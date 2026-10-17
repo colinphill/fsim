@@ -1,35 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "lowerer_vhdl_vital_names.hpp"
 
 #include <cctype>
 #include <map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
+using namespace vital_detail;
 using runtime::SimulationTick;
 
 namespace {
-
-std::string_view vital_timing_simple_name(const std::string_view name)
-{
-    const auto separator = name.find_last_of('.');
-    return name.substr(
-        separator == std::string_view::npos ? 0U : separator + 1U);
-}
-
-std::string_view vital_timing_name(const semantic::vhdl::Name& name)
-{
-    return name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
-}
-
-std::string canonical_vital_timing_identifier(const std::string_view name)
-{
-    auto result = std::string { name };
-    lowercase_ascii(result);
-    return result;
-}
 
 bool vital_timing_procedure_name(const std::string_view name)
 {
@@ -39,50 +20,6 @@ bool vital_timing_procedure_name(const std::string_view name)
         || equal_ignoring_ascii_case(name, "vitalperiodpulsecheck")
         || equal_ignoring_ascii_case(name, "vitalinphaseskewcheck")
         || equal_ignoring_ascii_case(name, "vitaloutphaseskewcheck");
-}
-
-bool has_vital_timing_qualification(const std::string_view name)
-{
-    const auto member_separator = name.find_last_of('.');
-    if (member_separator == std::string_view::npos) {
-        return true;
-    }
-    const auto owner = name.substr(0U, member_separator);
-    const auto package_separator = owner.find_last_of('.');
-    if (package_separator == std::string_view::npos) {
-        return equal_ignoring_ascii_case(owner, "vital_timing");
-    }
-    return equal_ignoring_ascii_case(
-               owner.substr(package_separator + 1U), "vital_timing")
-        && equal_ignoring_ascii_case(
-            owner.substr(0U, package_separator), "ieee");
-}
-
-std::optional<AssertionSeverity> vital_timing_severity(
-    const semantic::vhdl::Expression& expression)
-{
-    if (expression.kind != semantic::vhdl::ExpressionKind::name) {
-        return std::nullopt;
-    }
-    auto name = std::string_view { expression.text };
-    constexpr std::string_view prefix { "@fsim-enum:" };
-    if (name.starts_with(prefix)) {
-        name.remove_prefix(prefix.size());
-    }
-    name = vital_timing_simple_name(name);
-    if (equal_ignoring_ascii_case(name, "note")) {
-        return AssertionSeverity::note;
-    }
-    if (equal_ignoring_ascii_case(name, "warning")) {
-        return AssertionSeverity::warning;
-    }
-    if (equal_ignoring_ascii_case(name, "error")) {
-        return AssertionSeverity::error;
-    }
-    if (equal_ignoring_ascii_case(name, "failure")) {
-        return AssertionSeverity::failure;
-    }
-    return std::nullopt;
 }
 
 std::optional<std::uint16_t> vital_timing_edge(
@@ -127,21 +64,13 @@ bool Lowerer::is_hir_vhdl_vital_timing_call(
         return false;
     }
     const auto& procedure = statement->vhdl->procedure;
-    const auto qualified_name = vital_timing_name(procedure);
+    const auto qualified_name = procedure.text();
     if (!vital_timing_procedure_name(
-            vital_timing_simple_name(qualified_name))
-        || !has_vital_timing_qualification(qualified_name)) {
+            vital_simple_name(qualified_name))
+        || !has_vital_package_qualification(qualified_name, "vital_timing")) {
         return false;
     }
-    if (procedure.selected || !procedure.overloads.empty()) {
-        return false;
-    }
-    semantic::CompiledDesignResolver resolver { *specialized_hir_unit_ };
-    return resolver.resolve_vhdl_callable_candidates(
-                       procedure, statement->vhdl->scope)
-               .candidates.empty()
-        && resolver.vhdl_standard_package_member_visible(
-            procedure, statement->vhdl->scope);
+    return hir_vhdl_vital_intrinsic_visible(procedure, statement->vhdl->scope);
 }
 
 bool Lowerer::lower_hir_vhdl_vital_timing_call(
@@ -157,8 +86,8 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
     }
     const auto& source = *statement->vhdl;
     const auto statement_span = hir_source_span(source.source);
-    const auto name = vital_timing_simple_name(
-        vital_timing_name(source.procedure));
+    const auto name = vital_simple_name(
+        source.procedure.text());
     const bool setup_hold = equal_ignoring_ascii_case(
         name, "vitalsetupholdcheck");
     const bool recovery_removal = equal_ignoring_ascii_case(
@@ -171,50 +100,9 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
         name, "vitaloutphaseskewcheck");
     const bool skew = in_phase || out_phase;
 
-    std::vector<semantic::ExpressionId> positional;
-    std::map<std::string, semantic::ExpressionId, std::less<>> named;
-    bool saw_named { };
     bool valid = true;
-    for (const auto& association : source.procedure_arguments) {
-        if (association.formal) {
-            saw_named = true;
-            const auto formal = canonical_vital_timing_identifier(
-                vital_timing_simple_name(
-                    vital_timing_name(*association.formal)));
-            if (!named.emplace(formal, association.actual).second) {
-                report("FSIM-ELAB-VITAL-010",
-                    "duplicate VITAL timing actual for formal '"
-                        + formal + "'",
-                    hir_source_span(association.source));
-                valid = false;
-            }
-        } else {
-            if (saw_named) {
-                report("FSIM-ELAB-VITAL-010",
-                    "a positional VITAL timing actual cannot follow a named actual",
-                    hir_source_span(association.source));
-                valid = false;
-            }
-            positional.push_back(association.actual);
-        }
-    }
-    const auto expression_span = [&](const semantic::ExpressionId id) {
-        const auto expression = specialized_hir_unit_->find_expression(id);
-        return expression && expression->vhdl != nullptr
-            ? hir_source_span(expression->vhdl->source)
-            : statement_span;
-    };
-    const auto actual = [&](const std::string_view formal,
-                            const std::size_t position)
-        -> std::optional<semantic::ExpressionId> {
-        const auto selected = named.find(formal);
-        if (selected != named.end()) {
-            return selected->second;
-        }
-        return position < positional.size()
-            ? std::optional { positional[position] }
-            : std::nullopt;
-    };
+    const auto actuals = collect_hir_vital_actuals(source.procedure_arguments,
+        "FSIM-ELAB-VITAL-010", "VITAL timing", valid);
     const auto formals = [&] {
         if (period_pulse) {
             return std::vector<std::string_view> {
@@ -257,19 +145,19 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             "trigger"
         };
     }();
-    if (positional.size() > formals.size()) {
+    if (actuals.positional.size() > formals.size()) {
         report("FSIM-ELAB-VITAL-010",
             std::string { name } + " has too many positional actuals",
             statement_span);
         valid = false;
     }
-    for (const auto& [formal, expression_id] : named) {
+    for (const auto& [formal, expression_id] : actuals.named) {
         if (std::ranges::find(formals, std::string_view { formal })
             == formals.end()) {
             report("FSIM-ELAB-VITAL-010",
                 std::string { name } + " has no formal parameter '"
                     + formal + "'",
-                expression_span(expression_id));
+                hir_expression_span(expression_id, statement_span));
             valid = false;
         }
     }
@@ -277,7 +165,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
     const auto static_time = [&](const std::string_view formal,
                                  const std::size_t position,
                                  const SimulationTick fallback) {
-        const auto expression = actual(formal, position);
+        const auto expression = actuals.find(formal, position);
         if (!expression) {
             return fallback;
         }
@@ -286,7 +174,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             report("FSIM-ELAB-VITAL-011",
                 "VITAL timing formal '" + std::string { formal }
                     + "' requires a static nonnegative time in project ticks",
-                expression_span(*expression));
+                hir_expression_span(*expression, statement_span));
             valid = false;
             return SimulationTick { };
         }
@@ -295,42 +183,14 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
     const auto static_bool = [&](const std::string_view formal,
                                  const std::size_t position,
                                  const bool fallback) {
-        const auto expression = actual(formal, position);
-        if (!expression) {
-            return fallback;
-        }
-        const auto value = hir_constant_integer(*expression);
-        if (!value || (*value != 0 && *value != 1)) {
-            report("FSIM-ELAB-VITAL-011",
-                "VITAL timing formal '" + std::string { formal }
-                    + "' requires a static Boolean value",
-                expression_span(*expression));
-            valid = false;
-            return fallback;
-        }
-        return *value != 0;
+        return hir_vital_static_bool(actuals.find(formal, position), formal,
+            fallback, "FSIM-ELAB-VITAL-011", "VITAL timing", valid);
     };
     const auto static_string = [&](const std::string_view formal,
                                    const std::size_t position,
                                    const std::string_view fallback) {
-        const auto expression_id = actual(formal, position);
-        if (!expression_id) {
-            return std::string { fallback };
-        }
-        const auto expression = specialized_hir_unit_->find_expression(
-            *expression_id);
-        if (!expression || expression->vhdl == nullptr
-            || expression->vhdl->kind
-                != semantic::vhdl::ExpressionKind::string_literal
-            || !expression->vhdl->decoded_string) {
-            report("FSIM-ELAB-VITAL-011",
-                "VITAL timing formal '" + std::string { formal }
-                    + "' requires a static string literal",
-                expression_span(*expression_id));
-            valid = false;
-            return std::string { fallback };
-        }
-        return *expression->vhdl->decoded_string;
+        return hir_vital_static_string(actuals.find(formal, position),
+            formal, fallback, "FSIM-ELAB-VITAL-011", "VITAL timing", valid);
     };
     const auto runtime_binding = [&](const semantic::ExpressionId expression,
                                      const bool require_storage)
@@ -348,7 +208,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
                                     const std::size_t position,
                                     const std::string_view type_name)
         -> std::optional<RegisterId> {
-        const auto expression = actual(formal, position);
+        const auto expression = actuals.find(formal, position);
         const auto binding = expression
             ? runtime_binding(*expression, true)
             : std::nullopt;
@@ -360,14 +220,15 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             const auto subtype = hir_vhdl_expression_subtype(*expression);
             compatible = subtype
                 && equal_ignoring_ascii_case(
-                    vital_timing_simple_name(subtype->type_mark.spelling),
+                    vital_simple_name(subtype->type_mark.spelling),
                     type_name);
         }
         if (!compatible) {
             report("FSIM-ELAB-VITAL-012",
                 "VITAL timing formal '" + std::string { formal }
                     + "' requires a writable variable of the expected type",
-                expression ? expression_span(*expression) : statement_span);
+                expression ? hir_expression_span(*expression, statement_span)
+                           : statement_span);
             valid = false;
             return std::nullopt;
         }
@@ -377,7 +238,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
                                    const std::size_t position,
                                    const SimulationTick delay)
         -> std::optional<SignalId> {
-        const auto expression = actual(formal, position);
+        const auto expression = actuals.find(formal, position);
         const auto binding = expression
             ? runtime_binding(*expression, false)
             : std::nullopt;
@@ -385,7 +246,8 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             report("FSIM-ELAB-VITAL-012",
                 "VITAL timing formal '" + std::string { formal }
                     + "' requires a visible signal",
-                expression ? expression_span(*expression) : statement_span);
+                expression ? hir_expression_span(*expression, statement_span)
+                           : statement_span);
             valid = false;
             return std::nullopt;
         }
@@ -393,7 +255,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
             report("FSIM-ELAB-VITAL-012",
                 "VITAL timing formal '" + std::string { formal }
                     + "' requires a std_ulogic signal or vector",
-                expression_span(*expression));
+                hir_expression_span(*expression, statement_span));
             valid = false;
             return std::nullopt;
         }
@@ -403,26 +265,26 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
         }
         const auto delayed = vhdl_implicit_signal_attribute(
             *binding->signal, "delayed", delay,
-            expression_span(*expression));
+            hir_expression_span(*expression, statement_span));
         if (!delayed) {
             valid = false;
         }
         return delayed;
     };
     const auto severity = [&](const std::size_t position) {
-        const auto expression_id = actual("msgseverity", position);
+        const auto expression_id = actuals.find("msgseverity", position);
         if (!expression_id) {
             return AssertionSeverity::warning;
         }
         const auto expression = specialized_hir_unit_->find_expression(
             *expression_id);
         const auto decoded = expression && expression->vhdl != nullptr
-            ? vital_timing_severity(*expression->vhdl)
+            ? vital_severity(*expression->vhdl)
             : std::nullopt;
         if (!decoded) {
             report("FSIM-ELAB-VITAL-011",
                 "VITAL MsgSeverity requires a static severity_level literal",
-                expression_span(*expression_id));
+                hir_expression_span(*expression_id, statement_span));
             valid = false;
             return AssertionSeverity::warning;
         }
@@ -431,7 +293,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
     const auto reference_edges = [&](const std::size_t position,
                                      const std::string_view procedure)
         -> std::optional<std::uint16_t> {
-        const auto expression_id = actual("reftransition", position);
+        const auto expression_id = actuals.find("reftransition", position);
         if (!expression_id) {
             report("FSIM-ELAB-VITAL-010",
                 std::string { procedure } + " requires RefTransition",
@@ -447,7 +309,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
         if (!decoded) {
             report("FSIM-ELAB-VITAL-011",
                 "VITAL RefTransition requires a static edge symbol",
-                expression_span(*expression_id));
+                hir_expression_span(*expression_id, statement_span));
             valid = false;
         }
         return decoded;
@@ -467,11 +329,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
         1U, state_type);
 
     VitalTimingCheck operation;
-    operation.source = SourceLocation {
-        statement_span.source_name.str(),
-        static_cast<std::uint32_t>(statement_span.begin.line),
-        static_cast<std::uint32_t>(statement_span.begin.column),
-    };
+    operation.source = runtime_source_location(statement_span);
     std::size_t test_width { 1U };
     if (period_pulse) {
         const auto test_delay = static_time("testdelay", 4U, 0U);

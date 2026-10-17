@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/model.hpp"
 
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -72,6 +73,43 @@ enum class TypeForm : std::uint8_t {
     tagged_union,
     unpacked_union,
 };
+
+/// Container profiles name the nominal element type of an enumeration,
+/// structure or union as "@sv-type:<type index>".
+[[nodiscard]] constexpr bool has_nominal_type_identity(
+    const TypeForm form) noexcept
+{
+    return form == TypeForm::enumeration || form == TypeForm::packed_structure
+        || form == TypeForm::packed_union
+        || form == TypeForm::unpacked_structure
+        || form == TypeForm::unpacked_union || form == TypeForm::tagged_union;
+}
+
+inline constexpr std::string_view nominal_type_identity_prefix {
+    "@sv-type:"
+};
+
+[[nodiscard]] inline std::string nominal_type_identity(const TypeId type)
+{
+    return std::string { nominal_type_identity_prefix }
+    + std::to_string(type.value());
+}
+
+/// The type a nominal identity names, if `identity` is one.
+[[nodiscard]] inline std::optional<TypeId> nominal_identity_type(
+    std::string_view identity) noexcept
+{
+    if (!identity.starts_with(nominal_type_identity_prefix)) {
+        return std::nullopt;
+    }
+    identity.remove_prefix(nominal_type_identity_prefix.size());
+    std::uint32_t index { };
+    const auto [end, error] = std::from_chars(
+        identity.data(), identity.data() + identity.size(), index);
+    return error == std::errc { } && end == identity.data() + identity.size()
+        ? std::optional { TypeId::from_index(index) }
+        : std::nullopt;
+}
 
 enum class ModportMemberKind : std::uint8_t {
     signal,
@@ -283,6 +321,12 @@ struct AssignmentPatternAssociation {
     std::string choice_spelling;
     ExpressionId value;
     SourceSpanId source;
+
+    /// A positional pattern item has no key.
+    [[nodiscard]] bool positional() const noexcept
+    {
+        return choices.empty() && choice_spelling.empty();
+    }
 };
 
 struct CallAssociation {
@@ -2124,6 +2168,10 @@ public:
     [[nodiscard]] const std::vector<Unit>& units() const noexcept;
     [[nodiscard]] const std::vector<Declaration>& declarations() const noexcept;
     [[nodiscard]] const std::vector<TypeDefinition>& types() const noexcept;
+    /// The declaration or type with `id`, or nullptr.
+    [[nodiscard]] const Declaration* find_declaration(
+        DeclarationId id) const noexcept;
+    [[nodiscard]] const TypeDefinition* find_type(TypeId id) const noexcept;
     [[nodiscard]] const std::vector<Expression>& expressions() const noexcept;
     [[nodiscard]] const std::vector<Statement>& statements() const noexcept;
     [[nodiscard]] const std::vector<Process>& processes() const noexcept;
@@ -2193,5 +2241,20 @@ struct TopLevelHirView {
     std::span<const Declaration> declarations,
     std::span<const Statement> statements,
     std::span<const ClassDeclaration> classes);
+
+/// Whether a type spelling is a built-in net type keyword
+/// (IEEE 1800-2017 6.7.1).
+[[nodiscard]] constexpr bool is_builtin_net_kind(
+    const std::string_view spelling) noexcept
+{
+    for (const std::string_view kind : { "wire", "tri", "tri0", "tri1",
+             "wand", "triand", "wor", "trior", "trireg", "uwire", "supply0",
+             "supply1" }) {
+        if (spelling == kind) {
+            return true;
+        }
+    }
+    return false;
+}
 
 } // namespace fsim::semantic::sv

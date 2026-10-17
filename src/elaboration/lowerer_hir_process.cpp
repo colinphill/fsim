@@ -115,6 +115,20 @@ RegisterId Lowerer::allocate_register(
     return id;
 }
 
+RegisterId Lowerer::load_constant(
+    PackedLogic4 value, const frontend::ValueDomain domain)
+{
+    const auto target = allocate_register(value.width(), domain);
+    process_.operations.emplace_back(LoadConstant { target, std::move(value) });
+    return target;
+}
+
+RegisterId Lowerer::load_integer(const std::int64_t value,
+    const std::size_t width, const frontend::ValueDomain domain)
+{
+    return load_constant(integer_value(value, width), domain);
+}
+
 StringRegisterId Lowerer::allocate_string_register()
 {
     return next_string_register_++;
@@ -409,11 +423,7 @@ void Lowerer::emit_disable_scope_marker(
     }
     process_.operations.emplace_back(DebugPoint {
         kind,
-        SourceLocation {
-            span.source_name.str(),
-            static_cast<std::uint32_t>(span.begin.line),
-            static_cast<std::uint32_t>(span.begin.column),
-        },
+        runtime_source_location(span),
         scope,
     });
 }
@@ -424,11 +434,7 @@ void Lowerer::emit_debug_point(
 {
     process_.operations.emplace_back(DebugPoint {
         kind,
-        SourceLocation {
-            span.source_name.str(),
-            static_cast<std::uint32_t>(span.begin.line),
-            static_cast<std::uint32_t>(span.begin.column),
-        },
+        runtime_source_location(span),
         debug_scope_name(),
     });
 }
@@ -771,6 +777,32 @@ std::vector<SignalId> Lowerer::hir_statement_signal_dependencies(
     return dependencies;
 }
 
+std::optional<std::size_t> Lowerer::hir_enclosing_callable_frame(
+    const HirCallableFrame& frame) const
+{
+    if (!frame.enclosing_callable_invocation_identity) {
+        return std::nullopt;
+    }
+    const auto parent = std::ranges::find(hir_callable_frames_,
+        *frame.enclosing_callable_invocation_identity,
+        &HirCallableFrame::invocation_identity);
+    return parent == hir_callable_frames_.end()
+        ? std::nullopt
+        : std::optional { static_cast<std::size_t>(
+              parent - hir_callable_frames_.begin()) };
+}
+
+bool Lowerer::hir_retained_static_local(
+    const semantic::CompiledDeclarationView& declaration,
+    const bool first_initialization) const
+{
+    return active_hir_callable_
+        && !hir_callable_frames_[*active_hir_callable_].type.automatic
+        && !first_initialization && declaration.systemverilog != nullptr
+        && declaration.systemverilog->lifetime
+            != semantic::sv::Lifetime::automatic;
+}
+
 bool Lowerer::initialize_hir_declarations(
     const std::span<const semantic::DeclarationId> declarations)
 {
@@ -979,10 +1011,8 @@ bool Lowerer::initialize_hir_declarations(
             const std::optional<semantic::ExpressionId> expression)
             -> std::optional<RegisterId> {
             if (folded) {
-                const auto result = allocate_register(
-                    64U, frontend::ValueDomain::Integer);
-                process_.operations.emplace_back(LoadConstant {
-                    result, integer_value(*folded, 64U) });
+                const auto result = load_integer(
+                    *folded, 64U, frontend::ValueDomain::Integer);
                 return result;
             }
             if (!expression) {
@@ -1122,15 +1152,14 @@ bool Lowerer::initialize_hir_declarations(
             && aggregate_local->aggregate_value;
         // A typedef of an unpacked array, queue or associative array
         // (`typedef logic [7:0] bytes_t []; bytes_t a;`).
-        const bool typedef_container_local = aggregate_local
-            && !aggregate_value_local && [&] {
-                   const auto effective = semantic::CompiledDesignResolver {
-                       *specialized_hir_unit_, hir_generic_binding_frames_
-                   }.effective_systemverilog_type(
-                       *declaration->systemverilog->type,
-                       declaration->systemverilog->scope);
-                   return effective && effective->container_form.has_value();
-               }();
+        const bool typedef_container_local
+            = aggregate_local && !aggregate_value_local && [&] {
+                  const auto effective
+                      = hir_resolver().effective_systemverilog_type(
+                          *declaration->systemverilog->type,
+                          declaration->systemverilog->scope);
+                  return effective && effective->container_form.has_value();
+              }();
         if (declaration->systemverilog != nullptr
             && declaration->systemverilog->type
             && (declaration->systemverilog->type->container_form
@@ -1150,13 +1179,7 @@ bool Lowerer::initialize_hir_declarations(
                 ? allocate_container_register(*type)
                 : existing->second;
             const bool retained_static
-                = active_hir_callable_
-                && !hir_callable_frames_[*active_hir_callable_]
-                        .type.automatic
-                && !first_initialization
-                && declaration->systemverilog != nullptr
-                && declaration->systemverilog->lifetime
-                    != semantic::sv::Lifetime::automatic;
+                = hir_retained_static_local(*declaration, first_initialization);
             if (first_initialization) {
                 hir_local_container_registers_.emplace(
                     declaration_id.value(), destination);
@@ -1173,11 +1196,7 @@ bool Lowerer::initialize_hir_declarations(
                         std::move(name),
                         destination,
                         *type,
-                        SourceLocation {
-                            span.source_name.str(),
-                            static_cast<std::uint32_t>(span.begin.line),
-                            static_cast<std::uint32_t>(span.begin.column),
-                        },
+                        runtime_source_location(span),
                     });
             }
             if (input.initializer && !retained_static) {
@@ -1299,21 +1318,11 @@ bool Lowerer::initialize_hir_declarations(
                         std::move(name),
                         destination,
                         type,
-                        SourceLocation {
-                            span.source_name.str(),
-                            static_cast<std::uint32_t>(span.begin.line),
-                            static_cast<std::uint32_t>(span.begin.column),
-                        },
+                        runtime_source_location(span),
                     });
             }
             const bool retained_static
-                = active_hir_callable_
-                && !hir_callable_frames_[*active_hir_callable_]
-                        .type.automatic
-                && !first_initialization
-                && declaration->systemverilog != nullptr
-                && declaration->systemverilog->lifetime
-                    != semantic::sv::Lifetime::automatic;
+                = hir_retained_static_local(*declaration, first_initialization);
             if (is_hir_vhdl_environment_call_path(declaration_id)
                 && declaration->vhdl->initializer
                 && !retained_static) {
@@ -1347,13 +1356,7 @@ bool Lowerer::initialize_hir_declarations(
                 ? allocate_string_register()
                 : existing->second;
             const bool retained_static
-                = active_hir_callable_
-                && !hir_callable_frames_[*active_hir_callable_]
-                        .type.automatic
-                && !first_initialization
-                && declaration->systemverilog != nullptr
-                && declaration->systemverilog->lifetime
-                    != semantic::sv::Lifetime::automatic;
+                = hir_retained_static_local(*declaration, first_initialization);
             if (first_initialization) {
                 hir_local_string_registers_.emplace(
                     declaration_id.value(), destination);
@@ -1386,11 +1389,8 @@ bool Lowerer::initialize_hir_declarations(
                             if (null_range) {
                                 byte_count = 0U;
                             } else if (left && right) {
-                                const auto distance = *left >= *right
-                                    ? static_cast<std::uint64_t>(*left)
-                                        - static_cast<std::uint64_t>(*right)
-                                    : static_cast<std::uint64_t>(*right)
-                                        - static_cast<std::uint64_t>(*left);
+                                const auto distance
+                                    = support::index_distance(*left, *right);
                                 if (distance
                                     == std::numeric_limits<
                                         std::uint64_t>::max()) {
@@ -1405,12 +1405,9 @@ bool Lowerer::initialize_hir_declarations(
                                                                  expression)
                                     -> std::optional<RegisterId> {
                                     if (value) {
-                                        const auto result = allocate_register(
-                                            64U,
-                                            frontend::ValueDomain::Integer);
-                                        process_.operations.emplace_back(
-                                            LoadConstant { result,
-                                                integer_value(*value, 64U) });
+                                        const auto result
+                                            = load_integer(*value, 64U,
+                                                frontend::ValueDomain::Integer);
                                         return result;
                                     }
                                     if (!expression) {
@@ -1469,11 +1466,8 @@ bool Lowerer::initialize_hir_declarations(
                                             ? *right_register
                                             : *left_register,
                                     });
-                                const auto one = allocate_register(
-                                    64U, frontend::ValueDomain::Integer);
-                                process_.operations.emplace_back(
-                                    LoadConstant { one,
-                                        integer_value(1, 64U) });
+                                const auto one = load_integer(
+                                    1, 64U, frontend::ValueDomain::Integer);
                                 const auto raw_extent = allocate_register(
                                     64U, frontend::ValueDomain::Integer);
                                 process_.operations.emplace_back(
@@ -1493,11 +1487,8 @@ bool Lowerer::initialize_hir_declarations(
                                     });
                                 const auto extent32 = resize_register(
                                     raw_extent, 32U, false);
-                                const auto one32 = allocate_register(
-                                    32U, frontend::ValueDomain::Integer);
-                                process_.operations.emplace_back(
-                                    LoadConstant { one32,
-                                        integer_value(1, 32U) });
+                                const auto one32 = load_integer(
+                                    1, 32U, frontend::ValueDomain::Integer);
                                 const auto last = allocate_register(
                                     32U, frontend::ValueDomain::Integer);
                                 process_.operations.emplace_back(
@@ -1516,11 +1507,8 @@ bool Lowerer::initialize_hir_declarations(
                                                 maximum_string_bytes,
                                             '\0'),
                                     });
-                                const auto first32 = allocate_register(
-                                    32U, frontend::ValueDomain::Integer);
-                                process_.operations.emplace_back(
-                                    LoadConstant { first32,
-                                        integer_value(0, 32U) });
+                                const auto first32 = load_integer(
+                                    0, 32U, frontend::ValueDomain::Integer);
                                 StringMethod default_string;
                                 default_string.operation
                                     = StringMethodOperator::substr;
@@ -1605,11 +1593,7 @@ bool Lowerer::initialize_hir_declarations(
                 process_.debug_string_locals.push_back(DebugStringLocal {
                     std::move(name),
                     destination,
-                    SourceLocation {
-                        span.source_name.str(),
-                        static_cast<std::uint32_t>(span.begin.line),
-                        static_cast<std::uint32_t>(span.begin.column),
-                    },
+                    runtime_source_location(span),
                 });
             }
             continue;
@@ -1639,10 +1623,7 @@ bool Lowerer::initialize_hir_declarations(
                 auto type_name = std::string_view {
                     declaration->vhdl->subtype->type_mark.spelling
                 };
-                if (const auto separator = type_name.find_last_of(".:");
-                    separator != std::string_view::npos) {
-                    type_name.remove_prefix(separator + 1U);
-                }
+                type_name = simple_name_of(type_name);
                 contextual_result = result_declaration
                     && result_declaration->vhdl != nullptr
                     && type_name == result_declaration->vhdl->name;
@@ -1808,13 +1789,7 @@ bool Lowerer::initialize_hir_declarations(
             ? allocate_register(binding->width, binding->domain)
             : existing->second;
         const bool retained_static
-            = active_hir_callable_
-            && !hir_callable_frames_[*active_hir_callable_]
-                    .type.automatic
-            && !first_initialization
-            && declaration->systemverilog != nullptr
-            && declaration->systemverilog->lifetime
-                != semantic::sv::Lifetime::automatic;
+            = hir_retained_static_local(*declaration, first_initialization);
         locals_.insert_or_assign(binding->name, destination);
         if (first_initialization) {
             hir_local_registers_.emplace(
@@ -2022,11 +1997,7 @@ bool Lowerer::initialize_hir_declarations(
                 std::move(type_name),
                 destination,
                 binding->width,
-                SourceLocation {
-                    span.source_name.str(),
-                    static_cast<std::uint32_t>(span.begin.line),
-                    static_cast<std::uint32_t>(span.begin.column),
-                },
+                runtime_source_location(span),
                 binding->integer_range
                     ? std::optional { std::min(
                           binding->integer_range->left,
@@ -2269,7 +2240,7 @@ std::optional<Process> Lowerer::lower_hir_process(
             // changes, so it adds no event.
             if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
                 && input.sensitivities.size() > 1U
-                && semantic::CompiledDesignResolver { *specialized_hir_unit_ }
+                && hir_resolver()
                        .resolve_systemverilog_constant(
                            sensitivity.signal, input.scope, false,
                            sensitivity.source_order)
@@ -2987,9 +2958,7 @@ std::optional<Process> Lowerer::lower_hir_package_initializer(
     description.input_actual_assignment_context = true;
     auto assignment_type = declaration->systemverilog->type;
     if (assignment_type && !assignment_type->target.target.valid()) {
-        const auto resolved = semantic::CompiledDesignResolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        }.effective_systemverilog_type(
+        const auto resolved = hir_resolver().effective_systemverilog_type(
             *assignment_type, declaration->systemverilog->scope);
         if (resolved && resolved->target.target.valid()) {
             assignment_type = *resolved;
@@ -3456,23 +3425,9 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     return lowered;
 }
 
-std::optional<Process> Lowerer::lower_hir_process_body_once(
-    const HirProcessDescription& description,
-    const frontend::Language language,
-    const std::string_view hierarchy)
+// Clears the register, local and control state of one lowered process.
+void Lowerer::reset_hir_process_state()
 {
-    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
-        *this
-    };
-    process_ = Process { };
-    generated_processes_.clear();
-    implicit_signal_dependencies_.clear();
-    deferred_assertion_action_phase_.reset();
-    deferred_assertion_action_handoff_.reset();
-    language_ = language;
-    sample_concurrent_assertion_reads_
-        = description.concurrent_assertion;
-    hierarchy_ = std::string { hierarchy };
     next_register_ = 0U;
     next_string_register_ = 0U;
     next_container_register_ = 0U;
@@ -3497,6 +3452,26 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     block_controls_.clear();
     named_block_controls_.clear();
     named_fork_controls_.clear();
+}
+
+std::optional<Process> Lowerer::lower_hir_process_body_once(
+    const HirProcessDescription& description,
+    const frontend::Language language,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    process_ = Process { };
+    generated_processes_.clear();
+    implicit_signal_dependencies_.clear();
+    deferred_assertion_action_phase_.reset();
+    deferred_assertion_action_handoff_.reset();
+    language_ = language;
+    sample_concurrent_assertion_reads_
+        = description.concurrent_assertion;
+    hierarchy_ = std::string { hierarchy };
+    reset_hir_process_state();
     procedural_continuous_assignments_.clear();
     pending_monitor_drivers_.clear();
     procedural_continuous_assignment_by_statement_.clear();
@@ -3689,11 +3664,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             owner, *description.procedural_assignment_active });
         record_implicit_signal_dependency(
             *description.procedural_assignment_active);
-        const auto selected = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            selected,
-            unsigned_value(description.procedural_assignment_owner, 32U) });
+        const auto selected = load_constant(
+            unsigned_value(description.procedural_assignment_owner, 32U),
+            frontend::ValueDomain::Bit2);
         const auto active = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(Binary {
@@ -3705,10 +3678,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 forced, *description.procedural_assignment_force_owner });
             record_implicit_signal_dependency(
                 *description.procedural_assignment_force_owner);
-            const auto zero = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(
-                LoadConstant { zero, unsigned_value(0U, 32U) });
+            const auto zero = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
             const auto unforced = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(Binary {
@@ -3775,7 +3746,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         auto actual_expression
             = specialized_hir_unit_->find_expression(actual);
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         if (description.input_actual_vhdl_context
             && actual_expression
             && actual_expression->vhdl != nullptr
@@ -4057,11 +4028,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                                   || candidate.vhdl->form
                                       == semantic::vhdl::DeclarationForm::port);
                       };
-                const auto declaration = semantic::CompiledDesignResolver {
-                    *specialized_hir_unit_
-                }.resolve_vhdl(reference, statement->vhdl->scope,
-                     signal_object)
-                                             .unique();
+                const auto declaration
+                    = hir_resolver()
+                          .resolve_vhdl(
+                              reference, statement->vhdl->scope, signal_object)
+                          .unique();
                 const auto binding = declaration
                     ? hir_runtime_binding(
                           *declaration, hir_process_scope_, false)
@@ -4543,29 +4514,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     materialize_hir_procedural_continuous_assignments();
     materialize_hir_monitor_drivers();
 
-    next_register_ = 0U;
-    next_string_register_ = 0U;
-    next_container_register_ = 0U;
-    register_widths_.clear();
-    register_domains_.clear();
-    locals_.clear();
-    hir_local_registers_.clear();
-    hir_local_string_registers_.clear();
-    hir_local_container_registers_.clear();
-    hir_local_container_types_.clear();
-    hir_callable_frames_.clear();
-    hir_callable_indices_.clear();
-    hir_interface_callable_indices_.clear();
-    pending_hir_callables_.clear();
-    active_hir_callable_.reset();
-    hir_generic_binding_frames_.clear();
-    string_locals_.clear();
-    debug_local_names_.clear();
-    local_scope_.clear();
-    loop_controls_.clear();
-    block_controls_.clear();
-    named_block_controls_.clear();
-    named_fork_controls_.clear();
+    reset_hir_process_state();
     return std::move(process_);
 }
 

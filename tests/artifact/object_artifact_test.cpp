@@ -97,60 +97,6 @@ std::size_t object_unit_name_form_offset(
     return 0U;
 }
 
-std::size_t object_compilation_digest_offset(const std::string& bytes)
-{
-    std::size_t offset = 20U;
-    for (std::size_t field = 0U; field < 9U; ++field)
-        offset = skip_string(bytes, offset);
-    const auto size = load_u64(bytes, offset);
-    assert(size <= bytes.size() - offset - 8U);
-    assert(size == 64U);
-    return offset + 8U;
-}
-
-std::string make_v8_object_bytes(const fsim::artifact::ObjectMetadata& metadata)
-{
-    auto legacy = metadata;
-    legacy.format = 8U;
-    legacy.portable_schema = 15U;
-    for (auto& unit : legacy.units) {
-        unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
-        unit.primary_name_form = fsim::library::VhdlIdentifierForm::unknown;
-    }
-    legacy.compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(legacy);
-    auto bytes = fsim::artifact::serialize_object_metadata(legacy);
-    const auto digest_offset = object_compilation_digest_offset(bytes);
-    std::copy(legacy.compilation_digest.begin(), legacy.compilation_digest.end(),
-        bytes.begin() + static_cast<std::ptrdiff_t>(digest_offset));
-
-    std::size_t offset = 20U;
-    for (std::size_t field = 0U; field < 11U; ++field)
-        offset = skip_string(bytes, offset);
-    offset += 4U + 1U;
-    offset = skip_string(bytes, offset);
-    offset = skip_string(bytes, offset);
-    offset = skip_string_sequence(bytes, offset, 1U); // defines
-    offset = skip_string_sequence(bytes, offset, 1U); // include roots
-    offset = skip_string_sequence(bytes, offset, 5U); // VHDL dependencies
-    offset = skip_string_sequence(bytes, offset, 6U); // sources
-    const auto unit_count = load_u64(bytes, offset);
-    offset += 8U;
-    std::vector<std::size_t> form_offsets;
-    for (std::uint64_t unit = 0U; unit < unit_count; ++unit) {
-        for (std::size_t field = 0U; field < 9U; ++field)
-            offset = skip_string(bytes, offset);
-        form_offsets.push_back(offset);
-        offset += 8U;
-    }
-    assert(offset == bytes.size());
-    for (auto position = form_offsets.rbegin(); position != form_offsets.rend(); ++position)
-        bytes.erase(*position, 8U);
-    store_u32(bytes, 8U, 8U);
-    store_u32(bytes, 12U, 15U);
-    return bytes;
-}
-
 void make_tree_writable(const std::filesystem::path& root) {
   std::error_code error;
   for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
@@ -383,46 +329,7 @@ int main() {
         = fsim::artifact::compute_object_compilation_digest(changed_form);
     assert(changed_form.compilation_digest != vhdl_metadata.compilation_digest);
 
-    auto v8_bytes = make_v8_object_bytes(vhdl_metadata);
-    auto v8_expected = vhdl_metadata;
-    v8_expected.format = 8U;
-    v8_expected.portable_schema = 15U;
-    v8_expected.units.front().name_form
-        = fsim::library::VhdlIdentifierForm::unknown;
-    v8_expected.units.front().primary_name_form
-        = fsim::library::VhdlIdentifierForm::unknown;
-    v8_expected.compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(v8_expected);
-    fsim::diagnostic::Engine v8_decode_diagnostics;
-    const auto v8_decoded = fsim::artifact::deserialize_object_metadata(
-        v8_bytes, "v8-object", v8_decode_diagnostics);
-    assert(v8_decoded == std::optional { v8_expected });
-    assert(!v8_decode_diagnostics.has_error());
     assert(!vhdl_decode_diagnostics.has_error());
-
-    auto legacy_for_serialization = vhdl_metadata;
-    legacy_for_serialization.format = 8U;
-    legacy_for_serialization.portable_schema = 15U;
-    for (auto& unit : legacy_for_serialization.units) {
-        unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
-        unit.primary_name_form = fsim::library::VhdlIdentifierForm::unknown;
-    }
-    legacy_for_serialization.compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(
-            legacy_for_serialization);
-    const auto upgraded_bytes
-        = fsim::artifact::serialize_object_metadata(legacy_for_serialization);
-    fsim::diagnostic::Engine upgraded_diagnostics;
-    const auto upgraded = fsim::artifact::deserialize_object_metadata(
-        upgraded_bytes, "upgraded-legacy-object", upgraded_diagnostics);
-    auto upgraded_expected = legacy_for_serialization;
-    upgraded_expected.format = fsim::artifact::kObjectFormatVersion;
-    upgraded_expected.portable_schema
-        = fsim::library::kPortableSchemaVersion;
-    upgraded_expected.compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(upgraded_expected);
-    assert(upgraded == std::optional { upgraded_expected });
-    assert(!upgraded_diagnostics.has_error());
 
     const auto expect_direct_serializer_identity_rejection = [](
         fsim::artifact::ObjectMetadata invalid) {
@@ -470,6 +377,10 @@ int main() {
     auto old_format_current_schema = metadata;
     old_format_current_schema.format = 8U;
     expect_direct_serializer_identity_rejection(old_format_current_schema);
+    auto previous_identity = metadata;
+    previous_identity.format = 8U;
+    previous_identity.portable_schema = 15U;
+    expect_direct_serializer_identity_rejection(previous_identity);
     auto future_metadata_format = metadata;
     future_metadata_format.format = fsim::artifact::kObjectFormatVersion + 1U;
     expect_direct_serializer_identity_rejection(future_metadata_format);
@@ -477,25 +388,6 @@ int main() {
     stale_compiled_hir_identity.compiled_hir_schema
         = fsim::library::kCompiledHirSchemaVersion - 1U;
     expect_direct_serializer_identity_rejection(stale_compiled_hir_identity);
-    auto legacy_stale_compiled_hir_identity = legacy_for_serialization;
-    legacy_stale_compiled_hir_identity.compiled_hir_schema
-        = fsim::library::kCompiledHirSchemaVersion - 1U;
-    expect_direct_serializer_identity_rejection(
-        legacy_stale_compiled_hir_identity);
-
-    auto invalid_legacy_for_serialization = legacy_for_serialization;
-    invalid_legacy_for_serialization.compilation_digest.front()
-        = invalid_legacy_for_serialization.compilation_digest.front() == '0'
-            ? '1' : '0';
-    bool invalid_legacy_rejected = false;
-    try {
-        static_cast<void>(fsim::artifact::serialize_object_metadata(
-            invalid_legacy_for_serialization));
-    } catch (const std::invalid_argument&) {
-        invalid_legacy_rejected = true;
-    }
-    assert(invalid_legacy_rejected);
-
     auto invalid_form_bytes = vhdl_encoded;
     store_u32(invalid_form_bytes,
         object_unit_name_form_offset(invalid_form_bytes, 0U), 3U);

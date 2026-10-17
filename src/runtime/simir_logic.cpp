@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 
 namespace fsim::runtime::simir {
 
@@ -387,9 +388,7 @@ namespace fsim::runtime::simir {
     if (selected < lower || selected > upper) {
       continue;
     }
-    const auto offset = selected >= right
-        ? static_cast<std::uint64_t>(selected - right)
-        : static_cast<std::uint64_t>(right - selected);
+    const auto offset = support::index_distance(selected, right);
     if (offset > std::numeric_limits<std::uint32_t>::max()
                      - base_offset
         || base_offset + offset >= source.width()) {
@@ -453,9 +452,7 @@ dynamic_part_write_value(
     if (selected < lower || selected > upper) {
       continue;
     }
-    const auto offset = selected >= selection.right
-        ? static_cast<std::uint64_t>(selected - selection.right)
-        : static_cast<std::uint64_t>(selection.right - selected);
+    const auto offset = support::index_distance(selected, selection.right);
     if (offset > std::numeric_limits<std::uint32_t>::max()) {
       throw std::invalid_argument(
           "dynamic part-select write offset is not representable");

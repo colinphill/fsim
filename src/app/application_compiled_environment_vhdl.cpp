@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_compiled_environment_vhdl.hpp"
+#include "application_compiled_source.hpp"
 
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <map>
 #include <optional>
@@ -18,45 +20,19 @@ namespace {
 
     namespace vh = semantic::vhdl;
 
-    std::string identifier_key(const std::string_view name)
-    {
-        std::string key { name };
-        if (!key.empty() && (key.front() == '\\' || key.front() == '\'')) {
-            return key;
-        }
-        for (auto& character : key) {
-            if (character >= 'A' && character <= 'Z') {
-                character = static_cast<char>(character - 'A' + 'a');
-            }
-        }
-        return key;
-    }
-
     std::string package_key(const vh::Unit& unit)
     {
         const auto library = unit.library.empty()
             ? std::string_view { "work" }
             : std::string_view { unit.library };
-        return identifier_key(library) + '\n' + identifier_key(unit.name);
+        return support::canonical_vhdl_spelling(library) + '\n'
+            + support::canonical_vhdl_spelling(unit.name);
     }
 
     diagnostic::SourceSpan source_span(const semantic::CompiledDesign& design,
         const semantic::SourceSpanId source)
     {
-        diagnostic::SourceSpan result;
-        if (!source.valid() || source.value() >= design.semantics.source_spans().size()) {
-            return result;
-        }
-        const auto& span = design.semantics.source_spans()[source.value()];
-        if (!span.file.valid()
-            || span.file.value() >= design.semantics.source_files().size()) {
-            return result;
-        }
-        const auto& file = design.semantics.source_files()[span.file.value()];
-        result.path = span.logical_name.empty() ? file.physical_name : span.logical_name;
-        result.begin = { span.begin.line, span.begin.column, span.begin.offset };
-        result.end = { span.end.line, span.end.column, span.end.offset };
-        return result;
+        return compiled_source_span(design.semantics, source);
     }
 
     const vh::Declaration* declaration(const semantic::CompiledDesign& design,
@@ -69,11 +45,11 @@ namespace {
     const vh::Declaration* package_constant(const semantic::CompiledDesign& design,
         const vh::Unit& package, const std::string_view name)
     {
-        const auto key = identifier_key(name);
+        const auto key = support::canonical_vhdl_spelling(name);
         for (const auto id : package.declarations) {
             const auto* candidate = declaration(design, id);
             if (candidate != nullptr && candidate->form == vh::DeclarationForm::constant
-                && identifier_key(candidate->name) == key) {
+                && support::canonical_vhdl_spelling(candidate->name) == key) {
                 return candidate;
             }
         }
@@ -113,12 +89,14 @@ namespace {
                 if (x.text != y.text) {
                     return false;
                 }
-            } else if (identifier_key(x.text) != identifier_key(y.text)) {
+            } else if (support::canonical_vhdl_spelling(x.text)
+                != support::canonical_vhdl_spelling(y.text)) {
                 return false;
             }
             for (std::size_t index = 0; index < x.argument_names.size(); ++index) {
-                if (identifier_key(x.argument_names[index])
-                    != identifier_key(y.argument_names[index])) {
+                if (support::canonical_vhdl_spelling(x.argument_names[index])
+                    != support::canonical_vhdl_spelling(
+                        y.argument_names[index])) {
                     return false;
                 }
             }
@@ -129,8 +107,10 @@ namespace {
                 const auto& x_association = x.associations[index];
                 const auto& y_association = y.associations[index];
                 if (x_association.choices.size() != y_association.choices.size()
-                    || identifier_key(x_association.choice_spelling)
-                        != identifier_key(y_association.choice_spelling)) {
+                    || support::canonical_vhdl_spelling(
+                           x_association.choice_spelling)
+                        != support::canonical_vhdl_spelling(
+                            y_association.choice_spelling)) {
                     return false;
                 }
                 pending.emplace_back(x_association.value, y_association.value);
@@ -171,10 +151,13 @@ namespace {
         }
         const auto& a = *specification.subtype;
         const auto& b = *body.subtype;
-        if (!resolver.vhdl_subtype_profiles_match(a, specification.scope, b, body.scope)
-            || identifier_key(a.type_mark.spelling) != identifier_key(b.type_mark.spelling)
-            || identifier_key(a.resolution_function.spelling)
-                != identifier_key(b.resolution_function.spelling)) {
+        if (!resolver.vhdl_subtype_profiles_match(
+                a, specification.scope, b, body.scope)
+            || support::canonical_vhdl_spelling(a.type_mark.spelling)
+                != support::canonical_vhdl_spelling(b.type_mark.spelling)
+            || support::canonical_vhdl_spelling(a.resolution_function.spelling)
+                != support::canonical_vhdl_spelling(
+                    b.resolution_function.spelling)) {
             return false;
         }
         const auto effective_a = resolver.effective_vhdl_subtype(a, specification.scope).value_or(a);
@@ -249,7 +232,8 @@ namespace {
             const auto* left = declaration(design, a.formals[index]);
             const auto* right = declaration(design, b.formals[index]);
             if (left == nullptr || right == nullptr
-                || identifier_key(left->name) != identifier_key(right->name)) {
+                || support::canonical_vhdl_spelling(left->name)
+                    != support::canonical_vhdl_spelling(right->name)) {
                 return false;
             }
         }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "lowerer_vhdl_vital_names.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,15 +13,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 
 namespace {
-
-std::string canonical_vital_name(const std::string_view spelling)
-{
-    const auto separator = spelling.find_last_of('.');
-    auto result = std::string { spelling.substr(
-        separator == std::string_view::npos ? 0U : separator + 1U) };
-    lowercase_ascii(result);
-    return result;
-}
 
 bool vital_logic_name(const std::string_view name)
 {
@@ -153,17 +145,17 @@ bool compiler_owned_vital_expression(
         if (!unit || unit->vhdl == nullptr
             || unit->vhdl->kind != semantic::vhdl::UnitKind::package
             || !unit->vhdl->primary_name.empty()
-            || canonical_vital_name(unit->vhdl->library) != "ieee"
-            || (canonical_vital_name(unit->vhdl->name)
+            || lowercase_vhdl_simple_name(unit->vhdl->library) != "ieee"
+            || (lowercase_vhdl_simple_name(unit->vhdl->name)
                     != "vital_timing"
-                && canonical_vital_name(unit->vhdl->name)
+                && lowercase_vhdl_simple_name(unit->vhdl->name)
                     != "vital_primitives")) {
             return false;
         }
         return std::ranges::any_of(
             unit->vhdl->standard_package_declarations,
             [&](const std::string& member) {
-                return canonical_vital_name(member) == name;
+                return lowercase_vhdl_simple_name(member) == name;
             });
     };
     std::vector<semantic::DeclarationId> resolved;
@@ -203,7 +195,7 @@ resolve_vhdl_vital_named_constant(
         || !expression->vhdl->referenced_name) {
         return std::nullopt;
     }
-    const auto name = canonical_vital_name(expression->vhdl->text);
+    const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
     std::optional<std::string_view> mapped;
     if (name == "vitaldefaultoutputmap") {
         mapped = "UX01ZWLH-";
@@ -260,7 +252,7 @@ Lowerer::hir_vhdl_vital_expression_profile(
         || !expression->vhdl->referenced_name) {
         return std::nullopt;
     }
-    const auto name = canonical_vital_name(expression->vhdl->text);
+    const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
     if (!vital_expression_name(name)) {
         return std::nullopt;
     }
@@ -299,7 +291,7 @@ Lowerer::lower_hir_vhdl_vital_expression(
         return { true, std::nullopt };
     }
     const auto& source = *expression->vhdl;
-    const auto name = canonical_vital_name(source.text);
+    const auto name = lowercase_vhdl_simple_name(source.text);
     const auto span = hir_source_span(source.source);
     const auto width = expected_width != 0U
         ? expected_width
@@ -360,10 +352,40 @@ Lowerer::lower_hir_vhdl_vital_expression(
         return normalized;
     };
     const auto operand_span = [&](const semantic::ExpressionId id) {
-        const auto value = specialized_hir_unit_->find_expression(id);
-        return value && value->vhdl != nullptr
-            ? hir_source_span(value->vhdl->source)
-            : span;
+        return hir_expression_span(id, span);
+    };
+    // Binds the call's arguments to `formals` by name, or in order when
+    // unnamed; reports and fails on an unknown or duplicate argument.
+    const auto bind_arguments
+        = [&](const std::initializer_list<std::string_view> formals)
+        -> std::optional<std::vector<std::optional<semantic::ExpressionId>>> {
+        std::vector<std::optional<semantic::ExpressionId>> bound(
+            formals.size());
+        std::size_t positional { };
+        for (std::size_t index { }; index < source.operands.size(); ++index) {
+            const auto argument_name = source.argument_names.empty()
+                ? std::string_view { }
+                : std::string_view { source.argument_names[index] };
+            std::optional<std::size_t> target;
+            if (argument_name.empty()) {
+                if (positional < bound.size()) {
+                    target = positional++;
+                }
+            } else if (const auto found
+                = std::ranges::find(formals, argument_name);
+                found != formals.end()) {
+                target = static_cast<std::size_t>(
+                    std::distance(formals.begin(), found));
+            }
+            if (!target || bound[*target]) {
+                report("FSIM-ELAB-VITAL-003",
+                    name + " has an unknown, duplicate, or misplaced argument",
+                    operand_span(source.operands[index]));
+                return std::nullopt;
+            }
+            bound[*target] = source.operands[index];
+        }
+        return bound;
     };
     // VHDL composite generic occurrences retain the formal name in executable
     // HIR. VITAL owns the contextual shape of its delay arrays, so inspect the
@@ -402,8 +424,7 @@ Lowerer::lower_hir_vhdl_vital_expression(
             || !std::ranges::all_of(
                 aggregate->vhdl->associations,
                 [](const semantic::vhdl::AggregateAssociation& association) {
-                    return association.choices.empty()
-                        && association.choice_spelling.empty();
+                    return association.positional();
                 })) {
             return lower_hir_expression(id, delay_width);
         }
@@ -564,8 +585,7 @@ Lowerer::lower_hir_vhdl_vital_expression(
             && std::ranges::all_of(
                 source_expression->vhdl->associations,
                 [](const semantic::vhdl::AggregateAssociation& association) {
-                    return association.choices.empty()
-                        && association.choice_spelling.empty();
+                    return association.positional();
                 })) {
             source_width
                 = source_expression->vhdl->associations.size() * 64U;
@@ -623,31 +643,11 @@ Lowerer::lower_hir_vhdl_vital_expression(
     }
 
     if (name == "vitalcalcdelay") {
-        std::array<std::optional<semantic::ExpressionId>, 3U> arguments;
-        std::size_t positional { };
-        for (std::size_t index { }; index < source.operands.size(); ++index) {
-            const auto argument_name = source.argument_names.empty()
-                ? std::string_view { }
-                : std::string_view { source.argument_names[index] };
-            std::optional<std::size_t> target;
-            if (argument_name == "newval") {
-                target = 0U;
-            } else if (argument_name == "oldval") {
-                target = 1U;
-            } else if (argument_name == "delay") {
-                target = 2U;
-            } else if (argument_name.empty()
-                && positional < arguments.size()) {
-                target = positional++;
-            }
-            if (!target || arguments[*target]) {
-                report("FSIM-ELAB-VITAL-003",
-                    "vitalcalcdelay has an unknown, duplicate, or misplaced argument",
-                    operand_span(source.operands[index]));
-                return { true, std::nullopt };
-            }
-            arguments[*target] = source.operands[index];
+        const auto bound = bind_arguments({ "newval", "oldval", "delay" });
+        if (!bound) {
+            return { true, std::nullopt };
         }
+        const auto& arguments = *bound;
         if (std::ranges::any_of(arguments,
                 [](const auto& value) { return !value; })
             || width != 64U) {
@@ -942,29 +942,12 @@ Lowerer::lower_hir_vhdl_vital_expression(
     }
 
     if (name == "vitaltruthtable") {
-        std::optional<semantic::ExpressionId> table_expression;
-        std::optional<semantic::ExpressionId> data_expression;
-        std::size_t positional { };
-        for (std::size_t index { }; index < source.operands.size(); ++index) {
-            const auto argument_name = source.argument_names.empty()
-                ? std::string_view { }
-                : std::string_view { source.argument_names[index] };
-            auto* target = argument_name == "truthtable"
-                    || (argument_name.empty() && positional == 0U)
-                ? &table_expression
-                : argument_name == "datain"
-                        || (argument_name.empty() && positional == 1U)
-                ? &data_expression
-                : nullptr;
-            if (target == nullptr || *target) {
-                report("FSIM-ELAB-VITAL-003",
-                    "vitaltruthtable has an unknown, duplicate, or misplaced argument",
-                    operand_span(source.operands[index]));
-                return { true, std::nullopt };
-            }
-            *target = source.operands[index];
-            positional += argument_name.empty() ? 1U : 0U;
+        const auto bound = bind_arguments({ "truthtable", "datain" });
+        if (!bound) {
+            return { true, std::nullopt };
         }
+        const auto table_expression = (*bound)[0];
+        const auto data_expression = (*bound)[1];
         const auto data_width = data_expression
             ? hir_expression_width(*data_expression, hir_process_scope_)
             : std::nullopt;
@@ -1013,10 +996,9 @@ Lowerer::lower_hir_vhdl_vital_expression(
                 : std::nullopt;
         };
         const auto boolean = [&](const bool value) {
-            const auto result = allocate_register(
-                1U, frontend::ValueDomain::Boolean);
-            process_.operations.emplace_back(LoadConstant { result,
-                unsigned_value(value ? 1U : 0U, 1U) });
+            const auto result
+                = load_constant(unsigned_value(value ? 1U : 0U, 1U),
+                    frontend::ValueDomain::Boolean);
             return result;
         };
         std::vector<RegisterId> outputs(
@@ -1419,6 +1401,119 @@ Lowerer::lower_hir_vhdl_vital_expression(
     }
 
     return { false, std::nullopt };
+}
+
+// Compiler-owned IEEE VITAL packages deliberately retain only their
+// exported declaration surface. A linked user declaration therefore takes
+// precedence over the intrinsic even when the VITAL package is visible.
+bool Lowerer::hir_vhdl_vital_intrinsic_visible(
+    const semantic::vhdl::Name& procedure,
+    const semantic::ScopeId scope) const
+{
+    if (procedure.selected || !procedure.overloads.empty()) {
+        return false;
+    }
+    const auto resolver = hir_resolver();
+    return resolver.resolve_vhdl_callable_candidates(procedure, scope)
+               .candidates.empty()
+        && resolver.vhdl_standard_package_member_visible(procedure, scope);
+}
+
+std::optional<semantic::ExpressionId> Lowerer::HirVitalActuals::find(
+    const std::string_view formal, const std::size_t position) const
+{
+    if (const auto selected = named.find(formal); selected != named.end()) {
+        return selected->second;
+    }
+    return position < positional.size()
+        ? std::optional { positional[position] }
+        : std::nullopt;
+}
+
+Lowerer::HirVitalActuals Lowerer::collect_hir_vital_actuals(
+    const std::span<const semantic::vhdl::ProcedureAssociation> arguments,
+    const std::string_view code, const std::string_view label, bool& valid)
+{
+    HirVitalActuals result;
+    bool saw_named { };
+    for (const auto& association : arguments) {
+        if (association.formal) {
+            saw_named = true;
+            const auto formal = lowercase_ascii_copy(
+                vital_detail::vital_simple_name(association.formal->text()));
+            if (!result.named.emplace(formal, association.actual).second) {
+                report(std::string { code },
+                    "duplicate " + std::string { label }
+                        + " actual for formal '" + formal + "'",
+                    hir_source_span(association.source));
+                valid = false;
+            }
+        } else {
+            if (saw_named) {
+                report(std::string { code },
+                    "a positional " + std::string { label }
+                        + " actual cannot follow a named actual",
+                    hir_source_span(association.source));
+                valid = false;
+            }
+            result.positional.push_back(association.actual);
+        }
+    }
+    return result;
+}
+
+frontend::SourceSpan Lowerer::hir_expression_span(
+    const semantic::ExpressionId id,
+    const frontend::SourceSpan& fallback) const
+{
+    const auto expression = specialized_hir_unit_->find_expression(id);
+    return expression && expression->vhdl != nullptr
+        ? hir_source_span(expression->vhdl->source)
+        : fallback;
+}
+
+bool Lowerer::hir_vital_static_bool(
+    const std::optional<semantic::ExpressionId> expression,
+    const std::string_view formal, const bool fallback,
+    const std::string_view code, const std::string_view label, bool& valid)
+{
+    if (!expression) {
+        return fallback;
+    }
+    const auto value = hir_constant_integer(*expression);
+    if (!value || (*value != 0 && *value != 1)) {
+        report(std::string { code },
+            std::string { label } + " formal '" + std::string { formal }
+                + "' requires a static Boolean value",
+            hir_expression_span(*expression, { }));
+        valid = false;
+        return fallback;
+    }
+    return *value != 0;
+}
+
+std::string Lowerer::hir_vital_static_string(
+    const std::optional<semantic::ExpressionId> expression_id,
+    const std::string_view formal, const std::string_view fallback,
+    const std::string_view code, const std::string_view label, bool& valid)
+{
+    if (!expression_id) {
+        return std::string { fallback };
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        *expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind
+            != semantic::vhdl::ExpressionKind::string_literal
+        || !expression->vhdl->decoded_string) {
+        report(std::string { code },
+            std::string { label } + " formal '" + std::string { formal }
+                + "' requires a static string literal",
+            hir_expression_span(*expression_id, { }));
+        valid = false;
+        return std::string { fallback };
+    }
+    return *expression->vhdl->decoded_string;
 }
 
 } // namespace fsim::elaboration

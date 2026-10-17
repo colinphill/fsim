@@ -13,104 +13,6 @@
 namespace fsim::app::application_detail {
 namespace {
 
-    std::string folded(std::string_view text)
-    {
-        if (text.size() >= 2 && text.front() == '\\' && text.back() == '\\') {
-            return std::string { text };
-        }
-        std::string result(text);
-        std::ranges::transform(result, result.begin(), [](char value) {
-            return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
-        });
-        return result;
-    }
-
-    bool equal_name(std::string_view left, std::string_view right, std::string_view language)
-    {
-        return language == "vhdl" ? folded(left) == folded(right) : left == right;
-    }
-
-    bool extended_vhdl_identifier(std::string_view spelling)
-    {
-        return spelling.size() >= 2U && spelling.front() == '\\'
-            && spelling.back() == '\\';
-    }
-
-    std::string decode_vhdl_identifier(std::string_view spelling)
-    {
-        if (!extended_vhdl_identifier(spelling)) {
-            return folded(spelling);
-        }
-        spelling.remove_prefix(1U);
-        spelling.remove_suffix(1U);
-        std::string result;
-        result.reserve(spelling.size());
-        for (std::size_t index = 0; index < spelling.size(); ++index) {
-            result.push_back(spelling[index]);
-            if (spelling[index] == '\\' && index + 1U < spelling.size()
-                && spelling[index + 1U] == '\\') {
-                ++index;
-            }
-        }
-        return result;
-    }
-
-    std::vector<std::string_view> selected_name_parts(std::string_view spelling)
-    {
-        std::vector<std::string_view> result;
-        std::size_t begin = 0U;
-        bool extended = false;
-        for (std::size_t index = 0; index < spelling.size(); ++index) {
-            if (spelling[index] == '\\') {
-                if (extended && index + 1U < spelling.size()
-                    && spelling[index + 1U] == '\\') {
-                    ++index;
-                    continue;
-                }
-                extended = !extended;
-            } else if (spelling[index] == '.' && !extended) {
-                if (index == begin) {
-                    return { };
-                }
-                result.push_back(spelling.substr(begin, index - begin));
-                begin = index + 1U;
-            }
-        }
-        if (begin == spelling.size()) {
-            return { };
-        }
-        result.push_back(spelling.substr(begin));
-        return result;
-    }
-
-    bool unit_name_matches(
-        const library::UnitIndexEntry& unit,
-        const std::string_view name,
-        const library::VhdlIdentifierForm form)
-    {
-        if (form == library::VhdlIdentifierForm::unknown
-            || unit.name_form != form) {
-            return false;
-        }
-        return form == library::VhdlIdentifierForm::extended
-            ? unit.name == name : equal_name(unit.name, name, "vhdl");
-    }
-
-    bool unit_name_matches(
-        const std::string_view unit_name,
-        const library::VhdlIdentifierForm unit_form,
-        const std::string_view expected_name,
-        const library::VhdlIdentifierForm expected_form)
-    {
-        if (expected_form == library::VhdlIdentifierForm::unknown
-            || unit_form != expected_form) {
-            return false;
-        }
-        return expected_form == library::VhdlIdentifierForm::extended
-            ? unit_name == expected_name
-            : equal_name(unit_name, expected_name, "vhdl");
-    }
-
     std::string normalized_library(std::string_view library)
     {
         return std::string { library.empty() ? std::string_view { "work" } : library };
@@ -142,43 +44,32 @@ namespace {
                 text.remove_prefix(colon + 1);
             }
         }
-        bool extended = false;
-        std::size_t architecture_open = std::string_view::npos;
-        for (std::size_t index = 0; index < text.size(); ++index) {
-            if (text[index] == '\\') {
-                if (extended && index + 1U < text.size()
-                    && text[index + 1U] == '\\') {
-                    ++index;
-                    continue;
-                }
-                extended = !extended;
-            } else if (text[index] == '(' && !extended) {
-                architecture_open = index;
+        support::VhdlTargetSpelling spelling;
+        if (support::split_vhdl_target(text, spelling)) {
+            if (spelling.has_architecture) {
+                result.architecture
+                    = support::decode_vhdl_identifier(spelling.architecture);
+                result.architecture_form = vhdl_identifier_form(
+                    support::is_extended_vhdl_identifier(
+                        spelling.architecture));
             }
+            if (spelling.has_library) {
+                result.library
+                    = support::decode_vhdl_identifier(spelling.library);
+            }
+            text = spelling.unit;
+        } else if (const auto dot = text.find('.');
+            dot != std::string_view::npos && dot < text.find('\\')) {
+            // A Verilog escaped identifier (`\$I178`) has no closing
+            // backslash; only a library prefix before it is split off.
+            result.library
+                = support::decode_vhdl_identifier(text.substr(0U, dot));
+            text.remove_prefix(dot + 1U);
         }
-        if (architecture_open != std::string_view::npos
-            && text.back() == ')') {
-            const auto architecture = text.substr(
-                architecture_open + 1U, text.size() - architecture_open - 2U);
-            const bool architecture_extended
-                = extended_vhdl_identifier(architecture);
-            result.architecture = decode_vhdl_identifier(architecture);
-            result.architecture_form = architecture_extended
-                ? library::VhdlIdentifierForm::extended
-                : library::VhdlIdentifierForm::basic;
-            text = text.substr(0U, architecture_open);
-        }
-        const auto parts = selected_name_parts(text);
-        if (parts.size() == 2U) {
-            result.library = decode_vhdl_identifier(parts.front());
-            text = parts.back();
-        }
-        const bool name_extended = extended_vhdl_identifier(text);
+        const bool name_extended = support::is_extended_vhdl_identifier(text);
         result.name = result.language == "vhdl" || name_extended
-            ? decode_vhdl_identifier(text) : std::string { text };
-        result.name_form = name_extended
-            ? library::VhdlIdentifierForm::extended
-            : library::VhdlIdentifierForm::basic;
+            ? support::decode_vhdl_identifier(text) : std::string { text };
+        result.name_form = vhdl_identifier_form(name_extended);
         return result;
     }
 
@@ -217,9 +108,6 @@ namespace {
             }
             for (const auto& top : config_.project.tops) {
                 if (!select_target(parse_target(top.target), { })) {
-                    if (selection_error_) {
-                        return std::nullopt;
-                    }
                     workspace_error(diagnostics_, "selected top-level was not found: " + top.target);
                     return std::nullopt;
                 }
@@ -230,9 +118,6 @@ namespace {
                 }
                 for (const auto& library : root_libraries_) {
                     select_target(parse_target(*binding.target), library);
-                    if (selection_error_) {
-                        return std::nullopt;
-                    }
                 }
             }
             for (std::size_t index = 0; index < pending_.size(); ++index) {
@@ -284,121 +169,23 @@ namespace {
             std::string_view owner_library) const
         {
             if (!target.library.empty()) {
-                return equal_name(candidate, target.library, target.language);
+                return workspace_name_equal(
+                    candidate, target.library, target.language);
             }
-            if (equal_name(candidate, owner_library, target.language)) {
+            if (workspace_name_equal(
+                    candidate, owner_library, target.language)) {
                 return true;
             }
-            return std::ranges::any_of(config_.elaboration.search_libraries,
-                [&](const auto& library) { return equal_name(candidate, library, target.language); });
-        }
-
-        bool hydrate_legacy_vhdl_candidates(
-            const std::string_view expected_library,
-            const std::string_view owner_library,
-            const std::string_view expected_name,
-            const library::VhdlIdentifierForm expected_form,
-            const std::string_view expected_primary_name,
-            const library::VhdlIdentifierForm expected_primary_form,
-            const std::span<const std::string_view> kinds)
-        {
-            const auto may_match = [](const std::string_view indexed_name,
-                                       const library::VhdlIdentifierForm indexed_form,
-                                       const std::string_view requested_name,
-                                       const library::VhdlIdentifierForm requested_form) {
-                if (indexed_name.empty() || requested_name.empty()) {
-                    return false;
-                }
-                if (indexed_form != library::VhdlIdentifierForm::unknown
-                    && requested_form != library::VhdlIdentifierForm::unknown
-                    && indexed_form != requested_form) {
-                    return false;
-                }
-                if (indexed_form == library::VhdlIdentifierForm::extended
-                    || requested_form == library::VhdlIdentifierForm::extended) {
-                    return indexed_name == requested_name;
-                }
-                return equal_name(indexed_name, requested_name, "vhdl");
-            };
-            for (auto& catalog : catalogs_) {
-                const bool in_library_scope = !expected_library.empty()
-                    ? equal_name(catalog.location.name, expected_library, "vhdl")
-                    : (!owner_library.empty()
-                          && equal_name(catalog.location.name,
-                              owner_library, "vhdl"))
-                        || std::ranges::any_of(
-                            config_.elaboration.search_libraries,
-                            [&](const auto& search_library) {
-                                return equal_name(catalog.location.name,
-                                    search_library, "vhdl");
-                            });
-                if (!in_library_scope) {
-                    continue;
-                }
-                for (auto& record : catalog.artifacts) {
-                    if (record.kind != workspace::ArtifactKind::Hdl) {
-                        continue;
-                    }
-                    const bool candidate = std::ranges::any_of(
-                        record.units, [&](const auto& owned) {
-                            const auto& unit = owned.unit;
-                            if (unit.language != "vhdl"
-                                || (unit.name_form
-                                        != library::VhdlIdentifierForm::unknown
-                                    && (unit.primary_name.empty()
-                                        || unit.primary_name_form
-                                            != library::VhdlIdentifierForm::unknown))
-                                || (!kinds.empty()
-                                    && std::ranges::none_of(kinds,
-                                        [&](const auto kind) {
-                                            return unit.kind == kind;
-                                        }))
-                                || (kinds.empty() && !hierarchy_unit(unit))) {
-                                return false;
-                            }
-                            if (kinds.size() == 1U
-                                && kinds.front() == "architecture") {
-                                return may_match(unit.primary_name,
-                                           unit.primary_name_form,
-                                           expected_name, expected_form)
-                                    && (expected_primary_name.empty()
-                                        || may_match(unit.name,
-                                            unit.name_form,
-                                            expected_primary_name,
-                                            expected_primary_form));
-                            }
-                            return may_match(unit.name, unit.name_form,
-                                       expected_name, expected_form)
-                                || may_match(unit.primary_name,
-                                    unit.primary_name_form,
-                                    expected_name, expected_form);
-                        });
-                    if (candidate
-                        && !hydrate_workspace_artifact_vhdl_identifier_forms(
-                            store_, catalog.location, record, diagnostics_)) {
-                        selection_error_ = true;
-                        return false;
-                    }
-                }
-            }
-            return true;
+            return std::ranges::any_of(
+                config_.elaboration.search_libraries, [&](const auto& library) {
+                    return workspace_name_equal(
+                        candidate, library, target.language);
+                });
         }
 
         bool select_target(const Target& target, std::string_view owner_library,
             std::string_view required_kind = { }, bool include_architectures = true)
         {
-            if (target.language.empty() || target.language == "vhdl") {
-                std::vector<std::string_view> kinds;
-                if (!required_kind.empty()) {
-                    kinds.push_back(required_kind);
-                }
-                if (!hydrate_legacy_vhdl_candidates(
-                        target.library, owner_library,
-                        target.name, target.name_form,
-                        { }, library::VhdlIdentifierForm::unknown, kinds)) {
-                    return false;
-                }
-            }
             bool found { false };
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 if (!in_scope(location(index).name, target, owner_library)) {
@@ -409,9 +196,9 @@ namespace {
                     if ((!target.language.empty() && target.language != unit.language)
                         || (!required_kind.empty() ? unit.kind != required_kind : !hierarchy_unit(unit))
                         || (unit.language == "vhdl"
-                            ? !unit_name_matches(
-                                  unit, target.name, target.name_form)
-                            : !equal_name(
+                            ? !vhdl_identifier_matches(unit.name,
+                                  unit.name_form, target.name, target.name_form)
+                            : !workspace_name_equal(
                                   unit.name, target.name, unit.language))) {
                         continue;
                     }
@@ -421,9 +208,6 @@ namespace {
                         select_architectures(location(index).name, unit.name,
                             target.architecture, unit.name_form,
                             target.architecture_form);
-                        if (selection_error_) {
-                            return false;
-                        }
                     }
                 }
             }
@@ -435,14 +219,9 @@ namespace {
             const library::VhdlIdentifierForm entity_form,
             const library::VhdlIdentifierForm architecture_form)
         {
-            const std::array kinds { std::string_view { "architecture" } };
-            if (!hydrate_legacy_vhdl_candidates(library, library,
-                    entity, entity_form,
-                    architecture, architecture_form, kinds)) {
-                return;
-            }
             for (std::size_t index = 0; index < records_.size(); ++index) {
-                if (!equal_name(location(index).name, library, "vhdl")) {
+                if (!workspace_name_equal(
+                        location(index).name, library, "vhdl")) {
                     continue;
                 }
                 for (const auto& owned : artifact(index).units) {
@@ -450,12 +229,12 @@ namespace {
                     if (unit.language == "vhdl" && unit.kind == "architecture"
                         && entity_form != library::VhdlIdentifierForm::unknown
                         && unit.primary_name_form == entity_form
-                        && unit_name_matches(unit.primary_name,
+                        && vhdl_identifier_matches(unit.primary_name,
                             unit.primary_name_form, entity, entity_form)
                         && (architecture.empty()
                             || (architecture_form
                                     != library::VhdlIdentifierForm::unknown
-                                && unit_name_matches(unit.name,
+                                && vhdl_identifier_matches(unit.name,
                                     unit.name_form, architecture,
                                     architecture_form)))) {
                         select_record(index);
@@ -473,18 +252,9 @@ namespace {
                     == library::VhdlIdentifierForm::unknown) {
                 return;
             }
-            const std::array kinds {
-                std::string_view { "package" },
-                std::string_view { "package_body" }
-            };
-            if (!hydrate_legacy_vhdl_candidates(expected_library,
-                    expected_library,
-                    specification.name, specification.name_form,
-                    { }, library::VhdlIdentifierForm::unknown, kinds)) {
-                return;
-            }
             for (std::size_t index = 0; index < records_.size(); ++index) {
-                if (!equal_name(location(index).name, expected_library, "vhdl")) {
+                if (!workspace_name_equal(
+                        location(index).name, expected_library, "vhdl")) {
                     continue;
                 }
                 for (const auto& owned : artifact(index).units) {
@@ -492,7 +262,7 @@ namespace {
                     if (unit.language == "vhdl" && (unit.kind == "package" || unit.kind == "package_body")
                         && unit.name_form == specification.name_form
                         && unit.primary_name_form == specification.name_form
-                        && unit_name_matches(unit.name, unit.name_form,
+                        && vhdl_identifier_matches(unit.name, unit.name_form,
                             specification.name, specification.name_form)
                         && (unit.kind == "package_body" || !unit.primary_name.empty())) {
                         select_record(index);
@@ -611,7 +381,8 @@ namespace {
                             ? library::VhdlIdentifierForm::extended
                             : library::VhdlIdentifierForm::basic;
                         if (target.library.empty()
-                            || equal_name(target.library, "work", "vhdl")) {
+                            || workspace_name_equal(
+                                target.library, "work", "vhdl")) {
                             target.library = target_unit->identity->library;
                         }
                         const auto architecture_reference
@@ -653,7 +424,7 @@ namespace {
                     // from the owning architecture's library.
                     target.library = library;
                 } else {
-                    if (equal_name(target.library, "work", "vhdl")) {
+                    if (workspace_name_equal(target.library, "work", "vhdl")) {
                         target.library = library;
                     }
                 }
@@ -685,27 +456,9 @@ namespace {
             }
             if (reference.kind == Kind::package || reference.kind == Kind::import
                 || reference.kind == Kind::context || reference.kind == Kind::class_declaration) {
-                if (language == "vhdl" && target_unit && target_unit->vhdl
-                    && reference.kind != Kind::class_declaration) {
-                    std::vector<std::string_view> kinds;
-                    if (reference.kind == Kind::context) {
-                        kinds.push_back("context");
-                    } else {
-                        kinds.push_back("package");
-                        kinds.push_back("package_body");
-                    }
-                    const auto target_form = target_unit->vhdl->extended_name
-                        ? library::VhdlIdentifierForm::extended
-                        : library::VhdlIdentifierForm::basic;
-                    if (!hydrate_legacy_vhdl_candidates(reference.library,
-                            library,
-                            target_unit->vhdl->name, target_form, { },
-                            library::VhdlIdentifierForm::unknown, kinds)) {
-                        return;
-                    }
-                }
                 for (std::size_t index = 0; index < records_.size(); ++index) {
-                    if (!equal_name(location(index).name, reference.library, language)) {
+                    if (!workspace_name_equal(location(index).name,
+                            reference.library, language)) {
                         continue;
                     }
                     for (const auto& owned : artifact(index).units) {
@@ -723,15 +476,14 @@ namespace {
                             = reference.kind == Kind::context
                             ? unit.kind == "context"
                             : unit.kind == "package" && unit.primary_name.empty();
-                        const bool unit_matches_form
-                            = unit.language == "vhdl"
+                        const bool unit_matches_form = unit.language == "vhdl"
                             ? target_unit && target_unit->vhdl
-                                && unit_name_matches(
-                                    unit, target_unit->vhdl->name,
-                                    target_unit->vhdl->extended_name
-                                        ? library::VhdlIdentifierForm::extended
-                                        : library::VhdlIdentifierForm::basic)
-                            : equal_name(unit.name, reference.name, unit.language);
+                                && vhdl_identifier_matches(unit.name,
+                                    unit.name_form, target_unit->vhdl->name,
+                                    vhdl_identifier_form(
+                                        target_unit->vhdl->extended_name))
+                            : workspace_name_equal(
+                                  unit.name, reference.name, unit.language);
                         const bool matches = reference.kind == Kind::class_declaration
                             ? class_matches
                             : unit_kind_matches && unit_matches_form;
@@ -871,22 +623,13 @@ namespace {
                 selected.active_units.push_back(owned.unit);
                 select_package_body(location(index).name, owned.unit);
             }
-            if (selection_error_) {
-                return false;
-            }
             const auto design = load_workspace_objects(std::array { selected }, diagnostics_, false);
             if (!design) {
                 return false;
             }
             select_instances(*design);
-            if (selection_error_) {
-                return false;
-            }
             for (const auto& reference : design->references()) {
                 select_reference(*design, reference);
-                if (selection_error_) {
-                    return false;
-                }
             }
             for (const auto& unit : design->systemverilog_units()) {
                 select_configuration(unit);
@@ -898,12 +641,11 @@ namespace {
                         ? library::VhdlIdentifierForm::extended
                         : library::VhdlIdentifierForm::basic;
                     if (unit.configuration) {
-                        const auto spelling = unit.configuration->block.canonical.empty()
-                            ? unit.configuration->block.spelling : unit.configuration->block.canonical;
-                        target.architecture = decode_vhdl_identifier(spelling);
-                        target.architecture_form = extended_vhdl_identifier(spelling)
-                            ? library::VhdlIdentifierForm::extended
-                            : library::VhdlIdentifierForm::basic;
+                        const auto spelling = unit.configuration->block.text();
+                        target.architecture
+                            = support::decode_vhdl_identifier(spelling);
+                        target.architecture_form = vhdl_identifier_form(
+                            support::is_extended_vhdl_identifier(spelling));
                     }
                     select_target(target, unit.library, "entity");
                 }
@@ -948,7 +690,7 @@ namespace {
 
         const project::Config& config_;
         const workspace::Store& store_;
-        WorkspaceCatalogs catalogs_;
+        const WorkspaceCatalogs& catalogs_;
         diagnostic::Engine& diagnostics_;
         std::vector<RecordLocation> records_;
         std::vector<bool> selected_;
@@ -956,7 +698,6 @@ namespace {
         std::set<std::string> root_libraries_;
         std::set<std::string> involved_libraries_;
         bool stale_dependency_ { false };
-        bool selection_error_ { false };
     };
 
 } // namespace

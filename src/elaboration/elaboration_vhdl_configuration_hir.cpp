@@ -519,8 +519,7 @@ std::optional<std::int64_t> static_integer(
         return static_integer(compiled, *declaration->initializer, depth + 1U);
     }
     if (expression->kind == Kind::call && expression->operands.size() == 1U
-        && (expression->text == "'left" || expression->text == "'right"
-            || expression->text == "'low" || expression->text == "'high")) {
+        && (semantic::vhdl::is_scalar_bound_attribute(expression->text))) {
         const auto* prefix = expression_for(
             compiled, expression->operands.front());
         const auto* declaration = prefix != nullptr

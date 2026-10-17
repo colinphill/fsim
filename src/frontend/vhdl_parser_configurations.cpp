@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 namespace fsim::frontend {
 
@@ -36,9 +37,8 @@ VhdlParser::parse_vhdl_binding_indication(
         parse_vhdl_selected_name(
             "entity aspect in configuration binding",
             &result.entity_reference_spelling);
-    result.entity_name_extended = previous().text.size() >= 2U
-        && previous().text.front() == '\\'
-        && previous().text.back() == '\\';
+    result.entity_name_extended
+        = support::is_extended_vhdl_identifier(previous().text);
     // The architecture is optional (IEEE 1076-2008 7.3.2.2).
     if (match(TokenKind::LeftParen)) {
       const auto architecture =
@@ -47,9 +47,8 @@ VhdlParser::parse_vhdl_binding_indication(
       result.architecture_name =
           vhdl_name(architecture.text);
       result.architecture_name_spelling = architecture.text;
-      result.architecture_name_extended = architecture.text.size() >= 2U
-          && architecture.text.front() == '\\'
-          && architecture.text.back() == '\\';
+      result.architecture_name_extended
+          = support::is_extended_vhdl_identifier(architecture.text);
       expect(
           TokenKind::RightParen,
           "')' after configured architecture name",
@@ -61,9 +60,8 @@ VhdlParser::parse_vhdl_binding_indication(
         parse_vhdl_selected_name(
             "configuration aspect in configuration binding",
             &result.configuration_reference_spelling);
-    result.configuration_name_extended = previous().text.size() >= 2U
-        && previous().text.front() == '\\'
-        && previous().text.back() == '\\';
+    result.configuration_name_extended
+        = support::is_extended_vhdl_identifier(previous().text);
   } else if (match_keyword("open", true)) {
     result.kind = VhdlBindingAspectKind::Open;
   } else {
@@ -220,8 +218,7 @@ VhdlParser::parse_vhdl_block_configuration(
       expect_identifier(
           "block or generate name in configuration");
   result.block_name = vhdl_name(block.text);
-  result.block_name_extended = block.text.size() >= 2U
-      && block.text.front() == '\\' && block.text.back() == '\\';
+  result.block_name_extended = support::is_extended_vhdl_identifier(block.text);
   if (match(TokenKind::LeftParen)) {
     // A generate specification is a static expression or a static discrete
     // range (IEEE 1076-2008 3.4.2).
@@ -296,16 +293,14 @@ DesignUnit VhdlParser::parse_vhdl_configuration(
   const auto name =
       expect_identifier("configuration name");
   unit.name = vhdl_name(name.text);
-  unit.vhdl_extended_name = name.text.size() >= 2U
-      && name.text.front() == '\\' && name.text.back() == '\\';
+  unit.vhdl_extended_name = support::is_extended_vhdl_identifier(name.text);
   expect_keyword(
       "of", true, "FSIM-VHDL-PARSE-204");
   const auto entity_name =
       parse_vhdl_selected_name(
           "entity name in configuration declaration");
-  unit.vhdl_extended_primary_name = previous().text.size() >= 2U
-      && previous().text.front() == '\\'
-      && previous().text.back() == '\\';
+  unit.vhdl_extended_primary_name
+      = support::is_extended_vhdl_identifier(previous().text);
   const auto separator = entity_name.find_last_of('.');
   unit.primary_name =
       entity_name.substr(

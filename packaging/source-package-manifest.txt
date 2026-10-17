@@ -576,11 +576,14 @@ include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
 include/fsim/support/environment.hpp
 include/fsim/support/identity128.hpp
+include/fsim/support/index_distance.hpp
 include/fsim/support/native_filesystem.hpp
 include/fsim/support/path.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/teardown.hpp
+include/fsim/support/vhdl_identifier.hpp
+include/fsim/support/vhdl_time.hpp
 include/fsim/systemc.hpp
 include/fsim/systemc/accellera.hpp
 include/fsim/systemc/hierarchy.hpp
@@ -677,6 +680,7 @@ src/app/application_compiled_environment_sv.hpp
 src/app/application_compiled_environment_vhdl.cpp
 src/app/application_compiled_environment_vhdl.hpp
 src/app/application_compiled_hir_cache_revision.hpp
+src/app/application_compiled_source.hpp
 src/app/application_constraint_lowering.cpp
 src/app/application_container_profile.hpp
 src/app/application_coverage_command.cpp
@@ -998,6 +1002,7 @@ src/elaboration/hierarchy_vhdl_instance_worklist.cpp
 src/elaboration/hierarchy_vhdl_processes.cpp
 src/elaboration/hierarchy_vhdl_resolution.cpp
 src/elaboration/hierarchy_vhdl_subprograms.cpp
+src/elaboration/hir_output_conversion.hpp
 src/elaboration/lowerer_driver_regions.cpp
 src/elaboration/lowerer_driver_regions.hpp
 src/elaboration/lowerer_hir_callable.cpp
@@ -1022,6 +1027,7 @@ src/elaboration/lowerer_hir_vhdl_vital_state.cpp
 src/elaboration/lowerer_hir_vhdl_vital_timing.cpp
 src/elaboration/lowerer_internal.hpp
 src/elaboration/lowerer_sensitivity.cpp
+src/elaboration/lowerer_vhdl_vital_names.hpp
 src/elaboration/scoped_bindings.hpp
 src/elaboration/specialization_cache.hpp
 src/elaboration/systemverilog_template_bindings.hpp
@@ -1072,6 +1078,7 @@ src/frontend/sdf_parser.cpp
 src/frontend/string_case.hpp
 src/frontend/systemverilog_scalar_folding.cpp
 src/frontend/systemverilog_standard_package.cpp
+src/frontend/toggle_inventory_internal.hpp
 src/frontend/verilog_coverage_conditions.cpp
 src/frontend/verilog_coverage_points.cpp
 src/frontend/verilog_parser.cpp

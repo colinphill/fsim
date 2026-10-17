@@ -693,7 +693,7 @@ bool load_required_mapped_libraries(
             *compiled_design, library_name);
         std::set<std::string> indexed_udp_keys;
         std::set<std::string> indexed_class_identities;
-        for (auto& entry : metadata->units) {
+        for (const auto& entry : metadata->units) {
             if (entry.kind == "primitive") {
                 const auto* declaration = find_compiled_udp(
                     *compiled_design, library_name, entry.name);
@@ -750,55 +750,14 @@ bool load_required_mapped_libraries(
                     metadata->compiled_hir_checksum);
                 continue;
             }
-            const auto metadata_identity_matches_compiled = [](
-                const library::UnitIndexEntry& indexed,
-                const library::UnitIndexEntry& compiled) {
-                const bool forms_match = indexed.language == "vhdl"
-                    ? (indexed.name_form
-                            == library::VhdlIdentifierForm::unknown
-                        || indexed.name_form == compiled.name_form)
-                        && (indexed.primary_name_form
-                                == library::VhdlIdentifierForm::unknown
-                            || indexed.primary_name_form
-                                == compiled.primary_name_form)
-                    : indexed.name_form
-                            == library::VhdlIdentifierForm::unknown
-                        && indexed.primary_name_form
-                            == library::VhdlIdentifierForm::unknown;
-                return forms_match
-                    && indexed.language == compiled.language
-                    && indexed.kind == compiled.kind
-                    && indexed.name == compiled.name
-                    && indexed.primary_name == compiled.primary_name
-                    && indexed.architecture == compiled.architecture
-                    && indexed.artifact == compiled.artifact
-                    && indexed.checksum == compiled.checksum
-                    && indexed.standard == compiled.standard
-                    && indexed.compatibility_profile
-                        == compiled.compatibility_profile;
-            };
-            auto expected = remaining_compiled_units.end();
-            std::size_t expected_count = 0U;
-            for (auto candidate = remaining_compiled_units.begin();
-                 candidate != remaining_compiled_units.end(); ++candidate) {
-                if (metadata_identity_matches_compiled(entry, *candidate)) {
-                    expected = candidate;
-                    ++expected_count;
-                }
-            }
-            if (expected_count != 1U) {
-                diagnostics.error(
-                    "FSIM-LIB-0008",
-                    expected_count == 0U
-                        ? "mapped unit identity does not match its compiled-HIR index"
-                        : "legacy mapped unit identity is ambiguous without VHDL identifier forms");
+            const auto expected = std::ranges::find(
+                remaining_compiled_units, entry);
+            if (expected == remaining_compiled_units.end()) {
+                diagnostics.error("FSIM-LIB-0008",
+                    "mapped unit identity does not match its compiled-HIR "
+                    "index");
                 return false;
             }
-            // A legacy metadata index is unknown, not basic. The checksummed
-            // compiled-HIR bundle is authoritative and can safely restore the
-            // omitted forms only when this match was unique.
-            entry.name_form = expected->name_form;
-            entry.primary_name_form = expected->primary_name_form;
             const auto local_duplicate = std::ranges::any_of(
                 checked.parsed.units, [&](const auto& existing) {
                     return metadata_identity_matches(entry, existing)

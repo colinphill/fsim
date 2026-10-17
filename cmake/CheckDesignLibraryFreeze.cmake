@@ -50,15 +50,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "0c9292e41eeaaae065fb96ea678518f2aa83f35c7a15574a146d171ccd466f5a")
+  "843722e477e3fd960a1dbee482d95ea3c817a88feb02c90acf1ebde172a2a44f")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "design/library contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 57)
-  message(FATAL_ERROR "design/library contract requires SPDX, header and 55 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 55)
+  message(FATAL_ERROR "design/library contract requires SPDX, header and 53 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -66,7 +66,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
    NOT FSIM_HEADER STREQUAL "kind\tname\tcontract")
   message(FATAL_ERROR "design/library contract header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 56)
+foreach(FSIM_INDEX RANGE 2 54)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -190,4 +190,4 @@ fsim_require_design_library_tokens("${FSIM_TEST_BUILD}"
   "CheckDesignLibraryFreeze.cmake")
 
 message(STATUS
-  "design/library schema freeze passed: rows=55 digest=${FSIM_CONTRACT_DIGEST}")
+  "design/library schema freeze passed: rows=53 digest=${FSIM_CONTRACT_DIGEST}")

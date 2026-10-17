@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_runtime_path_codec.hpp"
+#include "../elaboration/elaborated_design_process_access.hpp"
 #include "../runtime/simir_operation_list_sharing.hpp"
 
 #include "application_design_artifact_codec_internal.hpp"
@@ -1061,7 +1062,11 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
             "runtime state is missing its process-row table", source_name);
         return std::nullopt;
     }
-    if (!validate_package_startup_rows(
+    // A trusted artifact's derived package startup metadata is not
+    // cross-checked again; FSIM_VERIFY_ARTIFACT=1 keeps the check.
+    const bool trusted = elaboration::detail::TrustedArtifactLoad::active();
+    if (!trusted
+        && !validate_package_startup_rows(
             dto.state, mutable_process_table->rows, diagnostics, source_name)) {
         return std::nullopt;
     }
@@ -1179,7 +1184,8 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
             source_name);
         return std::nullopt;
     }
-    if (!validate_typed_mailbox_operations(
+    if (!trusted
+        && !validate_typed_mailbox_operations(
             *mutable_process_table, diagnostics, source_name)) {
         return std::nullopt;
     }

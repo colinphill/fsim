@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "lowerer_vhdl_vital_names.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
@@ -9,48 +10,9 @@
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
+using namespace vital_detail;
 
 namespace {
-
-std::string_view memory_name(const semantic::vhdl::Name& name)
-{
-    return name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
-}
-
-std::string canonical_memory_identifier(const std::string_view name)
-{
-    auto result = std::string { name };
-    lowercase_ascii(result);
-    return result;
-}
-
-bool has_vital_memory_qualification(const std::string_view name)
-{
-    const auto member_separator = name.find_last_of('.');
-    if (member_separator == std::string_view::npos) {
-        return true;
-    }
-    const auto owner = name.substr(0U, member_separator);
-    const auto package_separator = owner.find_last_of('.');
-    if (package_separator == std::string_view::npos) {
-        return equal_ignoring_ascii_case(owner, "vital_memory");
-    }
-    return equal_ignoring_ascii_case(
-               owner.substr(package_separator + 1U), "vital_memory")
-        && equal_ignoring_ascii_case(
-            owner.substr(0U, package_separator), "ieee");
-}
-
-SourceLocation memory_source_location(const frontend::SourceSpan& span)
-{
-    return SourceLocation {
-        span.source_name.str(),
-        static_cast<std::uint32_t>(span.begin.line),
-        static_cast<std::uint32_t>(span.begin.column),
-    };
-}
 
 struct HirVitalMemoryActuals {
     std::optional<semantic::ExpressionId> words;
@@ -78,21 +40,13 @@ bool Lowerer::is_hir_vhdl_vital_memory_expression(
     }
     const auto& source = *expression->vhdl;
     const auto& reference = *source.referenced_name;
-    const auto qualified_name = memory_name(reference);
+    const auto qualified_name = reference.text();
     if (!equal_ignoring_ascii_case(
             simple_name_of(qualified_name), "vitaldeclarememory")
-        || !has_vital_memory_qualification(qualified_name)) {
+        || !has_vital_package_qualification(qualified_name, "vital_memory")) {
         return false;
     }
-    if (reference.selected || !reference.overloads.empty()) {
-        return false;
-    }
-    semantic::CompiledDesignResolver resolver { *specialized_hir_unit_ };
-    return resolver.resolve_vhdl_callable_candidates(
-                       reference, source.scope)
-               .candidates.empty()
-        && resolver.vhdl_standard_package_member_visible(
-            reference, source.scope);
+    return hir_vhdl_vital_intrinsic_visible(reference, source.scope);
 }
 
 std::optional<RegisterId>
@@ -154,12 +108,6 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
         "noofwords", "noofbitsperword", "memoryloadfile",
         "binaryloadfile"
     };
-    const auto expression_span = [&](const semantic::ExpressionId id) {
-        const auto value = specialized_hir_unit_->find_expression(id);
-        return value && value->vhdl != nullptr
-            ? hir_source_span(value->vhdl->source)
-            : span;
-    };
     std::size_t positional { };
     for (std::size_t index { }; index < source.operands.size(); ++index) {
         auto name = index < source.argument_names.size()
@@ -174,21 +122,21 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
                     "FSIM-ELAB-VITALMEM-001",
                     "VitalDeclareMemory has too many positional actuals for "
                     "the selected profile",
-                    expression_span(source.operands[index]));
+                    hir_expression_span(source.operands[index], span));
                 return std::nullopt;
             }
             name = subword_profile
                 ? with_subword[positional++]
                 : without_subword[positional++];
         }
-        const auto canonical_name = canonical_memory_identifier(name);
+        const auto canonical_name = lowercase_ascii_copy(name);
         const auto assign = [&](std::optional<semantic::ExpressionId>& target) {
             if (target) {
                 report(
                     "FSIM-ELAB-VITALMEM-001",
                     "VitalDeclareMemory has a duplicate '"
                         + canonical_name + "' association",
-                    expression_span(source.operands[index]));
+                    hir_expression_span(source.operands[index], span));
                 return false;
             }
             target = source.operands[index];
@@ -215,7 +163,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
                     "FSIM-ELAB-VITALMEM-001",
                     "VitalDeclareMemory has unknown association '"
                         + canonical_name + "'",
-                    expression_span(source.operands[index]));
+                    hir_expression_span(source.operands[index], span));
             }
             return std::nullopt;
         }
@@ -253,7 +201,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
                 "FSIM-ELAB-VITALMEM-003",
                 "VitalDeclareMemory MemoryLoadFile must be a string "
                 "expression",
-                expression_span(*actuals.load_file));
+                hir_expression_span(*actuals.load_file, span));
             return std::nullopt;
         }
         load_file = *lowered;
@@ -269,7 +217,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
             report(
                 "FSIM-ELAB-VITALMEM-003",
                 "VitalDeclareMemory BinaryLoadFile must be a static Boolean",
-                expression_span(*actuals.binary));
+                hir_expression_span(*actuals.binary, span));
             return std::nullopt;
         }
         binary = *value != 0;
@@ -286,7 +234,8 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
             && !load_expression->vhdl->decoded_string->empty()) {
             auto path = fsim::support::path_from_utf8(
                 *load_expression->vhdl->decoded_string);
-            const auto load_span = expression_span(*actuals.load_file);
+            const auto load_span
+                = hir_expression_span(*actuals.load_file, span);
             if (path.is_relative()) {
                 path = fsim::support::path_from_utf8(
                            frontend::physical_source(load_span))
@@ -329,7 +278,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
         binary,
         embedded_load,
         std::move(embedded_load_text),
-        memory_source_location(span),
+        runtime_source_location(span),
     });
     return destination;
 }

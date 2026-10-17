@@ -55,31 +55,6 @@ namespace {
             normalized_left, normalized_right);
     }
 
-    bool compiled_vhdl_unit_name_equal(
-        const semantic::vhdl::Unit& unit,
-        const std::string_view spelling)
-    {
-        const bool extended = spelling.size() >= 2U
-            && spelling.front() == '\\' && spelling.back() == '\\';
-        if (unit.extended_name != extended) {
-            return false;
-        }
-        if (!extended) {
-            return compiled_vhdl_name_equal(unit.name, spelling);
-        }
-        std::string decoded;
-        decoded.reserve(spelling.size() - 2U);
-        for (std::size_t index = 1U;
-             index + 1U < spelling.size(); ++index) {
-            decoded.push_back(spelling[index]);
-            if (spelling[index] == '\\' && index + 2U < spelling.size()
-                && spelling[index + 1U] == '\\') {
-                ++index;
-            }
-        }
-        return unit.name == decoded;
-    }
-
     std::string compiled_vhdl_occurrence_declaration_identity(
         const std::string_view identity,
         const std::string_view relative_path,
@@ -114,14 +89,6 @@ namespace {
         result.insert(template_begin,
             std::string { relative_path } + ".");
         return result;
-    }
-
-    std::string_view compiled_systemverilog_library(
-        const semantic::sv::Unit& unit)
-    {
-        return unit.library.empty()
-            ? std::string_view { "work" }
-            : std::string_view { unit.library };
     }
 
     bool compiled_systemverilog_selectable(
@@ -160,7 +127,7 @@ namespace {
         if (!type) {
             return true;
         }
-        const auto scalar = compiled_systemverilog_scalar_kind(
+        const auto scalar = frontend::systemverilog_scalar_kind(
             type->target.spelling);
         return scalar == frontend::SystemVerilogScalarKind::None
             || scalar == frontend::SystemVerilogScalarKind::Time;
@@ -248,64 +215,6 @@ namespace {
             return nullptr;
         }
         return &files[file.value()].physical_name;
-    }
-
-    frontend::PortDirection compiled_port_direction(
-        const semantic::sv::Direction direction) noexcept
-    {
-        switch (direction) {
-        case semantic::sv::Direction::input:
-            return frontend::PortDirection::Input;
-        case semantic::sv::Direction::output:
-            return frontend::PortDirection::Output;
-        case semantic::sv::Direction::inout:
-            return frontend::PortDirection::Inout;
-        case semantic::sv::Direction::ref:
-            return frontend::PortDirection::Ref;
-        case semantic::sv::Direction::unknown:
-            break;
-        }
-        return frontend::PortDirection::Unknown;
-    }
-
-    frontend::PortDirection compiled_port_direction(
-        const semantic::vhdl::Direction direction) noexcept
-    {
-        switch (direction) {
-        case semantic::vhdl::Direction::input:
-            return frontend::PortDirection::Input;
-        case semantic::vhdl::Direction::output:
-            return frontend::PortDirection::Output;
-        case semantic::vhdl::Direction::inout:
-            return frontend::PortDirection::Inout;
-        case semantic::vhdl::Direction::buffer:
-            return frontend::PortDirection::Buffer;
-        case semantic::vhdl::Direction::unknown:
-            break;
-        }
-        return frontend::PortDirection::Unknown;
-    }
-
-    frontend::ValueDomain compiled_value_domain(
-        const semantic::vhdl::ValueDomain domain) noexcept
-    {
-        switch (domain) {
-        case semantic::vhdl::ValueDomain::bit2:
-            return frontend::ValueDomain::Bit2;
-        case semantic::vhdl::ValueDomain::logic4:
-            return frontend::ValueDomain::Logic4;
-        case semantic::vhdl::ValueDomain::logic9:
-            return frontend::ValueDomain::Logic9;
-        case semantic::vhdl::ValueDomain::boolean:
-            return frontend::ValueDomain::Boolean;
-        case semantic::vhdl::ValueDomain::integer:
-            return frontend::ValueDomain::Integer;
-        case semantic::vhdl::ValueDomain::string:
-            return frontend::ValueDomain::String;
-        case semantic::vhdl::ValueDomain::unknown:
-            break;
-        }
-        return frontend::ValueDomain::Unknown;
     }
 
     struct CompiledContainerBridgeShape {
@@ -662,7 +571,7 @@ namespace {
             if (decimal.size() == 1U
                 && (decimal.front() == 'x' || decimal.front() == 'X'
                     || decimal.front() == 'z' || decimal.front() == 'Z')) {
-                bits.assign(width, static_cast<char>(std::tolower(static_cast<unsigned char>(decimal.front()))));
+                bits.assign(width, support::ascii_lower(decimal.front()));
                 return bits;
             }
             if (decimal.empty()
@@ -1082,38 +991,6 @@ namespace {
         std::string identity { "vhdl-array-shape-v2" };
         append_compiled_vhdl_shape_type(identity, type, 0U);
         return identity;
-    }
-
-    std::vector<std::string_view> compiled_vhdl_name_parts(
-        const std::string_view spelling)
-    {
-        std::vector<std::string_view> result;
-        std::size_t begin { };
-        bool in_extended_identifier { };
-        for (std::size_t index { }; index < spelling.size(); ++index) {
-            if (spelling[index] == '\\') {
-                if (in_extended_identifier && index + 1U < spelling.size()
-                    && spelling[index + 1U] == '\\') {
-                    ++index;
-                    continue;
-                }
-                in_extended_identifier = !in_extended_identifier;
-                continue;
-            }
-            if (spelling[index] != '.' || in_extended_identifier) {
-                continue;
-            }
-            if (index == begin) {
-                return { };
-            }
-            result.push_back(spelling.substr(begin, index - begin));
-            begin = index + 1U;
-        }
-        if (begin == spelling.size()) {
-            return { };
-        }
-        result.push_back(spelling.substr(begin));
-        return result;
     }
 
     std::string_view compiled_vhdl_effective_library(
@@ -1540,7 +1417,7 @@ namespace {
                 return false;
             }
             auto spelling = std::string_view { current.type_mark.spelling };
-            constexpr auto builtin_prefix = std::string_view { "@builtin:" };
+            constexpr auto builtin_prefix = semantic::vhdl::builtin_prefix;
             const bool compiler_builtin = spelling.starts_with(builtin_prefix);
             if (compiler_builtin) {
                 spelling.remove_prefix(builtin_prefix.size());
@@ -1814,15 +1691,6 @@ namespace {
                 });
         }
 
-        [[nodiscard]] static std::uint64_t range_distance(
-            const std::int64_t left, const std::int64_t right)
-        {
-            return left >= right
-                ? static_cast<std::uint64_t>(left)
-                    - static_cast<std::uint64_t>(right)
-                : static_cast<std::uint64_t>(right)
-                    - static_cast<std::uint64_t>(left);
-        }
 
         [[nodiscard]] static bool same_array_lengths(
             const std::vector<semantic::vhdl::RangeConstraint>& left,
@@ -1838,11 +1706,107 @@ namespace {
                     if (first_null || second_null) {
                         return first_null == second_null;
                     }
-                    return range_distance(*first.left, *first.right)
-                        == range_distance(*second.left, *second.right);
+                    return index_distance(*first.left, *first.right)
+                        == index_distance(*second.left, *second.right);
                 });
         }
     };
+
+    // The type an index subtype mark names. Only an unresolved standard
+    // spelling denotes the predefined CHARACTER without a retained
+    // declaration; a scoped user CHARACTER resolves to its own type.
+    struct CompiledVhdlIndexType {
+        std::optional<semantic::TypeId> type;
+        bool builtin_character { };
+    };
+    [[nodiscard]] CompiledVhdlIndexType compiled_vhdl_index_type(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::CompiledDesignResolver& resolver,
+        const semantic::vhdl::Name& index_subtype,
+        const std::optional<semantic::ScopeId> owner_scope)
+    {
+        CompiledVhdlIndexType result;
+        if (index_subtype.selected) {
+            const auto declaration = specialization.find_declaration(
+                *index_subtype.selected);
+            if (declaration && declaration->vhdl != nullptr) {
+                result.type = declaration->vhdl->declared_type;
+            }
+        }
+        if (!result.type) {
+            result.type = resolver.resolve_vhdl_named_type(
+                index_subtype.text(),
+                owner_scope);
+        }
+        const auto standard_character = [](const std::string_view name) {
+            return compiled_vhdl_name_equal(name, "character")
+                || compiled_vhdl_name_equal(name, "standard.character")
+                || compiled_vhdl_name_equal(name, "std.standard.character");
+        };
+        result.builtin_character = !result.type
+            && (standard_character(index_subtype.spelling)
+                || standard_character(index_subtype.canonical));
+        return result;
+    }
+
+    // The position of an enumeration literal bound in its index type, or of
+    // a character literal of the predefined CHARACTER.
+    [[nodiscard]] std::optional<std::int64_t> compiled_vhdl_index_literal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::CompiledDesignResolver& resolver,
+        const CompiledVhdlIndexType& index_type,
+        const semantic::ExpressionId expression)
+    {
+        if (index_type.type) {
+            if (const auto ordinal = resolver.vhdl_enumeration_literal_ordinal(
+                    *index_type.type, expression)) {
+                return ordinal;
+            }
+        }
+        if (!index_type.builtin_character) {
+            return std::nullopt;
+        }
+        const auto literal = specialization.find_expression(expression);
+        if (literal && literal->vhdl != nullptr
+            && literal->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && literal->vhdl->text.size() == 3U
+            && literal->vhdl->text.front() == '\''
+            && literal->vhdl->text.back() == '\'') {
+            return static_cast<std::int64_t>(
+                static_cast<unsigned char>(literal->vhdl->text[1]));
+        }
+        return std::nullopt;
+    }
+
+    // A generic with a default: a constant with an initial value or a
+    // subprogram with a default subprogram (IEEE 1076-2008 6.5.6.2).
+    [[nodiscard]] bool vhdl_generic_has_default(
+        const semantic::vhdl::Declaration* declaration)
+    {
+        if (declaration == nullptr) {
+            return false;
+        }
+        using Form = semantic::vhdl::DeclarationForm;
+        if (declaration->form == Form::generic_constant) {
+            return declaration->initializer.has_value();
+        }
+        return (declaration->form == Form::generic_function
+                   || declaration->form == Form::generic_procedure)
+            && declaration->callable && declaration->callable->default_callable;
+    }
+
+    // The INTEGER width the specialization's unit's own standard gives: 64
+    // bits under VHDL-2019 (IEEE 1076-2019 5.2.3.1), otherwise 32.
+    [[nodiscard]] std::size_t compiled_vhdl_unit_integer_width(
+        const semantic::SpecializedHirUnit& specialization)
+    {
+        const auto unit = specialization.design().find_unit(
+            specialization.unit());
+        return unit && unit->vhdl != nullptr && unit->vhdl->standard == "2019"
+            ? 64U
+            : 32U;
+    }
 
     // The width of STD.STANDARD.INTEGER for the specialization's unit: 64
     // bits under VHDL-2019 (IEEE 1076-2019 5.2.3.1), otherwise 32.
@@ -2019,10 +1983,8 @@ namespace {
             if (literal && literal->vhdl != nullptr && depth < 8U
                 && literal->vhdl->kind == semantic::vhdl::ExpressionKind::call
                 && literal->vhdl->operands.size() == 1U
-                && (literal->vhdl->text == "'left"
-                    || literal->vhdl->text == "'right"
-                    || literal->vhdl->text == "'low"
-                    || literal->vhdl->text == "'high")) {
+                && (semantic::vhdl::is_scalar_bound_attribute(
+                    literal->vhdl->text))) {
                 const auto prefix = specialization.find_expression(
                     literal->vhdl->operands.front());
                 const auto declaration = prefix && prefix->vhdl != nullptr
@@ -2084,54 +2046,14 @@ namespace {
                 if (authoritative_endpoints) {
                     return value;
                 }
-                if (index_subtype != nullptr) {
-                    const auto spelling = index_subtype->canonical.empty()
-                        ? std::string_view { index_subtype->spelling }
-                        : std::string_view { index_subtype->canonical };
-                    std::optional<semantic::TypeId> index_type;
-                    if (index_subtype->selected) {
-                        const auto declaration = specialization.find_declaration(
-                            *index_subtype->selected);
-                        if (declaration && declaration->vhdl != nullptr) {
-                            index_type = declaration->vhdl->declared_type;
-                        }
-                    }
-                    if (!index_type) {
-                        index_type = type_resolver.resolve_vhdl_named_type(
-                            spelling, owner_scope);
-                    }
-                    if (expression && index_type) {
-                        if (const auto ordinal
-                            = type_resolver.vhdl_enumeration_literal_ordinal(
-                                *index_type, *expression)) {
-                            return ordinal;
-                        }
-                    }
-                    const auto is_standard_character_name = [](
-                        const std::string_view name) {
-                        return compiled_vhdl_name_equal(name, "character")
-                            || compiled_vhdl_name_equal(
-                                name, "standard.character")
-                            || compiled_vhdl_name_equal(
-                                name, "std.standard.character");
-                    };
-                    const bool builtin_character = !index_type
-                        && (is_standard_character_name(index_subtype->spelling)
-                            || is_standard_character_name(
-                                index_subtype->canonical));
-                    if (expression && builtin_character) {
-                        const auto literal = specialization.find_expression(
-                            *expression);
-                        if (literal && literal->vhdl != nullptr
-                            && literal->vhdl->kind
-                                == semantic::vhdl::ExpressionKind::logic_literal
-                            && literal->vhdl->text.size() == 3U
-                            && literal->vhdl->text.front() == '\''
-                            && literal->vhdl->text.back() == '\'') {
-                            return static_cast<std::int64_t>(
-                                static_cast<unsigned char>(
-                                    literal->vhdl->text[1]));
-                        }
+                if (index_subtype != nullptr && expression) {
+                    const auto index_type = compiled_vhdl_index_type(
+                        specialization, type_resolver, *index_subtype,
+                        owner_scope);
+                    if (const auto position = compiled_vhdl_index_literal(
+                            specialization, type_resolver, index_type,
+                            *expression)) {
+                        return position;
                     }
                 }
                 return boundary(boundary, value, expression);
@@ -2502,7 +2424,7 @@ namespace {
                 // leaves unbounded.
                 const auto effective = compiled_vhdl_link_subtype(
                     specialization, subtype, owner_scope);
-                const auto effective_domain = compiled_value_domain(
+                const auto effective_domain = vhdl_value_domain(
                     effective.domain);
                 if (effective.executable_width
                     && compiled_vhdl_scalar_domain(effective_domain)) {
@@ -2551,7 +2473,7 @@ namespace {
                     return resolve_subtype(linked);
                 }
             }
-            const auto domain = compiled_value_domain(subtype.domain);
+            const auto domain = vhdl_value_domain(subtype.domain);
             const bool has_residual_constraint = std::ranges::any_of(
                 subtype.constraints,
                 [](const semantic::vhdl::RangeConstraint& constraint) {
@@ -2859,10 +2781,7 @@ namespace {
         const frontend::ValueDomain domain,
         const std::size_t width)
     {
-        if (const auto separator = spelling.find_last_of(".:");
-            separator != std::string_view::npos) {
-            spelling.remove_prefix(separator + 1U);
-        }
+        spelling = simple_name_of(spelling);
         if (compiled_vhdl_name_equal(spelling, "real") && width == 64U) {
             return unsigned_value(std::bit_cast<std::uint64_t>(
                 -std::numeric_limits<double>::max()), 64U);
@@ -2877,10 +2796,7 @@ namespace {
         if (compiled_vhdl_name_equal(spelling, "positive")) {
             return unsigned_value(1U, width);
         }
-        const auto minimum = width == 64U
-            ? std::numeric_limits<std::int64_t>::min()
-            : static_cast<std::int64_t>(
-                  std::numeric_limits<std::int32_t>::min());
+        const auto minimum = vhdl_integer_minimum(width);
         return unsigned_value(static_cast<std::uint64_t>(minimum), width);
     }
 
@@ -2923,10 +2839,7 @@ namespace {
         if (type.domain == frontend::ValueDomain::Integer && width != 0U) {
             const auto default_value = type.integer_range
                 ? type.integer_range->left
-                : type.vhdl_integer_storage_width == 64U
-                ? std::numeric_limits<std::int64_t>::min()
-                : static_cast<std::int64_t>(
-                      std::numeric_limits<std::int32_t>::min());
+                : vhdl_integer_minimum(type.vhdl_integer_storage_width);
             return unsigned_value(
                 static_cast<std::uint64_t>(default_value), width);
         }
@@ -2972,10 +2885,7 @@ namespace {
             }
             const auto simple_member = [&] {
                 auto spelling = std::string_view { member.spelling };
-                if (const auto separator = spelling.find_last_of(".:");
-                    separator != std::string_view::npos) {
-                    spelling.remove_prefix(separator + 1U);
-                }
+                spelling = simple_name_of(spelling);
                 return spelling;
             }();
             if (!result.is_logic9()
@@ -3658,28 +3568,9 @@ namespace {
         const auto predefined_array_name = [](
             const semantic::vhdl::BuiltinTypeIdentity identity)
             -> std::optional<std::string_view> {
-            using Builtin = semantic::vhdl::BuiltinTypeIdentity;
-            switch (identity) {
-            case Builtin::ieee_std_logic_1164_std_logic_vector:
-                return "std_logic_vector";
-            case Builtin::ieee_std_logic_1164_std_ulogic_vector:
-                return "std_ulogic_vector";
-            case Builtin::std_standard_string:
-                return "string";
-            case Builtin::std_standard_bit_vector:
-                return "bit_vector";
-            case Builtin::std_standard_boolean_vector:
-                return "boolean_vector";
-            case Builtin::std_standard_integer_vector:
-                return "integer_vector";
-            case Builtin::std_standard_real_vector:
-                return "real_vector";
-            case Builtin::std_standard_time_vector:
-                return "time_vector";
-            case Builtin::none:
-                return std::nullopt;
-            }
-            return std::nullopt;
+            const auto name = semantic::vhdl::builtin_type_name(identity);
+            return name.empty() ? std::nullopt
+                                : std::optional<std::string_view> { name };
         };
         const auto nominal_identity = [&](const semantic::vhdl::TypeDefinition&
                                               definition) {
@@ -3707,57 +3598,17 @@ namespace {
             const semantic::vhdl::RangeConstraint& constraint,
             const semantic::vhdl::Name& index_subtype)
             -> std::optional<frontend::IntegerRange> {
-            const auto spelling = index_subtype.canonical.empty()
-                ? std::string_view { index_subtype.spelling }
-                : std::string_view { index_subtype.canonical };
-            std::optional<semantic::TypeId> index_type;
-            if (index_subtype.selected) {
-                const auto declaration = specialization.find_declaration(
-                    *index_subtype.selected);
-                if (declaration && declaration->vhdl != nullptr) {
-                    index_type = declaration->vhdl->declared_type;
-                }
-            }
-            if (!index_type) {
-                index_type = type_resolver.resolve_vhdl_named_type(
-                    spelling, owner_scope);
-            }
-            const auto is_standard_character_name = [](
-                const std::string_view name) {
-                return compiled_vhdl_name_equal(name, "character")
-                    || compiled_vhdl_name_equal(
-                        name, "standard.character")
-                    || compiled_vhdl_name_equal(
-                        name, "std.standard.character");
-            };
-            // Only unresolved standard spellings denote the predefined
-            // CHARACTER here. A scoped user declaration named CHARACTER is
-            // found by resolve_vhdl_named_type and keeps its own enum ordinals.
-            const bool builtin_character = !index_type
-                && (is_standard_character_name(index_subtype.spelling)
-                    || is_standard_character_name(index_subtype.canonical));
+            const auto index_type = compiled_vhdl_index_type(
+                specialization, type_resolver, index_subtype, owner_scope);
             const auto contextual_boundary = [&](
                 const std::optional<std::int64_t> value,
                 const std::optional<semantic::ExpressionId> expression)
                 -> std::optional<std::int64_t> {
-                if (expression && index_type) {
-                    if (const auto ordinal
-                        = type_resolver.vhdl_enumeration_literal_ordinal(
-                            *index_type, *expression)) {
-                        return ordinal;
-                    }
-                }
-                if (expression && builtin_character) {
-                    const auto literal = specialization.find_expression(
-                        *expression);
-                    if (literal && literal->vhdl != nullptr
-                        && literal->vhdl->kind
-                            == semantic::vhdl::ExpressionKind::logic_literal
-                        && literal->vhdl->text.size() == 3U
-                        && literal->vhdl->text.front() == '\''
-                        && literal->vhdl->text.back() == '\'') {
-                        return static_cast<std::int64_t>(
-                            static_cast<unsigned char>(literal->vhdl->text[1]));
+                if (expression) {
+                    if (const auto position = compiled_vhdl_index_literal(
+                            specialization, type_resolver, index_type,
+                            *expression)) {
+                        return position;
                     }
                 }
                 return boundary(value, expression);
@@ -3911,7 +3762,7 @@ namespace {
             }
             PackedTypeMetadata result;
             result.spelling = subtype.type_mark.spelling;
-            result.domain = compiled_value_domain(subtype.domain);
+            result.domain = vhdl_value_domain(subtype.domain);
             result.is_signed = subtype.signed_value
                 || result.domain == frontend::ValueDomain::Integer;
             result.vhdl_integer_storage_width
@@ -4005,22 +3856,12 @@ namespace {
                                 || compiled_vhdl_name_equal(name, "u_float")
                             ? std::string { "integer" }
                             : std::string { "natural" };
-                    const auto current_unit
-                        = specialization.design().find_unit(
-                            specialization.unit());
                     const auto integer_width
-                        = current_unit && current_unit->vhdl != nullptr
-                            && current_unit->vhdl->standard == "2019"
-                        ? 64U
-                        : 32U;
-                    const auto integer_minimum = integer_width == 64U
-                        ? std::numeric_limits<std::int64_t>::min()
-                        : static_cast<std::int64_t>(
-                              std::numeric_limits<std::int32_t>::min());
-                    const auto integer_maximum = integer_width == 64U
-                        ? std::numeric_limits<std::int64_t>::max()
-                        : static_cast<std::int64_t>(
-                              std::numeric_limits<std::int32_t>::max());
+                        = compiled_vhdl_unit_integer_width(specialization);
+                    const auto integer_minimum
+                        = vhdl_integer_minimum(integer_width);
+                    const auto integer_maximum
+                        = vhdl_integer_maximum(integer_width);
                     const auto builtin_index_base_range
                         = frontend::IntegerRange {
                             builtin_index_subtype == "integer"
@@ -4738,7 +4579,7 @@ namespace {
         const auto resolve = [&](const auto& self,
                                  const semantic::vhdl::SubtypeIndication& subtype)
             -> std::optional<CompiledVhdlSignalLayout> {
-            const auto domain = compiled_value_domain(subtype.domain);
+            const auto domain = vhdl_value_domain(subtype.domain);
             if (const auto width = compiled_vhdl_signal_width(subtype);
                 width && compiled_vhdl_scalar_domain(domain)) {
                 return CompiledVhdlSignalLayout { *width, domain };
@@ -5285,10 +5126,7 @@ namespace {
             const auto range = compiled_integer_range(subtype);
             const auto default_value = range
                 ? range->left
-                : subtype.integer_storage_width == 64U
-                ? std::numeric_limits<std::int64_t>::min()
-                : static_cast<std::int64_t>(
-                      std::numeric_limits<std::int32_t>::min());
+                : vhdl_integer_minimum(subtype.integer_storage_width);
             return compiled_vhdl_integral_value(
                 default_value, domain, width);
         }
@@ -5315,10 +5153,7 @@ namespace {
         const semantic::vhdl::TypeDefinition* definition = nullptr;
         bool real { };
         const auto real_name = [](std::string_view name) {
-            if (const auto separator = name.find_last_of(".:");
-                separator != std::string_view::npos) {
-                name.remove_prefix(separator + 1U);
-            }
+            name = simple_name_of(name);
             return compiled_vhdl_name_equal(name, "real");
         };
         real = real_name(subtype.type_mark.spelling);
@@ -5423,18 +5258,13 @@ namespace {
             // STD.STANDARD vectors of INTEGER, TIME and REAL elements
             // (IEEE 1076-2008 16.3) start at their element's leftmost value.
             auto name = std::string_view { subtype.type_mark.spelling };
-            if (const auto separator = name.find_last_of(".:");
-                separator != std::string_view::npos) {
-                name.remove_prefix(separator + 1U);
-            }
+            name = simple_name_of(name);
             std::optional<PackedLogic4> element;
             std::size_t element_width { };
             if (compiled_vhdl_name_equal(name, "integer_vector")) {
                 element_width = compiled_vhdl_integer_width(specialization);
                 element = compiled_vhdl_integral_value(
-                    element_width == 64U
-                        ? std::numeric_limits<std::int64_t>::min()
-                        : std::numeric_limits<std::int32_t>::min(),
+                    vhdl_integer_minimum(element_width),
                     frontend::ValueDomain::Integer, element_width);
             } else if (compiled_vhdl_name_equal(name, "time_vector")) {
                 element_width = 64U;
@@ -5458,7 +5288,7 @@ namespace {
         if (!scalar) {
             return std::nullopt;
         }
-        const auto domain = compiled_value_domain(subtype.domain);
+        const auto domain = vhdl_value_domain(subtype.domain);
         if (const auto range = compiled_integer_range(subtype)) {
             return compiled_vhdl_integral_value(range->left, domain, width);
         }
@@ -5564,7 +5394,7 @@ namespace {
         semantic::ExpressionId id)
     {
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         for (std::size_t depth { }; depth < 16U; ++depth) {
             const auto expression = specialization.find_expression(id);
             if (!expression || expression->vhdl == nullptr) {
@@ -5650,7 +5480,8 @@ namespace {
                                  : std::optional { *left / *right };
         }
         if (source.kind == Kind::call
-            && source.text.starts_with("@vhdl-qualified:")
+            && source.text.starts_with(
+                semantic::vhdl::qualified_expression_prefix)
             && source.operands.size() == 1U) {
             return compiled_vhdl_static_real(
                 specialization, source.operands.front(), depth + 1U);
@@ -5723,7 +5554,7 @@ namespace {
         const std::size_t width)
     {
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         auto expression = specialization.find_expression(expression_id);
         if (expression && expression->vhdl != nullptr
             && expression->vhdl->kind
@@ -5962,23 +5793,8 @@ namespace {
                     type_id = found->id;
                 }
             }
-            std::unordered_set<std::uint32_t> visited;
-            while (type_id.valid()
-                && visited.insert(type_id.value()).second) {
-                const auto type = specialization.find_type(type_id);
-                if (!type || type->vhdl == nullptr) {
-                    return nullptr;
-                }
-                const auto* definition = type->vhdl;
-                if (definition->form
-                        != semantic::vhdl::TypeForm::subtype
-                    && definition->form
-                        != semantic::vhdl::TypeForm::alias) {
-                    return definition;
-                }
-                type_id = definition->base.type_mark.target;
-            }
-            return nullptr;
+            return semantic::vhdl_base_type_definition(
+                specialization, type_id);
         }();
         const auto scalar = [&](const semantic::ExpressionId value)
             -> std::optional<char> {
@@ -6303,7 +6119,7 @@ namespace {
         auto selected_expression_id = expression_id;
         auto selected_expression = expression;
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         if (selected_expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
             && selected_expression->vhdl->text.starts_with(
@@ -6675,7 +6491,7 @@ namespace {
 
         const auto strip_qualified = [&](semantic::ExpressionId id) {
             constexpr auto qualified_prefix
-                = std::string_view { "@vhdl-qualified:" };
+                = semantic::vhdl::qualified_expression_prefix;
             for (std::size_t depth { }; depth < 8U; ++depth) {
                 const auto expression = specialization.find_expression(id);
                 if (!expression || expression->vhdl == nullptr
@@ -7083,7 +6899,7 @@ namespace {
             : 0U;
         auto result = std::string { "vhdlconst-v1;domain=" }
             + std::to_string(static_cast<unsigned>(subtype
-                    ? compiled_value_domain(subtype->domain)
+                    ? vhdl_value_domain(subtype->domain)
                     : frontend::ValueDomain::Unknown))
             + ";width=" + std::to_string(width)
             + ";signed="
@@ -7154,7 +6970,7 @@ namespace {
                     constraint->descending,
                 };
             }
-            const auto parts = compiled_vhdl_name_parts(
+            const auto parts = support::split_vhdl_selected_name(
                 input.type_mark.spelling);
             const auto name = parts.empty()
                 ? std::string_view { input.type_mark.spelling }
@@ -7509,7 +7325,7 @@ namespace {
             : subtype;
         auto result = std::string { "vhdlcomposite-v1;domain=" }
             + std::to_string(static_cast<unsigned>(identity_subtype
-                    ? compiled_value_domain(identity_subtype->domain)
+                    ? vhdl_value_domain(identity_subtype->domain)
                     : frontend::ValueDomain::Unknown))
             + ";width=" + std::to_string(value.width())
             + ";signed="
@@ -7524,228 +7340,6 @@ namespace {
                           identity_subtype->type_mark.spelling)
                     : std::string { });
         result += ";value=" + value.to_msb_string();
-        return result;
-    }
-
-    std::optional<ContainerType> compiled_container_bridge_type(
-        const semantic::SpecializedHirUnit& specialization,
-        const semantic::sv::TypeReference& reference)
-    {
-        const auto boundary = [&](const std::optional<std::int64_t> value,
-                                  const std::optional<semantic::ExpressionId>
-                                      expression) {
-            return expression
-                ? specialization.evaluate_integral_expression(*expression)
-                : value;
-        };
-        const semantic::CompiledDesignResolver resolver { specialization };
-        std::unordered_set<std::uint32_t> visiting;
-        const auto profile = [&](const auto& self,
-                                 const semantic::sv::TypeReference& candidate,
-                                 const bool box_leaf)
-            -> std::optional<ContainerType> {
-            const auto effective = resolver.effective_systemverilog_type(
-                candidate, specialization.scope());
-            if (effective && *effective != candidate) {
-                return self(self, *effective, box_leaf);
-            }
-            if (candidate.container_form) {
-                if (*candidate.container_form
-                        != semantic::sv::TypeForm::static_array
-                    || candidate.container_element_types.size() > 1U) {
-                    return std::nullopt;
-                }
-                auto leaf = candidate.container_element_types.empty()
-                    ? candidate
-                    : candidate.container_element_types.front();
-                if (candidate.container_element_types.empty()) {
-                    leaf.container_form.reset();
-                    leaf.queue_maximum.reset();
-                    leaf.associative_index.reset();
-                    leaf.unpacked_dimensions.clear();
-                    leaf.container_element_types.clear();
-                }
-                auto element = self(self, leaf, false);
-                if (!element) {
-                    return std::nullopt;
-                }
-                ContainerType result;
-                if (leaf.container_form) {
-                    result.element_kind = ContainerElementKind::Container;
-                    result.element_types.push_back(std::move(*element));
-                } else {
-                    result.element_kind = element->element_kind;
-                    result.scalar_kind = element->scalar_kind;
-                    result.element_width = element->element_width;
-                    result.two_state = element->two_state;
-                    result.signed_elements = element->signed_elements;
-                    result.union_aggregate = element->union_aggregate;
-                    result.element_nominal_type
-                        = element->element_nominal_type;
-                    result.element_types
-                        = std::move(element->element_types);
-                    result.member_names
-                        = std::move(element->member_names);
-                }
-                result.fixed = true;
-                for (const auto& dimension :
-                    candidate.unpacked_dimensions) {
-                    const auto left = boundary(
-                        dimension.left, dimension.left_expression);
-                    const auto right = boundary(
-                        dimension.right, dimension.right_expression);
-                    if (!left || !right
-                        || *left
-                            < std::numeric_limits<std::int32_t>::min()
-                        || *left
-                            > std::numeric_limits<std::int32_t>::max()
-                        || *right
-                            < std::numeric_limits<std::int32_t>::min()
-                        || *right
-                            > std::numeric_limits<std::int32_t>::max()) {
-                        return std::nullopt;
-                    }
-                    result.dimensions.emplace_back(
-                        static_cast<std::int32_t>(*left),
-                        static_cast<std::int32_t>(*right));
-                }
-                if (result.dimensions.empty()) {
-                    return std::nullopt;
-                }
-                result.index_left = result.dimensions.front().first;
-                result.index_right = result.dimensions.front().second;
-                return result;
-            }
-
-            ContainerType result;
-            result.element_nominal_type = candidate.target.spelling;
-            if (candidate.target.target.valid()) {
-                if (!visiting.insert(candidate.target.target.value()).second) {
-                    return std::nullopt;
-                }
-                const auto definition = specialization.find_type(
-                    candidate.target.target);
-                if (!definition
-                    || definition->systemverilog == nullptr) {
-                    visiting.erase(candidate.target.target.value());
-                    return std::nullopt;
-                }
-                const auto& type = *definition->systemverilog;
-                if (type.form
-                        == semantic::sv::TypeForm::unpacked_structure
-                    || type.form
-                        == semantic::sv::TypeForm::unpacked_union) {
-                    result.element_kind = ContainerElementKind::Aggregate;
-                    result.union_aggregate = type.form
-                        == semantic::sv::TypeForm::unpacked_union;
-                    result.aggregate_value = box_leaf;
-                    result.element_nominal_type = type.name.empty()
-                        ? candidate.target.spelling
-                        : type.name;
-                    for (const auto& member : type.members) {
-                        auto member_type = self(self, member.type, true);
-                        if (!member_type) {
-                            visiting.erase(
-                                candidate.target.target.value());
-                            return std::nullopt;
-                        }
-                        result.member_names.push_back(member.name);
-                        result.element_types.push_back(
-                            std::move(*member_type));
-                    }
-                    visiting.erase(candidate.target.target.value());
-                    return result;
-                }
-                if (type.form
-                        == semantic::sv::TypeForm::packed_structure
-                    || type.form
-                        == semantic::sv::TypeForm::packed_union) {
-                    std::uint64_t width { };
-                    bool two_state = !candidate.four_state;
-                    for (const auto& member : type.members) {
-                        const auto member_type = self(
-                            self, member.type, false);
-                        if (!member_type
-                            || member_type->element_width == 0U) {
-                            visiting.erase(
-                                candidate.target.target.value());
-                            return std::nullopt;
-                        }
-                        if (type.form
-                            == semantic::sv::TypeForm::packed_union) {
-                            width = std::max<std::uint64_t>(
-                                width, member_type->element_width);
-                        } else if (width
-                            > std::numeric_limits<std::uint64_t>::max()
-                                - member_type->element_width) {
-                            visiting.erase(
-                                candidate.target.target.value());
-                            return std::nullopt;
-                        } else {
-                            width += member_type->element_width;
-                        }
-                        two_state = two_state
-                            && member_type->two_state;
-                    }
-                    visiting.erase(candidate.target.target.value());
-                    if (width == 0U
-                        || width
-                            > std::numeric_limits<std::uint32_t>::max()) {
-                        return std::nullopt;
-                    }
-                    result.element_kind = ContainerElementKind::Packed;
-                    result.element_width
-                        = static_cast<std::uint32_t>(width);
-                    result.two_state = two_state;
-                    result.signed_elements = candidate.signed_value;
-                } else {
-                    auto base = self(self, type.base, box_leaf);
-                    visiting.erase(candidate.target.target.value());
-                    return base;
-                }
-            } else {
-                std::optional<std::uint64_t> width
-                    = candidate.executable_width;
-                if (!width && candidate.packed_range) {
-                    const auto left = boundary(
-                        candidate.packed_range->left,
-                        candidate.packed_range->left_expression);
-                    const auto right = boundary(
-                        candidate.packed_range->right,
-                        candidate.packed_range->right_expression);
-                    if (left && right) {
-                        width = index_distance(*left, *right) + 1U;
-                    }
-                }
-                if (!width || *width == 0U
-                    || *width
-                        > std::numeric_limits<std::uint32_t>::max()) {
-                    return std::nullopt;
-                }
-                result.element_kind = ContainerElementKind::Packed;
-                result.element_width
-                    = static_cast<std::uint32_t>(*width);
-                result.two_state = !candidate.four_state;
-                result.signed_elements = candidate.signed_value;
-            }
-            if (box_leaf) {
-                result.fixed = true;
-                result.index_left = 0;
-                result.index_right = 0;
-                result.dimensions.emplace_back(0, 0);
-            }
-            return result;
-        };
-
-        auto result = profile(profile, reference, false);
-        if (!result) {
-            return std::nullopt;
-        }
-        try {
-            static_cast<void>(default_container_value(*result));
-        } catch (const std::exception&) {
-            return std::nullopt;
-        }
         return result;
     }
 
@@ -7845,7 +7439,7 @@ namespace {
                     && layout->width != 0U;
                 const bool missing_unconstrained_layout
                     = !layout && unconstrained_formal
-                    && compiled_value_domain(effective_subtype->domain)
+                    && vhdl_value_domain(effective_subtype->domain)
                         == expected_domain;
                 if (packed != nullptr
                     && (compatible_layout
@@ -7962,7 +7556,7 @@ namespace {
                     : std::nullopt;
                 if (packed != nullptr && typed_formal_subtype && layout
                     && layout->width != 0U
-                    && compiled_value_domain(typed_formal_subtype->domain)
+                    && vhdl_value_domain(typed_formal_subtype->domain)
                         == layout->domain
                     && (layout->domain == frontend::ValueDomain::Bit2
                         || layout->domain
@@ -8020,7 +7614,7 @@ namespace {
                     parent, subtype, formal->vhdl->scope);
                 const auto domain = layout
                     ? layout->domain
-                    : compiled_value_domain(subtype.domain);
+                    : vhdl_value_domain(subtype.domain);
                 requires_static_value
                     = domain == frontend::ValueDomain::Boolean
                     || domain == frontend::ValueDomain::Integer;
@@ -8173,7 +7767,7 @@ namespace {
                 || !declaration->systemverilog->type) {
                 continue;
             }
-            const auto target_scalar = compiled_systemverilog_scalar_kind(
+            const auto target_scalar = frontend::systemverilog_scalar_kind(
                 declaration->systemverilog->type->target.spelling);
             if (target_scalar
                 != frontend::SystemVerilogScalarKind::None) {
@@ -8296,7 +7890,7 @@ namespace {
                       return;
                   }
                   const auto target_scalar = declaration->systemverilog->type
-                      ? compiled_systemverilog_scalar_kind(
+                      ? frontend::systemverilog_scalar_kind(
                             declaration->systemverilog->type->target.spelling)
                       : frontend::SystemVerilogScalarKind::None;
                   const auto scalar_applicable
@@ -8848,20 +8442,14 @@ namespace {
             = std::ranges::none_of(incremental, has_formal);
         if (primary_named && incremental_named) {
             for (const auto& association : incremental) {
-                const auto name = association.formal->canonical.empty()
-                    ? std::string_view { association.formal->spelling }
-                    : std::string_view { association.formal->canonical };
+                const auto name = association.formal->text();
                 const auto existing = std::ranges::find_if(
                     primary, [&](const auto& candidate) {
                         if (!candidate.formal) {
                             return false;
                         }
                         const auto candidate_name
-                            = candidate.formal->canonical.empty()
-                            ? std::string_view {
-                                  candidate.formal->spelling }
-                            : std::string_view {
-                                  candidate.formal->canonical };
+                            = candidate.formal->text();
                         return compiled_vhdl_name_equal(
                             candidate_name, name);
                     });
@@ -9434,19 +9022,8 @@ namespace {
             return std::ranges::find(builtins, name) != builtins.end();
         };
         const auto scope_encloses = [&](const semantic::ScopeId outer,
-                                        semantic::ScopeId inner) {
-            const auto& scopes = compiled.semantics.scopes();
-            while (inner.valid() && inner.value() < scopes.size()) {
-                if (inner == outer) {
-                    return true;
-                }
-                const auto& scope = scopes[inner.value()];
-                if (!scope.parent) {
-                    break;
-                }
-                inner = *scope.parent;
-            }
-            return false;
+                                        const semantic::ScopeId inner) {
+            return semantic::scope_within(compiled.semantics, inner, outer);
         };
         const auto resolved_type_visible = [&](const std::string_view name,
                                                const semantic::ScopeId scope,
@@ -9705,9 +9282,8 @@ namespace {
                     reference.packed_range->right,
                     reference.packed_range->right_expression);
                 if (left && right) {
-                    const auto distance = *left >= *right
-                        ? static_cast<std::uint64_t>(*left - *right)
-                        : static_cast<std::uint64_t>(*right - *left);
+                    const auto distance
+                        = support::index_distance(*left, *right);
                     if (distance != std::numeric_limits<std::uint64_t>::max()) {
                         return distance + 1U;
                     }
@@ -10417,7 +9993,7 @@ namespace {
                                         *type, value.scope);
                           if (underlying
                               && frontend::is_real_scalar_kind(
-                                  compiled_systemverilog_scalar_kind(
+                                  frontend::systemverilog_scalar_kind(
                                       underlying->target.spelling))) {
                               return true;
                           }
@@ -10967,9 +10543,7 @@ namespace {
             if (!left || !right) {
                 return std::nullopt;
             }
-            const auto distance = *left >= *right
-                ? static_cast<std::uint64_t>(*left - *right)
-                : static_cast<std::uint64_t>(*right - *left);
+            const auto distance = support::index_distance(*left, *right);
             return distance == std::numeric_limits<std::uint64_t>::max()
                 ? std::nullopt
                 : std::optional<std::uint64_t> { distance + 1U };
@@ -13182,7 +12756,7 @@ namespace {
             auto display = actual.identity;
             if (value && declaration->vhdl->subtype) {
                 const auto& subtype = *declaration->vhdl->subtype;
-                const auto domain = compiled_value_domain(subtype.domain);
+                const auto domain = vhdl_value_domain(subtype.domain);
                 auto width = compiled_vhdl_signal_width(subtype);
                 if (!width || !compiled_vhdl_scalar_domain(domain)) {
                     const auto layout = compiled_vhdl_named_signal_layout(
@@ -15681,7 +15255,7 @@ void HierarchyBuilder::resolve_compiled_systemverilog_virtual_interface_initiali
             }
             const auto target_scalar
                 = declaration->systemverilog->type
-                ? compiled_systemverilog_scalar_kind(
+                ? frontend::systemverilog_scalar_kind(
                       declaration->systemverilog->type
                           ->target.spelling)
                 : frontend::SystemVerilogScalarKind::None;
@@ -16379,7 +15953,7 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
     }
     if (!display) {
         const auto target_scalar = declaration->systemverilog->type
-            ? compiled_systemverilog_scalar_kind(
+            ? frontend::systemverilog_scalar_kind(
                   declaration->systemverilog->type->target.spelling)
             : frontend::SystemVerilogScalarKind::None;
         const auto scalar_applicable
@@ -16502,11 +16076,7 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
             && subtype->domain == semantic::vhdl::ValueDomain::string) {
             identity = semantic::systemverilog_string_identity(value);
         } else {
-            std::string lowered;
-            for (const auto character : value) {
-                lowered.push_back(static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(character))));
-            }
+            auto lowered = support::ascii_lower(value);
             if (lowered == "true" || lowered == "false") {
                 identity = lowered == "true" ? "1" : "0";
             } else {
@@ -16715,7 +16285,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
     if (expression && expression->vhdl != nullptr) {
         const auto& actual_expression = *expression->vhdl;
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         if (formal_declaration.subtype
             && actual_expression.kind
                 == semantic::vhdl::ExpressionKind::call
@@ -17102,7 +16672,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         } else {
             width = compiled_vhdl_signal_width(
                 *formal_declaration.subtype);
-            domain = compiled_value_domain(
+            domain = vhdl_value_domain(
                 formal_declaration.subtype->domain);
         }
         // The adapter carries the formal's signal type, which the boundary
@@ -17914,7 +17484,7 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
                         != frontend::ValueDomain::Logic4)
                 || (descriptor->fixed_width
                     && *width != descriptor->default_width)
-                || compiled_systemverilog_scalar_kind(
+                || frontend::systemverilog_scalar_kind(
                        resolved_type->target.spelling)
                     != frontend::SystemVerilogScalarKind::None) {
                 return false;
@@ -18179,6 +17749,46 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         }
         return left.value() < right.value();
     };
+    // The SystemVerilog packages a unit imports or references, sorted and
+    // unique; restricted to the collected package units when requested.
+    // Whether a class property is static storage initialized by `new`.
+    const auto static_class_allocation = [&](const auto& property) {
+        if (!property.static_storage || !property.initializer) {
+            return false;
+        }
+        const auto initializer
+            = compiled_->find_expression(*property.initializer);
+        return initializer && initializer->systemverilog != nullptr
+            && initializer->systemverilog->kind
+                == semantic::sv::ExpressionKind::class_allocation;
+    };
+    const auto package_dependencies = [&](const semantic::UnitId owner,
+                                          const bool collected_only) {
+        std::vector<semantic::UnitId> dependencies;
+        for (const auto& reference : compiled_->references()) {
+            if (reference.owner != owner || !reference.target
+                || (reference.kind
+                        != semantic::CompiledReferenceKind::package
+                    && reference.kind
+                        != semantic::CompiledReferenceKind::import)) {
+                continue;
+            }
+            const auto target = compiled_->find_unit(*reference.target);
+            if (target && target->systemverilog != nullptr
+                && target->systemverilog->kind
+                    == semantic::sv::UnitKind::package
+                && (!collected_only
+                    || std::ranges::find(package_units, *reference.target)
+                        != package_units.end())) {
+                dependencies.push_back(*reference.target);
+            }
+        }
+        std::ranges::sort(dependencies, package_less);
+        dependencies.erase(
+            std::unique(dependencies.begin(), dependencies.end()),
+            dependencies.end());
+        return dependencies;
+    };
 
     // Reconstruct the complete package dependency closure using exact linked
     // UnitIds. Package units without initialized variables still participate
@@ -18190,28 +17800,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 != semantic::sv::UnitKind::package) {
             continue;
         }
-        std::vector<semantic::UnitId> dependencies;
-        for (const auto& reference : compiled_->references()) {
-            if (reference.owner != package_units[index]
-                || !reference.target
-                || (reference.kind
-                        != semantic::CompiledReferenceKind::package
-                    && reference.kind
-                        != semantic::CompiledReferenceKind::import)) {
-                continue;
-            }
-            const auto target = compiled_->find_unit(*reference.target);
-            if (target && target->systemverilog != nullptr
-                && target->systemverilog->kind
-                    == semantic::sv::UnitKind::package) {
-                dependencies.push_back(*reference.target);
-            }
-        }
-        std::ranges::sort(dependencies, package_less);
-        dependencies.erase(
-            std::unique(dependencies.begin(), dependencies.end()),
-            dependencies.end());
-        for (const auto dependency : dependencies) {
+        for (const auto dependency :
+            package_dependencies(package_units[index], false)) {
             append_package_unit(dependency);
         }
     }
@@ -18230,29 +17820,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             return;
         }
         state = 1U;
-        std::vector<semantic::UnitId> dependencies;
-        for (const auto& reference : compiled_->references()) {
-            if (reference.owner != id || !reference.target
-                || (reference.kind
-                        != semantic::CompiledReferenceKind::package
-                    && reference.kind
-                        != semantic::CompiledReferenceKind::import)) {
-                continue;
-            }
-            const auto target = compiled_->find_unit(*reference.target);
-            if (target && target->systemverilog != nullptr
-                && target->systemverilog->kind
-                    == semantic::sv::UnitKind::package
-                && std::ranges::find(package_units, *reference.target)
-                    != package_units.end()) {
-                dependencies.push_back(*reference.target);
-            }
-        }
-        std::ranges::sort(dependencies, package_less);
-        dependencies.erase(
-            std::unique(dependencies.begin(), dependencies.end()),
-            dependencies.end());
-        for (const auto dependency : dependencies) {
+        for (const auto dependency : package_dependencies(id, true)) {
             self(self, dependency);
         }
         state = 2U;
@@ -18292,28 +17860,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 continue;
             }
             result.push_back(current);
-            std::vector<semantic::UnitId> dependencies;
-            for (const auto& reference : compiled_->references()) {
-                if (reference.owner != current || !reference.target
-                    || (reference.kind
-                            != semantic::CompiledReferenceKind::package
-                        && reference.kind
-                            != semantic::CompiledReferenceKind::import)) {
-                    continue;
-                }
-                const auto target = compiled_->find_unit(*reference.target);
-                if (target && target->systemverilog != nullptr
-                    && target->systemverilog->kind
-                        == semantic::sv::UnitKind::package
-                    && std::ranges::find(package_units, *reference.target)
-                        != package_units.end()) {
-                    dependencies.push_back(*reference.target);
-                }
-            }
-            std::ranges::sort(dependencies, package_less);
-            dependencies.erase(
-                std::unique(dependencies.begin(), dependencies.end()),
-                dependencies.end());
+            const auto dependencies = package_dependencies(current, true);
             for (auto iterator = dependencies.rbegin();
                 iterator != dependencies.rend(); ++iterator) {
                 pending.push_back(*iterator);
@@ -18468,18 +18015,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         const auto identity
             = semantic::sv::class_declaration_identity(class_declaration);
         const auto has_static_allocation = std::ranges::any_of(
-            class_declaration.properties, [&](const auto& property) {
-                if (!property.static_storage || !property.initializer) {
-                    return false;
-                }
-                const auto initializer = std::ranges::find(
-                    compiled_->systemverilog_hir.expressions(),
-                    *property.initializer, &semantic::sv::Expression::id);
-                return initializer
-                        != compiled_->systemverilog_hir.expressions().end()
-                    && initializer->kind
-                        == semantic::sv::ExpressionKind::class_allocation;
-            });
+            class_declaration.properties, static_class_allocation);
         const auto specialization_count = std::ranges::count_if(
             class_specializations.specializations,
             [&](const auto& candidate) {
@@ -18488,19 +18024,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             });
         if (has_static_allocation && specialization_count == 0U) {
             const auto property = std::ranges::find_if(
-                class_declaration.properties, [&](const auto& candidate) {
-                    if (!candidate.static_storage || !candidate.initializer) {
-                        return false;
-                    }
-                    const auto initializer = std::ranges::find(
-                        compiled_->systemverilog_hir.expressions(),
-                        *candidate.initializer,
-                        &semantic::sv::Expression::id);
-                    return initializer
-                            != compiled_->systemverilog_hir.expressions().end()
-                        && initializer->kind
-                            == semantic::sv::ExpressionKind::class_allocation;
-                });
+                class_declaration.properties, static_class_allocation);
             report(
                 "FSIM-ELAB-HIR-001",
                 "package class allocation initializer '"
@@ -18529,19 +18053,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             class_specialization.declaration_scope);
         if (class_declaration == nullptr) {
             const auto property = std::ranges::find_if(
-                class_specialization.properties, [&](const auto& candidate) {
-                    if (!candidate.static_storage || !candidate.initializer) {
-                        return false;
-                    }
-                    const auto initializer = std::ranges::find(
-                        compiled_->systemverilog_hir.expressions(),
-                        *candidate.initializer,
-                        &semantic::sv::Expression::id);
-                    return initializer
-                            != compiled_->systemverilog_hir.expressions().end()
-                        && initializer->kind
-                            == semantic::sv::ExpressionKind::class_allocation;
-                });
+                class_specialization.properties, static_class_allocation);
             if (property
                 != class_specialization.properties.end()) {
                 report(
@@ -18558,16 +18070,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             property_index < class_specialization.properties.size();
             ++property_index) {
             const auto& property = class_specialization.properties[property_index];
-            if (!property.static_storage || !property.initializer) {
-                continue;
-            }
-            const auto initializer = std::ranges::find(
-                compiled_->systemverilog_hir.expressions(),
-                *property.initializer, &semantic::sv::Expression::id);
-            if (initializer
-                    == compiled_->systemverilog_hir.expressions().end()
-                || initializer->kind
-                    != semantic::sv::ExpressionKind::class_allocation) {
+            if (!static_class_allocation(property)) {
                 continue;
             }
             const auto class_property = std::ranges::find_if(
@@ -19288,10 +18791,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         if (!declaration.alias_target) {
             return true;
         }
-        auto target_name
-            = declaration.alias_target->canonical.empty()
-            ? declaration.alias_target->spelling
-            : declaration.alias_target->canonical;
+        auto target_name = declaration.alias_target->text();
         if (declaration.alias_target->selected) {
             const auto selected
                 = working_specialization.find_declaration(
@@ -19801,21 +19301,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 || compiled_vhdl_name_equal(name, "natural")
                 || compiled_vhdl_name_equal(name, "positive")
                 || compiled_vhdl_name_equal(name, "universal_integer")) {
-                const auto unit = working_specialization.design().find_unit(
-                    working_specialization.unit());
-                const auto integer_width = unit && unit->vhdl != nullptr
-                        && unit->vhdl->standard == "2019"
-                    ? 64U
-                    : 32U;
+                const auto integer_width = compiled_vhdl_unit_integer_width(
+                    working_specialization);
                 return IndexSubtypeBounds {
-                    integer_width == 64U
-                        ? std::numeric_limits<std::int64_t>::min()
-                        : static_cast<std::int64_t>(
-                              std::numeric_limits<std::int32_t>::min()),
-                    integer_width == 64U
-                        ? std::numeric_limits<std::int64_t>::max()
-                        : static_cast<std::int64_t>(
-                              std::numeric_limits<std::int32_t>::max()),
+                    vhdl_integer_minimum(integer_width),
+                    vhdl_integer_maximum(integer_width),
                 };
             }
             if (compiled_vhdl_name_equal(name, "boolean")
@@ -19943,20 +19433,10 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         const auto predefined_bounds = [&] (
             const std::string_view name)
             -> std::optional<IndexSubtypeBounds> {
-            const auto unit = working_specialization.design().find_unit(
-                working_specialization.unit());
-            const auto integer_width = unit && unit->vhdl != nullptr
-                    && unit->vhdl->standard == "2019"
-                ? 64U
-                : 32U;
-            const auto integer_minimum = integer_width == 64U
-                ? std::numeric_limits<std::int64_t>::min()
-                : static_cast<std::int64_t>(
-                      std::numeric_limits<std::int32_t>::min());
-            const auto integer_maximum = integer_width == 64U
-                ? std::numeric_limits<std::int64_t>::max()
-                : static_cast<std::int64_t>(
-                      std::numeric_limits<std::int32_t>::max());
+            const auto integer_width = compiled_vhdl_unit_integer_width(
+                working_specialization);
+            const auto integer_minimum = vhdl_integer_minimum(integer_width);
+            const auto integer_maximum = vhdl_integer_maximum(integer_width);
             if (compiled_vhdl_name_equal(name, "integer")
                 || compiled_vhdl_name_equal(name, "universal_integer")) {
                 return IndexSubtypeBounds {
@@ -20108,6 +19588,26 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     };
     bool inherited_port_range_out_of_bounds { };
     bool inherited_port_range_index_type_mismatch { };
+    // Either inherited-range pass (the port subtype callback or the later
+    // per-dimension walk) may set these flags.
+    const auto inherited_port_range_failed = [&] {
+        if (inherited_port_range_out_of_bounds) {
+            report(
+                "FSIM-ELAB-VHARRAY-011",
+                "an inherited VHDL array bound is outside the index subtype "
+                    "of signal '" + declaration.name + "'",
+                compiled_source_span(*compiled_, declaration.source));
+            return true;
+        }
+        if (inherited_port_range_index_type_mismatch) {
+            report("FSIM-ELAB-VHRANGE-001",
+                "the bounds of a VHDL index constraint must have the index "
+                "type",
+                compiled_source_span(*compiled_, declaration.source));
+            return true;
+        }
+        return false;
+    };
     const std::function<std::optional<semantic::vhdl::RangeConstraint>(
         const semantic::vhdl::RangeConstraint&)>
         inherited_port_range = [&] (
@@ -20308,25 +19808,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             subtype_executable = true;
         }
     }
-    if (inherited_port_range_out_of_bounds) {
-        report(
-            "FSIM-ELAB-VHARRAY-011",
-            "an inherited VHDL array bound is outside the index subtype "
-                "of signal '" + declaration.name + "'",
-            compiled_source_span(*compiled_, declaration.source));
-        return false;
-    }
-    if (inherited_port_range_index_type_mismatch) {
-        report(
-            "FSIM-ELAB-VHRANGE-001",
-            "the bounds of a VHDL index constraint must have the index type",
-            compiled_source_span(*compiled_, declaration.source));
+    if (inherited_port_range_failed()) {
         return false;
     }
     if (!subtype_executable && declaration.subtype) {
         executable_width = compiled_vhdl_signal_width(
             *declaration.subtype);
-        domain = compiled_value_domain(
+        domain = vhdl_value_domain(
             declaration.subtype->domain);
         subtype_executable = executable_width
             && compiled_vhdl_scalar_domain(domain);
@@ -20557,12 +20045,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             materialized_type->vhdl_array = std::move(inherited_array);
         }
     }
-    if (inherited_port_range_out_of_bounds) {
-        report(
-            "FSIM-ELAB-VHARRAY-011",
-            "an inherited VHDL array bound is outside the index subtype "
-                "of signal '" + declaration.name + "'",
-            compiled_source_span(*compiled_, declaration.source));
+    if (inherited_port_range_failed()) {
         return false;
     }
     if (materialized_type) {
@@ -20997,7 +20480,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                 || !candidate.primary_name.empty()
                 || !compiled_vhdl_library_equal(
                     candidate.library, library)
-                || !compiled_vhdl_unit_name_equal(
+                || !semantic::vhdl::unit_name_matches(
                     candidate, name)) {
                 continue;
             }
@@ -21038,7 +20521,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
         }
         const auto spelling
             = std::string_view { input.type_mark.spelling };
-        const auto parts = compiled_vhdl_name_parts(spelling);
+        const auto parts = support::split_vhdl_selected_name(spelling);
         const auto name = parts.empty()
             ? spelling
             : parts.back();
@@ -21251,10 +20734,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
             : std::string_view { owner.library };
         for (const auto& item : owner.context) {
             for (const auto& selected : item.selected_names) {
-                const auto spelling = selected.canonical.empty()
-                    ? std::string_view { selected.spelling }
-                    : std::string_view { selected.canonical };
-                auto parts = compiled_vhdl_name_parts(spelling);
+                const auto spelling = selected.text();
+                auto parts = support::split_vhdl_selected_name(spelling);
                 if (item.kind
                         == semantic::vhdl::ContextKind::use_clause
                     && parts.size() == 2U) {
@@ -21769,7 +21250,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
         const auto type_id = resolve_type(subtype);
         if (!type_id) {
             const auto selected_type = object_type
-                && compiled_vhdl_name_parts(
+                && support::split_vhdl_selected_name(
                        subtype.type_mark.spelling)
                         .size()
                     > 1U;
@@ -21839,7 +21320,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
         } else if (definition.form
             == semantic::vhdl::TypeForm::unresolved) {
             const auto selected_type = object_type
-                && compiled_vhdl_name_parts(
+                && support::split_vhdl_selected_name(
                        subtype.type_mark.spelling)
                         .size()
                     > 1U;
@@ -21986,11 +21467,7 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
             }
             const auto& source = *expression->vhdl;
             const auto actual_name = source.referenced_name
-                ? source.referenced_name->canonical.empty()
-                    ? std::string_view {
-                          source.referenced_name->spelling
-                      }
-                    : std::string_view { source.referenced_name->canonical }
+                ? source.referenced_name->text()
                 : std::string_view { source.text };
             const auto separator = actual_name.find_last_of(".:");
             const auto simple_name = actual_name.substr(
@@ -22036,15 +21513,8 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                                 || declaration->vhdl == nullptr) {
                                 return false;
                             }
-                            using Form
-                                = semantic::vhdl::DeclarationForm;
-                            const auto form
-                                = declaration->vhdl->form;
-                            return form == Form::generic_constant
-                                || form == Form::generic_type
-                                || form == Form::generic_function
-                                || form == Form::generic_procedure
-                                || form == Form::generic_package;
+                            return semantic::vhdl::is_generic_formal(
+                                declaration->vhdl->form);
                         });
                 });
             if (!binding.actual_declaration
@@ -23539,7 +23009,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                   expression.referenced_name->canonical
               }
             : std::string_view { expression.text };
-        const auto parts = compiled_vhdl_name_parts(spelling);
+        const auto parts = support::split_vhdl_selected_name(spelling);
         const auto hierarchy_root_name = parts.size() >= 2U
             && (compiled_vhdl_name_equal(
                     parts.front(), entity->name)
@@ -23700,9 +23170,7 @@ HierarchyBuilder::compiled_vhdl_package_template_candidates(
     const semantic::vhdl::Name& name,
     const std::string_view owner_library)
 {
-    auto spelling = name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
+    auto spelling = name.text();
     auto library = owner_library.empty()
         ? std::string_view { "work" }
         : owner_library;
@@ -23773,13 +23241,8 @@ void HierarchyBuilder::validate_compiled_vhdl_package_instances(
                     if (!record || record->vhdl == nullptr) {
                         return false;
                     }
-                    using Form = semantic::vhdl::DeclarationForm;
-                    const auto form = record->vhdl->form;
-                    return form == Form::generic_constant
-                        || form == Form::generic_type
-                        || form == Form::generic_function
-                        || form == Form::generic_procedure
-                        || form == Form::generic_package;
+                    return semantic::vhdl::is_generic_formal(
+                        record->vhdl->form);
                 });
             if (!generic) {
                 report(
@@ -23875,10 +23338,8 @@ void HierarchyBuilder::validate_compiled_vhdl_instantiated_package_cycles(
                 continue;
             }
             for (const auto& selected : item.selected_names) {
-                const auto spelling = selected.canonical.empty()
-                    ? std::string_view { selected.spelling }
-                    : std::string_view { selected.canonical };
-                const auto parts = compiled_vhdl_name_parts(spelling);
+                const auto spelling = selected.text();
+                const auto parts = support::split_vhdl_selected_name(spelling);
                 if (parts.size() != 3U) {
                     continue;
                 }
@@ -24508,7 +23969,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         ? formal_type->domain
         : formal_layout
         ? formal_layout->domain
-        : compiled_value_domain(
+        : vhdl_value_domain(
               formal_declaration.subtype->domain);
     const bool has_semantic_actual_domain
         = actual_hir_declaration && actual_hir_subtype
@@ -24517,7 +23978,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         = has_semantic_actual_domain
         && actual_hir_type->domain
             != actual_info.source_domain
-        && compiled_value_domain(actual_hir_subtype->domain)
+        && vhdl_value_domain(actual_hir_subtype->domain)
             == actual_hir_type->domain
         && std::ranges::any_of(
             design_.boundary_conversions_,
@@ -24883,11 +24344,7 @@ namespace {
             const auto form = declaration->vhdl->form;
             if (form == Form::port) {
                 target_ports.push_back(declaration_id);
-            } else if (form == Form::generic_constant
-                || form == Form::generic_type
-                || form == Form::generic_function
-                || form == Form::generic_procedure
-                || form == Form::generic_package) {
+            } else if (semantic::vhdl::is_generic_formal(form)) {
                 target_generics.push_back(declaration_id);
             }
         }
@@ -25272,42 +24729,24 @@ HierarchyBuilder::prepare_compiled_vhdl_systemverilog_parameters(
     return result;
 }
 
-bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
-    const semantic::vhdl::Instance& effective_instance,
-    const semantic::SpecializedHirUnit& working_specialization,
-    const std::string& child_path,
-    std::string_view working_path,
-    const std::string& selected_systemc_target,
+bool HierarchyBuilder::instantiate_systemc_ports(
+    const SystemCInstanceDescription& description,
+    const std::span<const SystemCPortAssociation> associations,
+    const bool vhdl, const SignalMap& working_signals,
+    const std::string_view working_path, const std::string& child_path,
     const Binding* external_binding,
-    const SignalMap& working_signals)
+    const frontend::SourceSpan& instance_source)
 {
-    const auto* description = construct_systemc_description(
-        effective_instance, working_specialization,
-        child_path, selected_systemc_target);
-    if (description == nullptr) {
-        return false;
-    }
     const auto diagnostics_before = diagnostics_.size();
     SignalMap child_aliases;
     ObjectMap child_objects;
-    std::vector<bool> connected(description->ports.size());
+    std::vector<bool> connected(description.ports.size());
     std::size_t next_positional { };
     bool saw_named { };
     bool saw_positional { };
-    for (const auto& association :
-        effective_instance.port_map) {
-        if (association.kind
-                == semantic::vhdl::AssociationKind::open
-            || association.kind
-                == semantic::vhdl::AssociationKind::
-                    default_box) {
-            continue;
-        }
-        const auto source = compiled_source_span(
-            *compiled_, association.source);
-        if (association.kind
-                != semantic::vhdl::AssociationKind::expression
-            || !association.expression) {
+    for (const auto& association : associations) {
+        const auto& source = association.source;
+        if (!association.actual_name) {
             report(
                 "FSIM-ELAB-HIR-001",
                 "SystemC port association requires a "
@@ -25319,23 +24758,21 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
         if (association.formal) {
             saw_named = true;
             const auto found = std::ranges::find_if(
-                description->ports,
-                [&](const auto& external_port) {
-                    return compiled_vhdl_name_equal(
-                        external_port.name,
-                        association.formal->spelling);
+                description.ports, [&](const auto& external_port) {
+                    return vhdl
+                        ? compiled_vhdl_name_equal(
+                              external_port.name, *association.formal)
+                        : external_port.name == *association.formal;
                 });
-            if (found == description->ports.end()) {
+            if (found == description.ports.end()) {
                 report(
                     "FSIM-ELAB-BIND-004",
-                    "unknown SystemC port '"
-                        + association.formal->spelling + "'",
+                    "unknown SystemC port '" + *association.formal + "'",
                     source);
                 continue;
             }
             port_index = static_cast<std::size_t>(
-                std::distance(
-                    description->ports.begin(), found));
+                std::distance(description.ports.begin(), found));
         } else {
             saw_positional = true;
             while (next_positional < connected.size()
@@ -25356,36 +24793,20 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
             report(
                 "FSIM-ELAB-BIND-004",
                 "duplicate SystemC port association for '"
-                    + description->ports[*port_index].name
-                    + "'",
+                    + description.ports[*port_index].name + "'",
                 source);
             continue;
         }
         connected[*port_index] = true;
 
-        const auto expression
-            = working_specialization.find_expression(
-                *association.expression);
-        std::string actual_name;
-        if (expression && expression->vhdl != nullptr
-            && expression->vhdl->kind
-                == semantic::vhdl::ExpressionKind::name) {
-            actual_name = expression->vhdl->text;
-            if (expression->vhdl->referenced_name
-                && expression->vhdl->referenced_name
-                    ->selected) {
-                const auto declaration
-                    = working_specialization.find_declaration(
-                        *expression->vhdl->referenced_name
-                            ->selected);
-                if (declaration
-                    && declaration->vhdl != nullptr) {
-                    actual_name
-                        = declaration->vhdl->name;
-                }
-            }
+        const auto& actual_name = *association.actual_name;
+        std::optional<SignalId> actual;
+        if (vhdl) {
+            actual = find_compiled_vhdl_signal(working_signals, actual_name);
+        } else if (const auto found = working_signals.find(actual_name);
+            found != working_signals.end()) {
+            actual = found->second;
         }
-        const auto actual = find_compiled_vhdl_signal(working_signals, actual_name);
         if (!actual) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -25396,10 +24817,8 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
             continue;
         }
 
-        const auto& external_port
-            = description->ports[*port_index];
-        const auto external_width
-            = external_port.type.width();
+        const auto& external_port = description.ports[*port_index];
+        const auto external_width = external_port.type.width();
         if (!external_width || *external_width == 0U) {
             report(
                 "FSIM-ELAB-BIND-019",
@@ -25411,48 +24830,94 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
         CompiledBoundaryPort port;
         port.name = external_port.name;
         port.type_name = external_port.type.spelling;
-        port.width = static_cast<std::size_t>(
-            *external_width);
+        port.width = static_cast<std::size_t>(*external_width);
         port.domain = external_port.type.domain;
-        port.systemverilog_scalar
-            = external_port.type.systemverilog_scalar;
+        port.systemverilog_scalar = external_port.type.systemverilog_scalar;
         port.signed_value = external_port.type.is_signed;
-        port.packed_range
-            = external_port.type.packed_range;
-        port.integer_range
-            = external_port.type.integer_range;
+        port.packed_range = external_port.type.packed_range;
+        port.integer_range = external_port.type.integer_range;
         port.direction = external_port.direction;
         port.declaration_source = source;
         port.initial = PackedLogic4 {
             port.width,
-            is_two_state_domain(port.domain)
-                ? Logic4::zero
-                : Logic4::x,
+            is_two_state_domain(port.domain) ? Logic4::zero : Logic4::x,
         };
         const auto formal = connect_compiled_boundary_port(
-            port, *actual, child_path, source,
-            external_binding);
+            port, *actual, child_path, source, external_binding);
         if (!formal) {
             continue;
         }
         child_aliases.emplace(external_port.name, *formal);
-        child_objects.emplace(
-            external_port.handle, *formal);
+        child_objects.emplace(external_port.handle, *formal);
     }
     if (saw_named && saw_positional) {
         report(
             "FSIM-ELAB-BIND-004",
             "named and positional SystemC port associations "
             "cannot be mixed",
-            compiled_source_span(*compiled_, effective_instance.source));
+            instance_source);
     }
     if (diagnostics_.size() != diagnostics_before) {
         return false;
     }
     instantiate_systemc(
-        *description, child_path, std::move(child_aliases),
+        description, child_path, std::move(child_aliases),
         std::move(child_objects));
     return true;
+}
+
+bool HierarchyBuilder::instantiate_compiled_vhdl_systemc_child(
+    const semantic::vhdl::Instance& effective_instance,
+    const semantic::SpecializedHirUnit& working_specialization,
+    const std::string& child_path,
+    std::string_view working_path,
+    const std::string& selected_systemc_target,
+    const Binding* external_binding,
+    const SignalMap& working_signals)
+{
+    const auto* description = construct_systemc_description(
+        effective_instance, working_specialization,
+        child_path, selected_systemc_target);
+    if (description == nullptr) {
+        return false;
+    }
+    std::vector<SystemCPortAssociation> associations;
+    for (const auto& association : effective_instance.port_map) {
+        if (association.kind == semantic::vhdl::AssociationKind::open
+            || association.kind
+                == semantic::vhdl::AssociationKind::default_box) {
+            continue;
+        }
+        auto& port = associations.emplace_back();
+        port.source = compiled_source_span(*compiled_, association.source);
+        if (association.formal) {
+            port.formal = association.formal->spelling;
+        }
+        if (association.kind != semantic::vhdl::AssociationKind::expression
+            || !association.expression) {
+            continue;
+        }
+        auto& actual_name = port.actual_name.emplace();
+        const auto expression = working_specialization.find_expression(
+            *association.expression);
+        if (expression && expression->vhdl != nullptr
+            && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::name) {
+            actual_name = expression->vhdl->text;
+            if (expression->vhdl->referenced_name
+                && expression->vhdl->referenced_name->selected) {
+                const auto declaration
+                    = working_specialization.find_declaration(
+                        *expression->vhdl->referenced_name->selected);
+                if (declaration && declaration->vhdl != nullptr) {
+                    actual_name = declaration->vhdl->name;
+                }
+            }
+        }
+    }
+    return instantiate_systemc_ports(*description, associations, true,
+        working_signals, working_path, child_path, external_binding,
+        compiled_source_span(*compiled_, effective_instance.source));
 }
 
 bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
@@ -25826,29 +25291,13 @@ bool HierarchyBuilder::compiled_vhdl_component_profile_matches(
     if (!candidate.component) {
         return false;
     }
-    const auto has_generic_default = [](
-        const semantic::vhdl::Declaration* declaration) {
-        if (declaration == nullptr) {
-            return false;
-        }
-        using Form = semantic::vhdl::DeclarationForm;
-        if (declaration->form == Form::generic_constant) {
-            return declaration->initializer.has_value();
-        }
-        if (declaration->form == Form::generic_function
-            || declaration->form == Form::generic_procedure) {
-            return declaration->callable
-                && declaration->callable->default_callable;
-        }
-        return false;
-    };
     const auto match_surface = [&](
                                    const auto& candidate_ids,
                                    const auto& entity_declarations,
                                    const bool ports) {
         if (!ports && candidate_ids.empty()) {
             return std::ranges::all_of(
-                entity_declarations, has_generic_default);
+                entity_declarations, vhdl_generic_has_default);
         }
         if (candidate_ids.size() != entity_declarations.size()) {
             return false;
@@ -26054,16 +25503,7 @@ HierarchyBuilder::select_compiled_vhdl_component_candidate(
             const auto form = declaration->vhdl->form;
             const auto selected = ports
                 ? form == semantic::vhdl::DeclarationForm::port
-                : form
-                        == semantic::vhdl::DeclarationForm::generic_constant
-                    || form
-                        == semantic::vhdl::DeclarationForm::generic_type
-                    || form
-                        == semantic::vhdl::DeclarationForm::generic_function
-                    || form
-                        == semantic::vhdl::DeclarationForm::generic_procedure
-                    || form
-                        == semantic::vhdl::DeclarationForm::generic_package;
+                : semantic::vhdl::is_generic_formal(form);
             if (selected) {
                 result.push_back(declaration->vhdl);
             }
@@ -26093,17 +25533,7 @@ HierarchyBuilder::select_compiled_vhdl_component_candidate(
         if (candidate->component) {
             if (candidate->component->generics.empty()) {
                 generic_mismatch = !std::ranges::all_of(
-                    entity_generics,
-                    [](const semantic::vhdl::Declaration* formal) {
-                        using Form = semantic::vhdl::DeclarationForm;
-                        return (formal->form == Form::generic_constant
-                                   && formal->initializer.has_value())
-                            || ((formal->form == Form::generic_function
-                                    || formal->form
-                                        == Form::generic_procedure)
-                                && formal->callable
-                                && formal->callable->default_callable);
-                    });
+                    entity_generics, vhdl_generic_has_default);
             } else {
                 generic_mismatch
                     = candidate->component->generics.size()
@@ -26267,8 +25697,9 @@ HierarchyBuilder::materialize_compiled_vhdl_systemverilog_port_mappings(
         }
         if (formal_declaration.type
             && formal_declaration.type->container_form) {
-            const auto expected = compiled_container_bridge_type(
-                context.child_specialization, *formal_declaration.type);
+            const auto expected = hierarchy_sv_type_layout_detail::
+                systemverilog_container_type(
+                    context.child_specialization, *formal_declaration.type);
             const auto formal_shape = expected
                 ? compiled_container_bridge_shape(*expected)
                 : std::nullopt;
@@ -26427,11 +25858,11 @@ HierarchyBuilder::materialize_compiled_vhdl_systemverilog_port_mappings(
                 || layout->second.four_state
             ? frontend::ValueDomain::Logic4
             : frontend::ValueDomain::Bit2;
-        port.systemverilog_scalar = compiled_systemverilog_scalar_kind(
+        port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
             layout->second.target.spelling);
         if (port.systemverilog_scalar
             == frontend::SystemVerilogScalarKind::None) {
-            port.systemverilog_scalar = compiled_systemverilog_scalar_kind(
+            port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
                 formal_declaration.type->target.spelling);
         }
         port.signed_value
@@ -27813,35 +27244,6 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
     SpecializationInfo& specialization,
     std::size_t& concurrent_order)
 {
-    const auto append_generated_processes = [&](Lowerer& source,
-                                                const semantic::vhdl::Unit& owner) {
-        auto generated_processes = source.take_generated_processes();
-        record_lowering_census(
-            vhdl_lowerer_generated_processes_,
-            generated_processes.size());
-        for (auto& generated : generated_processes) {
-            generated.language_standard = owner.standard;
-            generated.compatibility_profile
-                = owner.compatibility_profile;
-            canonicalize_process_operations(generated);
-            specialization.processes.push_back(generated.id);
-            design_.append_process_record(std::move(generated));
-        }
-    };
-    const auto report_unspecified_inference = [&](Lowerer& source,
-                                                  const auto id) {
-        const auto failure
-            = source.hir_vhdl_unspecified_inference_failure(id);
-        if (!failure) {
-            return false;
-        }
-        report(
-            "FSIM-ELAB-VHUNSPEC-001",
-            "VHDL-2019 unspecified interface types do not infer one "
-            "consistent callable profile",
-            compiled_source_span(*compiled_, *failure));
-        return true;
-    };
     const auto lower_concurrent_statements
         = [&](const semantic::vhdl::Unit& owner) {
               for (const auto statement_id : owner.concurrent_statements) {
@@ -27851,8 +27253,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                           && statement->vhdl != nullptr
                       ? statement->vhdl->source
                       : owner.source;
-                  if (report_unspecified_inference(
-                          lowerer, statement_id)) {
+                  if (report_vhdl_unspecified_inference(
+                          lowerer.hir_vhdl_unspecified_inference_failure(
+                              statement_id))) {
                       return false;
                   }
                   auto lowered = lower_cached_vhdl_occurrence(
@@ -27886,7 +27289,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                       design_.append_process_record(
                           std::move(process_instance));
                   }
-                  append_generated_processes(lowerer, owner);
+                  append_generated_vhdl_processes(
+                      lowerer, owner, specialization);
               }
               return true;
           };
@@ -27896,7 +27300,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
             const auto process_source = process && process->vhdl != nullptr
                 ? process->vhdl->source
                 : owner.source;
-            if (report_unspecified_inference(lowerer, process_id)) {
+            if (report_vhdl_unspecified_inference(
+                    lowerer.hir_vhdl_unspecified_inference_failure(
+                        process_id))) {
                 return false;
             }
             auto lowered = lower_cached_vhdl_occurrence(
@@ -27938,7 +27344,7 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                 design_.append_process_record(
                     std::move(process_instance));
             }
-            append_generated_processes(lowerer, owner);
+            append_generated_vhdl_processes(lowerer, owner, specialization);
         }
         return true;
     };
@@ -27989,16 +27395,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
                 continue;
             }
             const auto form = declaration->vhdl->form;
-            if (form
-                    == semantic::vhdl::DeclarationForm::generic_constant
-                || form
-                    == semantic::vhdl::DeclarationForm::generic_type
-                || form
-                    == semantic::vhdl::DeclarationForm::generic_function
-                || form
-                    == semantic::vhdl::DeclarationForm::generic_procedure
-                || form
-                    == semantic::vhdl::DeclarationForm::generic_package) {
+            if (semantic::vhdl::is_generic_formal(form)) {
                 target_generics.push_back(declaration_id);
             }
         }
@@ -28413,9 +27810,7 @@ HierarchyBuilder::select_compiled_vhdl_child(
                                                     const semantic::SourceSpanId source) -> bool {
             const auto parts = vhdl_configuration_detail::
                 configuration_name_parts(
-                    entity_name.canonical.empty()
-                        ? std::string_view { entity_name.spelling }
-                        : std::string_view { entity_name.canonical });
+                    entity_name.text());
             if (parts.empty() || parts.size() > 2U) {
                 report(
                     "FSIM-ELAB-VHCONFIG-008",
@@ -29355,166 +28750,47 @@ HierarchyBuilder::dispatch_compiled_systemverilog_instance(
         if (description == nullptr) {
             return Result {};
         }
-        const auto diagnostics_before = diagnostics_.size();
-        SignalMap child_aliases;
-        ObjectMap child_objects;
-        std::vector<bool> connected(description->ports.size());
-        std::size_t next_positional { };
-        bool saw_named { };
-        bool saw_positional { };
+        std::vector<SystemCPortAssociation> associations;
         for (const auto& association : record.ports) {
-            if (association.kind
-                    == semantic::sv::ActualKind::open
+            if (association.kind == semantic::sv::ActualKind::open
                 || association.kind
                     == semantic::sv::ActualKind::default_value) {
                 continue;
             }
-            const auto source = compiled_source_span(
+            auto& port = associations.emplace_back();
+            port.source = compiled_source_span(
                 *compiled_, association.source);
-            if (association.kind
-                    != semantic::sv::ActualKind::expression
+            port.formal = association.formal;
+            if (association.kind != semantic::sv::ActualKind::expression
                 || !association.expression) {
-                report(
-                    "FSIM-ELAB-HIR-001",
-                    "SystemC port association requires a "
-                    "compiled-HIR signal-name actual",
-                    source);
                 continue;
             }
-            std::optional<std::size_t> port_index;
-            if (association.formal) {
-                saw_named = true;
-                const auto found = std::ranges::find(
-                    description->ports, *association.formal,
-                    &ExternalPort::name);
-                if (found == description->ports.end()) {
-                    report(
-                        "FSIM-ELAB-BIND-004",
-                        "unknown SystemC port '"
-                            + *association.formal + "'",
-                        source);
-                    continue;
-                }
-                port_index = static_cast<std::size_t>(
-                    std::distance(
-                        description->ports.begin(), found));
-            } else {
-                saw_positional = true;
-                while (next_positional < connected.size()
-                    && connected[next_positional]) {
-                    ++next_positional;
-                }
-                if (next_positional >= connected.size()) {
-                    report(
-                        "FSIM-ELAB-BIND-004",
-                        "too many positional SystemC port "
-                        "associations",
-                        source);
-                    continue;
-                }
-                port_index = next_positional++;
-            }
-            if (connected[*port_index]) {
-                report(
-                    "FSIM-ELAB-BIND-004",
-                    "duplicate SystemC port association for '"
-                        + description->ports[*port_index].name
-                        + "'",
-                    source);
-                continue;
-            }
-            connected[*port_index] = true;
-
-            const auto expression
-                = working_specialization.find_expression(
-                    *association.expression);
-            std::string actual_name;
-            if (expression
-                && expression->systemverilog != nullptr
+            auto& actual_name = port.actual_name.emplace();
+            const auto expression = working_specialization.find_expression(
+                *association.expression);
+            if (expression && expression->systemverilog != nullptr
                 && expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::name) {
                 actual_name = expression->systemverilog->text;
                 if (expression->systemverilog->referenced_name
-                    && expression->systemverilog
-                        ->referenced_name->selected) {
+                    && expression->systemverilog->referenced_name
+                           ->selected) {
                     const auto declaration
                         = working_specialization.find_declaration(
-                            *expression->systemverilog
-                                ->referenced_name->selected);
+                            *expression->systemverilog->referenced_name
+                                 ->selected);
                     if (declaration
                         && declaration->systemverilog != nullptr) {
-                        actual_name
-                            = declaration->systemverilog->name;
+                        actual_name = declaration->systemverilog->name;
                     }
                 }
             }
-            const auto actual = working_signals.find(actual_name);
-            if (actual == working_signals.end()) {
-                report(
-                    "FSIM-ELAB-HIR-001",
-                    "SystemC port actual '" + actual_name
-                        + "' is not a signal in '"
-                        + std::string { working_path } + "'",
-                    source);
-                continue;
-            }
-
-            const auto& external_port
-                = description->ports[*port_index];
-            const auto external_width
-                = external_port.type.width();
-            if (!external_width || *external_width == 0U) {
-                report(
-                    "FSIM-ELAB-BIND-019",
-                    "SystemC port '" + external_port.name
-                        + "' has no executable scalar layout",
-                    source);
-                continue;
-            }
-            CompiledBoundaryPort port;
-            port.name = external_port.name;
-            port.type_name = external_port.type.spelling;
-            port.width = static_cast<std::size_t>(
-                *external_width);
-            port.domain = external_port.type.domain;
-            port.systemverilog_scalar
-                = external_port.type.systemverilog_scalar;
-            port.signed_value = external_port.type.is_signed;
-            port.packed_range
-                = external_port.type.packed_range;
-            port.integer_range
-                = external_port.type.integer_range;
-            port.direction = external_port.direction;
-            port.declaration_source = source;
-            port.initial = PackedLogic4 {
-                port.width,
-                is_two_state_domain(port.domain)
-                    ? Logic4::zero
-                    : Logic4::x,
-            };
-            const auto formal = connect_compiled_boundary_port(
-                port, actual->second, child_path, source,
-                external_binding);
-            if (!formal) {
-                continue;
-            }
-            child_aliases.emplace(external_port.name, *formal);
-            child_objects.emplace(
-                external_port.handle, *formal);
         }
-        if (saw_named && saw_positional) {
-            report(
-                "FSIM-ELAB-BIND-004",
-                "named and positional SystemC port associations "
-                "cannot be mixed",
-                compiled_source_span(*compiled_, record.source));
-        }
-        if (diagnostics_.size() != diagnostics_before) {
+        if (!instantiate_systemc_ports(*description, associations, false,
+                working_signals, working_path, child_path, external_binding,
+                compiled_source_span(*compiled_, record.source))) {
             return Result {};
         }
-        instantiate_systemc(
-            *description, child_path, std::move(child_aliases),
-            std::move(child_objects));
         Result result;
         result.status = Status::handled;
         return result;
@@ -29850,7 +29126,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
             } else {
                 width = compiled_vhdl_signal_width(
                     *declaration.subtype);
-                domain = compiled_value_domain(
+                domain = vhdl_value_domain(
                     declaration.subtype->domain);
             }
             if (!width || !compiled_vhdl_scalar_domain(domain)) {
@@ -30281,9 +29557,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             }
         } else if (association.formal) {
             const auto formal_name
-                = association.formal->canonical.empty()
-                ? std::string_view { association.formal->spelling }
-                : std::string_view { association.formal->canonical };
+                = association.formal->text();
             const auto found = std::ranges::find_if(
                 block_ports,
                 [&](const auto* candidate) {
@@ -30418,9 +29692,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
         auto actual_name = std::string_view { actual->vhdl->text };
         if (actual->vhdl->referenced_name) {
             const auto& reference = *actual->vhdl->referenced_name;
-            actual_name = reference.canonical.empty()
-                ? std::string_view { reference.spelling }
-                : std::string_view { reference.canonical };
+            actual_name = reference.text();
         }
         const auto signal = parent_signals->find(
             std::string { actual_name });
@@ -30450,7 +29722,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             } else if (formal->subtype) {
                 formal_width = compiled_vhdl_signal_width(
                     *formal->subtype);
-                formal_domain = compiled_value_domain(
+                formal_domain = vhdl_value_domain(
                     formal->subtype->domain);
             }
             const auto formal_range = formal_type

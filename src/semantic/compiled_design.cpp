@@ -11,34 +11,11 @@
 namespace fsim::semantic {
 namespace {
 
+using support::same_vhdl_identifier;
+
 std::string_view normalized_library(const std::string_view library)
 {
     return library.empty() ? std::string_view { "work" } : library;
-}
-
-bool extended_vhdl_identifier(const std::string_view value)
-{
-    return value.size() >= 2U && value.front() == '\\'
-        && value.back() == '\\';
-}
-
-bool same_vhdl_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    if (extended_vhdl_identifier(left)
-        || extended_vhdl_identifier(right)) {
-        return left == right;
-    }
-    const auto lower_ascii = [](const unsigned char character) {
-        return character >= 'A' && character <= 'Z'
-            ? static_cast<unsigned char>(character - 'A' + 'a')
-            : character;
-    };
-    return left.size() == right.size()
-        && std::ranges::equal(left, right,
-            [&](const unsigned char lhs, const unsigned char rhs) {
-                return lower_ascii(lhs) == lower_ascii(rhs);
-            });
 }
 
 std::optional<vhdl::UnitKind> primary_vhdl_kind(
@@ -98,7 +75,7 @@ std::optional<const vhdl::Unit*> scan_vhdl_primary_unit(
 
 std::string canonical_vhdl_identifier(const std::string_view value)
 {
-    if (extended_vhdl_identifier(value)) {
+    if (support::is_extended_vhdl_identifier(value)) {
         return std::string { value };
     }
     std::string result;
@@ -117,7 +94,7 @@ std::size_t hash_vhdl_identifier(const std::string_view value) noexcept
 {
     constexpr std::size_t offset = 1469598103934665603ULL;
     constexpr std::size_t prime = 1099511628211ULL;
-    const bool extended = extended_vhdl_identifier(value);
+    const bool extended = support::is_extended_vhdl_identifier(value);
     auto result = offset;
     for (const auto character : value) {
         auto byte = static_cast<unsigned char>(character);
@@ -132,32 +109,7 @@ std::size_t hash_vhdl_identifier(const std::string_view value) noexcept
 
 std::string_view vhdl_spelling(const vhdl::Name& name)
 {
-    return name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
-}
-
-std::vector<std::string_view> vhdl_name_parts(
-    const std::string_view name)
-{
-    std::vector<std::string_view> result;
-    std::size_t begin { };
-    while (begin < name.size()) {
-        const auto end = name.find('.', begin);
-        const auto part = name.substr(begin,
-            end == std::string_view::npos
-                ? std::string_view::npos
-                : end - begin);
-        if (part.empty()) {
-            return { };
-        }
-        result.push_back(part);
-        if (end == std::string_view::npos) {
-            break;
-        }
-        begin = end + 1U;
-    }
-    return result;
+    return name.text();
 }
 
 constexpr std::uint8_t missing_record = 0U;
@@ -798,28 +750,14 @@ void CompiledDesign::refresh_lookup_indexes()
                     continue;
                 }
                 for (const auto& selected : item.selected_names) {
-                    const auto parts = vhdl_name_parts(
+                    const auto parts = support::split_vhdl_selected_name(
                         vhdl_spelling(selected));
                     if (parts.size() != 2U && parts.size() != 3U) {
                         continue;
                     }
-                    const bool library_prefix = parts.size() == 3U
-                        || (parts.size() == 2U
-                            && (same_vhdl_identifier(parts.front(), "work")
-                                || same_vhdl_identifier(
-                                    parts.front(), "std")
-                                || std::ranges::any_of(unit.context,
-                                    [&](const vhdl::ContextItem& context) {
-                                        return context.kind
-                                                == vhdl::ContextKind::library_clause
-                                            && std::ranges::any_of(
-                                                context.selected_names,
-                                                [&](const vhdl::Name& selected_name) {
-                                                    return same_vhdl_identifier(
-                                                        vhdl_spelling(selected_name),
-                                                        parts.front());
-                                                });
-                                    })));
+                    const bool library_prefix
+                        = vhdl::use_name_has_library_prefix(
+                            unit, parts.size(), parts.front());
                     const auto specified_library = library_prefix
                         ? std::string_view { parts.front() }
                         : normalized_library(unit.library);
@@ -1205,6 +1143,37 @@ CompiledDesign::find_instance(const InstanceId id) const noexcept
         [&] { return std::span { vhdl_hir.instances() }; });
 }
 
+const Scope* CompiledDesign::find_scope(const ScopeId id) const noexcept
+{
+    const auto& scopes = semantics.scopes();
+    if (!id.valid()) {
+        return nullptr;
+    }
+    if (id.value() < scopes.size() && scopes[id.value()].id == id) {
+        return &scopes[id.value()];
+    }
+    const auto found = std::ranges::find(scopes, id, &Scope::id);
+    return found == scopes.end() ? nullptr : &*found;
+}
+
+const vhdl::Unit* CompiledDesign::vhdl_scope_unit(
+    const ScopeId scope) const noexcept
+{
+    const auto* record = find_scope(scope);
+    if (record == nullptr) {
+        return nullptr;
+    }
+    const auto owner = find_unit(record->unit);
+    return owner ? owner->vhdl : nullptr;
+}
+
+bool CompiledDesign::vhdl_scope_in_package(const ScopeId scope,
+    const std::string_view library,
+    const std::string_view package) const noexcept
+{
+    return vhdl::is_package(vhdl_scope_unit(scope), library, package);
+}
+
 std::optional<std::span<const DeclarationId>>
 CompiledDesign::systemverilog_declarations_in_scope(
     const ScopeId scope) const noexcept
@@ -1363,9 +1332,8 @@ bool CompiledDesign::valid() const
             if (!id.valid() || id.value() >= semantics.declarations().size()) {
                 return false;
             }
-            const auto declaration = std::ranges::find(
-                systemverilog_hir.declarations(), id, &sv::Declaration::id);
-            return declaration != systemverilog_hir.declarations().end()
+            const auto* declaration = systemverilog_hir.find_declaration(id);
+            return declaration != nullptr
                 && (declaration->form == sv::DeclarationForm::function
                     || declaration->form == sv::DeclarationForm::task);
         };

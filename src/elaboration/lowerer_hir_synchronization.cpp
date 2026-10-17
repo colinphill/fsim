@@ -32,24 +32,6 @@ namespace {
         : nullptr;
 }
 
-[[nodiscard]] std::optional<semantic::sv::TypeReference>
-effective_mailbox_element_type(
-    const semantic::sv::TypeReference& type,
-    const semantic::CompiledDesignResolver& resolver,
-    const semantic::ScopeId scope)
-{
-    auto effective = type;
-    for (std::size_t depth = 0U; depth < 8U; ++depth) {
-        const auto resolved
-            = resolver.effective_systemverilog_type(effective, scope);
-        if (!resolved || *resolved == effective) {
-            break;
-        }
-        effective = *resolved;
-    }
-    return effective;
-}
-
 [[nodiscard]] bool mailbox_string_element(
     const semantic::sv::TypeReference& type)
 {
@@ -65,6 +47,30 @@ effective_mailbox_element_type(
 }
 
 } // namespace
+
+std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
+    const semantic::sv::TypeReference* mailbox_type,
+    const std::string_view message, const frontend::SourceSpan& span)
+{
+    const auto* element = mailbox_element_type(mailbox_type);
+    const auto resolver = hir_resolver();
+    const auto effective_element = element
+        ? std::optional { fully_effective_systemverilog_type(
+              resolver, *element, hir_process_scope_) }
+        : std::nullopt;
+    if (effective_element && mailbox_string_element(*effective_element)) {
+        return HirMailboxElement { true, 0U };
+    }
+    const auto width = element
+        ? hir_systemverilog_type_width(*element, hir_process_scope_)
+        : std::nullopt;
+    if (!effective_element || !width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
+        report("FSIM-ELAB-SVSYNC-002", std::string { message }, span);
+        return std::nullopt;
+    }
+    return HirMailboxElement { false, static_cast<std::uint32_t>(*width) };
+}
 
 std::optional<Lowerer::HirSynchronizationTaskProfile>
 Lowerer::hir_synchronization_task_profile(
@@ -92,10 +98,10 @@ Lowerer::hir_synchronization_task_profile(
     if (!supported_method) {
         return std::nullopt;
     }
-    const auto receiver = semantic::CompiledDesignResolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    }.resolve_systemverilog(receiver_name, process_scope, { }, true)
-         .unique();
+    const auto receiver
+        = hir_resolver()
+              .resolve_systemverilog(receiver_name, process_scope, { }, true)
+              .unique();
     const auto declaration = receiver
         ? specialized_hir_unit_->find_declaration(*receiver)
         : std::nullopt;
@@ -171,30 +177,16 @@ bool Lowerer::lower_hir_synchronization_statement(
     }
 
     if (profile->mailbox) {
-        const auto* element = mailbox_element_type(receiver_type);
-        const semantic::CompiledDesignResolver resolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        };
-        const auto effective_element = element
-            ? effective_mailbox_element_type(
-                  *element, resolver, hir_process_scope_)
-            : std::nullopt;
-        const bool string_element = effective_element
-            && mailbox_string_element(*effective_element);
-        const auto width = element && !string_element
-            ? hir_systemverilog_type_width(*element, hir_process_scope_)
-            : std::nullopt;
-        if (!effective_element
-            || (!string_element
-                && (!width || *width == 0U
-                    || *width > std::numeric_limits<std::uint32_t>::max()))) {
-            report(
-                "FSIM-ELAB-SVSYNC-002",
-                "mailbox operations require exactly one finite positive "
-                "packed element type",
-                hir_source_span(statement.source));
+        const auto mailbox_element = hir_mailbox_element(
+            receiver_type,
+            "mailbox operations require exactly one finite positive "
+            "packed element type",
+            hir_source_span(statement.source));
+        if (!mailbox_element) {
             return true;
         }
+        const bool string_element = mailbox_element->string;
+        const auto width = mailbox_element->width;
         if ((profile->method != "put" && profile->method != "get"
                 && profile->method != "peek")
             || statement.task_arguments.size() != 1U) {
@@ -217,16 +209,16 @@ bool Lowerer::lower_hir_synchronization_statement(
                     MailboxElementKind::string, *value,
                 });
             } else {
-                auto value = lower_hir_expression(argument, *width);
+                auto value = lower_hir_expression(argument, width);
                 if (!value) {
                     return false;
                 }
-                if (register_width(*value) != *width) {
+                if (register_width(*value) != width) {
                     value = resize_register(
-                        *value, *width, hir_expression_signed(argument));
+                        *value, width, hir_expression_signed(argument));
                 }
                 process_.operations.emplace_back(MailboxPut {
-                    receiver, *value, static_cast<std::uint32_t>(*width),
+                    receiver, *value, width,
                     std::nullopt,
                 });
             }
@@ -244,9 +236,9 @@ bool Lowerer::lower_hir_synchronization_statement(
         const auto domain = hir_expression_domain(
             argument, hir_process_scope_)
                                 .value_or(frontend::ValueDomain::Logic4);
-        const auto value = allocate_register(*width, domain);
+        const auto value = allocate_register(width, domain);
         process_.operations.emplace_back(MailboxGet {
-            receiver, value, static_cast<std::uint32_t>(*width),
+            receiver, value, width,
             std::nullopt, profile->method == "peek",
         });
         return lower_hir_packed_copy_out(argument, value);
@@ -333,33 +325,19 @@ Lowerer::lower_hir_synchronization_expression(
         const auto destination = allocate_register(
             64U, frontend::ValueDomain::Bit2);
         if (mailbox) {
-            const auto* element = mailbox_element_type(expected_type);
-            const semantic::CompiledDesignResolver resolver {
-                *specialized_hir_unit_, hir_generic_binding_frames_
-            };
-            const auto effective_element = element
-                ? effective_mailbox_element_type(
-                      *element, resolver, hir_process_scope_)
-                : std::nullopt;
-            const bool string_element = effective_element
-                && mailbox_string_element(*effective_element);
-            const auto width = element && !string_element
-                ? hir_systemverilog_type_width(*element, hir_process_scope_)
-                : std::nullopt;
-            if (!effective_element
-                || (!string_element
-                    && (!width || *width == 0U
-                        || *width > std::numeric_limits<std::uint32_t>::max()))) {
-                report(
-                    "FSIM-ELAB-SVSYNC-002",
-                    "typed mailbox construction requires exactly one finite "
-                    "positive packed element type",
-                    hir_source_span(source.source));
+            const auto mailbox_element = hir_mailbox_element(
+                expected_type,
+                "typed mailbox construction requires exactly one finite "
+                "positive packed element type",
+                hir_source_span(source.source));
+            if (!mailbox_element) {
                 return { true, false, std::nullopt };
             }
+            const bool string_element = mailbox_element->string;
+            const auto width = mailbox_element->width;
             process_.operations.emplace_back(MailboxCreate {
                 destination, *count,
-                string_element ? 0U : static_cast<std::uint32_t>(*width),
+                width,
                 string_element ? MailboxElementKind::string
                                : MailboxElementKind::packed });
         } else {
@@ -417,32 +395,16 @@ Lowerer::lower_hir_synchronization_expression(
     };
 
     if (mailbox) {
-        const auto* element = mailbox_element_type(receiver_type);
-        const semantic::CompiledDesignResolver resolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        };
-        const auto effective_element = element
-            ? effective_mailbox_element_type(
-                  *element, resolver, hir_process_scope_)
-            : std::nullopt;
-        const bool string_element = effective_element
-            && mailbox_string_element(*effective_element);
-        const auto width = element && !string_element
-            ? hir_systemverilog_type_width(*element, hir_process_scope_)
-            : std::nullopt;
-        if (!effective_element
-            || (!string_element
-                && (!width || *width == 0U
-                    || *width > std::numeric_limits<std::uint32_t>::max()))) {
-            report(
-                "FSIM-ELAB-SVSYNC-002",
-                "mailbox operations require exactly one finite positive "
-                "packed element type",
-                hir_source_span(source.source));
+        const auto mailbox_element = hir_mailbox_element(
+            receiver_type,
+            "mailbox operations require exactly one finite positive "
+            "packed element type",
+            hir_source_span(source.source));
+        if (!mailbox_element) {
             return { true, false, std::nullopt };
         }
-        const auto element_width
-            = string_element ? 0U : static_cast<std::uint32_t>(*width);
+        const bool string_element = mailbox_element->string;
+        const auto element_width = mailbox_element->width;
         if (method == "num" && argument_count == 0U) {
             const auto destination = result();
             process_.operations.emplace_back(
@@ -469,13 +431,14 @@ Lowerer::lower_hir_synchronization_expression(
                     destination ? std::optional { resize_result(*destination) }
                                 : std::nullopt };
             }
-            auto value = lower_hir_expression(source.operands[1], *width);
+            auto value
+                = lower_hir_expression(source.operands[1], element_width);
             if (!value) {
                 return { true, false, std::nullopt };
             }
-            if (register_width(*value) != *width) {
+            if (register_width(*value) != element_width) {
                 value = resize_register(
-                    *value, *width,
+                    *value, element_width,
                     hir_expression_signed(source.operands[1]));
             }
             if (method == "put") {
@@ -530,7 +493,7 @@ Lowerer::lower_hir_synchronization_expression(
             const auto domain = hir_expression_domain(
                 source.operands[1], hir_process_scope_)
                                     .value_or(frontend::ValueDomain::Logic4);
-            const auto value = allocate_register(*width, domain);
+            const auto value = allocate_register(element_width, domain);
             std::optional<RegisterId> success;
             if (method.starts_with("try_")) {
                 success = result();

@@ -917,16 +917,30 @@ VESTS_BILLOWITCH_FILE_ROUNDTRIPS = (
     ("tc3203.vhd", "tc3202.vhd", "iofile.61"),
     ("tc3205.vhd", "tc3206.vhd", "iofile.64"),
 )
-VESTS_BILLOWITCH_FILE_CHAIN_PREFIX = "vests:billowitch:file:"
-VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE = {
-    case_name: f"billowitch:file:{Path(writer).stem}-{Path(reader).stem}"
-    for writer, reader, _filename in VESTS_BILLOWITCH_FILE_ROUNDTRIPS
-    for case_name in (writer, reader)
-}
-VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS = {
-    f"vests:{VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE[writer]}": filename
-    for writer, _reader, filename in VESTS_BILLOWITCH_FILE_ROUNDTRIPS
-}
+
+
+def vests_file_chains(
+    group: str, roundtrips: tuple[tuple[str, str, str], ...]
+) -> tuple[str, dict[str, str], dict[str, str]]:
+    """The chain prefix of a VESTs group's writer/reader file pairs, the
+    chain each case joins, and the file each chain's writer leaves."""
+    by_case = {
+        case_name: f"{group}:file:{Path(writer).stem}-{Path(reader).stem}"
+        for writer, reader, _filename in roundtrips
+        for case_name in (writer, reader)
+    }
+    outputs = {
+        f"vests:{by_case[writer]}": filename
+        for writer, _reader, filename in roundtrips
+    }
+    return f"vests:{group}:file:", by_case, outputs
+
+
+(
+    VESTS_BILLOWITCH_FILE_CHAIN_PREFIX,
+    VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE,
+    VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS,
+) = vests_file_chains("billowitch", VESTS_BILLOWITCH_FILE_ROUNDTRIPS)
 VESTS_CLIFTON_FILE_ROUNDTRIPS = (
     (
         "functional/textio/write/character_array_write.vhd",
@@ -934,16 +948,11 @@ VESTS_CLIFTON_FILE_ROUNDTRIPS = (
         "character_array.file",
     ),
 )
-VESTS_CLIFTON_FILE_CHAIN_PREFIX = "vests:clifton:file:"
-VESTS_CLIFTON_FILE_CHAIN_BY_CASE = {
-    case_name: f"clifton:file:{Path(writer).stem}-{Path(reader).stem}"
-    for writer, reader, _filename in VESTS_CLIFTON_FILE_ROUNDTRIPS
-    for case_name in (writer, reader)
-}
-VESTS_CLIFTON_FILE_CHAIN_OUTPUTS = {
-    f"vests:{VESTS_CLIFTON_FILE_CHAIN_BY_CASE[writer]}": filename
-    for writer, _reader, filename in VESTS_CLIFTON_FILE_ROUNDTRIPS
-}
+(
+    VESTS_CLIFTON_FILE_CHAIN_PREFIX,
+    VESTS_CLIFTON_FILE_CHAIN_BY_CASE,
+    VESTS_CLIFTON_FILE_CHAIN_OUTPUTS,
+) = vests_file_chains("clifton", VESTS_CLIFTON_FILE_ROUNDTRIPS)
 VESTS_FILE_CHAIN_OUTPUTS = {
     **VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS,
     **VESTS_CLIFTON_FILE_CHAIN_OUTPUTS,
@@ -952,6 +961,21 @@ VESTS_FILE_CHAIN_PREFIXES = (
     VESTS_BILLOWITCH_FILE_CHAIN_PREFIX,
     VESTS_CLIFTON_FILE_CHAIN_PREFIX,
 )
+# VESTs cases outside the LRM, by (group directory, case path).
+VESTS_OUT_OF_SCOPE = {
+    ("clifton-labs/compliant",
+     "functional/attributes/type/range/simple-range-attribute.vhdl"): (
+        "out of scope: applies scalar bound attributes to A'RANGE; "
+        "RANGE denotes a range, not a scalar type or subtype "
+        "(IEEE 1076-1993 14.1)"
+    ),
+    ("billowitch/non_compliant/analyzer_failure", "tc300.vhd"): (
+        "out of scope: expects compile-time detection of REAL range "
+        "overflow; REAL bounds are host-dependent and implementations "
+        "need not detect predefined floating-point overflow "
+        "(IEEE 1076-1993 3.1.4/3.1.4.1)"
+    ),
+}
 
 
 def vests_cases(root: Path) -> list[Case]:
@@ -1000,25 +1024,11 @@ def vests_cases(root: Path) -> list[Case]:
             text = read_text(source)
             checker_data: dict = {"outputs": []}
             case_chain = chain
-            skip = None
+            skip = VESTS_OUT_OF_SCOPE.get((directory, relative))
             if directory == "billowitch/compliant":
                 case_chain = VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE.get(relative, chain)
             elif directory == "clifton-labs/compliant":
                 case_chain = VESTS_CLIFTON_FILE_CHAIN_BY_CASE.get(relative, chain)
-                if relative == "functional/attributes/type/range/simple-range-attribute.vhdl":
-                    skip = (
-                        "out of scope: applies scalar bound attributes to A'RANGE; "
-                        "RANGE denotes a range, not a scalar type or subtype "
-                        "(IEEE 1076-1993 14.1)"
-                    )
-            elif (directory == "billowitch/non_compliant/analyzer_failure"
-                  and relative == "tc300.vhd"):
-                skip = (
-                    "out of scope: expects compile-time detection of REAL range "
-                    "overflow; REAL bounds are host-dependent and implementations "
-                    "need not detect predefined floating-point overflow "
-                    "(IEEE 1076-1993 3.1.4/3.1.4.1)"
-                )
             if mode in ("run", "run_err"):
                 entity = options.get("ENTITY", [None])[0]
                 if entity is None:

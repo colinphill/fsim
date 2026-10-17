@@ -25,18 +25,6 @@ constexpr std::uint64_t kGenericProjectedRegionPayload
     return true;
 }
 
-[[nodiscard]] bool same_frontier_key(
-    const RegionFrontierKeyV2& left,
-    const RegionFrontierKeyV2& right) noexcept
-{
-    return left.time == right.time && left.delta == right.delta
-        && left.systemverilog_round == right.systemverilog_round
-        && left.stable_order == right.stable_order
-        && left.sequence == right.sequence
-        && left.process_domain == right.process_domain
-        && left.phase == right.phase;
-}
-
 [[nodiscard]] bool scheduler_matches_frontier_key(
     const Scheduler& scheduler,
     const RegionFrontierKeyV2& key) noexcept
@@ -226,7 +214,7 @@ template <typename Runtime>
         || !region_frontier_pending_write_bindings_valid_v2(write)
         || !pending_words_match_storage(runtime, pending_slot, write)
         || !write_value_tail_is_valid(write)
-        || !same_frontier_key(write.commit_key, key)
+        || write.commit_key != key
         || write.commit_key.stable_order != member_layout.process_id
         || write.origin.process_domain
             != static_cast<std::uint32_t>(
@@ -424,7 +412,7 @@ template <typename Runtime>
         || member.process_id >= runtime.owner->processes.size()
         || (member.flags & required_flags) != required_flags
         || (member.flags & RegionFrontierMemberFlagsV2::executing) != 0U
-        || !same_frontier_key(member.queued_key, key)
+        || member.queued_key != key
         || member.queued_key.stable_order != member.process_id
         || member.queued_key.process_domain
             != static_cast<std::uint32_t>(
@@ -757,7 +745,7 @@ void Interpreter::Impl::dispatch_region_frontier_fallback(
     }
 
     auto& retired_write = runtime->pending_writes[index];
-    if (!same_frontier_key(retired_write.commit_key, key)
+    if (retired_write.commit_key != key
         || (retired_write.flags & pending_committed) != 0U
         || (retired_write.flags & pending_active) == 0U
         || runtime->frame.pending_write_count == 0U) {

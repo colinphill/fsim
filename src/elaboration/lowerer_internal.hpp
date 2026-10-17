@@ -26,6 +26,35 @@ using runtime::PackedLogic4;
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+// The runtime report location of a source span: its file and first line
+// and column.
+// A SystemVerilog type after following typedefs and parameter bindings to
+// a fixed point (at most eight steps).
+[[nodiscard]] inline semantic::sv::TypeReference
+fully_effective_systemverilog_type(
+    const semantic::CompiledDesignResolver& resolver,
+    semantic::sv::TypeReference type, const semantic::ScopeId scope)
+{
+    for (std::size_t depth { }; depth < 8U; ++depth) {
+        auto effective = resolver.effective_systemverilog_type(type, scope);
+        if (!effective || *effective == type) {
+            break;
+        }
+        type = std::move(*effective);
+    }
+    return type;
+}
+
+[[nodiscard]] inline SourceLocation runtime_source_location(
+    const frontend::SourceSpan& span)
+{
+    return SourceLocation {
+        span.source_name.str(),
+        static_cast<std::uint32_t>(span.begin.line),
+        static_cast<std::uint32_t>(span.begin.column),
+    };
+}
+
 [[nodiscard]] std::optional<double>
 systemverilog_real_literal(std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<runtime::simir::RandomDistributionKind>
@@ -76,6 +105,44 @@ resolve_vhdl_vital_named_constant(
     semantic::ExpressionId expression,
     std::size_t contextual_width,
     std::span<const semantic::CompiledBindingFrame> binding_frames = { });
+
+/// An internal `@sv-container-method:<method>:<container>` call: `size()`
+/// (a 32-bit int) or `pop_front()` (a 64-bit two-state element handle) of
+/// a container held by an object (IEEE 1800-2017 7.5.1, 7.10.2).
+struct SvContainerMethodCall {
+    bool pop_front { };
+    std::string_view container;
+
+    [[nodiscard]] std::size_t result_width() const noexcept
+    {
+        return pop_front ? 64U : 32U;
+    }
+    [[nodiscard]] frontend::ValueDomain result_domain() const noexcept
+    {
+        return pop_front ? frontend::ValueDomain::Bit2
+                         : frontend::ValueDomain::Integer;
+    }
+};
+
+[[nodiscard]] inline std::optional<SvContainerMethodCall>
+sv_container_method_call(const std::string_view text) noexcept
+{
+    constexpr auto prefix = std::string_view { "@sv-container-method:" };
+    constexpr auto pop_front = std::string_view { "pop_front:" };
+    constexpr auto size = std::string_view { "size:" };
+    if (!text.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    const auto operation = text.substr(prefix.size());
+    if (operation.starts_with(pop_front)) {
+        return SvContainerMethodCall { true,
+            operation.substr(pop_front.size()) };
+    }
+    if (operation.starts_with(size)) {
+        return SvContainerMethodCall { false, operation.substr(size.size()) };
+    }
+    return std::nullopt;
+}
 
 class Lowerer final {
 public:
@@ -522,6 +589,10 @@ private:
     [[nodiscard]] std::optional<bool> hir_vhdl_range_direction(
         const semantic::vhdl::RangeConstraint& range,
         semantic::ScopeId process_scope) const;
+    // `range` with folded bounds, a resolved direction and its null flag.
+    [[nodiscard]] std::optional<semantic::vhdl::RangeConstraint>
+    hir_vhdl_concrete_range(const semantic::vhdl::RangeConstraint& range,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::optional<HirPackedRange>>
     hir_vhdl_callable_formal_range(
         semantic::DeclarationId declaration,
@@ -559,6 +630,11 @@ private:
     // The array type an array subtype belongs to, for overload resolution:
     // STD_LOGIC_VECTOR and STD_ULOGIC_VECTOR, UNSIGNED, SIGNED and
     // BIT_VECTOR are distinct (IEEE 1076-2008 4.5.2). Nullopt when unknown.
+    // The element subtype of a predefined array type named by its simple
+    // name (bit_vector, string, boolean_vector, integer_vector,
+    // time_vector, real_vector, std_logic_vector, std_ulogic_vector).
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_predefined_array_element(std::string_view array_name) const;
     [[nodiscard]] std::optional<std::string> hir_vhdl_array_type_family(
         const semantic::vhdl::SubtypeIndication& subtype) const;
     [[nodiscard]] bool hir_vhdl_same_nominal_array_type(
@@ -632,6 +708,12 @@ private:
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
         std::vector<std::pair<std::uint64_t, std::string>>>>
     hir_virtual_interface_instances(std::string_view receiver) const;
+    // Tests a virtual interface `handle` against each instance of its
+    // interface type (IEEE 1800-2017 25.9) and emits the matching
+    // instance's call through `emit(path)`.
+    [[nodiscard]] bool lower_hir_virtual_interface_dispatch(RegisterId handle,
+        const std::vector<std::pair<std::uint64_t, std::string>>& instances,
+        const std::function<bool(const std::string&)>& emit);
     // The instance an interface function call runs on, while a call through
     // a virtual interface handle is lowered once per instance.
     std::optional<std::string> hir_interface_receiver_override_;
@@ -665,6 +747,15 @@ private:
     hir_systemverilog_event_array_selection(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // Selects one element of an event array, `@(e[i])` or `-> e[i]`, and
+    // applies `emit` to it: directly for a constant index, otherwise through
+    // a compare-and-branch chain over the declared elements. When no element
+    // matches, a wait blocks forever and a trigger does nothing.
+    [[nodiscard]] bool lower_hir_systemverilog_event_array_dispatch(
+        const HirSystemVerilogEventArraySelection& event_array,
+        const frontend::SourceSpan& span,
+        const std::function<bool(SignalId)>& emit,
+        bool wait_when_unmatched);
     [[nodiscard]] std::optional<PackedLogic4>
     hir_systemverilog_event_array_index_value(
         std::int32_t index,
@@ -693,6 +784,18 @@ private:
         semantic::ExpressionId expression) const;
     // Whether a VHDL STRING subtype resolves through aliases/subtypes to the
     // predefined STD.STANDARD.STRING declaration (or an unshadowed builtin).
+    // The 1 to N range a predefined STRING gives a string literal.
+    [[nodiscard]] std::optional<HirPackedRange> hir_vhdl_string_literal_range(
+        std::string_view value);
+    // The range of a subtype with exactly one array index constraint.
+    [[nodiscard]] std::optional<HirPackedRange> hir_vhdl_single_index_range(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId use_scope);
+    // A constant with an unconstrained predefined STRING subtype takes the
+    // exact bounds of a direct string-literal initializer; shape is not
+    // inferred through concatenations or function results.
+    [[nodiscard]] std::optional<HirPackedRange>
+    hir_vhdl_constant_string_literal_range(semantic::ExpressionId actual);
     [[nodiscard]] bool hir_vhdl_predefined_string_type(
         const semantic::vhdl::SubtypeIndication& subtype) const;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
@@ -700,13 +803,110 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_vhdl_runtime_string_prefix(
         semantic::ExpressionId prefix) const;
-    // The object a whole-object alias declaration denotes.
     // Whether a VHDL subprogram formal is of a STRING subtype.
     [[nodiscard]] bool vhdl_string_formal(semantic::DeclarationId formal) const;
+    // The object a whole-object alias declaration denotes.
     [[nodiscard]] std::optional<semantic::DeclarationId> hir_vhdl_alias_object(
         semantic::DeclarationId alias) const;
-    // The index of the non-null operand of a VHDL `&` whose other operand
-    // is a statically null array, if exactly one operand is null.
+    // The end of a VHDL subtype's chain of named subtypes and aliases: the
+    // last base spelling followed, the last predefined array identity a
+    // base names, the first type that is not a subtype or alias (or the
+    // unresolved base it stopped at), and the scope of the last
+    // declaration reached, in which each base was resolved.
+    struct HirVhdlSubtypeChain {
+        std::string_view spelling;
+        semantic::vhdl::BuiltinTypeIdentity builtin {
+            semantic::vhdl::BuiltinTypeIdentity::none
+        };
+        bool followed { };
+        semantic::TypeId type;
+        const semantic::vhdl::TypeDefinition* definition { };
+        semantic::ScopeId scope;
+    };
+    [[nodiscard]] HirVhdlSubtypeChain hir_vhdl_subtype_chain(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId scope) const;
+    // Whether an unresolved VITAL procedure name denotes the compiler's
+    // intrinsic rather than a user declaration.
+    [[nodiscard]] bool hir_vhdl_vital_intrinsic_visible(
+        const semantic::vhdl::Name& procedure, semantic::ScopeId scope) const;
+    // The named (lower-case formal) and positional actuals of a VITAL
+    // intrinsic procedure call.
+    struct HirVitalActuals {
+        std::vector<semantic::ExpressionId> positional;
+        std::map<std::string, semantic::ExpressionId, std::less<>> named;
+        [[nodiscard]] std::optional<semantic::ExpressionId> find(
+            std::string_view formal, std::size_t position) const;
+    };
+    // Reports a duplicate named actual, or a positional actual after a
+    // named one, as `code` for the `label` procedure family.
+    [[nodiscard]] HirVitalActuals collect_hir_vital_actuals(
+        std::span<const semantic::vhdl::ProcedureAssociation> arguments,
+        std::string_view code, std::string_view label, bool& valid);
+    // An expression's source span, or `fallback` when it has none.
+    [[nodiscard]] frontend::SourceSpan hir_expression_span(
+        semantic::ExpressionId id, const frontend::SourceSpan& fallback) const;
+    // A static Boolean or string-literal VITAL actual, or `fallback` when
+    // the formal has no actual.
+    [[nodiscard]] bool hir_vital_static_bool(
+        std::optional<semantic::ExpressionId> expression,
+        std::string_view formal, bool fallback, std::string_view code,
+        std::string_view label, bool& valid);
+    [[nodiscard]] std::string hir_vital_static_string(
+        std::optional<semantic::ExpressionId> expression,
+        std::string_view formal, std::string_view fallback,
+        std::string_view code, std::string_view label, bool& valid);
+    // Protected-method call lowering (lowerer_hir_vhdl_special.cpp).
+    // A call actual: its formal name (empty when positional) and value.
+    using HirVhdlProtectedActual
+        = std::pair<std::string_view, semantic::ExpressionId>;
+    struct HirVhdlProtectedCandidate {
+        const semantic::vhdl::Declaration* declaration { };
+        std::vector<semantic::ExpressionId> actuals;
+    };
+    struct HirVhdlProtectedStorage {
+        ContainerObjectId object { };
+        ContainerRegisterId container { };
+        RegisterId value { };
+    };
+    class HirVhdlProtectedMethodScope;
+    // The protected type of the object a method call is selected from.
+    [[nodiscard]] const semantic::vhdl::TypeDefinition*
+    hir_vhdl_protected_type(
+        semantic::ScopeId scope, std::string_view object) const;
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_protected_formal_width(
+        semantic::DeclarationId formal) const;
+    // The defined public methods of `body` named `member_name` whose
+    // profile the call actuals match.
+    [[nodiscard]] std::vector<HirVhdlProtectedCandidate>
+    hir_vhdl_protected_candidates(const semantic::vhdl::TypeDefinition& body,
+        std::string_view member_name, bool function,
+        std::span<const HirVhdlProtectedActual> call) const;
+    [[nodiscard]] std::optional<std::vector<RegisterId>>
+    lower_hir_vhdl_protected_arguments(
+        const semantic::vhdl::Declaration& method,
+        std::span<const semantic::ExpressionId> actuals);
+    // Reads the object's private variables into the method's locals and
+    // binds its formals to the lowered arguments.
+    [[nodiscard]] std::optional<std::vector<HirVhdlProtectedStorage>>
+    load_hir_vhdl_protected_storage(const semantic::vhdl::TypeDefinition& body,
+        std::string_view object, const semantic::vhdl::Declaration& method,
+        std::span<const RegisterId> arguments, RegisterId zero,
+        const frontend::SourceSpan& span);
+    // Clears the register, local and control state of one lowered process.
+    void reset_hir_process_state();
+    // A resolver over the specialized unit that sees the generic bindings
+    // of the instance being lowered.
+    [[nodiscard]] semantic::CompiledDesignResolver hir_resolver() const
+    {
+        return semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        };
+    }
+    // The type a VHDL type mark spelling denotes when looked up from
+    // `scope`, for type marks the HIR left unresolved.
+    [[nodiscard]] std::optional<semantic::TypeId> hir_vhdl_type_of_spelling(
+        std::string_view spelling, semantic::ScopeId scope) const;
     // The CHARACTER code of a VHDL character literal lowered self-determined
     // or in an 8-bit context: a non-logic character, a CHARACTER control
     // name (NUL), or a logic character ('0') whose context is CHARACTER.
@@ -903,6 +1103,11 @@ private:
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_indexed_member(
         semantic::ExpressionId expression) const;
+    // Adds a packed member's offset to a constant selection (or makes the
+    // member the selection of an unselected target); false on overflow.
+    [[nodiscard]] static bool add_hir_member_selection(
+        const std::optional<HirPackedMemberSelection>& member,
+        std::optional<HirConstantSelection>& selection, bool selected);
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_member_path(
         semantic::DeclarationId declaration, std::string_view path) const;
@@ -1261,6 +1466,16 @@ private:
     hir_synchronization_task_profile(
         const semantic::sv::Statement& statement,
         semantic::ScopeId process_scope) const;
+    // A typed mailbox's element: a string, or a packed type of `width`
+    // bits (IEEE 1800-2017 15.4.9). Reports FSIM-ELAB-SVSYNC-002 with
+    // `message` when the element has neither form.
+    struct HirMailboxElement {
+        bool string { };
+        std::uint32_t width { };
+    };
+    [[nodiscard]] std::optional<HirMailboxElement> hir_mailbox_element(
+        const semantic::sv::TypeReference* mailbox_type,
+        std::string_view message, const frontend::SourceSpan& span);
     [[nodiscard]] bool lower_hir_synchronization_statement(
         const semantic::sv::Statement& statement);
     [[nodiscard]] HirSynchronizationAttempt
@@ -1445,9 +1660,22 @@ private:
         std::optional<semantic::ExpressionId> initializer = std::nullopt,
         std::span<const semantic::vhdl::RangeConstraint>
             allocator_constraints = {});
+    // Issues a fresh handle of `heap` within its live-object limit and
+    // stores the new object's value through `store(handle)`.
+    [[nodiscard]] RegisterId issue_hir_vhdl_access_handle(
+        const HirVhdlAccessHeap& heap, const frontend::SourceSpan& span,
+        const std::function<void(RegisterId)>& store);
+    // Fails at run time unless `handle` names a live object of `heap`
+    // (IEEE 1076-2008 8.3: a dereference of null is an error).
+    void emit_hir_vhdl_access_live_check(const HirVhdlAccessHeap& heap,
+        RegisterId handle, const frontend::SourceSpan& span);
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_access_type_definition(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The effective subtype an access subtype designates.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_designated_subtype(
+        const semantic::vhdl::SubtypeIndication& access_subtype) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_access_expression(
         semantic::ExpressionId expression,
@@ -1542,6 +1770,23 @@ private:
     [[nodiscard]] HirStringFormatStatus hir_string_format_task_status(
         semantic::StatementId statement,
         semantic::ScopeId process_scope) const;
+    // The `width`-bit `selection` of `value`; fails when the selection is
+    // not `width` bits or leaves the register.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_selection_extract(
+        RegisterId value, const HirConstantSelection& selection,
+        std::size_t width, frontend::ValueDomain domain);
+    // Whether `value` is a slice of a named array whose constant bounds are
+    // a null range inside the prefix's index range, in its direction; only
+    // such bounds, never a missing width, prove a zero-element segment.
+    // `prefix_matches` checks the prefix's type.
+    [[nodiscard]] bool hir_vhdl_proven_null_slice(semantic::ExpressionId value,
+        semantic::ScopeId fallback_scope,
+        const std::function<bool(semantic::ExpressionId)>& prefix_matches)
+        const;
+    // A string holding the `width / 8` CHARACTER bytes of `packed`, most
+    // significant first, with no display-format NUL substitution.
+    [[nodiscard]] StringRegisterId lower_hir_packed_characters_to_string(
+        RegisterId packed, std::size_t width);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_expression(
         semantic::ExpressionId expression,
@@ -1920,6 +2165,12 @@ private:
         std::optional<StringRegisterId> local;
         std::optional<StringObjectId> object;
     };
+    // Points a scan target at a writable string or packed binding; false
+    // when the binding is read-only.
+    [[nodiscard]] bool set_hir_string_scan_target(
+        InputScanTarget& target, const HirStringBinding& binding) const;
+    [[nodiscard]] bool set_hir_packed_scan_target(
+        InputScanTarget& target, const HirRuntimeBinding& binding) const;
     [[nodiscard]] std::optional<HirStringBinding> hir_string_binding(
         semantic::DeclarationId declaration,
         semantic::ScopeId process_scope,
@@ -2308,6 +2559,9 @@ private:
     // an object of type CHARACTER).
     [[nodiscard]] bool hir_vhdl_character_expression(
         semantic::ExpressionId value) const;
+    // A non-empty aggregate of positional CHARACTER elements.
+    [[nodiscard]] bool hir_vhdl_positional_character_aggregate(
+        const semantic::vhdl::Expression& aggregate) const;
     // Whether a VHDL expression is of type TIME (or DELAY_LENGTH), including
     // folded time literals and NOW.
     [[nodiscard]] bool hir_vhdl_time_expression(
@@ -2436,6 +2690,15 @@ private:
     [[nodiscard]] std::string debug_scope_name() const;
     RegisterId allocate_register(
         std::size_t width,
+        frontend::ValueDomain domain);
+    // A format_packed string method appending `value`, `width` bits wide,
+    // to `target` in `format`; the caller sets any other options.
+    [[nodiscard]] StringMethod hir_format_packed(StringRegisterId target,
+        RegisterId value, std::size_t width,
+        runtime::simir::OutputFormat format);
+    // A fresh register loaded with a constant.
+    RegisterId load_constant(PackedLogic4 value, frontend::ValueDomain domain);
+    RegisterId load_integer(std::int64_t value, std::size_t width,
         frontend::ValueDomain domain);
     StringRegisterId allocate_string_register();
     ContainerRegisterId allocate_container_register(
@@ -2589,6 +2852,14 @@ private:
         std::optional<StringObjectId> string;
         std::optional<ContainerObjectId> container;
     };
+    // The index of the frame of the callable lexically enclosing `frame`.
+    [[nodiscard]] std::optional<std::size_t> hir_enclosing_callable_frame(
+        const HirCallableFrame& frame) const;
+    // A static local of a static callable keeps its value between calls;
+    // only its first activation runs the initializer (IEEE 1800-2017 6.21).
+    [[nodiscard]] bool hir_retained_static_local(
+        const semantic::CompiledDeclarationView& declaration,
+        bool first_initialization) const;
     [[nodiscard]] std::optional<HirStaticStorage> hir_static_storage(
         semantic::DeclarationId declaration,
         const HirCallableFrame* frame = nullptr) const;
@@ -2692,6 +2963,14 @@ private:
         std::string label;
     };
     std::vector<LoopControlContext> loop_controls_;
+    // Lowers a loop body in a new loop-control context; the caller patches
+    // its continue and break jumps.
+    [[nodiscard]] std::optional<LoopControlContext> lower_hir_loop_body(
+        std::string_view label,
+        std::span<const semantic::StatementId> statements);
+    // Points pending jump instructions at `target`.
+    void patch_hir_jumps(
+        std::span<const InstructionIndex> jumps, InstructionIndex target);
     struct BlockControlContext {
         std::string label;
         std::vector<InstructionIndex> disable_jumps;

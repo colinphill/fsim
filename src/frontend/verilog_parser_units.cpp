@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 
 namespace fsim::frontend {
 
@@ -770,25 +771,10 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
   } else if (const auto compound = [&]() -> std::optional<std::string> {
                // Any assignment operator may step a genvar (IEEE
                // 1800-2017 27.4, genvar_iteration).
-               static constexpr std::pair<TokenKind, const char*>
-                   operators[] = {
-                       {TokenKind::PlusAssign, "+"},
-                       {TokenKind::MinusAssign, "-"},
-                       {TokenKind::StarAssign, "*"},
-                       {TokenKind::SlashAssign, "/"},
-                       {TokenKind::PercentAssign, "%"},
-                       {TokenKind::AmpersandAssign, "&"},
-                       {TokenKind::PipeAssign, "|"},
-                       {TokenKind::CaretAssign, "^"},
-                       {TokenKind::ShiftLeftAssign, "<<"},
-                       {TokenKind::ShiftRightAssign, ">>"},
-                       {TokenKind::ArithmeticShiftLeftAssign, "<<<"},
-                       {TokenKind::ArithmeticShiftRightAssign, ">>>"},
-                   };
-               for (const auto& [kind, text] : operators) {
-                 if (match(kind)) return std::string{text};
-               }
-               return std::nullopt;
+               const auto text = compound_assignment_operator(current().kind);
+               if (text.empty()) return std::nullopt;
+               match(current().kind);
+               return std::string{text};
              }()) {
     auto amount = parse_expression();
     result.iteration = stepped_iteration(
@@ -2103,11 +2089,7 @@ std::vector<Instance> VerilogParser::parse_instances() {
       instance.array_left = std::move(left_expression);
       instance.array_right = std::move(right_expression);
     } else {
-      const auto distance = *left >= *right
-          ? static_cast<std::uint64_t>(*left)
-              - static_cast<std::uint64_t>(*right)
-          : static_cast<std::uint64_t>(*right)
-              - static_cast<std::uint64_t>(*left);
+      const auto distance = support::index_distance(*left, *right);
       if (distance >= maximum_instance_array_elements) {
         error(
             range,

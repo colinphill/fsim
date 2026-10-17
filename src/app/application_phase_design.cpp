@@ -1267,6 +1267,7 @@ std::optional<BuiltProject> load_design_artifact(
     if (!restore_sdf_phase_artifacts(directory, *metadata, built, diagnostics))
         return std::nullopt;
     built.trace_archive = std::move(trace_archive);
+    built.trusted_artifact = trusted;
     built.code_coverage_enabled = metadata->code_coverage.enabled;
     if (built.code_coverage_enabled
         && !built.design.code_coverage_inventory()) {

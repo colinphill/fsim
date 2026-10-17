@@ -542,28 +542,7 @@ namespace systemverilog_hir_detail {
         output.class_identity = input.nominal_type;
         // Keep class operation identity in the primary HIR. The executable
         // completion pass can reuse this expression by source and origin.
-        const auto bind_class_operation = [&](const std::string_view prefix) {
-            if (!input.text.starts_with(prefix))
-                return false;
-            const auto payload = input.text.substr(prefix.size());
-            output.class_member_identity = payload;
-            if (output.class_identity.empty()) {
-                const auto separator = payload.rfind("::");
-                output.class_identity = separator == std::string::npos
-                    ? payload
-                    : payload.substr(0, separator);
-            }
-            return true;
-        };
-        if (!bind_class_operation("@sv-new:")
-            && !bind_class_operation("@sv-dollar-cast:")
-            && !bind_class_operation("@sv-property:")
-            && !bind_class_operation("@sv-static-property:")
-            && !bind_class_operation("@sv-base-method:")
-            && !bind_class_operation("@sv-method:")
-            && !bind_class_operation("@sv-static-method:")) {
-            output.class_member_identity.clear();
-        }
+        bind_systemverilog_class_operation(output, input.text);
         output.signed_value = input.kind
                 == frontend::ExpressionKind::IntegerLiteral
             || (input.kind == frontend::ExpressionKind::LogicLiteral
@@ -577,18 +556,8 @@ namespace systemverilog_hir_detail {
                 static_cast<frontend::EdgeKind>(input.call_result_width));
         }
         output.decoded_string = input.decoded_string;
-        if (input.systemverilog_decimal_literal) {
-            const auto& literal = *input.systemverilog_decimal_literal;
-            output.decimal_literal = sv::DecimalLiteral {
-                literal.kind
-                        == frontend::SystemVerilogDecimalLiteralKind::Time
-                    ? sv::DecimalLiteralKind::time
-                    : sv::DecimalLiteralKind::real,
-                literal.digits,
-                literal.decimal_exponent,
-                literal.time_unit,
-            };
-        }
+        output.decimal_literal = systemverilog_decimal_literal(
+            input.systemverilog_decimal_literal);
         output.scalar_kind = static_cast<sv::ScalarKind>(
             input.systemverilog_scalar_kind);
         output.generated_text

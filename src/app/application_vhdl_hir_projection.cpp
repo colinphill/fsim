@@ -62,13 +62,13 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
     const frontend::SourceSpan& span,
     const semantic::ScopeId scope)
 {
-    vh::Name result {
-        std::string { spelling }, canonical_vhdl_name(std::string { spelling }),
-        source(span), std::nullopt, { }
-    };
+    vh::Name result { std::string { spelling },
+        support::canonical_vhdl_spelling(std::string { spelling }),
+        source(span), std::nullopt, { } };
     for (const auto& declaration : hir_.declarations()) {
         if (declaration.scope == scope
-            && canonical_vhdl_name(declaration.name) == result.canonical) {
+            && support::canonical_vhdl_spelling(declaration.name)
+                == result.canonical) {
             result.overloads.push_back(declaration.id);
         }
     }
@@ -114,7 +114,7 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
         || value.kind == frontend::ExpressionKind::Unary
         || value.kind == frontend::ExpressionKind::Binary) {
         constexpr auto qualified_prefix
-            = std::string_view { "@vhdl-qualified:" };
+            = semantic::vhdl::qualified_expression_prefix;
         auto spelling = value.text.starts_with(qualified_prefix)
             ? std::string { std::string_view { value.text }.substr(
                   qualified_prefix.size()) }
@@ -314,13 +314,13 @@ void VhdlHirBuilder::add_disconnection_specifications(
     if (ambiguous != nullptr) {
         *ambiguous = false;
     }
-    const auto canonical = canonical_vhdl_name(
+    const auto canonical = support::canonical_vhdl_spelling(
         std::string { name_value });
     const auto separator = name_value.find_last_of(".:");
     const auto simple = separator == std::string_view::npos
         ? name_value
         : name_value.substr(separator + 1U);
-    const auto simple_canonical = canonical_vhdl_name(
+    const auto simple_canonical = support::canonical_vhdl_spelling(
         std::string { simple });
 
     // ensure_type passes an exact declaration span while assigning a fresh
@@ -331,7 +331,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
         semantic::TypeId selected;
         for (const auto& type : model_.types()) {
             if (type.source != *exact_source
-                || canonical_vhdl_name(type.name) != simple_canonical) {
+                || support::canonical_vhdl_spelling(type.name)
+                    != simple_canonical) {
                 continue;
             }
             if (selected.valid() && selected != type.id) {
@@ -349,7 +350,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
     while (visible_scope) {
         for (const auto& type : model_.types()) {
             if (type.scope == *visible_scope
-                && canonical_vhdl_name(type.name) == canonical) {
+                && support::canonical_vhdl_spelling(type.name) == canonical) {
                 return type.id;
             }
         }
@@ -360,7 +361,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
         visible_scope = model_.scopes()[visible_scope->value()].parent;
     }
 
-    const auto current_library = canonical_vhdl_name(
+    const auto current_library = support::canonical_vhdl_spelling(
         current_unit_ == nullptr || current_unit_->library.empty()
             ? std::string { "work" }
             : current_unit_->library);
@@ -373,10 +374,10 @@ void VhdlHirBuilder::add_disconnection_specifications(
         && !current_unit_->primary_name.empty()
         && separator == std::string_view::npos) {
         semantic::TypeId selected;
-        const auto primary_name = canonical_vhdl_name(
+        const auto primary_name = support::canonical_vhdl_spelling(
             current_unit_->primary_name);
         for (const auto& unit : model_.units()) {
-            const auto unit_library = canonical_vhdl_name(
+            const auto unit_library = support::canonical_vhdl_spelling(
                 unit.library.empty()
                     ? std::string { "work" }
                     : unit.library);
@@ -388,12 +389,14 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     && unit.secondary_name.empty()
                 : false;
             if (!matching_kind || unit_library != current_library
-                || canonical_vhdl_name(unit.name) != primary_name) {
+                || support::canonical_vhdl_spelling(unit.name)
+                    != primary_name) {
                 continue;
             }
             for (const auto& type : model_.types()) {
                 if (type.scope != unit.scope
-                    || canonical_vhdl_name(type.name) != canonical) {
+                    || support::canonical_vhdl_spelling(type.name)
+                        != canonical) {
                     continue;
                 }
                 if (selected.valid() && selected != type.id) {
@@ -415,20 +418,20 @@ void VhdlHirBuilder::add_disconnection_specifications(
                                   bool* const package_ambiguous = nullptr) {
         semantic::TypeId selected;
         for (const auto& unit : model_.units()) {
-            const auto unit_library = canonical_vhdl_name(
+            const auto unit_library = support::canonical_vhdl_spelling(
                 unit.library.empty()
                     ? std::string { "work" }
                     : unit.library);
             if (unit.language != semantic::Language::vhdl
                 || unit.kind != semantic::UnitKind::vhdl_package
-                || !unit.secondary_name.empty()
-                || unit_library != library_name
-                || canonical_vhdl_name(unit.name) != package_name) {
+                || !unit.secondary_name.empty() || unit_library != library_name
+                || support::canonical_vhdl_spelling(unit.name)
+                    != package_name) {
                 continue;
             }
             for (const auto& type : model_.types()) {
                 if (type.scope != unit.scope
-                    || canonical_vhdl_name(type.name)
+                    || support::canonical_vhdl_spelling(type.name)
                         != simple_canonical) {
                     continue;
                 }
@@ -478,7 +481,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 if (!type.source.valid()
                     || type.source.value()
                         >= model_.source_spans().size()
-                    || canonical_vhdl_name(type.name)
+                    || support::canonical_vhdl_spelling(type.name)
                         != simple_canonical) {
                     continue;
                 }
@@ -522,7 +525,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 return;
             }
             for (const auto& imported : item.selected_names) {
-                const auto imported_name = canonical_vhdl_name(
+                const auto imported_name = support::canonical_vhdl_spelling(
                     imported.canonical.empty()
                         ? imported.spelling
                         : imported.canonical);
@@ -578,7 +581,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 return;
             }
             active_contexts.push_back(context_owner.id);
-            const auto owner_library = canonical_vhdl_name(
+            const auto owner_library = support::canonical_vhdl_spelling(
                 context_owner.library.empty()
                     ? std::string { "work" }
                     : context_owner.library);
@@ -594,11 +597,12 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 for (const auto& reference : item.selected_names) {
-                    const auto reference_name = canonical_vhdl_name(
-                        reference.canonical.empty()
-                            ? reference.spelling
-                            : reference.canonical);
-                    const auto parts = vhdl_name_parts(reference_name);
+                    const auto reference_name
+                        = support::canonical_vhdl_spelling(
+                            reference.canonical.empty() ? reference.spelling
+                                                        : reference.canonical);
+                    const auto parts
+                        = support::split_vhdl_selected_name(reference_name);
                     if (parts.empty()) {
                         mark_ambiguous();
                         return;
@@ -613,13 +617,13 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     const vh::Unit* referenced_context { };
                     for (const auto& candidate : hir_.units()) {
                         const auto candidate_library
-                            = canonical_vhdl_name(
+                            = support::canonical_vhdl_spelling(
                                 candidate.library.empty()
                                     ? std::string { "work" }
                                     : candidate.library);
                         if (candidate.kind != vh::UnitKind::context
                             || candidate_library != expected_library
-                            || !same_vhdl_unit_name(
+                            || !vh::unit_name_matches(
                                 candidate, simple_name)) {
                             continue;
                         }
@@ -660,23 +664,23 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 const auto primary_kind = architecture
                     ? vh::UnitKind::entity
                     : vh::UnitKind::package;
-                const auto primary_name = canonical_vhdl_name(
+                const auto primary_name = support::canonical_vhdl_spelling(
                     current_unit_->primary_name);
-                const auto primary_library = canonical_vhdl_name(
+                const auto primary_library = support::canonical_vhdl_spelling(
                     current_unit_->library.empty()
                         ? std::string { "work" }
                         : current_unit_->library);
                 const vh::Unit* primary_unit { };
                 for (const auto& candidate : hir_.units()) {
-                    const auto candidate_library = canonical_vhdl_name(
-                        candidate.library.empty()
-                            ? std::string { "work" }
-                            : candidate.library);
+                    const auto candidate_library
+                        = support::canonical_vhdl_spelling(
+                            candidate.library.empty() ? std::string { "work" }
+                                                      : candidate.library);
                     if (candidate.kind != primary_kind
                         || (package_body
                             && !candidate.primary_name.empty())
                         || candidate_library != primary_library
-                        || canonical_vhdl_name(candidate.name)
+                        || support::canonical_vhdl_spelling(candidate.name)
                             != primary_name) {
                         continue;
                     }
@@ -706,7 +710,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
     }
 
     if (separator != std::string_view::npos) {
-        const auto selected_name = canonical_vhdl_name(
+        const auto selected_name = support::canonical_vhdl_spelling(
             std::string { name_value });
         const auto first_dot = selected_name.find('.');
         const auto last_dot = selected_name.rfind('.');
@@ -732,7 +736,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
             nested != std::string_view::npos) {
             qualifier = qualifier.substr(nested + 1U);
         }
-        const auto qualifier_canonical = canonical_vhdl_name(
+        const auto qualifier_canonical = support::canonical_vhdl_spelling(
             std::string { qualifier });
 
         // A locally instantiated generic package exports the declarations of
@@ -757,21 +761,22 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     = current_unit_ != nullptr
                     && !current_unit_->primary_name.empty()
                     && current_unit_->scope.valid()
-                    && current_unit_->scope.value()
-                        < model_.scopes().size()
+                    && current_unit_->scope.value() < model_.scopes().size()
                     && declaration_unit.valid()
                     && std::ranges::any_of(
-                        model_.units(), [&](const semantic::Unit& unit) {
-                            const auto library = canonical_vhdl_name(
-                                unit.library.empty()
-                                    ? std::string { "work" }
-                                    : unit.library);
+                        model_.units(),
+                        [&](const semantic::Unit& unit) {
+                            const auto library
+                                = support::canonical_vhdl_spelling(
+                                    unit.library.empty()
+                                        ? std::string { "work" }
+                                        : unit.library);
                             return unit.id == declaration_unit
                                 && unit.language
                                     == semantic::Language::vhdl
                                 && library == current_library
-                                && canonical_vhdl_name(unit.name)
-                                    == canonical_vhdl_name(
+                                && support::canonical_vhdl_spelling(unit.name)
+                                    == support::canonical_vhdl_spelling(
                                         current_unit_->primary_name)
                                 && ((current_unit_->kind
                                             == vh::UnitKind::architecture
@@ -791,7 +796,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                             != vh::DeclarationForm::package_instance
                         && declaration.form
                             != vh::DeclarationForm::generic_package)
-                    || canonical_vhdl_name(declaration.name)
+                    || support::canonical_vhdl_spelling(declaration.name)
                         != qualifier_canonical
                     || !declaration.package) {
                     continue;
@@ -806,16 +811,17 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 if (const auto template_separator
                         = template_name.find_last_of(".:");
                     template_separator != std::string_view::npos) {
-                    template_library = canonical_vhdl_name(std::string {
-                        template_name.substr(0U, template_separator) });
+                    template_library
+                        = support::canonical_vhdl_spelling(std::string {
+                            template_name.substr(0U, template_separator) });
                     if (template_library == "work") {
                         template_library = current_library;
                     }
                     template_name.remove_prefix(template_separator + 1U);
                 }
-                const auto candidate = package_type(
-                    template_library,
-                    canonical_vhdl_name(std::string { template_name }));
+                const auto candidate = package_type(template_library,
+                    support::canonical_vhdl_spelling(
+                        std::string { template_name }));
                 if (!candidate.valid()) {
                     continue;
                 }
@@ -842,13 +848,13 @@ void VhdlHirBuilder::add_disconnection_specifications(
             if (unit.language != semantic::Language::vhdl
                 || unit.kind != semantic::UnitKind::vhdl_package
                 || !unit.secondary_name.empty()
-                || canonical_vhdl_name(unit.name)
+                || support::canonical_vhdl_spelling(unit.name)
                 != qualifier_canonical) {
                 continue;
             }
             for (const auto& type : model_.types()) {
                 if (type.scope != unit.scope
-                    || canonical_vhdl_name(type.name)
+                    || support::canonical_vhdl_spelling(type.name)
                         != simple_canonical) {
                     continue;
                 }
@@ -874,7 +880,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
     const semantic::SourceSpanId exact_source) const noexcept
 {
     const auto key = ValueLookupKey { scope, exact_source,
-        canonical_vhdl_name(std::string { name_value }) };
+        support::canonical_vhdl_spelling(std::string { name_value }) };
     const auto found = values_by_lookup_key_.find(key);
     return found == values_by_lookup_key_.end() ? semantic::ValueId { }
                                                  : found->second;
@@ -941,7 +947,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
         // `obj'subtype` is the subtype of an earlier visible object (IEEE
         // 1076-2008 16.2.2). An unconstrained array object, such as a
         // subprogram formal, takes its index ranges from `obj'range`.
-        const auto canonical = canonical_vhdl_name(type.vhdl_object_subtype);
+        const auto canonical
+            = support::canonical_vhdl_spelling(type.vhdl_object_subtype);
         const vh::Declaration* object = nullptr;
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope && object == nullptr) {
@@ -949,7 +956,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
             for (auto candidate = declarations.rbegin();
                 candidate != declarations.rend(); ++candidate) {
                 if (candidate->scope == *visible_scope && candidate->subtype
-                    && canonical_vhdl_name(candidate->name) == canonical) {
+                    && support::canonical_vhdl_spelling(candidate->name)
+                        == canonical) {
                     object = &*candidate;
                     break;
                 }
@@ -968,7 +976,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
                         || candidate.form
                             == vh::DeclarationForm::generic_constant)
                     && candidate.subtype
-                    && canonical_vhdl_name(candidate.name) == canonical) {
+                    && support::canonical_vhdl_spelling(candidate.name)
+                        == canonical) {
                     if (object != nullptr) {
                         object = nullptr;
                         break;
@@ -1261,7 +1270,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
         result.executable_width.reset();
     }
     if (!result.unconstrained && result.constraints.empty()) {
-        auto mark = canonical_vhdl_name(result.type_mark.spelling);
+        auto mark = support::canonical_vhdl_spelling(result.type_mark.spelling);
         if (const auto separator = mark.find_last_of(".:");
             separator != std::string::npos) {
             mark.erase(0U, separator + 1U);
@@ -1366,7 +1375,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
             declaration_origin);
         values_by_lookup_key_.try_emplace(
             ValueLookupKey { scope, span,
-                canonical_vhdl_name(std::string { value_name }) },
+                support::canonical_vhdl_spelling(std::string { value_name }) },
             id);
     }
     return id;

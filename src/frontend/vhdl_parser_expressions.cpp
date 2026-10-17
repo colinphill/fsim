@@ -436,6 +436,34 @@ std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
         bits };
 }
 
+Expression VhdlParser::parse_index_or_slice_suffix(Expression prefix,
+    const SourceSpan& start, const std::string_view slice_close,
+    const std::string_view index_close, const std::string_view code,
+    const bool index_list)
+{
+    auto first = parse_expression();
+    if (match_keyword("downto", true) || match_keyword("to", true)) {
+        const auto direction = previous();
+        auto last = parse_expression();
+        expect(TokenKind::RightParen, slice_close,
+            std::string { code });
+        return Expression { ExpressionKind::Slice,
+            detail::ascii_lower(direction.text),
+            { std::move(prefix), std::move(first), std::move(last) },
+            cover(start, previous().span) };
+    }
+    std::vector<Expression> operands;
+    operands.push_back(std::move(prefix));
+    operands.push_back(std::move(first));
+    while (index_list && match(TokenKind::Comma)) {
+        operands.push_back(parse_expression());
+    }
+    expect(TokenKind::RightParen, index_close,
+        std::string { code });
+    return Expression { ExpressionKind::Index, "index",
+        std::move(operands), cover(start, previous().span) };
+}
+
 Expression VhdlParser::parse_expression(
     int minimum_precedence, bool allow_conditional)
 {
@@ -1051,10 +1079,17 @@ Expression VhdlParser::parse_primary()
             return expression;
         }
         std::string selected_spelling { name.text };
+        // Keep the source spelling of a selected name only when an extended
+        // identifier makes it differ from the canonical text.
+        const auto attach_selected_spelling
+            = [&selected_spelling](Expression& expression) {
+                  if (selected_spelling.find('\\') != std::string::npos) {
+                      expression.vhdl_selected_name_spelling
+                          = selected_spelling;
+                  }
+              };
         Expression selected { ExpressionKind::Identifier, canonical, { }, name.span };
-        if (selected_spelling.find('\\') != std::string::npos) {
-            selected.vhdl_selected_name_spelling = selected_spelling;
-        }
+        attach_selected_spelling(selected);
         bool saw_dereference = false;
         // An index or element selected through an access object reaches
         // the designated object (IEEE 1076-2008 8.3).
@@ -1091,9 +1126,7 @@ Expression VhdlParser::parse_primary()
                 canonical += canonical_part;
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
-                if (selected_spelling.find('\\') != std::string::npos) {
-                    selected.vhdl_selected_name_spelling = selected_spelling;
-                }
+                attach_selected_spelling(selected);
             }
         }
         if (const auto api = vhdl_simulator_api(selected.text);
@@ -1106,36 +1139,11 @@ Expression VhdlParser::parse_primary()
         if (saw_dereference) {
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
-                    // The indexed-name suffix can be either an index group
-                    // or a slice (IEEE 1076-2008 8.4).
-                    auto first = parse_expression();
-                    if (match_keyword("downto", true)
-                        || match_keyword("to", true)) {
-                        const auto direction = previous();
-                        auto last = parse_expression();
-                        expect(TokenKind::RightParen,
-                            "')' after dereferenced slice",
-                            "FSIM-VHDL-PARSE-251");
-                        selected = Expression { ExpressionKind::Slice,
-                            detail::ascii_lower(direction.text),
-                            { std::move(selected), std::move(first),
-                                std::move(last) },
-                            cover(name.span, previous().span) };
-                    } else {
-                        std::vector<Expression> operands;
-                        operands.push_back(std::move(selected));
-                        operands.push_back(std::move(first));
-                        while (match(TokenKind::Comma)) {
-                            operands.push_back(parse_expression());
-                        }
-                        expect(TokenKind::RightParen,
-                            "')' after dereferenced index",
-                            "FSIM-VHDL-PARSE-251");
-                        selected = Expression { ExpressionKind::Index,
-                            "index",
-                            std::move(operands),
-                            cover(name.span, previous().span) };
-                    }
+                    selected = parse_index_or_slice_suffix(
+                        std::move(selected), name.span,
+                        "')' after dereferenced slice",
+                        "')' after dereferenced index",
+                        "FSIM-VHDL-PARSE-251");
                     continue;
                 }
                 if (!match(TokenKind::Dot)) {
@@ -1156,9 +1164,7 @@ Expression VhdlParser::parse_primary()
                     "@vhdl-qualified:" + canonical,
                     { std::move(value) },
                     cover(name.span, previous().span) };
-                if (selected_spelling.find('\\') != std::string::npos) {
-                    qualified.vhdl_selected_name_spelling = selected_spelling;
-                }
+                attach_selected_spelling(qualified);
                 return qualified;
             }
             const auto attribute = expect_identifier("attribute designator");
@@ -1220,34 +1226,9 @@ Expression VhdlParser::parse_primary()
                                     "the value of attribute '" + attribute.text
                                         + "' is not an array and cannot be indexed");
                             }
-                            auto first = parse_expression();
-                            if (match_keyword("downto", true) || match_keyword("to", true)) {
-                                const auto direction = previous();
-                                auto second = parse_expression();
-                                expect(TokenKind::RightParen, "')' after slice",
-                                    "FSIM-VHDL-PARSE-033");
-                                value = Expression { ExpressionKind::Slice,
-                                    detail::ascii_lower(direction.text),
-                                    { std::move(value), std::move(first), std::move(second) },
-                                    cover(name.span, previous().span) };
-                                continue;
-                            }
-                            std::vector<Expression> indices { std::move(first) };
-                            while (match(TokenKind::Comma)) {
-                                indices.push_back(parse_expression());
-                            }
-                            expect(TokenKind::RightParen, "')' after index",
-                                "FSIM-VHDL-PARSE-033");
-                            const auto suffix_span
-                                = cover(name.span, previous().span);
-                            std::vector<Expression> operands;
-                            operands.reserve(indices.size() + 1U);
-                            operands.push_back(std::move(value));
-                            for (auto& index : indices) {
-                                operands.push_back(std::move(index));
-                            }
-                            value = Expression { ExpressionKind::Index, "index",
-                                std::move(operands), suffix_span };
+                            value = parse_index_or_slice_suffix(
+                                std::move(value), name.span, "')' after slice",
+                                "')' after index", "FSIM-VHDL-PARSE-033");
                         }
                         return value;
                     }
@@ -1289,9 +1270,7 @@ Expression VhdlParser::parse_primary()
             }
             auto attribute_prefix = Expression {
                 ExpressionKind::Identifier, canonical, { }, name.span };
-            if (selected_spelling.find('\\') != std::string::npos) {
-                attribute_prefix.vhdl_selected_name_spelling = selected_spelling;
-            }
+            attach_selected_spelling(attribute_prefix);
             std::vector<Expression> operands {
                 std::move(attribute_prefix)
             };
@@ -1347,9 +1326,7 @@ Expression VhdlParser::parse_primary()
             }
             auto base = Expression {
                 ExpressionKind::Identifier, canonical, { }, name.span };
-            if (selected_spelling.find('\\') != std::string::npos) {
-                base.vhdl_selected_name_spelling = selected_spelling;
-            }
+            attach_selected_spelling(base);
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
             bool saw_named = false;
@@ -1381,23 +1358,11 @@ Expression VhdlParser::parse_primary()
                             // A slice is a name and may itself be sliced or
                             // indexed (`v(1 to 10)(2 to 9)`).
                             while (match(TokenKind::LeftParen)) {
-                                auto first = parse_expression();
-                                if (match_keyword("downto", true) || match_keyword("to", true)) {
-                                    const auto chained = previous();
-                                    auto last = parse_expression();
-                                    expect(TokenKind::RightParen, "')' after chained slice",
-                                        "FSIM-VHDL-PARSE-033");
-                                    slice = Expression { ExpressionKind::Slice,
-                                        detail::ascii_lower(chained.text),
-                                        { std::move(slice), std::move(first), std::move(last) },
-                                        cover(name.span, previous().span) };
-                                } else {
-                                    expect(TokenKind::RightParen, "')' after chained index",
-                                        "FSIM-VHDL-PARSE-033");
-                                    slice = Expression { ExpressionKind::Index, "index",
-                                        { std::move(slice), std::move(first) },
-                                        cover(name.span, previous().span) };
-                                }
+                                slice = parse_index_or_slice_suffix(
+                                    std::move(slice), name.span,
+                                    "')' after chained slice",
+                                    "')' after chained index",
+                                    "FSIM-VHDL-PARSE-033", false);
                             }
                             return slice;
                         }
@@ -1414,50 +1379,19 @@ Expression VhdlParser::parse_primary()
                 "FSIM-VHDL-PARSE-033");
             Expression call { ExpressionKind::Call, std::move(canonical),
                 std::move(arguments), cover(name.span, previous().span) };
-            if (selected_spelling.find('\\') != std::string::npos) {
-                call.vhdl_selected_name_spelling = selected_spelling;
-            }
+            attach_selected_spelling(call);
             if (saw_named) {
                 call.call_argument_names = std::move(argument_names);
             }
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
                     // A function call is a prefix of an indexed name or a
-                    // slice in every revision (IEEE 1076-1993 6.1).
-                    auto first = parse_expression();
-                    if (match_keyword("downto", true) || match_keyword("to", true)) {
-                        const auto direction = previous();
-                        auto second = parse_expression();
-                        expect(TokenKind::RightParen, "')' after chained slice",
-                            "FSIM-VHDL-PARSE-033");
-                        call = Expression {
-                            ExpressionKind::Slice,
-                            detail::ascii_lower(direction.text),
-                            { std::move(call), std::move(first), std::move(second) },
-                            cover(name.span, previous().span)
-                        };
-                    } else {
-                        std::vector<Expression> indices;
-                        indices.push_back(std::move(first));
-                        while (match(TokenKind::Comma)) {
-                            indices.push_back(parse_expression());
-                        }
-                        expect(TokenKind::RightParen, "')' after chained index",
-                            "FSIM-VHDL-PARSE-033");
-                        const auto suffix_span = cover(name.span, previous().span);
-                        // Keep all selectors from one parenthesized suffix in
-                        // one Index node. A multidimensional array uses one
-                        // parenthesized selector group; a nested array applies
-                        // another group after the element subtype is selected.
-                        std::vector<Expression> operands;
-                        operands.reserve(indices.size() + 1U);
-                        operands.push_back(std::move(call));
-                        for (auto& index : indices) {
-                            operands.push_back(std::move(index));
-                        }
-                        call = Expression { ExpressionKind::Index,
-                            "index", std::move(operands), suffix_span };
-                    }
+                    // slice in every revision (IEEE 1076-1993 6.1). All
+                    // selectors of one parenthesized suffix form one Index
+                    // node; a nested array applies another suffix.
+                    call = parse_index_or_slice_suffix(std::move(call),
+                        name.span, "')' after chained slice",
+                        "')' after chained index", "FSIM-VHDL-PARSE-033");
                     continue;
                 }
                 if (!match(TokenKind::Dot)) {

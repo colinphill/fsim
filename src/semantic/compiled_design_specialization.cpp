@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
@@ -491,16 +493,6 @@ std::string_view normalized_library(const std::string_view library)
     return library.empty() ? std::string_view { "work" } : library;
 }
 
-bool vhdl_name_equal(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::equal(left.begin(), left.end(), right.begin(), right.end(),
-            [](const unsigned char lhs, const unsigned char rhs) {
-                return std::tolower(lhs) == std::tolower(rhs);
-            });
-}
-
 bool vhdl_is_predefined_standard_string(
     const SpecializedHirUnit& unit,
     const vhdl::SubtypeIndication& subtype,
@@ -548,7 +540,8 @@ bool vhdl_is_predefined_standard_string(
                     definition.base.type_mark.spelling, base_scope, depth + 1U);
             }
             if (definition.form != vhdl::TypeForm::array
-                || !vhdl_name_equal(definition.name, "string")
+                || !support::equal_ignoring_ascii_case(
+                    definition.name, "string")
                 || !definition.declaration.valid()) {
                 return false;
             }
@@ -558,28 +551,18 @@ bool vhdl_is_predefined_standard_string(
                 || !declaration->vhdl->scope.valid()) {
                 return false;
             }
-            const auto& scopes = unit.design().semantics.scopes();
-            const auto owner_scope = std::ranges::find(
-                scopes, declaration->vhdl->scope, &Scope::id);
-            const auto owner = owner_scope != scopes.end()
-                ? unit.design().find_unit(owner_scope->unit)
-                : std::nullopt;
-            return owner && owner->vhdl != nullptr
-                && owner->vhdl->kind == vhdl::UnitKind::package
-                && vhdl_name_equal(owner->vhdl->library, "std")
-                && vhdl_name_equal(owner->vhdl->name, "standard");
+            return unit.design().vhdl_scope_in_package(
+                declaration->vhdl->scope, "std", "standard");
         }
 
-        constexpr auto builtin_prefix
-            = std::string_view { "@builtin:" };
-        if (spelling.starts_with(builtin_prefix)) {
-            spelling.remove_prefix(builtin_prefix.size());
-        }
-        if (vhdl_name_equal(spelling, "std.standard.string")
-            || vhdl_name_equal(spelling, "standard.string")) {
+        spelling = vhdl::without_builtin_prefix(spelling);
+        if (support::equal_ignoring_ascii_case(spelling, "std.standard.string")
+            || support::equal_ignoring_ascii_case(
+                spelling, "standard.string")) {
             return true;
         }
-        if (!vhdl_name_equal(spelling, "string") || !scope.valid()) {
+        if (!support::equal_ignoring_ascii_case(spelling, "string")
+            || !scope.valid()) {
             return false;
         }
         vhdl::Name name;
@@ -618,20 +601,6 @@ bool systemverilog_actual_form(const sv::DeclarationForm form)
 {
     return form == sv::DeclarationForm::parameter
         || form == sv::DeclarationForm::type_parameter;
-}
-
-bool vhdl_actual_form(const vhdl::DeclarationForm form)
-{
-    switch (form) {
-    case vhdl::DeclarationForm::generic_constant:
-    case vhdl::DeclarationForm::generic_type:
-    case vhdl::DeclarationForm::generic_function:
-    case vhdl::DeclarationForm::generic_procedure:
-    case vhdl::DeclarationForm::generic_package:
-        return true;
-    default:
-        return false;
-    }
 }
 
 bool vhdl_evaluable_value_form(const vhdl::DeclarationForm form)
@@ -680,10 +649,10 @@ const vhdl::Unit* primary_entity(
     const auto found = std::ranges::find_if(
         design.vhdl_units(), [&](const vhdl::Unit& candidate) {
             return candidate.kind == vhdl::UnitKind::entity
-                && vhdl_name_equal(
+                && support::equal_ignoring_ascii_case(
                     normalized_library(candidate.library),
                     normalized_library(architecture.library))
-                && vhdl_name_equal(
+                && support::equal_ignoring_ascii_case(
                     candidate.name, architecture.primary_name);
         });
     return found == design.vhdl_units().end() ? nullptr : &*found;
@@ -711,7 +680,7 @@ void add_vhdl_actuals(const CompiledDesign& design,
         const auto declaration = design.find_declaration(id);
         if (declaration_belongs_to(design, id, unit.id)
             && declaration && declaration->vhdl != nullptr
-            && vhdl_actual_form(declaration->vhdl->form)) {
+            && vhdl::is_generic_formal(declaration->vhdl->form)) {
             allowed.insert(id);
         }
     }
@@ -741,10 +710,11 @@ std::optional<DeclarationId> find_vhdl_actual(
 {
     for (const auto id : unit.declarations) {
         const auto declaration = design.find_declaration(id);
-        if (declaration_belongs_to(design, id, unit.id)
-            && declaration && declaration->vhdl != nullptr
-            && vhdl_actual_form(declaration->vhdl->form)
-            && vhdl_name_equal(declaration->vhdl->name, name)) {
+        if (declaration_belongs_to(design, id, unit.id) && declaration
+            && declaration->vhdl != nullptr
+            && vhdl::is_generic_formal(declaration->vhdl->form)
+            && support::equal_ignoring_ascii_case(
+                declaration->vhdl->name, name)) {
             return id;
         }
     }
@@ -2026,7 +1996,8 @@ public:
         } else if (source && source->vhdl != nullptr
             && (source->vhdl->kind == vhdl::ExpressionKind::concatenation
                 || (source->vhdl->kind == vhdl::ExpressionKind::binary
-                    && vhdl_name_equal(source->vhdl->text, "&")))) {
+                    && support::equal_ignoring_ascii_case(
+                        source->vhdl->text, "&")))) {
             value = evaluate_vhdl_concatenation(
                 *source->vhdl, &*effective);
         } else {
@@ -2207,7 +2178,7 @@ private:
                 { "mode_error", 3 },
             }};
         for (const auto& [name, ordinal] : literals) {
-            if (vhdl_name_equal(expression.text, name)) {
+            if (support::equal_ignoring_ascii_case(expression.text, name)) {
                 return ordinal;
             }
         }
@@ -2220,11 +2191,12 @@ private:
             "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
         };
         for (std::size_t code { }; code < controls.size(); ++code) {
-            if (vhdl_name_equal(expression.text, controls[code])) {
+            if (support::equal_ignoring_ascii_case(
+                    expression.text, controls[code])) {
                 return static_cast<int>(code);
             }
         }
-        if (vhdl_name_equal(expression.text, "del")) {
+        if (support::equal_ignoring_ascii_case(expression.text, "del")) {
             return 127;
         }
         if (expression.text.size() == 4U
@@ -2255,8 +2227,8 @@ private:
             mark.remove_prefix(separator + 1U);
         }
         const auto expression = unit_.find_expression(initializer);
-        if (!vhdl_name_equal(mark, "character") || !expression
-            || expression->vhdl == nullptr
+        if (!support::equal_ignoring_ascii_case(mark, "character")
+            || !expression || expression->vhdl == nullptr
             || expression->vhdl->kind != vhdl::ExpressionKind::logic_literal
             || expression->vhdl->text.size() != 3U
             || expression->vhdl->text.front() != '\'') {
@@ -2377,7 +2349,7 @@ private:
             }
             if (value.kind == VhdlConstantValue::Kind::integer
                 && subtype.constraints.empty()
-                && vhdl_name_equal(mark, "character")
+                && support::equal_ignoring_ascii_case(mark, "character")
                 && value.integer >= 0 && value.integer <= 255) {
                 std::string bits;
                 for (int bit = 7; bit >= 0; --bit) {
@@ -2822,12 +2794,7 @@ private:
             || effective->predefined_attribute_dimension
             || !effective->resolution_function.spelling.empty()
             || !effective->resolution_function.canonical.empty()
-            || effective->unspecified_class
-                != vhdl::UnspecifiedTypeClass::none
-            || !effective->unspecified_component_classes.empty()
-            || !effective->unspecified_component_type_marks.empty()
-            || effective->unspecified_array_index_count != 0U
-            || !effective->unspecified_inference_identity.empty()) {
+            || effective->has_unspecified_parts()) {
             return std::nullopt;
         }
 
@@ -2836,14 +2803,9 @@ private:
             auto spelling = std::string_view {
                 effective->type_mark.spelling
             };
-            constexpr auto builtin_prefix = std::string_view {
-                "@builtin:"
-            };
-            if (spelling.starts_with(builtin_prefix)) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
-            if (!vhdl_name_equal(spelling, "boolean")
-                && !vhdl_name_equal(
+            spelling = vhdl::without_builtin_prefix(spelling);
+            if (!support::equal_ignoring_ascii_case(spelling, "boolean")
+                && !support::equal_ignoring_ascii_case(
                     spelling, "std.standard.boolean")) {
                 return std::nullopt;
             }
@@ -2865,14 +2827,13 @@ private:
             }
             const auto& definition = *type->vhdl;
             if (definition.form == vhdl::TypeForm::enumeration) {
-                if (!vhdl_name_equal(definition.name, "boolean")
+                if (!support::equal_ignoring_ascii_case(
+                        definition.name, "boolean")
                     || definition.enumeration_literals.size() != 2U
-                    || !vhdl_name_equal(
-                        definition.enumeration_literals[0].spelling,
-                        "false")
-                    || !vhdl_name_equal(
-                        definition.enumeration_literals[1].spelling,
-                        "true")) {
+                    || !support::equal_ignoring_ascii_case(
+                        definition.enumeration_literals[0].spelling, "false")
+                    || !support::equal_ignoring_ascii_case(
+                        definition.enumeration_literals[1].spelling, "true")) {
                     return std::nullopt;
                 }
                 const auto declaration
@@ -2880,23 +2841,8 @@ private:
                 if (!declaration || declaration->vhdl == nullptr) {
                     return std::nullopt;
                 }
-                const auto& scopes
-                    = unit_.design().semantics.scopes();
-                const auto owner_scope = std::ranges::find(
-                    scopes, declaration->vhdl->scope, &Scope::id);
-                const auto owner = owner_scope != scopes.end()
-                    ? unit_.design().find_unit(owner_scope->unit)
-                    : std::nullopt;
-                return owner && owner->identity != nullptr
-                        && owner->vhdl != nullptr
-                        && owner->identity->kind
-                            == UnitKind::vhdl_package
-                        && owner->vhdl->kind
-                            == vhdl::UnitKind::package
-                        && vhdl_name_equal(
-                            owner->identity->library, "std")
-                        && vhdl_name_equal(
-                            owner->identity->name, "standard")
+                return unit_.design().vhdl_scope_in_package(
+                           declaration->vhdl->scope, "std", "standard")
                     ? std::optional { type_id }
                     : std::nullopt;
             }
@@ -2979,25 +2925,18 @@ private:
         const vhdl::SubtypeIndication& subtype)
     {
         return subtype.domain == vhdl::ValueDomain::integer
-            && vhdl_name_equal(subtype.type_mark.spelling, "integer")
+            && support::equal_ignoring_ascii_case(
+                subtype.type_mark.spelling, "integer")
             && !subtype.type_mark.target.valid()
-            && vhdl_predefined_integer_range(subtype)
-            && !subtype.unconstrained
-            && subtype.signed_value
-            && subtype.integer_storage_width != 0U
-            && subtype.executable_width
-                == subtype.integer_storage_width
+            && vhdl_predefined_integer_range(subtype) && !subtype.unconstrained
+            && subtype.signed_value && subtype.integer_storage_width != 0U
+            && subtype.executable_width == subtype.integer_storage_width
             && subtype.resolution_function.spelling.empty()
             && subtype.resolution_function.canonical.empty()
             && subtype.builtin_type == vhdl::BuiltinTypeIdentity::none
             && !subtype.predefined_attribute
             && !subtype.predefined_attribute_dimension
-            && subtype.unspecified_class
-                == vhdl::UnspecifiedTypeClass::none
-            && subtype.unspecified_component_classes.empty()
-            && subtype.unspecified_component_type_marks.empty()
-            && subtype.unspecified_array_index_count == 0U
-            && subtype.unspecified_inference_identity.empty();
+            && !subtype.has_unspecified_parts();
     }
 
     [[nodiscard]] std::optional<vhdl::SubtypeIndication>
@@ -3008,40 +2947,12 @@ private:
         if (!element_subtype) {
             return std::nullopt;
         }
-        if (element_subtype->type_mark.target.valid()
-            || !vhdl_name_equal(
-                element_subtype->type_mark.spelling, "integer")) {
-            return std::nullopt;
+        // The element subtype may not yet carry its INTEGER domain.
+        auto integer_element = *element_subtype;
+        if (integer_element.domain == vhdl::ValueDomain::unknown) {
+            integer_element.domain = vhdl::ValueDomain::integer;
         }
-        if (element_subtype->domain != vhdl::ValueDomain::unknown
-            && element_subtype->domain != vhdl::ValueDomain::integer) {
-            return std::nullopt;
-        }
-        if (!vhdl_predefined_integer_range(*element_subtype)) {
-            return std::nullopt;
-        }
-        if (element_subtype->unconstrained || !element_subtype->signed_value) {
-            return std::nullopt;
-        }
-        if (element_subtype->integer_storage_width == 0U
-            || element_subtype->executable_width
-                != element_subtype->integer_storage_width) {
-            return std::nullopt;
-        }
-        if (element_subtype->predefined_attribute
-            || element_subtype->predefined_attribute_dimension
-            || !element_subtype->resolution_function.spelling.empty()
-            || !element_subtype->resolution_function.canonical.empty()
-            || element_subtype->builtin_type
-                != vhdl::BuiltinTypeIdentity::none) {
-            return std::nullopt;
-        }
-        if (element_subtype->unspecified_class
-                != vhdl::UnspecifiedTypeClass::none
-            || !element_subtype->unspecified_component_classes.empty()
-            || !element_subtype->unspecified_component_type_marks.empty()
-            || element_subtype->unspecified_array_index_count != 0U
-            || !element_subtype->unspecified_inference_identity.empty()) {
+        if (!vhdl_integer_array_element_subtype(integer_element)) {
             return std::nullopt;
         }
         const auto named_integer_types
@@ -3128,7 +3039,7 @@ private:
         const bool boolean_element = boolean_array.has_value();
         const bool unresolved_integer_element
             = element_subtype->domain == vhdl::ValueDomain::integer
-            || vhdl_name_equal(
+            || support::equal_ignoring_ascii_case(
                 element_subtype->type_mark.spelling, "integer")
             || (element_subtype->signed_value
                 && element_subtype->integer_storage_width != 0U);
@@ -3213,6 +3124,32 @@ private:
         return width;
     }
 
+    /// The range of `width` (> 0) elements starting at the left bound of an
+    /// array type's index subtype, as an unconstrained array value takes
+    /// (IEEE 1076-2008 9.2.5).
+    [[nodiscard]] std::optional<VhdlArrayRange>
+    vhdl_index_subtype_leading_range(
+        const TypeId array_type, const std::size_t width)
+    {
+        const auto index_range = vhdl_array_index_subtype_range(array_type);
+        if (!index_range
+            || width - 1U
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        const auto offset = static_cast<std::int64_t>(width - 1U);
+        const auto right = index_range->descending
+            ? checked_subtract(index_range->left, offset)
+            : checked_add(index_range->left, offset);
+        if (!right || *right < index_range->minimum
+            || *right > index_range->maximum) {
+            return std::nullopt;
+        }
+        return VhdlArrayRange {
+            index_range->left, *right, index_range->descending, false };
+    }
+
     [[nodiscard]] bool vhdl_boolean_array_is_unconstrained(
         const vhdl::SubtypeIndication& subtype)
     {
@@ -3253,20 +3190,9 @@ private:
                 / sizeof(VhdlConstantValue)) {
             return std::nullopt;
         }
-        const auto index_range
-            = vhdl_array_index_subtype_range(info->array_type);
-        if (!index_range
-            || width - 1U
-                > static_cast<std::size_t>(
-                    std::numeric_limits<std::int64_t>::max())) {
-            return std::nullopt;
-        }
-        const auto offset = static_cast<std::int64_t>(width - 1U);
-        const auto right = index_range->descending
-            ? checked_subtract(index_range->left, offset)
-            : checked_add(index_range->left, offset);
-        if (!right || *right < index_range->minimum
-            || *right > index_range->maximum) {
+        const auto range
+            = vhdl_index_subtype_leading_range(info->array_type, width);
+        if (!range) {
             return std::nullopt;
         }
         if (!consume_constant_work_unit(
@@ -3279,9 +3205,9 @@ private:
         value.array_type = info->array_type;
         value.array_element_type = info->element_type;
         value.boolean_array_element = true;
-        value.array_left = index_range->left;
-        value.array_right = *right;
-        value.array_descending = index_range->descending;
+        value.array_left = range->left;
+        value.array_right = range->right;
+        value.array_descending = range->descending;
         value.array_element_subtype
             = std::make_shared<const vhdl::SubtypeIndication>(
                 info->element_subtype);
@@ -3477,7 +3403,8 @@ private:
     [[nodiscard]] bool vhdl_aggregate_uses_others(
         const vhdl::AggregateAssociation& association)
     {
-        if (vhdl_name_equal(association.choice_spelling, "others")) {
+        if (support::equal_ignoring_ascii_case(
+                association.choice_spelling, "others")) {
             return true;
         }
         if (association.choices.size() != 1U) {
@@ -3488,7 +3415,7 @@ private:
         return choice && choice->vhdl != nullptr
             && (choice->vhdl->kind == vhdl::ExpressionKind::default_choice
                 || choice->vhdl->kind == vhdl::ExpressionKind::name)
-            && vhdl_name_equal(choice->vhdl->text, "others");
+            && support::equal_ignoring_ascii_case(choice->vhdl->text, "others");
     }
 
     [[nodiscard]] std::optional<VhdlConstantValue>
@@ -3564,8 +3491,7 @@ private:
                 index < expression->vhdl->associations.size(); ++index) {
                 const auto& association
                     = expression->vhdl->associations[index];
-                if (!association.choices.empty()
-                    || !association.choice_spelling.empty()) {
+                if (!association.positional()) {
                     return std::nullopt;
                 }
                 auto element = evaluate_vhdl_boolean_element(
@@ -4011,7 +3937,7 @@ private:
         const std::string_view operation, const std::int64_t left,
         const std::int64_t right)
     {
-        if (vhdl_name_equal(operation, "**")) {
+        if (support::equal_ignoring_ascii_case(operation, "**")) {
             if (right < 0 || right > 63) {
                 return std::nullopt;
             }
@@ -4069,7 +3995,7 @@ private:
                                        const auto& regions) -> void {
             for (const auto& region : regions) {
                 if (region.kind == vhdl::GenerateKind::iterative
-                    && vhdl_name_equal(region.iterator, name)
+                    && support::equal_ignoring_ascii_case(region.iterator, name)
                     && vhdl_scope_within(region.scope, use_scope)) {
                     if (visible_iterators < 2U) {
                         ++visible_iterators;
@@ -4375,29 +4301,18 @@ private:
                         * sizeof(VhdlConstantValue))) {
                     return std::nullopt;
                 }
-                const auto index_range
-                    = vhdl_array_index_subtype_range(result.array_type);
-                if (!index_range
-                    || width - 1U
-                        > static_cast<std::size_t>(
-                            std::numeric_limits<std::int64_t>::max())) {
-                    return std::nullopt;
-                }
-                const auto offset = static_cast<std::int64_t>(width - 1U);
-                const auto right = index_range->descending
-                    ? checked_subtract(index_range->left, offset)
-                    : checked_add(index_range->left, offset);
-                if (!right || *right < index_range->minimum
-                    || *right > index_range->maximum) {
+                const auto range = vhdl_index_subtype_leading_range(
+                    result.array_type, width);
+                if (!range) {
                     return std::nullopt;
                 }
                 result.elements.reserve(width);
                 result.elements.insert(result.elements.end(),
                     right_operand.elements.begin(),
                     right_operand.elements.end());
-                result.array_left = index_range->left;
-                result.array_right = *right;
-                result.array_descending = index_range->descending;
+                result.array_left = range->left;
+                result.array_right = range->right;
+                result.array_descending = range->descending;
                 result.array_null = false;
             }
             return result;
@@ -4592,7 +4507,8 @@ private:
                     = type && type->vhdl != nullptr ? type->vhdl : nullptr;
                 if (definition == nullptr
                     || definition->form != vhdl::TypeForm::array
-                    || !vhdl_name_equal(definition->name, "bit_vector")
+                    || !support::equal_ignoring_ascii_case(
+                        definition->name, "bit_vector")
                     || definition->array_dimensions.size() != 1U
                     || !definition->element_subtype
                     || definition->element_subtype->domain
@@ -4605,20 +4521,9 @@ private:
                     || !type_declaration->vhdl->scope.valid()) {
                     return std::nullopt;
                 }
-                const auto& scopes = unit_.design().semantics.scopes();
-                const auto owner_scope = std::ranges::find(
-                    scopes, type_declaration->vhdl->scope, &Scope::id);
-                const auto owner = owner_scope != scopes.end()
-                    ? unit_.design().find_unit(owner_scope->unit)
-                    : std::nullopt;
-                return owner && owner->identity != nullptr
-                        && owner->vhdl != nullptr
-                        && owner->identity->kind == UnitKind::vhdl_package
-                        && owner->vhdl->kind == vhdl::UnitKind::package
-                        && vhdl_name_equal(owner->identity->library, "std")
-                        && vhdl_name_equal(owner->identity->name, "standard")
-                    ? std::optional<std::string> {
-                          "std.standard.bit_vector" }
+                return unit_.design().vhdl_scope_in_package(
+                           type_declaration->vhdl->scope, "std", "standard")
+                    ? std::optional<std::string> { "std.standard.bit_vector" }
                     : std::nullopt;
             }
             if (effective->type_mark.target.valid()) {
@@ -4627,18 +4532,15 @@ private:
             auto spelling = std::string_view {
                 effective->type_mark.spelling
             };
-            constexpr auto builtin_prefix
-                = std::string_view { "@builtin:" };
-            if (spelling.starts_with(builtin_prefix)) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
+            spelling = vhdl::without_builtin_prefix(spelling);
             // BIT_VECTOR is declared by implicitly visible STD.STANDARD.
             // Do not ask the use-clause visibility resolver to prove that
             // implicit visibility; accept only the exact predefined spelling
             // and retain the no-user-declaration check below.
             const auto standard_bit_vector
-                = vhdl_name_equal(spelling, "bit_vector")
-                || vhdl_name_equal(spelling, "std.standard.bit_vector");
+                = support::equal_ignoring_ascii_case(spelling, "bit_vector")
+                || support::equal_ignoring_ascii_case(
+                    spelling, "std.standard.bit_vector");
             if (!standard_bit_vector
                 || effective->domain != vhdl::ValueDomain::bit2) {
                 return std::nullopt;
@@ -4868,7 +4770,8 @@ private:
                 const SpecializedHirNamedIdentity* identity { };
                 for (const auto& candidate :
                     unit_.specialization().hierarchy_identities) {
-                    if (!vhdl_name_equal(candidate.name, source.text)) {
+                    if (!support::equal_ignoring_ascii_case(
+                            candidate.name, source.text)) {
                         continue;
                     }
                     if (identity != nullptr) {
@@ -4965,7 +4868,7 @@ private:
                     : std::nullopt;
             }
             if (operand->kind == VhdlConstantValue::Kind::packed
-                && vhdl_name_equal(source.text, "not")
+                && support::equal_ignoring_ascii_case(source.text, "not")
                 && vhdl_known_bits(operand->packed.bits)) {
                 auto bits = operand->packed.bits;
                 for (auto& bit : bits) {
@@ -4979,7 +4882,7 @@ private:
         }
         if (source.kind == Kind::concatenation
             || (source.kind == Kind::binary
-                && vhdl_name_equal(source.text, "&"))) {
+                && support::equal_ignoring_ascii_case(source.text, "&"))) {
             return evaluate_vhdl_concatenation(source);
         }
         if (source.kind == Kind::binary && source.operands.size() == 2U) {
@@ -5031,21 +4934,12 @@ private:
     {
         const auto declaration = unit_.find_declaration(id);
         if (!declaration || declaration->vhdl == nullptr
-            || !vhdl_name_equal(declaration->vhdl->name, member)) {
+            || !support::equal_ignoring_ascii_case(
+                declaration->vhdl->name, member)) {
             return false;
         }
-        const auto& scopes = unit_.design().semantics.scopes();
-        const auto scope = std::ranges::find(
-            scopes, declaration->vhdl->scope, &Scope::id);
-        const auto owner = scope != scopes.end()
-            ? unit_.design().find_unit(scope->unit)
-            : std::nullopt;
-        return owner && owner->identity != nullptr
-            && owner->vhdl != nullptr
-            && owner->identity->kind == UnitKind::vhdl_package
-            && owner->vhdl->kind == vhdl::UnitKind::package
-            && vhdl_name_equal(owner->identity->library, library)
-            && vhdl_name_equal(owner->identity->name, package);
+        return unit_.design().vhdl_scope_in_package(
+            declaration->vhdl->scope, library, package);
     }
 
     [[nodiscard]] bool vhdl_numeric_std_callable(
@@ -5074,8 +4968,9 @@ private:
         }
         if (!effective->type_mark.target.valid()) {
             const auto& spelling = effective->type_mark.spelling;
-            const bool signed_type = vhdl_name_equal(spelling, "signed");
-            const bool unsigned_type = vhdl_name_equal(
+            const bool signed_type
+                = support::equal_ignoring_ascii_case(spelling, "signed");
+            const bool unsigned_type = support::equal_ignoring_ascii_case(
                 spelling, "unsigned");
             if ((signed_type || unsigned_type)
                 && resolver.vhdl_builtin_package_member_imported(
@@ -5096,9 +4991,9 @@ private:
                 const auto type_declaration = unit_.find_declaration(
                     definition.declaration);
                 if (!type_declaration || type_declaration->vhdl == nullptr
-                    || (!vhdl_name_equal(
+                    || (!support::equal_ignoring_ascii_case(
                             definition.name, "unresolved_signed")
-                        && !vhdl_name_equal(
+                        && !support::equal_ignoring_ascii_case(
                             definition.name, "unresolved_unsigned"))
                     || definition.array_dimensions.size() != 1U
                     || !definition.element_subtype
@@ -5106,22 +5001,11 @@ private:
                         != vhdl::ValueDomain::logic9) {
                     return std::nullopt;
                 }
-                const auto& scopes = unit_.design().semantics.scopes();
-                const auto scope = std::ranges::find(
-                    scopes, type_declaration->vhdl->scope, &Scope::id);
-                const auto owner = scope != scopes.end()
-                    ? unit_.design().find_unit(scope->unit)
-                    : std::nullopt;
-                if (!owner || owner->identity == nullptr
-                    || owner->vhdl == nullptr
-                    || owner->identity->kind != UnitKind::vhdl_package
-                    || owner->vhdl->kind != vhdl::UnitKind::package
-                    || !vhdl_name_equal(owner->identity->library, "ieee")
-                    || !vhdl_name_equal(
-                        owner->identity->name, "numeric_std")) {
+                if (!unit_.design().vhdl_scope_in_package(
+                        type_declaration->vhdl->scope, "ieee", "numeric_std")) {
                     return std::nullopt;
                 }
-                return vhdl_name_equal(
+                return support::equal_ignoring_ascii_case(
                            definition.name, "unresolved_signed")
                     ? std::optional<bool> { true }
                     : std::optional<bool> { false };
@@ -5380,8 +5264,9 @@ private:
         if (expression->vhdl->kind == vhdl::ExpressionKind::slice) {
             const auto& slice = *expression->vhdl;
             if (slice.operands.size() != 3U
-                || (!vhdl_name_equal(slice.text, "to")
-                    && !vhdl_name_equal(slice.text, "downto"))) {
+                || (!support::equal_ignoring_ascii_case(slice.text, "to")
+                    && !support::equal_ignoring_ascii_case(
+                        slice.text, "downto"))) {
                 return std::nullopt;
             }
             // A VHDL array slice retains the prefix's array type. The value
@@ -5519,9 +5404,13 @@ private:
                 return fail();
             }
             const auto& type_name = effective_operand->type_mark.spelling;
-            const bool signed_value = vhdl_name_equal(type_name, "signed");
-            if ((!signed_value && !vhdl_name_equal(type_name, "unsigned"))
-                || !vhdl_name_equal(operand->type_mark.spelling, type_name)
+            const bool signed_value
+                = support::equal_ignoring_ascii_case(type_name, "signed");
+            if ((!signed_value
+                    && !support::equal_ignoring_ascii_case(
+                        type_name, "unsigned"))
+                || !support::equal_ignoring_ascii_case(
+                    operand->type_mark.spelling, type_name)
                 || !resolver.vhdl_builtin_package_member_imported(
                     "ieee", "numeric_std", type_name, expression.scope)) {
                 return fail();
@@ -5868,7 +5757,7 @@ private:
     {
         auto name = normalized_token(expression.text);
         constexpr std::string_view qualified_prefix {
-            "@vhdl-qualified:"
+            vhdl::qualified_expression_prefix
         };
         if (name.starts_with(qualified_prefix)) {
             name.erase(0U, qualified_prefix.size());
@@ -6741,7 +6630,7 @@ private:
                 || declaration->vhdl == nullptr
                 || declaration->vhdl->form
                     != vhdl::DeclarationForm::constant
-                || !vhdl_name_equal(
+                || !support::equal_ignoring_ascii_case(
                     declaration->vhdl->name, statement.loop_variable)) {
                 return fail();
             }
@@ -6851,11 +6740,7 @@ private:
             const auto right = boundary(type.packed_range->right,
                 type.packed_range->right_expression);
             if (left && right) {
-                const auto distance = *left >= *right
-                    ? static_cast<std::uint64_t>(*left)
-                        - static_cast<std::uint64_t>(*right)
-                    : static_cast<std::uint64_t>(*right)
-                        - static_cast<std::uint64_t>(*left);
+                const auto distance = support::index_distance(*left, *right);
                 if (distance < std::numeric_limits<std::uint64_t>::max()) {
                     width = distance + 1U;
                 }
@@ -7031,7 +6916,7 @@ private:
         reference.canonical = reference.spelling;
         const CompiledDeclarationPredicate actual = [](const auto& view) {
             return view.vhdl != nullptr
-                && vhdl_actual_form(view.vhdl->form);
+                && vhdl::is_generic_formal(view.vhdl->form);
         };
         return resolver.resolve_vhdl(reference, use_scope, actual).unique();
     }
@@ -7221,7 +7106,7 @@ private:
         const auto matches = [&](const std::string_view literal) {
             return spelling.starts_with('\'')
                 ? spelling == literal
-                : vhdl_name_equal(spelling, literal);
+                : support::equal_ignoring_ascii_case(spelling, literal);
         };
         std::set<TypeId> visiting;
         const auto resolve = [&](const auto& self,
@@ -7495,36 +7380,7 @@ private:
             }
             std::size_t extent { 1U };
             const auto include_range = [&](const sv::PackedRange& range) {
-                const auto left = range.left_expression
-                    ? evaluate(*range.left_expression)
-                    : range.left;
-                const auto right = range.right_expression
-                    ? evaluate(*range.right_expression)
-                    : range.right;
-                if (!left || !right) {
-                    return false;
-                }
-                constexpr auto sign_bit
-                    = std::uint64_t { 1 } << 63U;
-                const auto ordered_left
-                    = static_cast<std::uint64_t>(*left) ^ sign_bit;
-                const auto ordered_right
-                    = static_cast<std::uint64_t>(*right) ^ sign_bit;
-                const auto distance = ordered_left >= ordered_right
-                    ? ordered_left - ordered_right
-                    : ordered_right - ordered_left;
-                if (distance
-                    >= maximum_systemverilog_constant_work_units) {
-                    return false;
-                }
-                const auto dimension_extent
-                    = static_cast<std::size_t>(distance + 1U);
-                if (dimension_extent
-                    > maximum_systemverilog_constant_work_units / extent) {
-                    return false;
-                }
-                extent *= dimension_extent;
-                return true;
+                return include_packed_extent(range, true, extent);
             };
             for (const auto& dimension : reference.packed_dimensions) {
                 if (!include_range(dimension)) {
@@ -7765,6 +7621,39 @@ private:
         return width;
     }
 
+    /// Multiplies `extent` by the element count of a packed range, within
+    /// the constant work limit. `prefer_residual` evaluates a retained bound
+    /// expression in this specialization instead of its folded value.
+    [[nodiscard]] bool include_packed_extent(const sv::PackedRange& range,
+        const bool prefer_residual, std::size_t& extent)
+    {
+        const auto boundary = [&](const std::optional<std::int64_t> folded,
+                                  const std::optional<ExpressionId> residual) {
+            if (prefer_residual) {
+                return residual ? evaluate(*residual) : folded;
+            }
+            return folded ? folded
+                : residual ? evaluate(*residual)
+                           : std::nullopt;
+        };
+        const auto left = boundary(range.left, range.left_expression);
+        const auto right = boundary(range.right, range.right_expression);
+        if (!left || !right) {
+            return false;
+        }
+        const auto distance = support::index_distance(*left, *right);
+        if (distance >= maximum_systemverilog_constant_work_units) {
+            return false;
+        }
+        const auto dimension_extent = static_cast<std::size_t>(distance + 1U);
+        if (dimension_extent
+            > maximum_systemverilog_constant_work_units / extent) {
+            return false;
+        }
+        extent *= dimension_extent;
+        return true;
+    }
+
     /// The bit width of a packed type, when evident.
     [[nodiscard]] std::optional<std::size_t> systemverilog_type_bit_width(
         const sv::TypeReference& type)
@@ -7789,36 +7678,7 @@ private:
             }
             std::size_t extent { 1U };
             const auto include_range = [&](const sv::PackedRange& range) {
-                const auto boundary
-                    = [&](const std::optional<std::int64_t> folded,
-                          const std::optional<ExpressionId> residual) {
-                          return folded ? folded
-                              : residual ? evaluate(*residual)
-                                         : std::nullopt;
-                      };
-                const auto left
-                    = boundary(range.left, range.left_expression);
-                const auto right
-                    = boundary(range.right, range.right_expression);
-                if (!left || !right) {
-                    return false;
-                }
-                const auto distance = *left >= *right
-                    ? static_cast<std::uint64_t>(*left)
-                        - static_cast<std::uint64_t>(*right)
-                    : static_cast<std::uint64_t>(*right)
-                        - static_cast<std::uint64_t>(*left);
-                if (distance >= maximum_systemverilog_constant_work_units) {
-                    return false;
-                }
-                const auto dimension_extent
-                    = static_cast<std::size_t>(distance + 1U);
-                if (dimension_extent
-                    > maximum_systemverilog_constant_work_units / extent) {
-                    return false;
-                }
-                extent *= dimension_extent;
-                return true;
+                return include_packed_extent(range, false, extent);
             };
             for (const auto& dimension : type.packed_dimensions) {
                 if (!include_range(dimension)) {
@@ -7937,34 +7797,7 @@ private:
         if (has_packed_shape) {
             std::size_t extent { 1U };
             const auto include_range = [&](const sv::PackedRange& range) {
-                const auto boundary
-                    = [&](const std::optional<std::int64_t> folded,
-                          const std::optional<ExpressionId> residual) {
-                          return residual ? evaluate(*residual) : folded;
-                      };
-                const auto left
-                    = boundary(range.left, range.left_expression);
-                const auto right
-                    = boundary(range.right, range.right_expression);
-                if (!left || !right) {
-                    return false;
-                }
-                const auto distance = *left >= *right
-                    ? static_cast<std::uint64_t>(*left)
-                        - static_cast<std::uint64_t>(*right)
-                    : static_cast<std::uint64_t>(*right)
-                        - static_cast<std::uint64_t>(*left);
-                if (distance >= maximum_systemverilog_constant_work_units) {
-                    return false;
-                }
-                const auto dimension_extent
-                    = static_cast<std::size_t>(distance + 1U);
-                if (dimension_extent
-                    > maximum_systemverilog_constant_work_units / extent) {
-                    return false;
-                }
-                extent *= dimension_extent;
-                return true;
+                return include_packed_extent(range, true, extent);
             };
             for (const auto& dimension : type.packed_dimensions) {
                 if (!include_range(dimension)) {
@@ -8292,11 +8125,7 @@ private:
         if (!left || !right) {
             return std::nullopt;
         }
-        const auto distance = *left >= *right
-            ? static_cast<std::uint64_t>(*left)
-                - static_cast<std::uint64_t>(*right)
-            : static_cast<std::uint64_t>(*right)
-                - static_cast<std::uint64_t>(*left);
+        const auto distance = support::index_distance(*left, *right);
         return distance >= maximum_systemverilog_constant_work_units
             ? std::nullopt
             : std::optional<std::size_t> {
@@ -8474,11 +8303,7 @@ private:
                 }
                 width = static_cast<std::uint64_t>(*second);
             } else {
-                const auto distance = *first >= *second
-                    ? static_cast<std::uint64_t>(*first)
-                        - static_cast<std::uint64_t>(*second)
-                    : static_cast<std::uint64_t>(*second)
-                        - static_cast<std::uint64_t>(*first);
+                const auto distance = support::index_distance(*first, *second);
                 if (distance == std::numeric_limits<std::uint64_t>::max()) {
                     return std::nullopt;
                 }
@@ -10219,7 +10044,7 @@ private:
                 if (!declaration || declaration->vhdl == nullptr
                     || declaration->vhdl->form
                         != vhdl::DeclarationForm::constant
-                    || !vhdl_name_equal(
+                    || !support::equal_ignoring_ascii_case(
                         declaration->vhdl->name,
                         statement.loop_variable)) {
                     return StatementFlow::failed;
@@ -10402,17 +10227,14 @@ private:
             return std::nullopt;
         }
         if (value.kind == vhdl::ExpressionKind::aggregate) {
-            if (value.associations.empty()
-                || !std::ranges::all_of(value.associations, [](const auto& association) {
-                       return association.choices.empty()
-                           && association.choice_spelling.empty();
-                   })) {
+            if (!vhdl::positional_aggregate(value)) {
                 return std::nullopt;
             }
             return static_cast<std::int64_t>(value.associations.size());
         }
         if (value.kind == vhdl::ExpressionKind::call
-            && value.text.starts_with("@vhdl-qualified:") && value.operands.size() == 1U) {
+            && value.text.starts_with(vhdl::qualified_expression_prefix)
+            && value.operands.size() == 1U) {
             return vhdl_value_shape_length(value.operands.front(), depth + 1U);
         }
         if ((value.kind != vhdl::ExpressionKind::name
@@ -10460,14 +10282,10 @@ private:
             || expression.operands.empty()) {
             return std::nullopt;
         }
-        const bool supported = expression.text == "'left"
-            || expression.text == "'right"
-            || expression.text == "'low"
-            || expression.text == "'high"
-            || expression.text == "'length"
-            || expression.text == "'ascending"
-            || expression.text == "'pos"
-            || expression.text == "'val";
+        const bool supported
+            = semantic::vhdl::is_scalar_bound_attribute(expression.text)
+            || expression.text == "'length" || expression.text == "'ascending"
+            || expression.text == "'pos" || expression.text == "'val";
         if (!supported) {
             return std::nullopt;
         }
@@ -10533,11 +10351,13 @@ private:
 
         // A CHARACTER literal bound is its position, its character code
         // (IEEE 1076-2008 16.3).
-        const bool character_typed = (definition != nullptr
-                && vhdl_name_equal(definition->base.type_mark.spelling,
-                    "character"))
+        const bool character_typed
+            = (definition != nullptr
+                  && support::equal_ignoring_ascii_case(
+                      definition->base.type_mark.spelling, "character"))
             || (subtype != nullptr
-                && vhdl_name_equal(subtype->type_mark.spelling, "character"));
+                && support::equal_ignoring_ascii_case(
+                    subtype->type_mark.spelling, "character"));
         const auto bound = [&](const ExpressionId id)
             -> std::optional<std::int64_t> {
             if (const auto value = evaluate(id)) {
@@ -10569,15 +10389,15 @@ private:
 
         std::optional<vhdl::RangeConstraint> range;
         const auto predefined_array = subtype != nullptr
-            && (vhdl_name_equal(
+            && (support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "bit_vector")
-                || vhdl_name_equal(
+                || support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "std_logic_vector")
-                || vhdl_name_equal(
+                || support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "std_ulogic_vector")
-                || vhdl_name_equal(
+                || support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "signed")
-                || vhdl_name_equal(
+                || support::equal_ignoring_ascii_case(
                     subtype->type_mark.spelling, "unsigned"));
         const auto constrained_array = subtype != nullptr
             && std::ranges::any_of(
@@ -10662,20 +10482,20 @@ private:
                     auto spelling = std::string_view {
                         subtype->type_mark.spelling
                     };
-                    constexpr auto builtin_prefix
-                        = std::string_view { "@builtin:" };
+                    constexpr auto builtin_prefix = vhdl::builtin_prefix;
                     const bool compiler_builtin
                         = spelling.starts_with(builtin_prefix);
                     if (compiler_builtin) {
                         spelling.remove_prefix(builtin_prefix.size());
                     }
-                    if (!vhdl_name_equal(spelling, "bit_vector")
-                        && !vhdl_name_equal(
+                    if (!support::equal_ignoring_ascii_case(
+                            spelling, "bit_vector")
+                        && !support::equal_ignoring_ascii_case(
                             spelling, "std.standard.bit_vector")) {
                         return false;
                     }
                     if (compiler_builtin
-                        || vhdl_name_equal(
+                        || support::equal_ignoring_ascii_case(
                             spelling, "std.standard.bit_vector")) {
                         return true;
                     }
@@ -10768,11 +10588,11 @@ private:
                 separator != std::string_view::npos) {
                 predefined_name.remove_prefix(separator + 1U);
             }
-            const bool integer = vhdl_name_equal(
+            const bool integer = support::equal_ignoring_ascii_case(
                 predefined_name, "integer");
-            const bool natural = vhdl_name_equal(
+            const bool natural = support::equal_ignoring_ascii_case(
                 predefined_name, "natural");
-            const bool positive = vhdl_name_equal(
+            const bool positive = support::equal_ignoring_ascii_case(
                 predefined_name, "positive");
             if (integer || natural || positive) {
                 const auto selected_unit
@@ -10804,15 +10624,19 @@ private:
             // Predefined enumeration types without a HIR definition
             // (IEEE 1076-2008 16.3; IEEE 1164 STD_ULOGIC).
             std::optional<std::int64_t> last_ordinal;
-            if (vhdl_name_equal(predefined_name, "boolean")
-                || vhdl_name_equal(predefined_name, "bit")) {
+            if (support::equal_ignoring_ascii_case(predefined_name, "boolean")
+                || support::equal_ignoring_ascii_case(predefined_name, "bit")) {
                 last_ordinal = 1;
-            } else if (vhdl_name_equal(predefined_name, "character")) {
+            } else if (support::equal_ignoring_ascii_case(
+                           predefined_name, "character")) {
                 last_ordinal = 255;
-            } else if (vhdl_name_equal(predefined_name, "severity_level")) {
+            } else if (support::equal_ignoring_ascii_case(
+                           predefined_name, "severity_level")) {
                 last_ordinal = 3;
-            } else if (vhdl_name_equal(predefined_name, "std_ulogic")
-                || vhdl_name_equal(predefined_name, "std_logic")) {
+            } else if (support::equal_ignoring_ascii_case(
+                           predefined_name, "std_ulogic")
+                || support::equal_ignoring_ascii_case(
+                    predefined_name, "std_logic")) {
                 last_ordinal = 8;
             }
             if (!range && last_ordinal) {
@@ -10871,11 +10695,7 @@ private:
         if (range->direction_from_bounds && left != right) {
             return std::nullopt;
         }
-        const auto distance = left >= right
-            ? static_cast<std::uint64_t>(left)
-                - static_cast<std::uint64_t>(right)
-            : static_cast<std::uint64_t>(right)
-                - static_cast<std::uint64_t>(left);
+        const auto distance = support::index_distance(left, right);
         return distance
                 < static_cast<std::uint64_t>(
                     std::numeric_limits<std::int64_t>::max())
@@ -10916,7 +10736,7 @@ private:
                                 [&](const vhdl::PhysicalUnit& physical_unit) {
                                     return physical_unit.declaration
                                             == candidate.vhdl->id
-                                        && vhdl_name_equal(
+                                        && support::equal_ignoring_ascii_case(
                                             physical_unit.name, unit_name);
                                 });
                     });
@@ -10933,21 +10753,10 @@ private:
                     != CompiledResolutionStatus::not_found) {
                 return std::nullopt;
             }
-            constexpr std::array<std::pair<std::string_view, std::uint64_t>, 8U>
-                standard_time_units { {
-                    { "fs", 1U },
-                    { "ps", 1'000U },
-                    { "ns", 1'000'000U },
-                    { "us", 1'000'000'000U },
-                    { "ms", 1'000'000'000'000U },
-                    { "sec", 1'000'000'000'000'000U },
-                    { "min", 60'000'000'000'000'000U },
-                    { "hr", 3'600'000'000'000'000'000U },
-                } };
             const auto standard_unit = std::ranges::find(
-                standard_time_units, unit_name,
+                support::vhdl_time_units, unit_name,
                 &std::pair<std::string_view, std::uint64_t>::first);
-            if (standard_unit == standard_time_units.end()) {
+            if (standard_unit == support::vhdl_time_units.end()) {
                 return std::nullopt;
             }
             const auto magnitude_expression = unit_.find_expression(
@@ -11429,7 +11238,8 @@ private:
             const auto right = evaluate(expression.operands[1]);
             if (left && right) {
                 if constexpr (!systemverilog) {
-                    if (vhdl_name_equal(expression.text, "**")) {
+                    if (support::equal_ignoring_ascii_case(
+                            expression.text, "**")) {
                         const auto value = vhdl_integer_binary(
                             expression.text, *left, *right);
                         return value ? vhdl_integer(*value)
@@ -11617,7 +11427,7 @@ private:
             }
             if (expression.kind == Kind::call) {
                 constexpr std::string_view qualified_prefix {
-                    "@vhdl-qualified:"
+                    vhdl::qualified_expression_prefix
                 };
                 const CompiledDeclarationPredicate type_declaration
                     = [](const CompiledDeclarationView& candidate) {
@@ -11640,9 +11450,12 @@ private:
                     conversion_name.remove_prefix(separator + 1U);
                 }
                 const bool predefined_scalar_conversion
-                    = vhdl_name_equal(conversion_name, "integer")
-                    || vhdl_name_equal(conversion_name, "natural")
-                    || vhdl_name_equal(conversion_name, "positive");
+                    = support::equal_ignoring_ascii_case(
+                          conversion_name, "integer")
+                    || support::equal_ignoring_ascii_case(
+                        conversion_name, "natural")
+                    || support::equal_ignoring_ascii_case(
+                        conversion_name, "positive");
                 if (expression.operands.size() == 1U
                     && (conversion
                         || predefined_scalar_conversion
@@ -11788,7 +11601,7 @@ private:
             // only an unconstrained subtype whose resolved declaration proves
             // it is the predefined STD.STANDARD.STRING type.
             constexpr auto qualified_prefix
-                = std::string_view { "@vhdl-qualified:" };
+                = vhdl::qualified_expression_prefix;
             if (expression.kind == Kind::call
                 && expression.text.starts_with(qualified_prefix)
                 && expression.operands.size() == 1U) {
@@ -12729,8 +12542,10 @@ std::string vhdl_declaration_identity(
             for (const auto& unit : design.vhdl_units()) {
                 if (unit.kind != vhdl::UnitKind::package
                     || unit.primary_name.empty()
-                    || !vhdl_name_equal(unit.library, owner->vhdl->library)
-                    || !vhdl_name_equal(unit.name, owner->vhdl->name)) {
+                    || !support::equal_ignoring_ascii_case(
+                        unit.library, owner->vhdl->library)
+                    || !support::equal_ignoring_ascii_case(
+                        unit.name, owner->vhdl->name)) {
                     continue;
                 }
                 for (const auto candidate_id : unit.declarations) {
@@ -12740,7 +12555,7 @@ std::string vhdl_declaration_identity(
                         && candidate->vhdl->form == record.form
                         && candidate->vhdl->callable
                         && candidate->vhdl->callable->defined
-                        && vhdl_name_equal(
+                        && support::equal_ignoring_ascii_case(
                             candidate->vhdl->name, record.name)) {
                         append_identity_component(result,
                             source_identity(
@@ -13003,9 +12818,7 @@ std::string vhdl_subtype_identity(const CompiledDesign& design,
     append_identity_component(result,
         type.unspecified_inference_identity);
     append_identity_component(result,
-        type.resolution_function.canonical.empty()
-            ? std::string_view { type.resolution_function.spelling }
-            : std::string_view { type.resolution_function.canonical });
+        type.resolution_function.text());
     append_identity_component(result,
         type.predefined_attribute
             ? std::to_string(static_cast<unsigned>(
@@ -13066,11 +12879,7 @@ std::string vhdl_type_definition_identity(const CompiledDesign& design,
     }
     for (const auto& dimension : type.array_dimensions) {
         append_identity_component(result,
-            dimension.index_subtype.canonical.empty()
-                ? std::string_view {
-                      dimension.index_subtype.spelling }
-                : std::string_view {
-                      dimension.index_subtype.canonical });
+            dimension.index_subtype.text());
         append_identity_component(result,
             dimension.unconstrained
                 ? "unconstrained"
@@ -13192,47 +13001,47 @@ InferredVhdlTypeClass vhdl_builtin_type_class(
     const auto name = spelling.substr(separator == std::string_view::npos
             ? 0U
             : separator + 1U);
-    if (vhdl_name_equal(name, "bit_vector")
-        || vhdl_name_equal(name, "std_logic_vector")
-        || vhdl_name_equal(name, "std_ulogic_vector")
-        || vhdl_name_equal(name, "signed")
-        || vhdl_name_equal(name, "unsigned")
-        || vhdl_name_equal(name, "string")
-        || vhdl_name_equal(name, "boolean_vector")
-        || vhdl_name_equal(name, "integer_vector")
-        || vhdl_name_equal(name, "real_vector")
-        || vhdl_name_equal(name, "time_vector")
-        || vhdl_name_equal(name, "ufixed")
-        || vhdl_name_equal(name, "sfixed")
-        || vhdl_name_equal(name, "unresolved_ufixed")
-        || vhdl_name_equal(name, "unresolved_sfixed")
-        || vhdl_name_equal(name, "float")
-        || vhdl_name_equal(name, "unresolved_float")
-        || vhdl_name_equal(name, "u_float")) {
+    if (support::equal_ignoring_ascii_case(name, "bit_vector")
+        || support::equal_ignoring_ascii_case(name, "std_logic_vector")
+        || support::equal_ignoring_ascii_case(name, "std_ulogic_vector")
+        || support::equal_ignoring_ascii_case(name, "signed")
+        || support::equal_ignoring_ascii_case(name, "unsigned")
+        || support::equal_ignoring_ascii_case(name, "string")
+        || support::equal_ignoring_ascii_case(name, "boolean_vector")
+        || support::equal_ignoring_ascii_case(name, "integer_vector")
+        || support::equal_ignoring_ascii_case(name, "real_vector")
+        || support::equal_ignoring_ascii_case(name, "time_vector")
+        || support::equal_ignoring_ascii_case(name, "ufixed")
+        || support::equal_ignoring_ascii_case(name, "sfixed")
+        || support::equal_ignoring_ascii_case(name, "unresolved_ufixed")
+        || support::equal_ignoring_ascii_case(name, "unresolved_sfixed")
+        || support::equal_ignoring_ascii_case(name, "float")
+        || support::equal_ignoring_ascii_case(name, "unresolved_float")
+        || support::equal_ignoring_ascii_case(name, "u_float")) {
         return InferredVhdlTypeClass::array;
     }
-    if (vhdl_name_equal(name, "integer")
-        || vhdl_name_equal(name, "natural")
-        || vhdl_name_equal(name, "positive")
-        || vhdl_name_equal(name, "universal_integer")
+    if (support::equal_ignoring_ascii_case(name, "integer")
+        || support::equal_ignoring_ascii_case(name, "natural")
+        || support::equal_ignoring_ascii_case(name, "positive")
+        || support::equal_ignoring_ascii_case(name, "universal_integer")
         || domain == vhdl::ValueDomain::integer) {
         return InferredVhdlTypeClass::integer;
     }
-    if (vhdl_name_equal(name, "real")
-        || vhdl_name_equal(name, "universal_real")) {
+    if (support::equal_ignoring_ascii_case(name, "real")
+        || support::equal_ignoring_ascii_case(name, "universal_real")) {
         return InferredVhdlTypeClass::floating;
     }
-    if (vhdl_name_equal(name, "time")) {
+    if (support::equal_ignoring_ascii_case(name, "time")) {
         return InferredVhdlTypeClass::physical;
     }
-    if (vhdl_name_equal(name, "boolean")
-        || vhdl_name_equal(name, "bit")
-        || vhdl_name_equal(name, "character")
-        || vhdl_name_equal(name, "severity_level")
-        || vhdl_name_equal(name, "file_open_kind")
-        || vhdl_name_equal(name, "file_open_status")
-        || vhdl_name_equal(name, "std_logic")
-        || vhdl_name_equal(name, "std_ulogic")) {
+    if (support::equal_ignoring_ascii_case(name, "boolean")
+        || support::equal_ignoring_ascii_case(name, "bit")
+        || support::equal_ignoring_ascii_case(name, "character")
+        || support::equal_ignoring_ascii_case(name, "severity_level")
+        || support::equal_ignoring_ascii_case(name, "file_open_kind")
+        || support::equal_ignoring_ascii_case(name, "file_open_status")
+        || support::equal_ignoring_ascii_case(name, "std_logic")
+        || support::equal_ignoring_ascii_case(name, "std_ulogic")) {
         return InferredVhdlTypeClass::discrete;
     }
     if (domain == vhdl::ValueDomain::boolean
@@ -13399,9 +13208,7 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
         : builtin_reference;
     const auto type_name = !expression.text.empty()
         ? std::string_view { expression.text }
-        : reference.canonical.empty()
-        ? std::string_view { reference.spelling }
-        : std::string_view { reference.canonical };
+        : reference.text();
     if (parent != nullptr && &parent->design() == &design) {
         const auto& actuals = parent->specialization().actual_identities;
         const auto actual = std::ranges::find_if(
@@ -13415,7 +13222,7 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
                 return declaration && declaration->vhdl != nullptr
                     && declaration->vhdl->form
                         == vhdl::DeclarationForm::generic_type
-                    && vhdl_name_equal(
+                    && support::equal_ignoring_ascii_case(
                         declaration->vhdl->name, type_name);
             });
         if (actual != actuals.end()) {
@@ -13443,7 +13250,8 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
             for (const auto& record : design.vhdl_hir.declarations()) {
                 if (record.scope != *scope
                     || !vhdl_type_declaration_form(record.form)
-                    || !vhdl_name_equal(record.name, type_name)) {
+                    || !support::equal_ignoring_ascii_case(
+                        record.name, type_name)) {
                     continue;
                 }
                 if (candidate) {
@@ -13472,7 +13280,8 @@ std::optional<InferredVhdlTypeActual> vhdl_type_mark_actual(
         std::optional<DeclarationId> candidate;
         for (const auto& record : design.vhdl_hir.declarations()) {
             if (!vhdl_type_declaration_form(record.form)
-                || !vhdl_name_equal(record.name, simple_type_name)) {
+                || !support::equal_ignoring_ascii_case(
+                    record.name, simple_type_name)) {
                 continue;
             }
             if (candidate) {
@@ -13558,13 +13367,13 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
         -> bool {
         if (constraint.kind != vhdl::ExpressionKind::binary
             || constraint.operands.size() != 2U
-            || (!vhdl_name_equal(constraint.text, "to")
-                && !vhdl_name_equal(
+            || (!support::equal_ignoring_ascii_case(constraint.text, "to")
+                && !support::equal_ignoring_ascii_case(
                     constraint.text, "downto"))) {
             return false;
         }
         append_identity_component(identity,
-            vhdl_name_equal(constraint.text, "downto")
+            support::equal_ignoring_ascii_case(constraint.text, "downto")
                 ? "downto"
                 : "to");
         append_identity_component(identity,
@@ -13578,8 +13387,8 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
 
     if (record.kind == vhdl::ExpressionKind::slice
         && record.operands.size() == 3U
-        && (vhdl_name_equal(record.text, "to")
-            || vhdl_name_equal(record.text, "downto"))) {
+        && (support::equal_ignoring_ascii_case(record.text, "to")
+            || support::equal_ignoring_ascii_case(record.text, "downto"))) {
         const auto type_mark = design.find_expression(
             record.operands.front());
         if (!type_mark || type_mark->vhdl == nullptr
@@ -13595,7 +13404,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
         std::string identity { "vhdl-type-constraint-v1;" };
         append_identity_component(identity, inferred->identity);
         append_identity_component(identity,
-            vhdl_name_equal(record.text, "downto")
+            support::equal_ignoring_ascii_case(record.text, "downto")
                 ? "downto"
                 : "to");
         append_identity_component(identity,
@@ -13610,7 +13419,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             if (left && right) {
                 identity += ";enum-range=" + std::to_string(*left)
                     + ":" + std::to_string(*right) + ":"
-                    + (vhdl_name_equal(record.text, "downto")
+                    + (support::equal_ignoring_ascii_case(record.text, "downto")
                             ? "1"
                             : "0");
             }
@@ -13620,7 +13429,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             constraint.kind = vhdl::RangeKind::discrete;
             constraint.left_expression = record.operands[1];
             constraint.right_expression = record.operands[2];
-            constraint.descending = vhdl_name_equal(
+            constraint.descending = support::equal_ignoring_ascii_case(
                 record.text, "downto");
             constraint.source = record.source;
             inferred->subtype->constraints = { std::move(constraint) };
@@ -13657,7 +13466,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
             range.kind = vhdl::RangeKind::discrete;
             range.left_expression = constraint->vhdl->operands[0];
             range.right_expression = constraint->vhdl->operands[1];
-            range.descending = vhdl_name_equal(
+            range.descending = support::equal_ignoring_ascii_case(
                 constraint->vhdl->text, "downto");
             range.source = constraint->vhdl->source;
             inferred->subtype->constraints.push_back(std::move(range));
@@ -13680,7 +13489,7 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
                 identity += ";enum-range="
                     + std::to_string(*left) + ":"
                     + std::to_string(*right) + ":"
-                    + (vhdl_name_equal(
+                    + (support::equal_ignoring_ascii_case(
                            constraint->vhdl->text, "downto")
                             ? "1"
                             : "0");
@@ -13763,7 +13572,7 @@ void append_vhdl_formals(const CompiledDesign& design,
             continue;
         }
         const auto form = declaration->vhdl->form;
-        const bool parameter = vhdl_actual_form(form);
+        const bool parameter = vhdl::is_generic_formal(form);
         const bool port = form == vhdl::DeclarationForm::port;
         if ((surface == SpecializedHirAssociationSurface::parameters
                 && parameter)
@@ -13896,7 +13705,7 @@ std::vector<AssociationActual> association_actuals(
 bool association_name_equal(const std::string_view formal,
     const std::string_view actual, const bool vhdl_names)
 {
-    return vhdl_names ? vhdl_name_equal(formal, actual)
+    return vhdl_names ? support::equal_ignoring_ascii_case(formal, actual)
                       : formal == actual;
 }
 
@@ -14524,11 +14333,7 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                         formal.declaration);
                     continue;
                 }
-                const auto spelling = source.referenced_name->canonical.empty()
-                    ? std::string_view {
-                          source.referenced_name->spelling }
-                    : std::string_view {
-                          source.referenced_name->canonical };
+                const auto spelling = source.referenced_name->text();
                 if (spelling.find('.') != std::string_view::npos) {
                     reject(actual,
                         SpecializedHirAssociationDiagnostic::
@@ -15155,7 +14960,7 @@ resolve_specialized_hir_vhdl_block_associations(
     for (const auto declaration_id : block.declarations) {
         const auto declaration = parent.find_declaration(declaration_id);
         if (!declaration || declaration->vhdl == nullptr
-            || !vhdl_actual_form(declaration->vhdl->form)) {
+            || !vhdl::is_generic_formal(declaration->vhdl->form)) {
             continue;
         }
         formals.push_back({ declaration_id, declaration->vhdl->name,
@@ -15532,9 +15337,10 @@ SpecializedHirUnit::vhdl_declaration_dependency_units(
                                                 const std::string_view name) {
         for (const auto& candidate : design_->vhdl_units()) {
             if (candidate.kind == vhdl::UnitKind::package
-                && vhdl_name_equal(normalized_library(candidate.library),
+                && support::equal_ignoring_ascii_case(
+                    normalized_library(candidate.library),
                     normalized_library(library))
-                && vhdl_name_equal(candidate.name, name)) {
+                && support::equal_ignoring_ascii_case(candidate.name, name)) {
                 units.insert(candidate.id);
             }
         }
@@ -15672,12 +15478,9 @@ SpecializedHirUnit::vhdl_declaration_dependency_units(
     return { units.begin(), units.end() };
 }
 
-SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
-    const std::span<const SpecializedHirNamedIdentity> identities) const
+SpecializedHirUnit SpecializedHirUnit::with_overlay(
+    SpecializedHirOverlay overlay) const
 {
-    auto overlay = specialization_;
-    overlay.hierarchy_identities.assign(
-        identities.begin(), identities.end());
     const bool replacements_empty
         = systemverilog_declarations_.empty()
         && vhdl_declarations_.empty()
@@ -15709,6 +15512,15 @@ SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
     return result;
 }
 
+SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
+    const std::span<const SpecializedHirNamedIdentity> identities) const
+{
+    auto overlay = specialization_;
+    overlay.hierarchy_identities.assign(
+        identities.begin(), identities.end());
+    return with_overlay(std::move(overlay));
+}
+
 SpecializedHirUnit SpecializedHirUnit::with_local_actual_identities(
     const std::span<const SpecializedHirActualIdentity> actuals) const
 {
@@ -15723,35 +15535,7 @@ SpecializedHirUnit SpecializedHirUnit::with_local_actual_identities(
             *existing = actual;
         }
     }
-    const bool replacements_empty
-        = systemverilog_declarations_.empty()
-        && vhdl_declarations_.empty()
-        && systemverilog_types_.empty() && vhdl_types_.empty()
-        && systemverilog_expressions_.empty()
-        && vhdl_expressions_.empty()
-        && systemverilog_statements_.empty() && vhdl_statements_.empty()
-        && systemverilog_processes_.empty() && vhdl_processes_.empty()
-        && systemverilog_instances_.empty() && vhdl_instances_.empty();
-    auto result = SpecializedHirUnit {
-        *design_, std::move(overlay), replacement_units_,
-        validated_lookup_indexes_,
-        replacements_empty ? initializer_memo_context_
-                           : std::shared_ptr<
-                                 detail::VhdlInitializerMemoContext> { }
-    };
-    result.systemverilog_declarations_ = systemverilog_declarations_;
-    result.vhdl_declarations_ = vhdl_declarations_;
-    result.systemverilog_types_ = systemverilog_types_;
-    result.vhdl_types_ = vhdl_types_;
-    result.systemverilog_expressions_ = systemverilog_expressions_;
-    result.vhdl_expressions_ = vhdl_expressions_;
-    result.systemverilog_statements_ = systemverilog_statements_;
-    result.vhdl_statements_ = vhdl_statements_;
-    result.systemverilog_processes_ = systemverilog_processes_;
-    result.vhdl_processes_ = vhdl_processes_;
-    result.systemverilog_instances_ = systemverilog_instances_;
-    result.vhdl_instances_ = vhdl_instances_;
-    return result;
+    return with_overlay(std::move(overlay));
 }
 
 std::span<const DeclarationId>
@@ -16141,7 +15925,7 @@ SpecializedHirUnit::find_instance(const ScopeId scope,
             return view;
         }
         if (view->vhdl != nullptr && view->vhdl->scope == scope
-            && vhdl_name_equal(view->vhdl->name, name)) {
+            && support::equal_ignoring_ascii_case(view->vhdl->name, name)) {
             return view;
         }
     }

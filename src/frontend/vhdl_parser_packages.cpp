@@ -446,28 +446,9 @@ std::string VhdlParser::parse_vhdl_selected_name(
   return result;
 }
 
-void VhdlParser::parse_vhdl_package_generic_map(
+void VhdlParser::parse_vhdl_generic_associations(
     std::vector<ParameterOverride>& associations,
-    bool& box,
-    const Token& start) {
-  expect_keyword("map", true, "FSIM-VHDL-PARSE-181");
-  expect(
-      TokenKind::LeftParen,
-      "'(' after package generic map",
-      "FSIM-VHDL-PARSE-182");
-  if (match(TokenKind::Less)) {
-    expect(
-        TokenKind::Greater,
-        "'>' in package generic box",
-        "FSIM-VHDL-PARSE-183");
-    box = true;
-    expect(
-        TokenKind::RightParen,
-        "')' after package generic box",
-        "FSIM-VHDL-PARSE-184");
-    return;
-  }
-
+    const VhdlGenericAssociationText& text) {
   bool saw_named = false;
   const auto begins_unambiguous_subtype_indication = [&]() {
     if (!at(TokenKind::Identifier)) {
@@ -496,23 +477,20 @@ void VhdlParser::parse_vhdl_package_generic_map(
               })) {
         error(
             name,
-            "FSIM-VHDL-SEM-057",
-            "duplicate package generic association '"
-                + *actual.name + "'");
+            std::string { text.duplicate_code },
+            std::string { text.duplicate } + " '" + *actual.name + "'");
       }
     } else if (saw_named) {
       error(
           current(),
-          "FSIM-VHDL-SEM-058",
-          "a positional package generic association cannot follow a "
-          "named association");
+          std::string { text.positional_code },
+          std::string { text.positional });
     }
 
-    if (match(TokenKind::Less)) {
-      expect(
-          TokenKind::Greater,
-          "'>' in default package generic association",
-          "FSIM-VHDL-PARSE-185");
+    if (text.allow_open && match_keyword("open", true)) {
+      actual.default_box = true;
+    } else if (match(TokenKind::Less)) {
+      expect(TokenKind::Greater, text.box, std::string { text.box_code });
       actual.default_box = true;
     } else if (begins_unambiguous_subtype_indication()) {
       actual.type_value = parse_vhdl_type(true, true);
@@ -526,6 +504,37 @@ void VhdlParser::parse_vhdl_package_generic_map(
       break;
     }
   }
+}
+
+void VhdlParser::parse_vhdl_package_generic_map(
+    std::vector<ParameterOverride>& associations,
+    bool& box,
+    const Token& start) {
+  expect_keyword("map", true, "FSIM-VHDL-PARSE-181");
+  expect(
+      TokenKind::LeftParen,
+      "'(' after package generic map",
+      "FSIM-VHDL-PARSE-182");
+  if (match(TokenKind::Less)) {
+    expect(
+        TokenKind::Greater,
+        "'>' in package generic box",
+        "FSIM-VHDL-PARSE-183");
+    box = true;
+    expect(
+        TokenKind::RightParen,
+        "')' after package generic box",
+        "FSIM-VHDL-PARSE-184");
+    return;
+  }
+
+  parse_vhdl_generic_associations(associations, {
+      "FSIM-VHDL-SEM-057", "duplicate package generic association",
+      "FSIM-VHDL-SEM-058",
+      "a positional package generic association cannot follow a named "
+      "association",
+      "'>' in default package generic association",
+      "FSIM-VHDL-PARSE-185", false });
   expect(
       TokenKind::RightParen,
       "')' after package generic associations",

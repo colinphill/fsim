@@ -2308,15 +2308,6 @@ bool Interpreter::Impl::try_publish_region_blocking_output(
     std::size_t scheduled_count { };
     std::uint64_t reserved_systemverilog_round { };
 
-    const auto keys_equal = [](const RegionFrontierKeyV1& left,
-                                const RegionFrontierKeyV1& right) noexcept {
-        return left.time == right.time && left.delta == right.delta
-            && left.systemverilog_round == right.systemverilog_round
-            && left.stable_order == right.stable_order
-            && left.sequence == right.sequence
-            && left.process_domain == right.process_domain
-            && left.phase == right.phase;
-    };
 
     try {
         if (component >= region_activation_programs.size()
@@ -2704,8 +2695,8 @@ bool Interpreter::Impl::try_publish_region_blocking_output(
                             | RegionFrontierMemberFlagsV1::pending_activation;
                         if (recipient.queued) {
                             if (present_flags != queued_flags
-                                || !keys_equal(runtime_member.queued_key,
-                                    queued.queued_key)) {
+                                || runtime_member.queued_key
+                                    != queued.queued_key) {
                                 return false;
                             }
                         } else if (present_flags != 0U

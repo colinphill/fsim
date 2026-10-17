@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 
 namespace fsim::frontend {
 namespace {
@@ -176,25 +177,22 @@ void VerilogParser::parse_switch_primitive(
             "switch-instance array bounds must be decimal locally static "
             "integers");
       } else {
-        const auto distance = *left_value >= *right_value
-            ? static_cast<std::uint64_t>(*left_value)
-                - static_cast<std::uint64_t>(*right_value)
-            : static_cast<std::uint64_t>(*right_value)
-                - static_cast<std::uint64_t>(*left_value);
-        if (distance >= maximum_instance_array_elements) {
-          error(
-              range,
-              "FSIM-SV-SEM-157",
-              "materializing the switch-instance array would exceed the "
-              "256 MiB frontend owning-storage budget");
-        } else {
-          const auto count = distance + 1;
-          for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
-            instance_indices.push_back(
-                *left_value >= *right_value
-                    ? *left_value - static_cast<std::int64_t>(ordinal)
-                    : *left_value + static_cast<std::int64_t>(ordinal));
-          }
+          const auto distance
+              = support::index_distance(*left_value, *right_value);
+          if (distance >= maximum_instance_array_elements) {
+              error(
+                  range,
+                  "FSIM-SV-SEM-157",
+                  "materializing the switch-instance array would exceed the "
+                  "256 MiB frontend owning-storage budget");
+          } else {
+              const auto count = distance + 1;
+              for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
+                  instance_indices.push_back(
+                      *left_value >= *right_value
+                          ? *left_value - static_cast<std::int64_t>(ordinal)
+                          : *left_value + static_cast<std::int64_t>(ordinal));
+              }
         }
       }
     }

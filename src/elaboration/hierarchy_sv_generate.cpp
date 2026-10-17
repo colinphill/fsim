@@ -406,8 +406,7 @@ ValidationResult validate_generated_constant(
 
     const auto scalar_applicable
         = (record.type
-              && hierarchy_sv_parameters_detail::
-                      compiled_systemverilog_scalar_kind(
+              && frontend::systemverilog_scalar_kind(
                           record.type->target.spelling)
                   != frontend::SystemVerilogScalarKind::None)
         || hir_systemverilog_scalar_expression_applicable(

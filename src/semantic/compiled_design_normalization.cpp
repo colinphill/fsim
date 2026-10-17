@@ -672,61 +672,19 @@ const vhdl::Declaration* defined_pure_function(
         : nullptr;
 }
 
-const SourceSpan* vhdl_source_span(
-    const Model& model, const SourceSpanId id)
-{
-    const auto& spans = model.source_spans();
-    if (!id.valid() || id.value() >= spans.size()) {
-        return nullptr;
-    }
-    const auto& span = spans[id.value()];
-    return span.id == id ? &span : nullptr;
-}
-
-const SourceFile* vhdl_source_file(
-    const Model& model, const SourceFileId id)
-{
-    const auto& files = model.source_files();
-    if (!id.valid() || id.value() >= files.size()) {
-        return nullptr;
-    }
-    const auto& file = files[id.value()];
-    return file.id == id ? &file : nullptr;
-}
-
-bool same_vhdl_physical_source(
-    const Model& model, const SourceSpanId left_id,
-    const SourceSpanId right_id)
-{
-    const auto* const left = vhdl_source_span(model, left_id);
-    const auto* const right = vhdl_source_span(model, right_id);
-    if (left == nullptr || right == nullptr
-        || !left->file.valid() || !right->file.valid()) {
-        return false;
-    }
-    if (left->file == right->file) {
-        return true;
-    }
-    const auto* const left_file = vhdl_source_file(model, left->file);
-    const auto* const right_file = vhdl_source_file(model, right->file);
-    return left_file != nullptr && right_file != nullptr
-        && !left_file->physical_name.empty()
-        && left_file->physical_name == right_file->physical_name;
-}
-
 bool vhdl_call_targets_later_local_function(
     const CompiledDesign& design, const vhdl::Expression& use,
     const vhdl::Declaration& definition)
 {
     if (use.kind != vhdl::ExpressionKind::call
         || use.scope != definition.scope
-        || !same_vhdl_physical_source(
+        || !same_physical_source(
             design.semantics, definition.source, use.source)) {
         return false;
     }
-    const auto* const use_span = vhdl_source_span(
+    const auto* const use_span = find_source_span(
         design.semantics, use.source);
-    const auto* const definition_span = vhdl_source_span(
+    const auto* const definition_span = find_source_span(
         design.semantics, definition.source);
     return use_span != nullptr && definition_span != nullptr
         && definition_span->begin.offset > use_span->begin.offset;
@@ -1045,9 +1003,7 @@ struct VhdlGenericDependencyContext {
         // package/import results can involve recursive context resolution and
         // are deliberately recomputed. This context is keyed by selected unit,
         // so the resolver's other lookup input is fixed too.
-        const auto spelling = name.canonical.empty()
-            ? std::string_view { name.spelling }
-            : std::string_view { name.canonical };
+        const auto spelling = name.text();
         if (name.selected || !name.overloads.empty()
             || !simple_vhdl_guard_identifier(spelling)) {
             return resolver.resolve_expression_name(expression).unique();

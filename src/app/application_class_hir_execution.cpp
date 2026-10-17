@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_hir_execution.hpp"
+#include "fsim/support/index_distance.hpp"
+#include "../elaboration/hir_output_conversion.hpp"
 
 #include "fsim/frontend/output_format.hpp"
 #include "fsim/runtime/output_format.hpp"
@@ -19,22 +21,6 @@ namespace {
 
 constexpr std::size_t maximum_class_call_depth = 1024U;
 constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
-
-[[nodiscard]] runtime::simir::AssertionSeverity report_severity(
-    const semantic::sv::AssertionSeverity severity) noexcept
-{
-    switch (severity) {
-    case semantic::sv::AssertionSeverity::note:
-        return runtime::simir::AssertionSeverity::note;
-    case semantic::sv::AssertionSeverity::warning:
-        return runtime::simir::AssertionSeverity::warning;
-    case semantic::sv::AssertionSeverity::error:
-        return runtime::simir::AssertionSeverity::error;
-    case semantic::sv::AssertionSeverity::failure:
-        return runtime::simir::AssertionSeverity::failure;
-    }
-    return runtime::simir::AssertionSeverity::error;
-}
 
 [[nodiscard]] std::optional<std::uint64_t> decimal(
     const std::string_view text)
@@ -241,21 +227,13 @@ static_class_property(
     return result;
 }
 
+// The two's complement of a fully known value.
 [[nodiscard]] runtime::PackedLogic4 negate_known_packed(
     const runtime::PackedLogic4& value)
 {
-    auto result = runtime::PackedLogic4(value.width(), runtime::Logic4::zero);
-    bool first_one_seen { };
-    for (std::size_t bit = 0U; bit < value.width(); ++bit) {
-        const auto state = value.get(bit);
-        if (!first_one_seen) {
-            result.set(bit, state);
-            first_one_seen = state == runtime::Logic4::one;
-        } else {
-            result.set(bit, runtime::logic_not(state));
-        }
-    }
-    return result;
+    return runtime::simir::binary_value(
+        runtime::simir::BinaryOperator::subtract_unsigned,
+        runtime::PackedLogic4(value.width(), runtime::Logic4::zero), value);
 }
 
 [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_binary_packed(
@@ -275,47 +253,14 @@ static_class_property(
         || rhs.width() == 0U || lhs.is_logic9() || rhs.is_logic9()) {
         return std::nullopt;
     }
-    if (operation == "<<" || operation == "<<<"
-        || operation == ">>" || operation == ">>>") {
-        if (packed_has_unknown(rhs))
-            return PackedLogic4(lhs.width(), Logic4::x);
-        bool shift_overflow = false;
-        std::size_t amount { };
-        for (std::size_t bit = 0U; bit < rhs.width(); ++bit) {
-            if (rhs.get(bit) != Logic4::one)
-                continue;
-            if (bit >= std::numeric_limits<std::size_t>::digits) {
-                shift_overflow = true;
-                break;
-            }
-            const auto increment = std::size_t { 1U } << bit;
-            if (increment > std::numeric_limits<std::size_t>::max() - amount) {
-                shift_overflow = true;
-                break;
-            }
-            amount += increment;
-        }
-        const bool left_shift = operation == "<<" || operation == "<<<";
-        const bool arithmetic_right = operation == ">>>" && signed_operation;
-        const auto fill = arithmetic_right
-            ? lhs.get(lhs.width() - 1U) : Logic4::zero;
-        auto result = PackedLogic4(lhs.width(), Logic4::zero);
-        if (shift_overflow || amount >= result.width()) {
-            if (!left_shift && arithmetic_right)
-                result.fill(fill);
-            return result;
-        }
-        for (std::size_t bit = 0U; bit < result.width(); ++bit) {
-            if (left_shift) {
-                if (bit >= amount)
-                    result.set(bit, lhs.get(bit - amount));
-            } else if (bit + amount < result.width()) {
-                result.set(bit, lhs.get(bit + amount));
-            } else {
-                result.set(bit, fill);
-            }
-        }
-        return result;
+    if (shift) {
+        using runtime::simir::ShiftOperator;
+        const auto shift_operation = operation == "<<" || operation == "<<<"
+            ? ShiftOperator::logical_left
+            : operation == ">>>" && signed_operation
+            ? ShiftOperator::arithmetic_right
+            : ShiftOperator::logical_right;
+        return runtime::simir::shift_value(shift_operation, lhs, rhs, false);
     }
 
     using runtime::simir::BinaryOperator;
@@ -407,10 +352,8 @@ static_class_property(
             return false;
         }
         visited.push_back(target.target);
-        const auto definition = std::ranges::find(
-            hir.types(), target.target,
-            &semantic::sv::TypeDefinition::id);
-        if (definition == hir.types().end())
+        const auto* definition = hir.find_type(target.target);
+        if (definition == nullptr)
             return false;
         if (definition->form == TypeForm::enumeration
             || definition->form == TypeForm::packed_integral
@@ -424,6 +367,122 @@ static_class_property(
     }
     return false;
 }
+
+// Points `slot` at `value` for one scope and restores it on exit.
+template <typename T>
+class ScopedSlot {
+public:
+    ScopedSlot(T*& slot, T* value) noexcept
+        : slot_ { slot }, saved_ { std::exchange(slot, value) }
+    {
+    }
+    ScopedSlot(const ScopedSlot&) = delete;
+    ScopedSlot& operator=(const ScopedSlot&) = delete;
+    ~ScopedSlot() { slot_ = saved_; }
+
+private:
+    T*& slot_;
+    T* saved_;
+};
+
+// Sets `slot` to `value` for one scope and restores it on exit.
+template <typename T>
+class ScopedValue {
+public:
+    ScopedValue(T& slot, T value)
+        : slot_ { slot }, saved_ { std::exchange(slot, std::move(value)) }
+    {
+    }
+    ScopedValue(const ScopedValue&) = delete;
+    ScopedValue& operator=(const ScopedValue&) = delete;
+    ~ScopedValue() { slot_ = std::move(saved_); }
+
+private:
+    T& slot_;
+    T saved_;
+};
+
+// Restores one map entry (or its absence) on scope exit.
+template <typename Map>
+class ScopedMapEntry {
+public:
+    ScopedMapEntry(Map& map, typename Map::key_type key)
+        : map_ { map }, key_ { std::move(key) }
+    {
+        if (const auto found = map_.find(key_); found != map_.end()) {
+            saved_ = found->second;
+        }
+    }
+    ScopedMapEntry(const ScopedMapEntry&) = delete;
+    ScopedMapEntry& operator=(const ScopedMapEntry&) = delete;
+    ~ScopedMapEntry()
+    {
+        if (saved_) {
+            map_.insert_or_assign(key_, std::move(*saved_));
+        } else {
+            map_.erase(key_);
+        }
+    }
+
+private:
+    Map& map_;
+    typename Map::key_type key_;
+    std::optional<typename Map::mapped_type> saved_;
+};
+
+// Pops the frame a call pushed onto `frames`, when it pushed one.
+template <typename Frames>
+class PendingFrameGuard {
+public:
+    PendingFrameGuard(Frames& frames, const bool active) noexcept
+        : frames_ { frames }, active_ { active }
+    {
+    }
+    PendingFrameGuard(const PendingFrameGuard&) = delete;
+    PendingFrameGuard& operator=(const PendingFrameGuard&) = delete;
+    ~PendingFrameGuard()
+    {
+        if (active_) {
+            frames_.pop_back();
+        }
+    }
+
+private:
+    Frames& frames_;
+    bool active_;
+};
+
+// Reports from `report_process` (when given) and names `hierarchy` as the
+// active scope while a method runs; restores both on exit.
+class ExecutionContextGuard {
+public:
+    ExecutionContextGuard(
+        std::optional<runtime::simir::ProcessId>& report_slot,
+        const std::optional<runtime::simir::ProcessId> report_process,
+        std::string& hierarchy_slot, std::string hierarchy)
+        : report_slot_ { report_slot }, previous_report_ { report_slot },
+          hierarchy_slot_ { hierarchy_slot },
+          previous_hierarchy_ {
+              std::exchange(hierarchy_slot, std::move(hierarchy)) }
+    {
+        if (report_process) {
+            report_slot = report_process;
+        }
+    }
+    ExecutionContextGuard(const ExecutionContextGuard&) = delete;
+    ExecutionContextGuard& operator=(const ExecutionContextGuard&) = delete;
+    ~ExecutionContextGuard()
+    {
+        report_slot_ = previous_report_;
+        hierarchy_slot_ = std::move(previous_hierarchy_);
+    }
+
+private:
+    std::optional<runtime::simir::ProcessId>& report_slot_;
+    std::optional<runtime::simir::ProcessId> previous_report_;
+    std::string& hierarchy_slot_;
+    std::string previous_hierarchy_;
+};
 
 } // namespace
 
@@ -477,9 +536,14 @@ const semantic::sv::Declaration*
 SystemVerilogClassHirExecution::declaration(
     const semantic::DeclarationId id) const noexcept
 {
-    const auto found = std::ranges::find(
-        hir_.declarations(), id, &semantic::sv::Declaration::id);
-    return found == hir_.declarations().end() ? nullptr : &*found;
+    return hir_.find_declaration(id);
+}
+
+const semantic::sv::TypeDefinition*
+SystemVerilogClassHirExecution::type_definition(
+    const semantic::TypeId id) const noexcept
+{
+    return hir_.find_type(id);
 }
 
 const semantic::sv::Expression*
@@ -1516,11 +1580,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 if (actual->left != 0 || actual->right != -1)
                     return std::nullopt;
             } else {
-                const auto distance = actual->left >= actual->right
-                    ? static_cast<std::uint64_t>(actual->left)
-                        - static_cast<std::uint64_t>(actual->right)
-                    : static_cast<std::uint64_t>(actual->right)
-                        - static_cast<std::uint64_t>(actual->left);
+                const auto distance
+                    = support::index_distance(actual->left, actual->right);
                 if (distance == std::numeric_limits<std::uint64_t>::max()
                     || !std::in_range<std::size_t>(distance + 1U)
                     || static_cast<std::size_t>(distance + 1U) != size) {
@@ -1537,16 +1598,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             std::vector<QueryDimension> dimensions {
                 QueryDimension { actual->left, actual->right }
             };
-            const auto range_bound = [this, handle, &environment](
-                                         const std::optional<std::int64_t>& literal,
-                                         const std::optional<semantic::ExpressionId>& id)
-                -> std::optional<std::int64_t> {
-                if (literal)
-                    return literal;
-                if (!id)
-                    return std::nullopt;
-                const auto value = evaluate_packed(*id, handle, environment);
-                return value ? value->known_signed_value() : std::nullopt;
+            const auto range_bound = [&](const auto& literal, const auto& id) {
+                return evaluate_range_bound(literal, id, handle, environment);
             };
             const auto append_range = [&](const semantic::sv::PackedRange& range) {
                 dimensions.push_back({
@@ -1573,13 +1626,11 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                         return std::nullopt;
                     }
                     alias_path.push_back(current.target.target);
-                    const auto found = std::ranges::find(
-                        hir_.types(), current.target.target,
-                        &semantic::sv::TypeDefinition::id);
-                    if (found == hir_.types().end())
+                    const auto* found = type_definition(current.target.target);
+                    if (found == nullptr)
                         return std::nullopt;
                     if (found->form != TypeForm::alias) {
-                        return ResolvedQueryType { &*found,
+                        return ResolvedQueryType { found,
                             std::move(current) };
                     }
                     current = found->base;
@@ -1695,11 +1746,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 return std::nullopt;
             const auto left = *selected.left;
             const auto right = *selected.right;
-            const auto difference = left >= right
-                ? static_cast<std::uint64_t>(left)
-                    - static_cast<std::uint64_t>(right)
-                : static_cast<std::uint64_t>(right)
-                    - static_cast<std::uint64_t>(left);
+            const auto difference = support::index_distance(left, right);
             if (difference == std::numeric_limits<std::uint64_t>::max())
                 return std::nullopt;
             const auto dimension_size = dimension == 1U
@@ -1760,16 +1807,14 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                                             storage) {
         std::vector<semantic::TypeId> alias_path;
         auto resolved = type;
-        auto definition = hir_.types().end();
+        const semantic::sv::TypeDefinition* definition = nullptr;
         auto form = resolved.container_form;
         for (;;) {
             definition = resolved.target.target.valid()
-                ? std::ranges::find(
-                      hir_.types(), resolved.target.target,
-                      &semantic::sv::TypeDefinition::id)
-                : hir_.types().end();
+                ? type_definition(resolved.target.target)
+                : nullptr;
             if (form || !resolved.unpacked_dimensions.empty()
-                || definition == hir_.types().end()
+                || definition == nullptr
                 || definition->form != TypeForm::alias) {
                 break;
             }
@@ -1783,27 +1828,19 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         }
         if (!form && !resolved.unpacked_dimensions.empty())
             form = TypeForm::static_array;
-        if (!form && definition != hir_.types().end())
+        if (!form && definition != nullptr)
             form = definition->form;
         auto ranges = resolved.unpacked_dimensions;
         if (ranges.empty() && form == TypeForm::static_array
-            && definition != hir_.types().end() && definition->container) {
+            && definition != nullptr && definition->container) {
             ranges = definition->container->static_dimensions;
         }
         if (form == TypeForm::static_array) {
             if (ranges.empty())
                 return false;
             const auto& range = ranges.front();
-            const auto bound = [&](
-                                   const std::optional<std::int64_t>& literal,
-                                   const std::optional<semantic::ExpressionId>& id)
-                -> std::optional<std::int64_t> {
-                if (literal)
-                    return literal;
-                if (!id)
-                    return std::nullopt;
-                const auto value = evaluate_packed(*id, handle, environment);
-                return value ? value->known_signed_value() : std::nullopt;
+            const auto bound = [&](const auto& literal, const auto& id) {
+                return evaluate_range_bound(literal, id, handle, environment);
             };
             const auto left = bound(range.left, range.left_expression);
             const auto right = bound(range.right, range.right_expression);
@@ -1823,7 +1860,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                 type = resolved.container_element_types.front();
                 return true;
             }
-            if (definition != hir_.types().end()
+            if (definition != nullptr
                 && definition->form == TypeForm::static_array) {
                 type = definition->base;
                 return true;
@@ -1851,7 +1888,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             semantic::sv::TypeReference element_type;
             if (resolved.container_element_types.size() == 1U) {
                 element_type = resolved.container_element_types.front();
-            } else if (definition != hir_.types().end()
+            } else if (definition != nullptr
                 && form && definition->form == *form) {
                 element_type = definition->base;
             } else {
@@ -1993,10 +2030,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                     return std::nullopt;
                 }
                 visited.push_back(type.target.target);
-                const auto definition = std::ranges::find(
-                    hir_.types(), type.target.target,
-                    &semantic::sv::TypeDefinition::id);
-                if (definition == hir_.types().end())
+                const auto* definition = type_definition(type.target.target);
+                if (definition == nullptr)
                     return std::nullopt;
                 if (definition->form == TypeForm::alias) {
                     type = definition->base;
@@ -2114,65 +2149,10 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             || form == TypeForm::associative_array;
     };
     const auto integral_type = [&](const IndexTypeReference& reference) {
-        if (reference.container_form || !reference.unpacked_dimensions.empty()
-            || reference.value_form == TypeForm::string
-            || reference.value_form == TypeForm::class_handle
-            || reference.virtual_interface) {
-            return false;
-        }
-        if (reference.value_form == TypeForm::packed_integral
-            || reference.value_form == TypeForm::enumeration
-            || reference.value_form == TypeForm::packed_structure
-            || reference.value_form == TypeForm::packed_union) {
-            return true;
-        }
-        auto type = reference.target;
-        std::vector<semantic::TypeId> visited;
-        constexpr std::array<std::string_view, 9> integral_names {
-            "bit", "logic", "reg", "byte", "shortint", "int",
-            "integer", "longint", "time"
-        };
-        for (;;) {
-            if (std::ranges::find(integral_names, type.spelling)
-                != integral_names.end()) {
-                return true;
-            }
-            if (!type.target.valid()
-                || std::ranges::find(visited, type.target) != visited.end()) {
-                return false;
-            }
-            visited.push_back(type.target);
-            const auto definition = std::ranges::find(
-                hir_.types(), type.target,
-                &semantic::sv::TypeDefinition::id);
-            if (definition == hir_.types().end())
-                return false;
-            if (definition->form == TypeForm::enumeration
-                || definition->form == TypeForm::packed_integral
-                || definition->form == TypeForm::packed_structure
-                || definition->form == TypeForm::packed_union) {
-                return true;
-            }
-            if (definition->form != TypeForm::alias)
-                return false;
-            type = definition->base.target;
-            if (!type.target.valid()) {
-                return std::ranges::find(
-                           integral_names, type.spelling)
-                    != integral_names.end();
-            }
-        }
-        return false;
+        return is_integral_associative_index(reference, hir_);
     };
-    const auto bound = [&](const std::optional<std::int64_t>& literal,
-                           const std::optional<semantic::ExpressionId>& id)
-        -> std::optional<std::int64_t> {
-        if (literal)
-            return literal;
-        if (!id)
-            return std::nullopt;
-        const auto value = evaluate_packed(*id, handle, environment);
-        return value ? value->known_signed_value() : std::nullopt;
+    const auto bound = [&](const auto& literal, const auto& id) {
+        return evaluate_range_bound(literal, id, handle, environment);
     };
     const auto extent = [&](const semantic::sv::PackedRange& range)
         -> std::optional<std::uint64_t> {
@@ -2180,11 +2160,7 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
         const auto right = bound(range.right, range.right_expression);
         if (!left || !right)
             return std::nullopt;
-        const auto distance = *left >= *right
-            ? static_cast<std::uint64_t>(*left)
-                - static_cast<std::uint64_t>(*right)
-            : static_cast<std::uint64_t>(*right)
-                - static_cast<std::uint64_t>(*left);
+        const auto distance = support::index_distance(*left, *right);
         if (distance == std::numeric_limits<std::uint64_t>::max())
             return std::nullopt;
         return distance + 1U;
@@ -2229,9 +2205,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
             return std::nullopt;
         }
         visited.push_back(type_id);
-        const auto definition = std::ranges::find(
-            hir_.types(), type_id, &semantic::sv::TypeDefinition::id);
-        if (definition == hir_.types().end())
+        const auto* definition = type_definition(type_id);
+        if (definition == nullptr)
             return std::nullopt;
         if (definition->form == TypeForm::enumeration
             && !definition->base.target.target.valid()
@@ -2275,13 +2250,9 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                                  const semantic::sv::TypeReference& reference,
                                  std::vector<semantic::TypeId> type_path)
         -> bool {
-        const auto definition = reference.target.target.valid()
-            ? std::ranges::find(
-                  hir_.types(), reference.target.target,
-                  &semantic::sv::TypeDefinition::id)
-            : hir_.types().end();
-        const auto* type_definition
-            = definition == hir_.types().end() ? nullptr : &*definition;
+        const auto* type_definition = reference.target.target.valid()
+            ? this->type_definition(reference.target.target)
+            : nullptr;
         if (type_definition != nullptr) {
             if (std::ranges::find(type_path, type_definition->id)
                 != type_path.end()) {
@@ -2521,10 +2492,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
                     return std::nullopt;
                 }
                 visited.push_back(type_id);
-                const auto definition = std::ranges::find(
-                    hir_.types(), type_id,
-                    &semantic::sv::TypeDefinition::id);
-                if (definition == hir_.types().end())
+                const auto* definition = type_definition(type_id);
+                if (definition == nullptr)
                     return std::nullopt;
                 if (definition->form == TypeForm::enumeration
                     && !definition->base.target.target.valid()
@@ -2679,11 +2648,8 @@ SystemVerilogClassHirExecution::evaluate_class_array_query(
     if (!selected_left || !selected_right)
         return std::nullopt;
     const auto selected_size = [&]() -> std::optional<std::uint64_t> {
-        const auto distance = *selected_left >= *selected_right
-            ? static_cast<std::uint64_t>(*selected_left)
-                - static_cast<std::uint64_t>(*selected_right)
-            : static_cast<std::uint64_t>(*selected_right)
-                - static_cast<std::uint64_t>(*selected_left);
+        const auto distance
+            = support::index_distance(*selected_left, *selected_right);
         if (distance == std::numeric_limits<std::uint64_t>::max())
             return std::nullopt;
         return distance + 1U;
@@ -2831,10 +2797,8 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
     if (form == TypeForm::static_array) {
         auto ranges = type->unpacked_dimensions;
         if (ranges.empty() && type->target.target.valid()) {
-            const auto definition = std::ranges::find(
-                hir_.types(), type->target.target,
-                &semantic::sv::TypeDefinition::id);
-            if (definition != hir_.types().end()
+            const auto* definition = type_definition(type->target.target);
+            if (definition != nullptr
                 && definition->container) {
                 ranges = definition->container->static_dimensions;
             }
@@ -2845,16 +2809,8 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
             return std::nullopt;
         }
         std::size_t offset { };
-        const auto range_bound = [&](
-                                     const std::optional<std::int64_t>& literal,
-                                     const std::optional<semantic::ExpressionId>& id)
-            -> std::optional<std::int64_t> {
-            if (literal)
-                return literal;
-            if (!id)
-                return std::nullopt;
-            const auto value = evaluate_packed(*id, handle, environment);
-            return value ? value->known_signed_value() : std::nullopt;
+        const auto range_bound = [&](const auto& literal, const auto& id) {
+            return evaluate_range_bound(literal, id, handle, environment);
         };
         for (std::size_t dimension { }; dimension < ranges.size();
             ++dimension) {
@@ -2871,11 +2827,7 @@ SystemVerilogClassHirExecution::evaluate_class_handle_index(
                 || *index > std::max(*left, *right)) {
                 return std::nullopt;
             }
-            const auto distance = *left >= *right
-                ? static_cast<std::uint64_t>(*left)
-                    - static_cast<std::uint64_t>(*right)
-                : static_cast<std::uint64_t>(*right)
-                    - static_cast<std::uint64_t>(*left);
+            const auto distance = support::index_distance(*left, *right);
             if (distance == std::numeric_limits<std::uint64_t>::max()
                 || distance + 1U
                     > std::numeric_limits<std::size_t>::max()) {
@@ -2940,13 +2892,11 @@ SystemVerilogClassHirExecution::call_aggregate_definition(
             return nullptr;
         }
         visited.push_back(current.target.target);
-        const auto found = std::ranges::find(
-            hir_.types(), current.target.target,
-            &semantic::sv::TypeDefinition::id);
-        if (found == hir_.types().end())
+        const auto* found = type_definition(current.target.target);
+        if (found == nullptr)
             return nullptr;
         if (found->form != semantic::sv::TypeForm::alias)
-            return &*found;
+            return found;
         current = found->base;
     }
     return nullptr;
@@ -3033,10 +2983,8 @@ bool SystemVerilogClassHirExecution::scalar_call_type_compatible(
         for (std::size_t depth = 0U; depth < 64U; ++depth) {
             if (!type.target.target.valid())
                 return type;
-            const auto definition = std::ranges::find(
-                hir_.types(), type.target.target,
-                &semantic::sv::TypeDefinition::id);
-            if (definition == hir_.types().end()
+            const auto* definition = type_definition(type.target.target);
+            if (definition == nullptr
                 || definition->form != semantic::sv::TypeForm::alias) {
                 return type;
             }
@@ -3137,14 +3085,8 @@ SystemVerilogClassHirExecution::call_array_bounds(
     }
     if (ranges.size() != 1U)
         return std::nullopt;
-    const auto bound = [&](const auto& literal, const auto& expression_id)
-        -> std::optional<std::int64_t> {
-        if (literal)
-            return literal;
-        if (!expression_id)
-            return std::nullopt;
-        const auto value = evaluate_packed(*expression_id, handle, environment);
-        return value ? value->known_signed_value() : std::nullopt;
+    const auto bound = [&](const auto& literal, const auto& id) {
+        return evaluate_range_bound(literal, id, handle, environment);
     };
     const auto left = bound(ranges.front().left,
         ranges.front().left_expression);
@@ -3232,11 +3174,8 @@ void SystemVerilogClassHirExecution::validate_typed_actual(
         }
         if (actual.left == 0 && actual.right == -1 && actual.elements.empty())
             return;
-        const auto distance = actual.left >= actual.right
-            ? static_cast<std::uint64_t>(actual.left)
-                - static_cast<std::uint64_t>(actual.right)
-            : static_cast<std::uint64_t>(actual.right)
-                - static_cast<std::uint64_t>(actual.left);
+        const auto distance
+            = support::index_distance(actual.left, actual.right);
         if (distance == std::numeric_limits<std::uint64_t>::max()
             || !std::in_range<std::size_t>(distance + 1U)
             || actual.elements.size()
@@ -3376,17 +3315,10 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
     const auto nominal_identity = [this](
                                       const semantic::sv::TypeReference& type) {
         const auto* definition = call_aggregate_definition(type);
-        if (definition == nullptr
-            || (definition->form != TypeForm::enumeration
-                && definition->form != TypeForm::packed_structure
-                && definition->form != TypeForm::packed_union
-                && definition->form != TypeForm::tagged_union
-                && definition->form != TypeForm::unpacked_structure
-                && definition->form != TypeForm::unpacked_union)) {
-            return std::string { };
-        }
-        return std::string { "@sv-type:" }
-            + std::to_string(definition->id.value());
+        return definition != nullptr
+                && semantic::sv::has_nominal_type_identity(definition->form)
+            ? semantic::sv::nominal_type_identity(definition->id)
+            : std::string { };
     };
     const auto scalar_kind = [this](
                                  const semantic::sv::TypeReference& type) {
@@ -3394,26 +3326,19 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
         std::vector<semantic::TypeId> visited;
         for (std::size_t depth { }; depth < 64U; ++depth) {
             using Scalar = runtime::SystemVerilogScalarKind;
-            if (current.target.spelling == "shortreal")
-                return Scalar::ShortReal;
-            if (current.target.spelling == "real")
-                return Scalar::Real;
-            if (current.target.spelling == "realtime")
-                return Scalar::Realtime;
-            if (current.target.spelling == "time")
-                return Scalar::Time;
-            if (current.target.spelling == "chandle")
-                return Scalar::Chandle;
+            if (const auto kind = frontend::systemverilog_scalar_kind(
+                    current.target.spelling);
+                kind != Scalar::None) {
+                return kind;
+            }
             if (!current.target.target.valid()
                 || std::ranges::find(visited, current.target.target)
                     != visited.end()) {
                 return Scalar::None;
             }
             visited.push_back(current.target.target);
-            const auto definition = std::ranges::find(
-                hir_.types(), current.target.target,
-                &semantic::sv::TypeDefinition::id);
-            if (definition == hir_.types().end()
+            const auto* definition = type_definition(current.target.target);
+            if (definition == nullptr
                 || definition->form != TypeForm::alias) {
                 return Scalar::None;
             }
@@ -3456,10 +3381,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                 return std::nullopt;
             }
             visited.push_back(current.target.target);
-            const auto definition = std::ranges::find(
-                hir_.types(), current.target.target,
-                &semantic::sv::TypeDefinition::id);
-            if (definition == hir_.types().end())
+            const auto* definition = type_definition(current.target.target);
+            if (definition == nullptr)
                 return std::nullopt;
             if (definition->form != TypeForm::alias)
                 return current;
@@ -3633,11 +3556,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                 }
                 if (!bounds)
                     return std::nullopt;
-                const auto distance = bounds->first >= bounds->second
-                    ? static_cast<std::uint64_t>(bounds->first)
-                        - static_cast<std::uint64_t>(bounds->second)
-                    : static_cast<std::uint64_t>(bounds->second)
-                        - static_cast<std::uint64_t>(bounds->first);
+                const auto distance
+                    = support::index_distance(bounds->first, bounds->second);
                 if (distance == std::numeric_limits<std::uint64_t>::max()
                     || !std::in_range<std::size_t>(distance + 1U)
                     || count != static_cast<std::size_t>(distance + 1U)) {
@@ -3824,11 +3744,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                             != runtime::SystemVerilogClassContainerKind::FixedArray) {
                         return std::nullopt;
                     }
-                    const auto distance = bounds->first >= bounds->second
-                        ? static_cast<std::uint64_t>(bounds->first)
-                            - static_cast<std::uint64_t>(bounds->second)
-                        : static_cast<std::uint64_t>(bounds->second)
-                            - static_cast<std::uint64_t>(bounds->first);
+                    const auto distance = support::index_distance(
+                        bounds->first, bounds->second);
                     if (distance == std::numeric_limits<std::uint64_t>::max()
                         || !std::in_range<std::size_t>(distance + 1U)
                         || storage.handle_container->size()
@@ -3884,11 +3801,8 @@ SystemVerilogClassHirExecution::evaluate_typed_actual(
                         != runtime::SystemVerilogClassContainerKind::FixedArray) {
                     return std::nullopt;
                 }
-                const auto distance = bounds->first >= bounds->second
-                    ? static_cast<std::uint64_t>(bounds->first)
-                        - static_cast<std::uint64_t>(bounds->second)
-                    : static_cast<std::uint64_t>(bounds->second)
-                        - static_cast<std::uint64_t>(bounds->first);
+                const auto distance
+                    = support::index_distance(bounds->first, bounds->second);
                 if (distance == std::numeric_limits<std::uint64_t>::max()
                     || !std::in_range<std::size_t>(distance + 1U)
                     || storage.handle_container->size()
@@ -4722,15 +4636,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 selected_method->canonical_identity, receiver_handle,
                 std::move(typed_actuals), false });
         }
-        struct PendingFrameGuard {
-            std::vector<PendingCallFrame>& frames;
-            bool active;
-            ~PendingFrameGuard()
-            {
-                if (active)
-                    frames.pop_back();
-            }
-        } pending_guard { pending_call_frames_, typed_frame };
+        const PendingFrameGuard pending_guard { pending_call_frames_,
+            typed_frame };
         auto result = invoke_function_(receiver_handle, identity,
             actuals, string_actuals, names, directions, virtual_dispatch,
             ActualReferences { });
@@ -5158,11 +5065,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 && type->packed_range->right) {
                 const auto left = *type->packed_range->left;
                 const auto right = *type->packed_range->right;
-                const auto distance = left >= right
-                    ? static_cast<std::uint64_t>(left)
-                        - static_cast<std::uint64_t>(right)
-                    : static_cast<std::uint64_t>(right)
-                        - static_cast<std::uint64_t>(left);
+                const auto distance = support::index_distance(left, right);
                 if (distance < std::numeric_limits<std::size_t>::max()) {
                     return ExpressionShape {
                         static_cast<std::size_t>(distance + 1U),
@@ -5804,61 +5707,29 @@ SystemVerilogClassHirExecution::evaluate_packed(
         // They are extended to their common width using that operation
         // signedness before comparison (IEEE 1800-2017 11.8.1-11.8.2).
         const bool signed_comparison = *lhs_signed && *rhs_signed;
+        // An X or Z bit in either operand makes the result unknown.
         const auto common_width = std::max(left->width(), right->width());
-        const auto bit_at = [signed_comparison](
-                                const runtime::PackedLogic4& operand,
-                                const std::size_t bit) {
-            if (bit < operand.width())
-                return operand.get(bit);
-            return signed_comparison
-                    ? operand.get(operand.width() - 1U)
-                    : runtime::Logic4::zero;
-        };
-
-        // A relational result is unknown when either operand contains X or
-        // Z, including bits above the first machine word.
-        for (std::size_t bit = 0U; bit < common_width; ++bit) {
-            const auto lhs_bit = bit_at(*left, bit);
-            const auto rhs_bit = bit_at(*right, bit);
-            if ((lhs_bit != runtime::Logic4::zero
-                    && lhs_bit != runtime::Logic4::one)
-                || (rhs_bit != runtime::Logic4::zero
-                    && rhs_bit != runtime::Logic4::one)) {
-                return apply_context(
-                    runtime::PackedLogic4(1U, runtime::Logic4::x), false);
-            }
-        }
-
-        bool less = false;
-        bool equal = true;
-        if (signed_comparison) {
-            const auto lhs_negative
-                = bit_at(*left, common_width - 1U) == runtime::Logic4::one;
-            const auto rhs_negative
-                = bit_at(*right, common_width - 1U) == runtime::Logic4::one;
-            if (lhs_negative != rhs_negative) {
-                less = lhs_negative;
-                equal = false;
-            }
-        }
-        if (equal) {
-            for (std::size_t bit = common_width; bit-- > 0U;) {
-                const auto lhs_bit = bit_at(*left, bit);
-                const auto rhs_bit = bit_at(*right, bit);
-                if (lhs_bit == rhs_bit)
-                    continue;
-                less = lhs_bit == runtime::Logic4::zero;
-                equal = false;
-                break;
-            }
-        }
-
-        const bool result = value->text == "<" ? less
-            : value->text == "<=" ? less || equal
-            : value->text == ">" ? !less && !equal
-                                  : !less;
-        return apply_context(runtime::PackedLogic4::from_aval_bval(
-            1U, result ? 1U : 0U, 0U), false);
+        const auto lhs_operand = resize_expression_operand(
+            *left, common_width, signed_comparison);
+        const auto rhs_operand = resize_expression_operand(
+            *right, common_width, signed_comparison);
+        if (!lhs_operand || !rhs_operand)
+            return std::nullopt;
+        using runtime::simir::BinaryOperator;
+        const auto comparison = value->text == "<"
+            ? (signed_comparison ? BinaryOperator::less_signed
+                                 : BinaryOperator::less_unsigned)
+            : value->text == "<="
+            ? (signed_comparison ? BinaryOperator::less_equal_signed
+                                 : BinaryOperator::less_equal_unsigned)
+            : value->text == ">"
+            ? (signed_comparison ? BinaryOperator::greater_signed
+                                 : BinaryOperator::greater_unsigned)
+            : (signed_comparison ? BinaryOperator::greater_equal_signed
+                                 : BinaryOperator::greater_equal_unsigned);
+        return apply_context(runtime::simir::binary_value(
+                                 comparison, *lhs_operand, *rhs_operand),
+            false);
     }
     const bool shift_operation = value->text == "<<"
         || value->text == "<<<" || value->text == ">>"
@@ -6100,12 +5971,7 @@ SystemVerilogClassHirExecution::execute(
     const std::optional<std::size_t> return_context_width)
 {
     constexpr std::string_view base_prefix { "@sv-base-constructor:" };
-    struct StringScope {
-        StringEnvironment*& slot;
-        StringEnvironment* saved;
-        ~StringScope() { slot = saved; }
-    } string_scope { strings_, strings_ };
-    strings_ = &string_environment;
+    const ScopedSlot string_scope { strings_, &string_environment };
     const auto assignment_context_width = [this, handle, &environment](
                                               const semantic::ExpressionId id)
         -> std::optional<std::size_t> {
@@ -6234,11 +6100,7 @@ SystemVerilogClassHirExecution::execute(
                 && type->packed_range->right) {
                 const auto left = *type->packed_range->left;
                 const auto right = *type->packed_range->right;
-                const auto distance = left >= right
-                    ? static_cast<std::uint64_t>(left)
-                        - static_cast<std::uint64_t>(right)
-                    : static_cast<std::uint64_t>(right)
-                        - static_cast<std::uint64_t>(left);
+                const auto distance = support::index_distance(left, right);
                 if (distance < std::numeric_limits<std::size_t>::max())
                     return static_cast<std::size_t>(distance + 1U);
             }
@@ -6428,10 +6290,9 @@ SystemVerilogClassHirExecution::execute(
                     auto ranges = property->type.unpacked_dimensions;
                     if (ranges.empty()
                         && property->type.target.target.valid()) {
-                        const auto definition = std::ranges::find(
-                            hir_.types(), property->type.target.target,
-                            &semantic::sv::TypeDefinition::id);
-                        if (definition != hir_.types().end()
+                        const auto* definition
+                            = type_definition(property->type.target.target);
+                        if (definition != nullptr
                             && definition->container) {
                             ranges = definition->container->static_dimensions;
                         }
@@ -6441,18 +6302,11 @@ SystemVerilogClassHirExecution::execute(
                             "class HIR fixed-array assignment requires one resolved dimension"
                         };
                     }
-                    const auto range_bound = [&](const auto& literal,
-                                                 const auto& id)
-                        -> std::optional<std::int64_t> {
-                        if (literal)
-                            return literal;
-                        if (!id)
-                            return std::nullopt;
-                        const auto value = evaluate_packed(
-                            *id, handle, environment);
-                        return value ? value->known_signed_value()
-                                     : std::nullopt;
-                    };
+                    const auto range_bound
+                        = [&](const auto& literal, const auto& id) {
+                              return evaluate_range_bound(
+                                  literal, id, handle, environment);
+                          };
                     const auto left = range_bound(
                         ranges.front().left,
                         ranges.front().left_expression);
@@ -6464,11 +6318,8 @@ SystemVerilogClassHirExecution::execute(
                             "class HIR fixed-array assignment bounds are not executable"
                         };
                     }
-                    const auto distance = *left >= *right
-                        ? static_cast<std::uint64_t>(*left)
-                            - static_cast<std::uint64_t>(*right)
-                        : static_cast<std::uint64_t>(*right)
-                            - static_cast<std::uint64_t>(*left);
+                    const auto distance
+                        = support::index_distance(*left, *right);
                     if (distance == std::numeric_limits<std::uint64_t>::max()
                         || !std::in_range<std::size_t>(distance + 1U)) {
                         throw std::invalid_argument {
@@ -7041,15 +6892,8 @@ SystemVerilogClassHirExecution::execute(
                         receiver->low_word().aval,
                         std::move(typed_actuals), false });
                 }
-                struct PendingFrameGuard {
-                    std::vector<PendingCallFrame>& frames;
-                    bool active;
-                    ~PendingFrameGuard()
-                    {
-                        if (active)
-                            frames.pop_back();
-                    }
-                } pending_guard { pending_call_frames_, typed_frame };
+                const PendingFrameGuard pending_guard { pending_call_frames_,
+                    typed_frame };
                 (void)invoke_function_(receiver->low_word().aval,
                     method_identity,
                     actuals, string_actuals, names, directions,
@@ -7143,23 +6987,7 @@ SystemVerilogClassHirExecution::execute(
                         "class HIR foreach index variable is absent"
                     };
                 }
-                const auto previous_index = environment.find(index_name);
-                const auto previous_value = previous_index == environment.end()
-                    ? std::optional<runtime::PackedLogic4> { }
-                    : std::optional { previous_index->second };
-                struct ForeachIndexGuard {
-                    PackedEnvironment& environment;
-                    std::string name;
-                    std::optional<runtime::PackedLogic4> previous;
-                    ~ForeachIndexGuard()
-                    {
-                        if (previous) {
-                            environment.insert_or_assign(name, *previous);
-                        } else {
-                            environment.erase(name);
-                        }
-                    }
-                } index_guard { environment, index_name, previous_value };
+                const ScopedMapEntry index_guard { environment, index_name };
                 auto index = collection->left;
                 for (;;) {
                     environment.insert_or_assign(index_name,
@@ -7348,7 +7176,9 @@ SystemVerilogClassHirExecution::execute(
                 *item, message, handle, environment, string_environment);
             if (report_) {
                 report_(report_process_, message,
-                    report_severity(item->assertion_severity), item->source);
+                    elaboration::runtime_assertion_severity(
+                        item->assertion_severity),
+                    item->source);
             }
             if (item->assertion_severity
                 == semantic::sv::AssertionSeverity::failure) {
@@ -7631,51 +7461,13 @@ std::string SystemVerilogClassHirExecution::format_display(
                 "class HIR display value is not executable"
             };
         }
-        auto runtime_format = runtime::simir::OutputFormat::decimal;
-        switch (format) {
-        case Format::decimal:
-            runtime_format = runtime::simir::OutputFormat::decimal;
-            break;
-        case Format::binary:
-            runtime_format = runtime::simir::OutputFormat::binary;
-            break;
-        case Format::hexadecimal:
-            runtime_format = runtime::simir::OutputFormat::hexadecimal;
-            break;
-        case Format::octal:
-            runtime_format = runtime::simir::OutputFormat::octal;
-            break;
-        case Format::character:
-            runtime_format = runtime::simir::OutputFormat::character;
-            break;
-        case Format::string:
-            runtime_format = runtime::simir::OutputFormat::string;
-            break;
-        case Format::real_scientific:
-            runtime_format = runtime::simir::OutputFormat::real_scientific;
-            break;
-        case Format::real_fixed:
-            runtime_format = runtime::simir::OutputFormat::real_fixed;
-            break;
-        case Format::real_general:
-            runtime_format = runtime::simir::OutputFormat::real_general;
-            break;
-        case Format::time:
-            runtime_format = runtime::simir::OutputFormat::time;
-            break;
-        case Format::unformatted2:
-            runtime_format = runtime::simir::OutputFormat::unformatted2;
-            break;
-        case Format::unformatted4:
-            runtime_format = runtime::simir::OutputFormat::unformatted4;
-            break;
-        case Format::pattern:
-        case Format::strength:
-        case Format::hierarchy:
+        if (format == Format::pattern || format == Format::strength
+            || format == Format::hierarchy) {
             throw std::invalid_argument {
                 "class HIR output conversion is unsupported"
             };
         }
+        const auto runtime_format = elaboration::runtime_output_format(format);
         return runtime::simir::make_formatted_output({ }, { }, runtime_format,
             *packed, source != nullptr && source->signed_value,
             suppress_leading_zero, minimum_width, left_justify, zero_pad,
@@ -7728,34 +7520,6 @@ std::string SystemVerilogClassHirExecution::format_report(
             "class HIR report format requires matching value arguments"
         };
     }
-    const auto semantic_format = [](const frontend::OutputFormat format_value) {
-        using FrontendFormat = frontend::OutputFormat;
-        using SemanticFormat = semantic::sv::OutputFormat;
-        switch (format_value) {
-        case FrontendFormat::Binary: return SemanticFormat::binary;
-        case FrontendFormat::Hexadecimal: return SemanticFormat::hexadecimal;
-        case FrontendFormat::Octal: return SemanticFormat::octal;
-        case FrontendFormat::Decimal: return SemanticFormat::decimal;
-        case FrontendFormat::Character: return SemanticFormat::character;
-        case FrontendFormat::String: return SemanticFormat::string;
-        case FrontendFormat::RealScientific:
-            return SemanticFormat::real_scientific;
-        case FrontendFormat::RealFixed: return SemanticFormat::real_fixed;
-        case FrontendFormat::RealGeneral:
-            return SemanticFormat::real_general;
-        case FrontendFormat::Hierarchy: return SemanticFormat::hierarchy;
-        case FrontendFormat::Time: return SemanticFormat::time;
-        case FrontendFormat::Unformatted2:
-            return SemanticFormat::unformatted2;
-        case FrontendFormat::Unformatted4:
-            return SemanticFormat::unformatted4;
-        case FrontendFormat::Pattern: return SemanticFormat::pattern;
-        case FrontendFormat::Strength: return SemanticFormat::strength;
-        }
-        throw std::invalid_argument {
-            "class HIR report format conversion is unsupported"
-        };
-    };
     semantic::sv::Statement display;
     display.output_text = parsed.trailing_text;
     std::size_t value_index { };
@@ -7772,7 +7536,7 @@ std::string SystemVerilogClassHirExecution::format_report(
         }
         display.output_values.push_back(semantic::sv::OutputValue {
             value,
-            semantic_format(conversion.format),
+            elaboration::hir_output_format(conversion.format),
             conversion.prefix,
             conversion.suppress_leading_zero,
             conversion.minimum_width,
@@ -8027,15 +7791,7 @@ SystemVerilogClassHirExecution::evaluate_string_call(
             static_dispatch ? 0U : receiver_handle,
             std::move(typed_actuals), false });
     }
-    struct PendingFrameGuard {
-        std::vector<PendingCallFrame>& frames;
-        bool active;
-        ~PendingFrameGuard()
-        {
-            if (active)
-                frames.pop_back();
-        }
-    } pending_guard { pending_call_frames_, typed_frame };
+    const PendingFrameGuard pending_guard { pending_call_frames_, typed_frame };
     if (static_dispatch) {
         if (!invoke_static_function_)
             return std::nullopt;
@@ -8094,28 +7850,25 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const ActualReferences actual_references,
     const std::optional<runtime::simir::ProcessId> report_process)
 {
-    const auto previous_report_process = report_process_;
-    if (report_process) {
-        report_process_ = report_process;
-    }
-    auto previous_hierarchy = std::move(active_hierarchy_);
-    active_hierarchy_ = method.canonical_identity;
-    struct ExecutionContextGuard {
-        std::optional<runtime::simir::ProcessId>& report_process;
-        std::optional<runtime::simir::ProcessId> previous_report_process;
-        std::string& hierarchy;
-        std::string previous_hierarchy;
-        ~ExecutionContextGuard()
-        {
-            report_process = previous_report_process;
-            hierarchy = std::move(previous_hierarchy);
-        }
-    } context_guard {
-        report_process_, previous_report_process, active_hierarchy_,
-        std::move(previous_hierarchy)
-    };
+    const ExecutionContextGuard context_guard { report_process_,
+        report_process, active_hierarchy_, method.canonical_identity };
     return invoke_function_impl(method, handle, actuals, string_actuals,
         actual_names_view, actual_directions_view, actual_references, nullptr);
+}
+
+std::optional<std::int64_t>
+SystemVerilogClassHirExecution::evaluate_range_bound(
+    const std::optional<std::int64_t>& literal,
+    const std::optional<semantic::ExpressionId>& expression,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment)
+{
+    if (literal)
+        return literal;
+    if (!expression)
+        return std::nullopt;
+    const auto value = evaluate_packed(*expression, handle, environment);
+    return value ? value->known_signed_value() : std::nullopt;
 }
 
 runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
@@ -8148,13 +7901,8 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
     }
     const std::span<const std::string> actual_names { names };
     const std::span<const std::uint8_t> actual_directions { directions };
-    const auto previous_string_return = string_return_;
-    string_return_ = method.return_type && is_string(*method.return_type);
-    struct StringReturnGuard {
-        bool& flag;
-        bool previous;
-        ~StringReturnGuard() { flag = previous; }
-    } string_return_guard { string_return_, previous_string_return };
+    const ScopedValue string_return_guard { string_return_,
+        method.return_type && is_string(*method.return_type) };
 
     if (depth_ >= maximum_class_call_depth)
         throw std::overflow_error { "SystemVerilog HIR class call depth exhausted" };
@@ -8267,32 +8015,13 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function_impl(
     if (actual_formals_output != nullptr)
         *actual_formals_output = actual_formals;
     StringEnvironment strings;
-    struct ActiveStringEnvironment {
-        StringEnvironment*& slot;
-        StringEnvironment* saved;
-        ~ActiveStringEnvironment() { slot = saved; }
-    } active_string_environment { strings_, strings_ };
-    strings_ = &strings;
+    const ScopedSlot active_string_environment { strings_, &strings };
     StringBindingEnvironment string_bindings;
-    struct ActiveStringBindings {
-        StringBindingEnvironment*& slot;
-        StringBindingEnvironment* saved;
-        ~ActiveStringBindings() { slot = saved; }
-    } active_string_bindings { string_bindings_, string_bindings_ };
-    string_bindings_ = &string_bindings;
-    struct ActivePackedEnvironment {
-        PackedEnvironment*& slot;
-        PackedEnvironment* saved;
-        ~ActivePackedEnvironment() { slot = saved; }
-    } active_packed_environment {
-        packed_environment_, packed_environment_ };
-    packed_environment_ = &environment;
-    struct ActiveCallValues {
-        CallValueEnvironment*& slot;
-        CallValueEnvironment* saved;
-        ~ActiveCallValues() { slot = saved; }
-    } active_call_values { call_values_, call_values_ };
-    call_values_ = &typed_actuals;
+    const ScopedSlot active_string_bindings { string_bindings_,
+        &string_bindings };
+    const ScopedSlot active_packed_environment { packed_environment_,
+        &environment };
+    const ScopedSlot active_call_values { call_values_, &typed_actuals };
     initialize_strings(method, handle, actual_formals, string_actuals,
         strings, string_bindings);
     const auto void_result = method.return_type
@@ -8415,26 +8144,12 @@ void SystemVerilogClassHirExecution::invoke_task(
     auto environment = bind_actuals(method, handle, actuals, { }, &actual_formals);
     std::vector<std::string> string_actuals(actuals.size());
     StringEnvironment strings;
-    struct ActiveStringEnvironment {
-        StringEnvironment*& slot;
-        StringEnvironment* saved;
-        ~ActiveStringEnvironment() { slot = saved; }
-    } active_string_environment { strings_, strings_ };
-    strings_ = &strings;
+    const ScopedSlot active_string_environment { strings_, &strings };
     StringBindingEnvironment string_bindings;
-    struct ActiveStringBindings {
-        StringBindingEnvironment*& slot;
-        StringBindingEnvironment* saved;
-        ~ActiveStringBindings() { slot = saved; }
-    } active_string_bindings { string_bindings_, string_bindings_ };
-    string_bindings_ = &string_bindings;
-    struct ActivePackedEnvironment {
-        PackedEnvironment*& slot;
-        PackedEnvironment* saved;
-        ~ActivePackedEnvironment() { slot = saved; }
-    } active_packed_environment {
-        packed_environment_, packed_environment_ };
-    packed_environment_ = &environment;
+    const ScopedSlot active_string_bindings { string_bindings_,
+        &string_bindings };
+    const ScopedSlot active_packed_environment { packed_environment_,
+        &environment };
     initialize_strings(method, handle, actual_formals, string_actuals,
         strings, string_bindings);
     const auto result = execute(
@@ -8465,26 +8180,12 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     }
     PackedEnvironment environment;
     StringEnvironment strings;
-    struct ActiveStringEnvironment {
-        StringEnvironment*& slot;
-        StringEnvironment* saved;
-        ~ActiveStringEnvironment() { slot = saved; }
-    } active_string_environment { strings_, strings_ };
-    strings_ = &strings;
+    const ScopedSlot active_string_environment { strings_, &strings };
     StringBindingEnvironment string_bindings;
-    struct ActiveStringBindings {
-        StringBindingEnvironment*& slot;
-        StringBindingEnvironment* saved;
-        ~ActiveStringBindings() { slot = saved; }
-    } active_string_bindings { string_bindings_, string_bindings_ };
-    string_bindings_ = &string_bindings;
-    struct ActivePackedEnvironment {
-        PackedEnvironment*& slot;
-        PackedEnvironment* saved;
-        ~ActivePackedEnvironment() { slot = saved; }
-    } active_packed_environment {
-        packed_environment_, packed_environment_ };
-    packed_environment_ = &environment;
+    const ScopedSlot active_string_bindings { string_bindings_,
+        &string_bindings };
+    const ScopedSlot active_packed_environment { packed_environment_,
+        &environment };
     if (constructor != selected.methods.end()) {
         std::vector<std::size_t> actual_formals;
         environment = bind_actuals(
@@ -8643,26 +8344,9 @@ bool SystemVerilogClassHirExecution::invoke_constructor(
     }
     if (selected == nullptr)
         return false;
-    const auto previous_report_process = report_process_;
-    if (report_process) {
-        report_process_ = report_process;
-    }
-    auto previous_hierarchy = std::move(active_hierarchy_);
-    active_hierarchy_ = std::string { specialization_identity } + "::new";
-    struct ExecutionContextGuard {
-        std::optional<runtime::simir::ProcessId>& report_process;
-        std::optional<runtime::simir::ProcessId> previous_report_process;
-        std::string& hierarchy;
-        std::string previous_hierarchy;
-        ~ExecutionContextGuard()
-        {
-            report_process = previous_report_process;
-            hierarchy = std::move(previous_hierarchy);
-        }
-    } context_guard {
-        report_process_, previous_report_process, active_hierarchy_,
-        std::move(previous_hierarchy)
-    };
+    const ExecutionContextGuard context_guard { report_process_,
+        report_process, active_hierarchy_,
+        std::string { specialization_identity } + "::new" };
     invoke_constructor_impl(
         *selected, handle, actuals, string_actuals, actual_names);
     return true;

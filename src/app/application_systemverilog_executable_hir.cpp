@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
+#include "../elaboration/hir_output_conversion.hpp"
 
 #include <concepts>
 #include <cstdint>
@@ -129,10 +130,9 @@ namespace {
                         continue;
                     }
                     for (const auto declaration_id : package.declarations) {
-                        const auto declaration = std::ranges::find(
-                            hir_.declarations(), declaration_id,
-                            &sv::Declaration::id);
-                        if (declaration == hir_.declarations().end()
+                        const auto* declaration
+                            = hir_.find_declaration(declaration_id);
+                        if (declaration == nullptr
                             || declaration->name != declaration_name
                             || std::ranges::find(
                                    result.overloads, declaration_id)
@@ -493,29 +493,33 @@ namespace {
             output.referenced_name.reset();
         }
 
-        void bind_implicit_class_property(
-            sv::Expression& output,
-            const frontend::Expression& input,
-            const semantic::ScopeId scope,
+        // `object.member` where `object` names one class-typed object: the
+        // lowered receiver, the class it names and the member's name
+        // (IEEE 1800-2017 8.4). `receiver_span_from_dot` narrows the
+        // receiver's span to the text before the dot.
+        struct ImplicitClassMember {
+            semantic::ExpressionId receiver;
+            const sv::ClassDeclaration* declaration { };
+            std::string_view member;
+        };
+        [[nodiscard]] std::optional<ImplicitClassMember> implicit_class_member(
+            const std::string_view dotted, const frontend::SourceSpan& span,
+            const bool receiver_span_from_dot, const semantic::ScopeId scope,
             const semantic::OriginId parent)
         {
-            if (output.kind != sv::ExpressionKind::name
-                || (output.referenced_name
-                    && output.referenced_name->selected)) {
-                return;
-            }
-            const auto dot = input.text.rfind('.');
-            if (dot == std::string::npos || dot == 0U
-                || dot + 1U >= input.text.size()
-                || input.text.substr(0U, dot).find('.')
-                    != std::string::npos) {
-                return;
+            const auto dot = dotted.rfind('.');
+            if (dot == std::string_view::npos || dot == 0U
+                || dot + 1U >= dotted.size()
+                || dotted.substr(0U, dot).find('.')
+                    != std::string_view::npos) {
+                return std::nullopt;
             }
             frontend::Expression receiver_input {
                 frontend::ExpressionKind::Identifier,
-                input.text.substr(0U, dot), { }, input.span
+                std::string { dotted.substr(0U, dot) }, { }, span
             };
-            if (receiver_input.span.end.offset
+            if (receiver_span_from_dot
+                && receiver_input.span.end.offset
                     >= receiver_input.span.begin.offset
                 && dot <= receiver_input.span.end.offset
                         - receiver_input.span.begin.offset) {
@@ -530,56 +534,78 @@ namespace {
             const auto receiver_id = expression(
                 receiver_input, scope, parent);
             if (!receiver_id) {
-                return;
+                return std::nullopt;
             }
             const auto receiver = std::ranges::find(
                 hir_.expressions(), *receiver_id, &sv::Expression::id);
             if (receiver == hir_.expressions().end()
                 || !receiver->referenced_name
                 || !receiver->referenced_name->selected) {
-                return;
+                return std::nullopt;
             }
-            const auto object = std::ranges::find(
-                hir_.declarations(), *receiver->referenced_name->selected,
-                &sv::Declaration::id);
-            if (object == hir_.declarations().end() || !object->type) {
-                return;
+            const auto* object
+                = hir_.find_declaration(*receiver->referenced_name->selected);
+            if (object == nullptr || !object->type) {
+                return std::nullopt;
             }
             const auto identity = !object->type->class_identity.empty()
                 ? std::string_view { object->type->class_identity }
                 : std::string_view { object->type->target.spelling };
             const auto* declaration = visible_class(identity, scope);
             if (declaration == nullptr) {
+                return std::nullopt;
+            }
+            return ImplicitClassMember {
+                *receiver_id, declaration, dotted.substr(dot + 1U) };
+        }
+
+        // The one element of `range` satisfying `predicate`, or null.
+        template <typename Range, typename Predicate>
+        [[nodiscard]] static auto* unique_match(
+            Range& range, const Predicate& predicate)
+        {
+            const auto found = std::ranges::find_if(range, predicate);
+            return found == range.end()
+                    || std::ranges::any_of(
+                        std::next(found), range.end(), predicate)
+                ? nullptr
+                : &*found;
+        }
+
+        void bind_implicit_class_property(
+            sv::Expression& output,
+            const frontend::Expression& input,
+            const semantic::ScopeId scope,
+            const semantic::OriginId parent)
+        {
+            if (output.kind != sv::ExpressionKind::name
+                || (output.referenced_name
+                    && output.referenced_name->selected)) {
                 return;
             }
-            const auto member = std::string_view { input.text }.substr(
-                dot + 1U);
-            const auto property = std::ranges::find_if(
-                declaration->properties,
+            const auto access = implicit_class_member(
+                input.text, input.span, true, scope, parent);
+            if (!access) {
+                return;
+            }
+            const auto* property = unique_match(
+                access->declaration->properties,
                 [&](const sv::ClassProperty& candidate) {
-                    return candidate.name == member
+                    return candidate.name == access->member
                         && !candidate.static_storage
                         && candidate.visibility
                             == sv::ClassVisibility::public_access;
                 });
-            if (property == declaration->properties.end()
-                || std::ranges::any_of(
-                    std::next(property), declaration->properties.end(),
-                    [&](const sv::ClassProperty& candidate) {
-                        return candidate.name == member
-                            && !candidate.static_storage
-                            && candidate.visibility
-                                == sv::ClassVisibility::public_access;
-                    })) {
+            if (property == nullptr) {
                 return;
             }
             output.kind = sv::ExpressionKind::class_property;
             output.text = "@sv-property:" + property->canonical_identity;
-            output.class_identity = declaration->canonical_identity;
+            output.class_identity = access->declaration->canonical_identity;
             output.class_member_identity = property->canonical_identity;
             output.class_checked = true;
             output.referenced_name.reset();
-            output.operands = { *receiver_id };
+            output.operands = { access->receiver };
         }
 
         [[nodiscard]] std::optional<semantic::ExpressionId>
@@ -595,63 +621,21 @@ namespace {
                 || input.task_name.front() == '@') {
                 return std::nullopt;
             }
-            const auto dot = input.task_name.rfind('.');
-            if (dot == std::string::npos || dot == 0U
-                || dot + 1U >= input.task_name.size()
-                || input.task_name.substr(0U, dot).find('.')
-                    != std::string::npos) {
+            const auto access = implicit_class_member(
+                input.task_name, input.span, false, scope, parent);
+            if (!access) {
                 return std::nullopt;
             }
-            frontend::Expression receiver_input {
-                frontend::ExpressionKind::Identifier,
-                input.task_name.substr(0U, dot), { }, input.span
-            };
-            const auto receiver_id = expression(
-                receiver_input, scope, parent);
-            if (!receiver_id) {
-                return std::nullopt;
-            }
-            const auto receiver = std::ranges::find(
-                hir_.expressions(), *receiver_id, &sv::Expression::id);
-            if (receiver == hir_.expressions().end()
-                || !receiver->referenced_name
-                || !receiver->referenced_name->selected) {
-                return std::nullopt;
-            }
-            const auto object = std::ranges::find(
-                hir_.declarations(), *receiver->referenced_name->selected,
-                &sv::Declaration::id);
-            if (object == hir_.declarations().end() || !object->type) {
-                return std::nullopt;
-            }
-            const auto identity = !object->type->class_identity.empty()
-                ? std::string_view { object->type->class_identity }
-                : std::string_view { object->type->target.spelling };
-            const auto* declaration = visible_class(identity, scope);
-            if (declaration == nullptr) {
-                return std::nullopt;
-            }
-            const auto member = std::string_view { input.task_name }.substr(
-                dot + 1U);
-            const auto method = std::ranges::find_if(
-                declaration->methods,
+            const auto* method = unique_match(
+                access->declaration->methods,
                 [&](const sv::ClassMethod& candidate) {
-                    return candidate.name == member
+                    return candidate.name == access->member
                         && candidate.kind == sv::ClassMethodKind::task
                         && !candidate.static_method
                         && candidate.visibility
                             == sv::ClassVisibility::public_access;
                 });
-            if (method == declaration->methods.end()
-                || std::ranges::any_of(
-                    std::next(method), declaration->methods.end(),
-                    [&](const sv::ClassMethod& candidate) {
-                        return candidate.name == member
-                            && candidate.kind == sv::ClassMethodKind::task
-                            && !candidate.static_method
-                            && candidate.visibility
-                                == sv::ClassVisibility::public_access;
-                    })) {
+            if (method == nullptr) {
                 return std::nullopt;
             }
             output.task = sv::Name {
@@ -659,7 +643,7 @@ namespace {
                 source(input.span), method->declaration,
                 { method->declaration }
             };
-            return receiver_id;
+            return access->receiver;
         }
 
         [[nodiscard]] std::optional<semantic::ExpressionId> expression(
@@ -750,45 +734,16 @@ namespace {
             output.class_identity = input.nominal_type;
             output.signed_value = signed_value;
             output.clocking_edge = clocking_edge;
-            const auto bind_class_operation = [&](const std::string_view prefix) {
-                if (!input.text.starts_with(prefix))
-                    return false;
-                const auto payload = input.text.substr(prefix.size());
-                output.class_member_identity = payload;
-                if (output.class_identity.empty()) {
-                    const auto separator = payload.rfind("::");
-                    output.class_identity = separator == std::string::npos
-                        ? payload
-                        : payload.substr(0, separator);
-                }
-                return true;
-            };
-            if (!bind_class_operation("@sv-new:")
-                && !bind_class_operation("@sv-dollar-cast:")
-                && !bind_class_operation("@sv-property:")
-                && !bind_class_operation("@sv-static-property:")
-                && !bind_class_operation("@sv-base-method:")
-                && !bind_class_operation("@sv-method:")
-                && !bind_class_operation("@sv-static-method:")) {
-                output.class_member_identity.clear();
-            }
+            systemverilog_hir_detail::bind_systemverilog_class_operation(
+                output, input.text);
             bind_class_allocation(output);
             output.class_checked = output.kind == sv::ExpressionKind::class_cast
                 || output.kind == sv::ExpressionKind::class_property
                 || output.kind == sv::ExpressionKind::class_method_call;
             output.decoded_string = input.decoded_string;
-            if (input.systemverilog_decimal_literal) {
-                const auto& literal = *input.systemverilog_decimal_literal;
-                output.decimal_literal = sv::DecimalLiteral {
-                    literal.kind
-                            == frontend::SystemVerilogDecimalLiteralKind::Time
-                        ? sv::DecimalLiteralKind::time
-                        : sv::DecimalLiteralKind::real,
-                    literal.digits,
-                    literal.decimal_exponent,
-                    literal.time_unit,
-                };
-            }
+            output.decimal_literal
+                = systemverilog_hir_detail::systemverilog_decimal_literal(
+                    input.systemverilog_decimal_literal);
             output.scalar_kind = static_cast<sv::ScalarKind>(
                 input.systemverilog_scalar_kind);
             output.generated_text
@@ -815,10 +770,9 @@ namespace {
                 && output.kind == sv::ExpressionKind::name
                 && output.referenced_name
                 && output.referenced_name->selected) {
-                const auto callable = std::ranges::find(hir_.declarations(),
-                    *output.referenced_name->selected,
-                    &sv::Declaration::id);
-                if (callable != hir_.declarations().end()
+                const auto* callable
+                    = hir_.find_declaration(*output.referenced_name->selected);
+                if (callable != nullptr
                     && callable->callable && callable->callable->function
                     && callable->callable->formals.empty()) {
                     bool inside = false;
@@ -1156,60 +1110,6 @@ namespace {
             return static_cast<sv::CaseQualifier>(qualifier);
         }
 
-        [[nodiscard]] sv::AssertionSeverity assertion_severity(
-            const frontend::AssertionSeverity severity) const noexcept
-        {
-            switch (severity) {
-            case frontend::AssertionSeverity::Note:
-                return sv::AssertionSeverity::note;
-            case frontend::AssertionSeverity::Warning:
-                return sv::AssertionSeverity::warning;
-            case frontend::AssertionSeverity::Error:
-                return sv::AssertionSeverity::error;
-            case frontend::AssertionSeverity::Failure:
-                return sv::AssertionSeverity::failure;
-            }
-            return sv::AssertionSeverity::error;
-        }
-
-        [[nodiscard]] sv::OutputFormat output_format(
-            const frontend::OutputFormat format) const noexcept
-        {
-            switch (format) {
-            case frontend::OutputFormat::Binary:
-                return sv::OutputFormat::binary;
-            case frontend::OutputFormat::Hexadecimal:
-                return sv::OutputFormat::hexadecimal;
-            case frontend::OutputFormat::Octal:
-                return sv::OutputFormat::octal;
-            case frontend::OutputFormat::Decimal:
-                return sv::OutputFormat::decimal;
-            case frontend::OutputFormat::Character:
-                return sv::OutputFormat::character;
-            case frontend::OutputFormat::String:
-                return sv::OutputFormat::string;
-            case frontend::OutputFormat::RealScientific:
-                return sv::OutputFormat::real_scientific;
-            case frontend::OutputFormat::RealFixed:
-                return sv::OutputFormat::real_fixed;
-            case frontend::OutputFormat::RealGeneral:
-                return sv::OutputFormat::real_general;
-            case frontend::OutputFormat::Hierarchy:
-                return sv::OutputFormat::hierarchy;
-            case frontend::OutputFormat::Time:
-                return sv::OutputFormat::time;
-            case frontend::OutputFormat::Unformatted2:
-                return sv::OutputFormat::unformatted2;
-            case frontend::OutputFormat::Unformatted4:
-                return sv::OutputFormat::unformatted4;
-            case frontend::OutputFormat::Pattern:
-                return sv::OutputFormat::pattern;
-            case frontend::OutputFormat::Strength:
-                return sv::OutputFormat::strength;
-            }
-            return sv::OutputFormat::decimal;
-        }
-
         [[nodiscard]] semantic::TypeId find_type(
             const semantic::ScopeId scope,
             const std::string_view spelling,
@@ -1302,41 +1202,8 @@ namespace {
             // an empty named_type and retain their use-site shape below.
             const bool resolved_named_type = !input.named_type.empty()
                 && output.target.target.valid();
-            const auto type_form = [&] {
-                if (input.systemverilog_container) {
-                    switch (input.systemverilog_container->kind) {
-                    case frontend::SystemVerilogContainerKind::DynamicArray:
-                        return sv::TypeForm::dynamic_array;
-                    case frontend::SystemVerilogContainerKind::Queue:
-                        return sv::TypeForm::queue;
-                    case frontend::SystemVerilogContainerKind::AssociativeArray:
-                        return sv::TypeForm::associative_array;
-                    case frontend::SystemVerilogContainerKind::StaticArray:
-                        return sv::TypeForm::static_array;
-                    }
-                }
-                switch (input.packed_aggregate) {
-                case frontend::PackedAggregateKind::Struct:
-                    return sv::TypeForm::packed_structure;
-                case frontend::PackedAggregateKind::Union:
-                    return sv::TypeForm::packed_union;
-                case frontend::PackedAggregateKind::TaggedUnion:
-                    return sv::TypeForm::tagged_union;
-                case frontend::PackedAggregateKind::UnpackedStruct:
-                    return sv::TypeForm::unpacked_structure;
-                case frontend::PackedAggregateKind::UnpackedUnion:
-                    return sv::TypeForm::unpacked_union;
-                case frontend::PackedAggregateKind::None:
-                    break;
-                }
-                if (!input.enumeration_literals.empty()) {
-                    return sv::TypeForm::enumeration;
-                }
-                if (input.domain == frontend::ValueDomain::String) {
-                    return sv::TypeForm::string;
-                }
-                return sv::TypeForm::packed_integral;
-            }();
+            const auto type_form
+                = systemverilog_hir_detail::systemverilog_type_form(input);
             output.value_form = resolved_named_type
                 ? std::optional<sv::TypeForm> { }
                 : std::optional<sv::TypeForm> { type_form };
@@ -1347,26 +1214,15 @@ namespace {
             output.virtual_interface = input.systemverilog_virtual_interface;
             output.interface_type = input.systemverilog_interface_type;
             output.interface_modport = input.systemverilog_interface_modport;
-            for (const auto& input_actual :
-                input.systemverilog_class_parameter_actuals) {
-                sv::ActualAssociation actual;
-                actual.formal = input_actual.name;
-                actual.source = source(input_actual.span);
-                if (input_actual.type_actual) {
-                    actual.kind = sv::ActualKind::type;
-                    actual.type = type_reference(
-                        *input_actual.type_actual, input_actual.span,
-                        scope, parent);
-                } else if (input_actual.value.kind
-                    == frontend::ExpressionKind::Invalid) {
-                    actual.kind = sv::ActualKind::default_value;
-                } else {
-                    actual.expression = expression(
-                        input_actual.value, scope, parent);
-                }
-                output.interface_parameter_actuals.push_back(
-                    std::move(actual));
-            }
+            output.interface_parameter_actuals = systemverilog_hir_detail::
+                systemverilog_class_parameter_actuals(
+                    input, [&](const auto& span) { return source(span); },
+                    [&](const auto& type, const auto& span) {
+                        return type_reference(type, span, scope, parent);
+                    },
+                    [&](const auto& value) {
+                        return expression(value, scope, parent);
+                    });
             output.systemverilog_net_type = input.systemverilog_net_type;
             output.systemverilog_resolution_function
                 = input.systemverilog_resolution_function;
@@ -1676,9 +1532,8 @@ namespace {
                 && !output.task.overloads.empty()
                 && std::ranges::all_of(output.task.overloads,
                     [&](const semantic::DeclarationId id) {
-                        const auto declaration = std::ranges::find(
-                            hir_.declarations(), id, &sv::Declaration::id);
-                        return declaration != hir_.declarations().end()
+                        const auto* declaration = hir_.find_declaration(id);
+                        return declaration != nullptr
                             && declaration->callable
                             && declaration->callable->function;
                     });
@@ -1777,7 +1632,8 @@ namespace {
                     item, child_scope, statement_origin));
             }
             output.assertion_message = input.assertion_message;
-            output.assertion_severity = assertion_severity(input.assertion_severity);
+            output.assertion_severity
+                = elaboration::hir_assertion_severity(input.assertion_severity);
             output.assertion_has_pass_action = input.assertion_has_pass_action;
             output.assertion_has_failure_action = input.assertion_has_failure_action;
             output.output_text = input.output_text;
@@ -1786,7 +1642,8 @@ namespace {
             output.output_newline = input.output_newline;
             output.output_postponed = input.output_postponed;
             if (input.output_format) {
-                output.output_format = output_format(*input.output_format);
+                output.output_format
+                    = elaboration::hir_output_format(*input.output_format);
             }
             output.output_prefix = input.output_prefix;
             output.output_suffix = input.output_suffix;
@@ -1808,7 +1665,7 @@ namespace {
                     || item.format == frontend::OutputFormat::Hierarchy
                     || item.format == frontend::OutputFormat::Time) {
                     output.output_values.push_back({ value,
-                        output_format(item.format),
+                        elaboration::hir_output_format(item.format),
                         item.prefix,
                         item.suppress_leading_zero,
                         item.minimum_width,

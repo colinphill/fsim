@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 namespace fsim::frontend {
 
@@ -13,32 +14,19 @@ namespace {
 
 [[nodiscard]] std::string context_identifier(const std::string_view spelling)
 {
-    if (spelling.size() >= 2U && spelling.front() == '\\'
-        && spelling.back() == '\\') {
-        return std::string { spelling };
-    }
-    return detail::vhdl_name(spelling);
+    return support::is_extended_vhdl_identifier(spelling)
+        ? std::string { spelling }
+        : detail::vhdl_name(spelling);
 }
 
 [[nodiscard]] std::size_t selected_name_part_count(
     const std::string_view spelling)
 {
-    std::size_t count { 1U };
-    bool in_extended_identifier { };
-    for (std::size_t index { }; index < spelling.size(); ++index) {
-        if (spelling[index] == '\\') {
-            if (in_extended_identifier && index + 1U < spelling.size()
-                && spelling[index + 1U] == '\\') {
-                ++index;
-                continue;
-            }
-            in_extended_identifier = !in_extended_identifier;
-        } else if (spelling[index] == '.'
-            && !in_extended_identifier) {
-            ++count;
-        }
-    }
-    return count;
+    std::size_t count { };
+    return support::visit_vhdl_selected_name(spelling,
+               [&](std::string_view) { ++count; })
+        ? count
+        : 0U;
 }
 
 // A generic subprogram declares its generic clause after the designator
@@ -378,8 +366,7 @@ DesignUnit VhdlParser::parse_context_declaration(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("context name");
     unit.name = vhdl_name(name.text);
-    unit.vhdl_extended_name = name.text.size() >= 2U
-        && name.text.front() == '\\' && name.text.back() == '\\';
+    unit.vhdl_extended_name = support::is_extended_vhdl_identifier(name.text);
     expect_keyword("is", true, "FSIM-VHDL-PARSE-090");
     while (!at_end() && !keyword("end", 0, true)) {
         if (any_keyword({ "library", "use", "context" }, true)) {
@@ -417,8 +404,7 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("package name");
     unit.name = vhdl_name(name.text);
-    unit.vhdl_extended_name = name.text.size() >= 2U
-        && name.text.front() == '\\' && name.text.back() == '\\';
+    unit.vhdl_extended_name = support::is_extended_vhdl_identifier(name.text);
     if (body) {
         // Package bodies share the package design-unit kind so existing package
         // lookup stays stable; primary_name distinguishes the secondary body
@@ -618,8 +604,7 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("entity name");
     unit.name = vhdl_name(name.text);
-    unit.vhdl_extended_name = name.text.size() >= 2U
-        && name.text.front() == '\\' && name.text.back() == '\\';
+    unit.vhdl_extended_name = support::is_extended_vhdl_identifier(name.text);
     expect_keyword("is", true, "FSIM-VHDL-PARSE-002");
 
     bool entity_ports_seen = false;
@@ -792,6 +777,22 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
     const bool expect_terminating_semicolon)
 {
     expect(TokenKind::LeftParen, "'(' after generic", "FSIM-VHDL-PARSE-050");
+    const auto end_declaration = [&] {
+        if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+            error(current(), "FSIM-VHDL-PARSE-052",
+                "expected ';' between generic declarations");
+            skip_to_semicolon();
+        }
+    };
+    // An interface package or subprogram generic, named by its declaration.
+    const auto add_interface_generic = [&](ParameterDeclaration generic) {
+        Token name;
+        name.kind = TokenKind::Identifier;
+        name.text = generic.name;
+        name.span = generic.span;
+        add_vhdl_generic(unit, std::move(generic), name);
+        end_declaration();
+    };
     while (!at_end() && !at(TokenKind::RightParen)) {
         if (match_keyword("package", true)) {
             const auto package_start = previous();
@@ -800,60 +801,22 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
                 "an interface package generic",
                 "select VHDL-2008 or replace it with an ordinary value generic");
             auto generic = parse_vhdl_interface_package(package_start);
-            Token name;
-            name.kind = TokenKind::Identifier;
-            name.text = generic.name;
-            name.span = generic.span;
-            add_vhdl_generic(unit, std::move(generic), name);
-            if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
-                error(current(), "FSIM-VHDL-PARSE-052",
-                    "expected ';' between generic declarations");
-                skip_to_semicolon();
-            }
+            add_interface_generic(std::move(generic));
             continue;
         }
-        if ((keyword("pure", 0, true) || keyword("impure", 0, true)) && keyword("function", 1, true)) {
-            const bool pure = match_keyword("pure", true);
-            if (!pure) {
-                (void)match_keyword("impure", true);
-            }
+        if (keyword("function", 0, true)
+            || ((keyword("pure", 0, true) || keyword("impure", 0, true))
+                && keyword("function", 1, true))) {
+            const bool pure = !match_keyword("impure", true);
+            (void)match_keyword("pure", true);
             const auto function_start = expect_keyword("function", true);
             require_vhdl_standard(
                 function_start, VhdlStandard::Vhdl2008,
                 "an interface function generic",
                 "select VHDL-2008 or declare the subprogram outside the generic "
                 "interface");
-            auto generic = parse_vhdl_interface_function(function_start, pure);
-            Token name;
-            name.kind = TokenKind::Identifier;
-            name.text = generic.name;
-            name.span = generic.span;
-            add_vhdl_generic(unit, std::move(generic), name);
-            if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
-                error(current(), "FSIM-VHDL-PARSE-052",
-                    "expected ';' between generic declarations");
-                skip_to_semicolon();
-            }
-            continue;
-        }
-        if (match_keyword("function", true)) {
-            const auto function_start = previous();
-            require_vhdl_standard(
-                function_start, VhdlStandard::Vhdl2008,
-                "an interface function generic",
-                "select VHDL-2008 or declare the subprogram outside the generic "
-                "interface");
-            auto generic = parse_vhdl_interface_function(function_start, true);
-            Token name;
-            name.kind = TokenKind::Identifier;
-            name.text = generic.name;
-            name.span = generic.span;
-            add_vhdl_generic(unit, std::move(generic), name);
-            if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
-                error(current(), "FSIM-VHDL-PARSE-052",
-                    "expected ';' between generic declarations");
-                skip_to_semicolon();
-            }
+            add_interface_generic(
+                parse_vhdl_interface_function(function_start, pure));
             continue;
         }
         if (match_keyword("procedure", true)) {
@@ -864,16 +827,7 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
                 "select VHDL-2008 or declare the subprogram outside the generic "
                 "interface");
             auto generic = parse_vhdl_interface_procedure(procedure_start);
-            Token name;
-            name.kind = TokenKind::Identifier;
-            name.text = generic.name;
-            name.span = generic.span;
-            add_vhdl_generic(unit, std::move(generic), name);
-            if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
-                error(current(), "FSIM-VHDL-PARSE-052",
-                    "expected ';' between generic declarations");
-                skip_to_semicolon();
-            }
+            add_interface_generic(std::move(generic));
             continue;
         }
         if (match_keyword("type", true)) {
@@ -903,11 +857,7 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
             }
             generic.span = span_from(type_start, previous());
             add_vhdl_generic(unit, std::move(generic), name);
-            if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
-                error(current(), "FSIM-VHDL-PARSE-052",
-                    "expected ';' between generic declarations");
-                skip_to_semicolon();
-            }
+            end_declaration();
             continue;
         }
         InterfaceObjectClass object_class = InterfaceObjectClass::Constant;
@@ -1756,13 +1706,12 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
     unit.language = Language::Vhdl2008;
     const auto name = expect_identifier("architecture name");
     unit.name = vhdl_name(name.text);
-    unit.vhdl_extended_name = name.text.size() >= 2U
-        && name.text.front() == '\\' && name.text.back() == '\\';
+    unit.vhdl_extended_name = support::is_extended_vhdl_identifier(name.text);
     expect_keyword("of", true, "FSIM-VHDL-PARSE-014");
     const auto entity = expect_identifier("entity name");
     unit.primary_name = vhdl_name(entity.text);
-    unit.vhdl_extended_primary_name = entity.text.size() >= 2U
-        && entity.text.front() == '\\' && entity.text.back() == '\\';
+    unit.vhdl_extended_primary_name
+        = support::is_extended_vhdl_identifier(entity.text);
     expect_keyword("is", true, "FSIM-VHDL-PARSE-015");
 
     while (!at_end() && !keyword("begin", 0, true)) {

@@ -672,48 +672,6 @@ namespace {
         return value;
     }
 
-    frontend::PortDirection compiled_port_direction(
-        const semantic::sv::Direction direction) noexcept
-    {
-        switch (direction) {
-        case semantic::sv::Direction::input:
-            return frontend::PortDirection::Input;
-        case semantic::sv::Direction::output:
-            return frontend::PortDirection::Output;
-        case semantic::sv::Direction::inout:
-            return frontend::PortDirection::Inout;
-        case semantic::sv::Direction::ref:
-            return frontend::PortDirection::Ref;
-        case semantic::sv::Direction::unknown:
-            break;
-        }
-        return frontend::PortDirection::Unknown;
-    }
-
-    frontend::PortDirection compiled_port_direction(
-        const semantic::sv::Declaration& declaration) noexcept
-    {
-        const auto direction = compiled_port_direction(declaration.direction);
-        if (direction != frontend::PortDirection::Unknown
-            || declaration.form != semantic::sv::DeclarationForm::port) {
-            return direction;
-        }
-        const auto interface_port = !declaration.interface_type.empty()
-            || (declaration.type
-                && declaration.type->target.spelling == "interface");
-        return interface_port
-            ? frontend::PortDirection::Inout
-            : frontend::PortDirection::Unknown;
-    }
-
-    std::string_view compiled_systemverilog_library(
-        const semantic::sv::Unit& unit)
-    {
-        return unit.library.empty()
-            ? std::string_view { "work" }
-            : std::string_view { unit.library };
-    }
-
     template<typename LocalMap, typename GlobalMap>
     bool register_static_storage_alias(LocalMap& local, GlobalMap& global,
         const std::string& name, const std::string& path,
@@ -1029,13 +987,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 }
                 const auto spelling
                     = std::string_view { current->target.spelling };
-                if (spelling == "wire" || spelling == "tri"
-                    || spelling == "tri0" || spelling == "tri1"
-                    || spelling == "wand" || spelling == "triand"
-                    || spelling == "wor" || spelling == "trior"
-                    || spelling == "trireg" || spelling == "uwire"
-                    || spelling == "supply0"
-                    || spelling == "supply1") {
+                if (semantic::sv::is_builtin_net_kind(spelling)) {
                     return spelling;
                 }
                 if (current->container_element_types.size() != 1U) {
@@ -1156,15 +1108,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     const auto builtin_net_kind = declaration.type
         ? net_type_for(declaration, *declaration.type)
         : std::string_view { };
-    const auto is_builtin_net_kind = [](const std::string_view kind) {
-        constexpr std::array<std::string_view, 12> kinds {
-            "wire", "tri", "tri0", "tri1", "wand", "triand",
-            "wor", "trior", "trireg", "uwire", "supply0", "supply1"
-        };
-        return std::ranges::find(kinds, kind) != kinds.end();
-    };
     if (declaration.type
-        && is_builtin_net_kind(builtin_net_kind)) {
+        && semantic::sv::is_builtin_net_kind(builtin_net_kind)) {
         struct BuiltinNetTypeProperties final {
             bool packed_integral { };
             bool four_state { };
@@ -2046,11 +1991,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         ? "event"
         : declaration.type->target.spelling;
     info.source_domain = domain;
-    auto scalar_kind = compiled_systemverilog_scalar_kind(
+    auto scalar_kind = frontend::systemverilog_scalar_kind(
         effective_type.target.spelling);
     if (scalar_kind
         == frontend::SystemVerilogScalarKind::None) {
-        scalar_kind = compiled_systemverilog_scalar_kind(
+        scalar_kind = frontend::systemverilog_scalar_kind(
             declaration.type->target.spelling);
     }
     if (declaration.type->virtual_interface

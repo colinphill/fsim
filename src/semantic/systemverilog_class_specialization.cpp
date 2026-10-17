@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -674,9 +675,7 @@ private:
             && type.packed_range->right) {
             const auto left = *type.packed_range->left;
             const auto right = *type.packed_range->right;
-            const auto distance = left >= right
-                ? static_cast<std::uint64_t>(left - right)
-                : static_cast<std::uint64_t>(right - left);
+            const auto distance = support::index_distance(left, right);
             if (distance >= std::numeric_limits<std::size_t>::max()) {
                 return std::nullopt;
             }

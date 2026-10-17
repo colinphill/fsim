@@ -10,30 +10,7 @@
 namespace fsim::app::workspace::detail {
 namespace {
 
-constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchemaV1 { {
-    { "metadata",
-        "CREATE TABLE metadata(version INTEGER NOT NULL, library TEXT NOT NULL)" },
-    { "artifacts",
-        "CREATE TABLE artifacts(id TEXT PRIMARY KEY NOT NULL, kind INTEGER NOT NULL, "
-        "path TEXT NOT NULL, fingerprint TEXT NOT NULL)" },
-    { "sources",
-        "CREATE TABLE sources(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
-        "source TEXT NOT NULL, PRIMARY KEY(owner, source))" },
-    { "units",
-        "CREATE TABLE units(identity TEXT PRIMARY KEY NOT NULL, "
-        "owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
-        "language TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, "
-        "primary_name TEXT NOT NULL, architecture TEXT NOT NULL, artifact TEXT NOT NULL, "
-        "checksum TEXT NOT NULL, standard TEXT NOT NULL, profile TEXT NOT NULL, source TEXT NOT NULL)" },
-    { "dependencies",
-        "CREATE TABLE dependencies(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
-        "ordinal INTEGER NOT NULL, library TEXT NOT NULL, language TEXT NOT NULL, kind TEXT NOT NULL, "
-        "name TEXT NOT NULL, primary_name TEXT NOT NULL, architecture TEXT NOT NULL, "
-        "artifact TEXT NOT NULL, checksum TEXT NOT NULL, standard TEXT NOT NULL, profile TEXT NOT NULL, "
-        "fingerprint TEXT NOT NULL, PRIMARY KEY(owner, ordinal))" },
-} };
-
-constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchemaV2 { {
+constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchema { {
     { "metadata",
         "CREATE TABLE metadata(version INTEGER NOT NULL, library TEXT NOT NULL)" },
     { "artifacts",
@@ -119,7 +96,7 @@ bool Database::execute(const char* sql, std::string& error)
 
 bool Database::initialize_schema(std::string& error)
 {
-    for (const auto& [unused, sql] : kSchemaV2) {
+    for (const auto& [unused, sql] : kSchema) {
         (void)unused;
         if (!execute(sql, error))
             return false;
@@ -140,64 +117,18 @@ bool Database::validate_schema(std::string& error)
         const auto name = query.text(1, error);
         const auto sql = query.text(2, error);
         bool found = false;
-        for (const auto& [expected_name, expected_sql] : kSchemaV1) {
+        for (const auto& [expected_name, expected_sql] : kSchema) {
             if (name == expected_name && sql == expected_sql)
                 found = true;
         }
-        for (const auto& [expected_name, expected_sql] : kSchemaV2) {
-            if (name == expected_name && sql == expected_sql)
-                found = true;
-        }
-        if (!found || type != "table" || ++count > kSchemaV2.size()) {
+        if (!found || type != "table" || ++count > kSchema.size()) {
             error = "workspace library catalog has an unsupported schema";
             return false;
         }
     }
-    if (status != SQLITE_DONE || count != kSchemaV2.size()) {
+    if (status != SQLITE_DONE || count != kSchema.size()) {
         if (error.empty())
             error = "workspace library catalog schema is incomplete";
-        return false;
-    }
-    // The exact `units`/`dependencies` CREATE statements identify the format;
-    // reject mixed tables even if each table individually appeared in one set.
-    Statement shape { *this,
-        "SELECT sql FROM sqlite_schema WHERE type='table' AND name='units'", error };
-    if (!shape || shape.step(error) != SQLITE_ROW) {
-        return false;
-    }
-    const auto unit_sql = shape.text(0, error);
-    if (!unit_sql || shape.step(error) != SQLITE_DONE) {
-        return false;
-    }
-    const auto v1 = std::ranges::find_if(kSchemaV1, [](const auto& item) {
-        return item.first == "units";
-    });
-    const auto v2 = std::ranges::find_if(kSchemaV2, [](const auto& item) {
-        return item.first == "units";
-    });
-    Statement dependency_shape { *this,
-        "SELECT sql FROM sqlite_schema WHERE type='table' AND name='dependencies'",
-        error };
-    if (!dependency_shape
-        || dependency_shape.step(error) != SQLITE_ROW) {
-        return false;
-    }
-    const auto dependency_sql = dependency_shape.text(0, error);
-    if (!dependency_sql || dependency_shape.step(error) != SQLITE_DONE) {
-        return false;
-    }
-    const auto v1_dependencies = std::ranges::find_if(
-        kSchemaV1, [](const auto& item) { return item.first == "dependencies"; });
-    const auto v2_dependencies = std::ranges::find_if(
-        kSchemaV2, [](const auto& item) { return item.first == "dependencies"; });
-    if (unit_sql == v1->second
-        && dependency_sql == v1_dependencies->second) {
-        schema_version = 1;
-    } else if (unit_sql == v2->second
-        && dependency_sql == v2_dependencies->second) {
-        schema_version = 2;
-    } else {
-        error = "workspace library catalog has an unsupported schema";
         return false;
     }
     return true;
@@ -282,8 +213,7 @@ std::optional<int> Statement::integer(const int index, std::string& error)
 }
 
 std::optional<library::UnitIndexEntry> read_unit(
-    Statement& query, const int offset, std::string& error,
-    const bool has_identifier_forms)
+    Statement& query, const int offset, std::string& error)
 {
     library::UnitIndexEntry unit;
     std::array<std::string, 9> fields;
@@ -302,18 +232,16 @@ std::optional<library::UnitIndexEntry> read_unit(
     unit.checksum = std::move(fields[6]);
     unit.standard = std::move(fields[7]);
     unit.compatibility_profile = std::move(fields[8]);
-    if (has_identifier_forms) {
-        const auto name_form = query.integer(offset + 9, error);
-        const auto primary_name_form = query.integer(offset + 10, error);
-        if (!name_form || !primary_name_form || *name_form < 0 || *name_form > 2
-            || *primary_name_form < 0 || *primary_name_form > 2) {
-            error = "workspace catalog has an invalid VHDL identifier form";
-            return std::nullopt;
-        }
-        unit.name_form = static_cast<library::VhdlIdentifierForm>(*name_form);
-        unit.primary_name_form
-            = static_cast<library::VhdlIdentifierForm>(*primary_name_form);
+    const auto name_form = query.integer(offset + 9, error);
+    const auto primary_name_form = query.integer(offset + 10, error);
+    if (!name_form || !primary_name_form || *name_form < 0 || *name_form > 2
+        || *primary_name_form < 0 || *primary_name_form > 2) {
+        error = "workspace catalog has an invalid VHDL identifier form";
+        return std::nullopt;
     }
+    unit.name_form = static_cast<library::VhdlIdentifierForm>(*name_form);
+    unit.primary_name_form
+        = static_cast<library::VhdlIdentifierForm>(*primary_name_form);
     return unit;
 }
 

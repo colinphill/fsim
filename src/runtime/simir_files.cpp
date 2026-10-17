@@ -16,39 +16,7 @@ namespace {
 
     constexpr std::string_view multichannel_write_mode = "\x1f"
                                                          "fsim-multichannel-write";
-    constexpr std::string_view vhdl_textio_read_marker = "\x1f"
-                                                         "fsim-vhdl-textio-read";
-    constexpr std::string_view vhdl_textio_read_2008_marker = "\x1f"
-                                                             "fsim-vhdl-textio-read-2008";
-    constexpr std::string_view vhdl_textio_radix_read_2008_marker = "\x1f"
-                                                                 "fsim-vhdl-textio-radix-read-2008";
-    constexpr std::string_view vhdl_textio_sread_marker = "\x1f"
-                                                          "fsim-vhdl-textio-sread";
     constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
-
-    [[nodiscard]] bool vhdl_textio_read(
-        const FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && (operation.conversions.front().prefix
-                    == vhdl_textio_read_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_radix_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_sread_marker);
-    }
-
-    [[nodiscard]] bool vhdl_textio_sread(
-        const FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && operation.conversions.front().prefix
-                == vhdl_textio_sread_marker;
-    }
 
     [[nodiscard]] bool below_root(
         const std::filesystem::path& root,
@@ -1132,46 +1100,29 @@ void Interpreter::Impl::execute_file(
 {
     try {
         InputScanResult scanned;
-        std::string* consumed_source { };
         const auto active_time_format = time_format;
-        const bool vhdl_textio_line = vhdl_textio_read(operation);
         auto effective_operation = operation;
-        if (vhdl_textio_line && !vhdl_textio_sread(operation)) {
-            for (auto& conversion : effective_operation.conversions) {
-                if (conversion.maximum_characters != 0U
-                    || conversion.format != InputScanFormat::string) {
-                    continue;
-                }
-                std::size_t length { };
-                if (conversion.target.kind
-                    == InputScanTargetKind::string_register) {
-                    length = get_string_register(
-                        process, conversion.target.id).size();
-                } else if (conversion.target.kind
-                    == InputScanTargetKind::string_object) {
-                    length = get_string_object(
-                        conversion.target.id).initial_value.size();
-                } else {
-                    continue;
-                }
-                if (length > std::numeric_limits<std::uint32_t>::max()) {
-                    throw std::length_error {
-                        "VHDL TextIO STRING target exceeds scan limit"
-                    };
-                }
-                conversion.maximum_characters
-                    = static_cast<std::uint32_t>(length);
-            }
+        if (!size_vhdl_textio_string_reads(effective_operation,
+                [&](const InputScanTarget& target)
+                    -> std::optional<std::size_t> {
+                    if (target.kind == InputScanTargetKind::string_register) {
+                        return get_string_register(process, target.id).size();
+                    }
+                    if (target.kind == InputScanTargetKind::string_object) {
+                        return get_string_object(target.id)
+                            .initial_value.size();
+                    }
+                    return std::nullopt;
+                })) {
+            throw std::length_error {
+                "VHDL TextIO STRING target exceeds scan limit"
+            };
         }
         if (operation.string_source) {
             auto& source = get_string_register(process, operation.source);
             scanned = scan_formatted_string(
                 effective_operation, source, active_time_format);
-            consumed_source = &source;
-            if (operation.consume_string_source && !vhdl_textio_line) {
-                source.erase(0,
-                    std::min(source.size(), scanned.consumed));
-            }
+            consume_scanned_source(operation, source, scanned);
         } else {
             const auto handle = known_file_handle(process, operation.handle);
             const std::function<std::int32_t()> read = [&] {
@@ -1185,25 +1136,9 @@ void Interpreter::Impl::execute_file(
             scanned = scan_formatted_input(
                 effective_operation, read, unread, active_time_format);
         }
-        const auto expected = static_cast<std::int32_t>(std::ranges::count_if(
-            operation.conversions,
-            [](const InputScanConversion& conversion) {
-                return !conversion.suppress;
-            }));
-        const bool complete = vhdl_textio_sread(operation)
-            ? scanned.values.size() == 1U
-                && scanned.values.front().has_value()
-            : scanned.assignments == expected;
+        const bool complete = file_scan_complete(operation, scanned);
         if (operation.success) {
             get_register(process, *operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
-        }
-        // TextIO removes each accepted character from LINE as it forms the
-        // representation. A later conversion failure does not restore that
-        // valid prefix; an invalid next character remains on the line.
-        if (operation.consume_string_source && vhdl_textio_line
-            && consumed_source != nullptr) {
-            consumed_source->erase(0,
-                std::min(consumed_source->size(), scanned.consumed));
         }
         if (operation.require_assignments && !complete) {
             throw std::runtime_error {

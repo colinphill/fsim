@@ -43,4 +43,25 @@ struct InputScanResult {
     const FileScan& operation, std::string_view input,
     const SystemVerilogTimeFormat& time_format);
 
+/// A VHDL TextIO READ into a STRING fills the whole target (IEEE 1076-2019
+/// 16.4): give each such conversion without an explicit width the target's
+/// current length. `string_length` returns that length for string targets and
+/// nothing for other targets. Returns false when a length exceeds the scan
+/// limit.
+[[nodiscard]] bool size_vhdl_textio_string_reads(FileScan& operation,
+    const std::function<std::optional<std::size_t>(const InputScanTarget&)>&
+        string_length);
+
+/// Removes the characters a string-source scan consumed when the scan
+/// consumes its source. TextIO removes each accepted character from LINE as
+/// it forms a representation, so a later conversion failure keeps the valid
+/// prefix removed.
+void consume_scanned_source(const FileScan& operation, std::string& source,
+    const InputScanResult& scanned);
+
+/// Whether a scan converted everything it requests: the single value of a
+/// VHDL SREAD, or every unsuppressed conversion otherwise.
+[[nodiscard]] bool file_scan_complete(
+    const FileScan& operation, const InputScanResult& scanned) noexcept;
+
 } // namespace fsim::runtime::simir

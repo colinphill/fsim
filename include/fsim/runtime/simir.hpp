@@ -891,6 +891,13 @@ struct Binary {
     const PackedLogic4& lhs,
     const PackedLogic4& rhs);
 
+/// `value` shifted by `amount_value`; an unknown amount gives all X.
+[[nodiscard]] PackedLogic4 shift_value(
+    ShiftOperator operation,
+    const PackedLogic4& value,
+    const PackedLogic4& amount_value,
+    bool signed_amount);
+
 enum class IntegerUnaryOperator : std::uint8_t {
     negate,
     absolute,
@@ -2271,17 +2278,9 @@ public:
     /// The identity is the static design process that owns the fork, including
     /// when a dynamic child creates a nested fork.
     using ForkSpawnFilter = std::function<bool(ProcessId)>;
-    /// The first identity is the owning static design process. Runtime fork
-    /// children retain it even though their ProcessProgram id is dynamic.
-    using ClassAllocateHook = std::function<std::uint64_t(
-        ProcessId, std::string_view, std::string_view,
-        std::string_view,
-        std::span<const PackedLogic4>,
-        std::span<const std::string>,
-        std::span<const std::string>)>;
-    // Context-aware class callbacks also receive the currently executing
-    // process. The legacy hooks above remain available to callers that only
-    // need the owning design process or object identity.
+    // Class callbacks receive the currently executing process. The next
+    // identity is the owning static design process; runtime fork children
+    // retain it even though their ProcessProgram id is dynamic.
     using ClassAllocateContextHook = std::function<std::uint64_t(
         ProcessId, ProcessId, std::string_view, std::string_view,
         std::string_view,
@@ -2296,15 +2295,6 @@ public:
     // a read of a property never written leaves `value` unchanged.
     using ClassPropertyContainerHook = std::function<void(
         std::uint64_t, std::string_view, ContainerValue&, bool)>;
-    using ClassMethodCallHook = std::function<PackedLogic4(
-        std::uint64_t,
-        std::string_view,
-        std::vector<PackedLogic4>&,
-        std::vector<std::string>&,
-        std::span<const std::string>,
-        std::span<const std::uint8_t>,
-        std::span<const SystemVerilogConstraintTemplate>,
-        bool)>;
     using ClassMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::uint64_t,
@@ -2318,12 +2308,6 @@ public:
     using ClassStaticPropertyReadHook = std::function<PackedLogic4(std::string_view)>;
     using ClassStaticPropertyWriteHook = std::function<void(
         std::string_view, const PackedLogic4&)>;
-    using ClassStaticMethodCallHook = std::function<PackedLogic4(
-        std::string_view,
-        std::vector<PackedLogic4>&,
-        std::vector<std::string>&,
-        std::span<const std::string>,
-        std::span<const std::uint8_t>)>;
     using ClassStaticMethodCallContextHook = std::function<PackedLogic4(
         ProcessId,
         std::string_view,
@@ -2668,19 +2652,16 @@ public:
     void set_coverage_database_control_hook(
         CoverageDatabaseControlHook hook);
     void set_fork_spawn_filter(ForkSpawnFilter filter);
-    void set_class_allocate_hook(ClassAllocateHook hook);
     void set_class_allocate_context_hook(ClassAllocateContextHook hook);
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);
     void set_class_property_container_hook(ClassPropertyContainerHook hook);
-    void set_class_method_call_hook(ClassMethodCallHook hook);
     void set_class_method_call_context_hook(
         ClassMethodCallContextHook hook);
     void set_class_static_property_read_hook(
         ClassStaticPropertyReadHook hook);
     void set_class_static_property_write_hook(
         ClassStaticPropertyWriteHook hook);
-    void set_class_static_method_call_hook(ClassStaticMethodCallHook hook);
     void set_class_static_method_call_context_hook(
         ClassStaticMethodCallContextHook hook);
     void set_dpi_function_call_hook(DpiFunctionCallHook hook);

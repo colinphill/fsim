@@ -32,14 +32,6 @@ partition_workspace_objects(const CompilationWorkspace&, const project::Config&,
 compiled_object_unit_entries(const semantic::CompiledDesign&,
     std::string_view library);
 
-// Restore identifier forms omitted by a legacy workspace catalog only when
-// the object's checksummed compiled-HIR bundle identifies one unique unit.
-// Ambiguous or missing HIR evidence is an error and leaves the caller's
-// catalog entry unchanged.
-[[nodiscard]] std::optional<library::UnitIndexEntry>
-hydrate_legacy_vhdl_identifier_forms(const WorkspaceObjectSelection&,
-    const library::UnitIndexEntry&, diagnostic::Engine&);
-
 [[nodiscard]] std::optional<CompilationWorkspace> load_workspace_objects(
     std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,

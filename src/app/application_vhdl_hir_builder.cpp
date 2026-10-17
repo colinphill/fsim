@@ -10,7 +10,7 @@ VhdlHirBuilder::VhdlHirBuilder(semantic::Model& model, vh::Hir& hir)
     for (const auto& value : model_.values()) {
         values_by_lookup_key_.try_emplace(
             ValueLookupKey { value.scope, value.source,
-                canonical_vhdl_name(value.name) },
+                support::canonical_vhdl_spelling(value.name) },
             value.id);
     }
 }
@@ -709,20 +709,23 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         if (component.selection != vh::InstanceSelection::others) {
             continue;
         }
-        const auto component_name = canonical_vhdl_name(
+        const auto component_name = support::canonical_vhdl_spelling(
             component.component.spelling);
         for (const auto& sibling : output.components) {
             if (sibling.selection != vh::InstanceSelection::labels
-                || canonical_vhdl_name(sibling.component.spelling)
+                || support::canonical_vhdl_spelling(sibling.component.spelling)
                     != component_name) {
                 continue;
             }
             component.labels.insert(component.labels.end(),
                 sibling.labels.begin(), sibling.labels.end());
         }
-        std::ranges::sort(component.labels, {}, canonical_vhdl_name);
+        const auto canonical = [](const std::string& label) {
+            return support::canonical_vhdl_spelling(label);
+        };
+        std::ranges::sort(component.labels, {}, canonical);
         const auto duplicate = std::ranges::unique(
-            component.labels, {}, canonical_vhdl_name);
+            component.labels, {}, canonical);
         component.labels.erase(duplicate.begin(), component.labels.end());
     }
     for (const auto& block : input.block_configurations) {
@@ -1503,7 +1506,8 @@ void VhdlHirBuilder::rebuild_overload_sets()
         std::vector<semantic::DeclarationId>>
         groups;
     for (const auto& declaration : hir_.declarations()) {
-        groups[{ declaration.scope, canonical_vhdl_name(declaration.name) }]
+        groups[{ declaration.scope,
+                   support::canonical_vhdl_spelling(declaration.name) }]
             .push_back(declaration.id);
     }
     auto& overloads = hir_.mutable_overload_sets();

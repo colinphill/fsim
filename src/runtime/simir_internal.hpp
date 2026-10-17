@@ -283,12 +283,6 @@ void validate_container_value(const ContainerValue& value);
 [[nodiscard]] constexpr ShiftOperator reverse_shift(
     const ShiftOperator operation) noexcept;
 
-[[nodiscard]] PackedLogic4 shift_value(
-    ShiftOperator operation,
-    const PackedLogic4& value,
-    const PackedLogic4& amount_value,
-    const bool signed_amount);
-
 [[nodiscard]] PackedLogic4 extract_value(
     const PackedLogic4& source,
     const std::size_t offset,
@@ -3930,16 +3924,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     VcdControlHook vcd_control_hook;
     CoverageDatabaseControlHook coverage_database_control_hook;
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
-    ClassAllocateHook class_allocate_hook;
     ClassAllocateContextHook class_allocate_context_hook;
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
     ClassPropertyContainerHook class_property_container_hook;
-    ClassMethodCallHook class_method_call_hook;
     ClassMethodCallContextHook class_method_call_context_hook;
     ClassStaticPropertyReadHook class_static_property_read_hook;
     ClassStaticPropertyWriteHook class_static_property_write_hook;
-    ClassStaticMethodCallHook class_static_method_call_hook;
     ClassStaticMethodCallContextHook class_static_method_call_context_hook;
     DpiFunctionCallHook dpi_function_call_hook;
     std::optional<MonitorInstall> monitor;
@@ -4441,6 +4432,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] bool has_dynamic_waits(SignalId signal) const noexcept;
 
+    // Whether a container object is aliased by a signal, an aggregate
+    // signal, or one of its element signals.
+    [[nodiscard]] bool container_has_signal_alias(
+        ContainerObjectId object) const noexcept;
+    // Throws unless the active package static initializer (process or
+    // startup callback) may write this string or container object.
+    void require_package_static_write(std::string_view kind, bool in_range,
+        std::uint64_t owner, std::uint32_t object,
+        std::optional<ProcessId> process, bool container) const;
+    // Mirror a callable register write into the automatic callable context
+    // that owns `destination`. Returns true when the write targets a
+    // suspended context only, so the live register file is left untouched.
+    template <typename Id, typename Value>
+    bool update_callable_register_context(ProcessState& process,
+        Id destination, std::vector<Id> ProcessState::CallableFrameState::*ids,
+        std::vector<Value> ProcessState::CallableFrameState::*values,
+        const Value& value);
     void write_process_register(
         ProcessState& process,
         const RegisterId destination,
@@ -5023,6 +5031,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void demote_owned_driver(SignalId signal_id);
     void demote_all_owned_drivers();
     [[nodiscard]] bool owned_driver_active(SignalId signal_id) const noexcept;
+    [[nodiscard]] bool wide_commit_signal_eligible(SignalId signal_id) const;
     void require_writable_aggregate_signal(SignalId signal_id) const;
     void promote_container_alias_authority(SignalId signal_id);
     void promote_all_container_alias_authorities();

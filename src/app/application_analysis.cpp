@@ -2,6 +2,7 @@
 #include "application_internal.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -201,6 +202,22 @@ diagnostic::SourcePosition position(const frontend::SourceLocation& source)  {
 
 diagnostic::SourceSpan span(const frontend::SourceSpan& source)  {
   return {source.source_name, position(source.begin), position(source.end)};
+}
+
+diagnostic::SourceSpan compiled_source_span(
+    const semantic::Model& model, const semantic::SourceSpanId source) {
+  diagnostic::SourceSpan result;
+  const auto* const span = semantic::find_source_span(model, source);
+  if (span == nullptr) {
+    return result;
+  }
+  const auto* const file = semantic::find_source_file(model, *span);
+  result.path = !span->logical_name.empty() || file == nullptr
+      ? span->logical_name
+      : file->physical_name;
+  result.begin = { span->begin.line, span->begin.column, span->begin.offset };
+  result.end = { span->end.line, span->end.column, span->end.offset };
+  return result;
 }
 
 void import_diagnostic(
@@ -842,24 +859,6 @@ std::string vhdl_form_key(const std::string_view name, const bool extended)
   return std::string { extended ? "extended:" : "basic:" } + std::string { name };
 }
 
-std::string vhdl_identifier_spelling(
-    const std::string_view name, const bool extended)
-{
-  if (!extended) {
-    return std::string { name };
-  }
-  std::string result { "\\" };
-  result.reserve(name.size() + 2U);
-  for (const auto character : name) {
-    result.push_back(character);
-    if (character == '\\') {
-      result.push_back('\\');
-    }
-  }
-  result.push_back('\\');
-  return result;
-}
-
 } // namespace
 
 std::string unit_key(const frontend::DesignUnit& unit)  {
@@ -1214,9 +1213,9 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
             : std::string_view { unit.library };
         candidates.push_back(
             "vhdl:" + std::string { library } + "."
-            + vhdl_identifier_spelling(
+            + support::encode_vhdl_identifier(
                 unit.primary_name, unit.extended_primary_name)
-            + "(" + vhdl_identifier_spelling(
+            + "(" + support::encode_vhdl_identifier(
                 unit.name, unit.extended_name) + ")");
       }
     }
@@ -1285,77 +1284,22 @@ std::optional<BindingTarget> parse_binding_target(std::string_view target)  {
   result.language = std::string(target.substr(0, colon));
   auto remainder = target.substr(colon + 1);
   if (result.language == "vhdl") {
-    const auto decode_identifier = [](std::string_view spelling) {
-      const bool extended = spelling.size() >= 2U
-          && spelling.front() == '\\' && spelling.back() == '\\';
-      if (!extended) {
-        std::string result { spelling };
-        std::ranges::transform(result, result.begin(), [](const char value) {
-          return value >= 'A' && value <= 'Z'
-              ? static_cast<char>(value - 'A' + 'a') : value;
-        });
-        return result;
-      }
-      spelling.remove_prefix(1U);
-      spelling.remove_suffix(1U);
-      std::string result;
-      result.reserve(spelling.size());
-      for (std::size_t index = 0; index < spelling.size(); ++index) {
-        result.push_back(spelling[index]);
-        if (spelling[index] == '\\' && index + 1U < spelling.size()
-            && spelling[index + 1U] == '\\') {
-          ++index;
-        }
-      }
-      return result;
-    };
-    bool extended = false;
-    auto architecture_open = std::string_view::npos;
-    for (std::size_t index = 0; index < remainder.size(); ++index) {
-      if (remainder[index] == '\\') {
-        if (extended && index + 1U < remainder.size()
-            && remainder[index + 1U] == '\\') {
-          ++index;
-        } else {
-          extended = !extended;
-        }
-      } else if (remainder[index] == '(' && !extended) {
-        architecture_open = index;
-      }
+    support::VhdlTargetSpelling spelling;
+    if (!support::split_vhdl_target(remainder, spelling)) {
+      return std::nullopt;
     }
-    if (architecture_open != std::string_view::npos) {
-      if (remainder.back() != ')') {
-        return std::nullopt;
-      }
-      const auto spelling = remainder.substr(architecture_open + 1U,
-          remainder.size() - architecture_open - 2U);
-      result.architecture_extended = spelling.size() >= 2U
-          && spelling.front() == '\\' && spelling.back() == '\\';
-      result.architecture = decode_identifier(spelling);
-      remainder = remainder.substr(0U, architecture_open);
+    if (spelling.has_architecture) {
+      result.architecture_extended
+          = support::is_extended_vhdl_identifier(spelling.architecture);
+      result.architecture
+          = support::decode_vhdl_identifier(spelling.architecture);
     }
-    std::size_t library_separator = std::string_view::npos;
-    extended = false;
-    for (std::size_t index = 0; index < remainder.size(); ++index) {
-      if (remainder[index] == '\\') {
-        if (extended && index + 1U < remainder.size()
-            && remainder[index + 1U] == '\\') {
-          ++index;
-        } else {
-          extended = !extended;
-        }
-      } else if (remainder[index] == '.' && !extended) {
-        library_separator = index;
-      }
+    if (spelling.has_library) {
+      result.qualifier = support::decode_vhdl_identifier(spelling.library);
     }
-    if (library_separator != std::string_view::npos) {
-      result.qualifier = decode_identifier(
-          remainder.substr(0U, library_separator));
-      remainder.remove_prefix(library_separator + 1U);
-    }
-    result.unit_extended = remainder.size() >= 2U
-        && remainder.front() == '\\' && remainder.back() == '\\';
-    result.unit = decode_identifier(remainder);
+    result.unit_extended = support::is_extended_vhdl_identifier(spelling.unit);
+    result.unit = support::decode_vhdl_identifier(spelling.unit);
+    remainder = spelling.unit;
   } else {
     if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
       result.qualifier = std::string(remainder.substr(0, dot));

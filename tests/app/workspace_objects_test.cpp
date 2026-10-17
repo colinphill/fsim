@@ -71,19 +71,6 @@ void copy_read_only_object_tree(const std::filesystem::path& source,
     }
 }
 
-void write_object_metadata(const std::filesystem::path& object,
-    const fsim::artifact::ObjectMetadata& metadata)
-{
-    const auto path = object / fsim::artifact::kObjectMetadataFilename;
-    std::filesystem::permissions(path,
-        std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add);
-    write_file(path, fsim::artifact::serialize_object_metadata(metadata));
-    std::filesystem::permissions(path,
-        std::filesystem::perms::owner_read,
-        std::filesystem::perm_options::replace);
-}
-
 detail::WorkspaceObjectSelection compile(const std::filesystem::path& root,
     const std::string& name, const std::string_view text)
 {
@@ -172,12 +159,12 @@ std::optional<detail::CompilationWorkspace> check_vhdl_with_imported(
     return checked;
 }
 
-struct LegacyCatalogFixture {
+struct CatalogFixture {
     std::unique_ptr<workspace::LibraryTransaction> transaction;
     workspace::LibraryCatalog catalog;
 };
 
-LegacyCatalogFixture make_legacy_catalog(
+CatalogFixture make_catalog(
     workspace::Store& store,
     const std::vector<detail::WorkspaceObjectSelection>& objects)
 {
@@ -185,63 +172,28 @@ LegacyCatalogFixture make_legacy_catalog(
     std::string error;
     auto transaction = store.begin_library("work", error);
     assert(transaction && error.empty());
-    LegacyCatalogFixture result;
+    CatalogFixture result;
     result.catalog = transaction->catalog();
     for (std::size_t index = 0; index < objects.size(); ++index) {
-        fsim::diagnostic::Engine diagnostics;
-        const auto metadata = fsim::artifact::load_object_metadata(
-            objects[index].path, diagnostics);
-        assert(metadata && !diagnostics.has_error());
         auto record = transaction->allocate_artifact(
             workspace::ArtifactKind::Hdl, error);
         assert(record && error.empty());
         copy_read_only_object_tree(objects[index].path,
             transaction->artifact_path(*record));
-        auto legacy_metadata = fsim::artifact::load_object_metadata(
+        fsim::diagnostic::Engine diagnostics;
+        const auto metadata = fsim::artifact::load_object_metadata(
             transaction->artifact_path(*record), diagnostics);
-        assert(legacy_metadata && !diagnostics.has_error());
-        for (auto& unit : legacy_metadata->units) {
-            if (unit.language == "vhdl") {
-                unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
-                unit.primary_name_form
-                    = fsim::library::VhdlIdentifierForm::unknown;
-            }
-        }
-        legacy_metadata->compilation_digest
-            = fsim::artifact::compute_object_compilation_digest(
-                *legacy_metadata);
-        const auto metadata_path = transaction->artifact_path(*record)
-            / fsim::artifact::kObjectMetadataFilename;
-        std::filesystem::permissions(metadata_path,
-            std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::add);
-        write_file(metadata_path,
-            fsim::artifact::serialize_object_metadata(*legacy_metadata));
-        std::filesystem::permissions(metadata_path,
-            std::filesystem::perms::owner_read,
-            std::filesystem::perm_options::replace);
-        const auto source_key = "legacy-" + std::to_string(index) + ".vhd";
+        assert(metadata && !diagnostics.has_error());
+        const auto source_key = "source-" + std::to_string(index) + ".vhd";
         record->sources = { source_key };
-        record->fingerprint = legacy_metadata->compilation_digest;
-        for (auto unit : legacy_metadata->units) {
-            if (unit.language == "vhdl") {
-                unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
-                unit.primary_name_form
-                    = fsim::library::VhdlIdentifierForm::unknown;
-            }
-            record->units.push_back({ std::move(unit), source_key });
+        record->fingerprint = metadata->compilation_digest;
+        for (const auto& unit : metadata->units) {
+            record->units.push_back({ unit, source_key });
         }
         result.catalog.artifacts.push_back(std::move(*record));
     }
     result.transaction = std::move(transaction);
     return result;
-}
-
-bool has_diagnostic_code(const fsim::diagnostic::Engine& diagnostics,
-    const std::string_view code)
-{
-    return std::ranges::any_of(diagnostics.diagnostics(),
-        [&](const auto& item) { return item.code == code; });
 }
 
 detail::WorkspaceObjectSelection select(
@@ -641,8 +593,7 @@ endclass
     assert(class_count == 3U);
 }
 
-void check_legacy_vhdl_identifier_hydration(
-    const std::filesystem::path& root)
+void check_vhdl_extended_top_resolution(const std::filesystem::path& root)
 {
     const auto basic = compile_vhdl(root / "basic-source", "basic", R"(
 entity ctx is end entity;
@@ -650,256 +601,29 @@ entity ctx is end entity;
     const auto extended = compile_vhdl(root / "extended-source", "extended", R"(
 entity \ctx\ is end entity;
 )");
-
     workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { basic, extended });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    for (const auto& artifact : catalogs.front().artifacts) {
-        assert(artifact.units.size() == 1U);
-        assert(artifact.units.front().unit.name_form
-            == fsim::library::VhdlIdentifierForm::unknown);
-        assert(artifact.units.front().unit.primary_name.empty());
-        assert(artifact.units.front().unit.primary_name_form
-            == fsim::library::VhdlIdentifierForm::unknown);
-    }
+    const auto fixture = make_catalog(store, { basic, extended });
+    const detail::WorkspaceCatalogs catalogs { fixture.catalog };
 
     fsim::project::Config selector_config;
     selector_config.project.tops.push_back({ "vhdl:work.ctx", { } });
     fsim::diagnostic::Engine selector_diagnostics;
     const auto selected = detail::select_workspace_design(
         selector_config, store, catalogs, selector_diagnostics);
-    if (!selected) {
-        fsim::diagnostic::print_text(std::cerr, selector_diagnostics);
-    }
     assert(selected && !selector_diagnostics.has_error());
     assert(selected->objects.size() == 1U);
     assert(selected->objects.front().active_units.size() == 1U);
     assert(selected->objects.front().active_units.front().name_form
         == fsim::library::VhdlIdentifierForm::basic);
-    assert(selected->objects.front().active_units.front().primary_name.empty());
-    assert(selected->objects.front().active_units.front().primary_name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-    assert(selected->catalogs.size() == 1U);
-    assert(selected->catalogs.front().artifacts.size() == 1U);
-    assert(selected->catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-    // Selection hydrates a private snapshot; callers holding the legacy
-    // catalog do not observe partially upgraded state.
-    assert(catalogs.front().artifacts[0].units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-    assert(catalogs.front().artifacts[1].units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
 
-    fsim::project::Config basic_config;
-    basic_config.project.tops.push_back({ "vhdl:work.ctx", { } });
-    fsim::diagnostic::Engine basic_diagnostics;
-    assert(detail::resolve_workspace_tops(basic_config, store, catalogs,
-        basic_diagnostics));
-    assert(!basic_diagnostics.has_error());
-    assert(basic_config.project.tops.front().target == "vhdl:work.ctx");
-    assert(catalogs.front().artifacts[0].units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-    assert(catalogs.front().artifacts[1].units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::extended);
-    for (const auto& artifact : catalogs.front().artifacts) {
-        assert(artifact.units.front().unit.primary_name.empty());
-        assert(artifact.units.front().unit.primary_name_form
-            == fsim::library::VhdlIdentifierForm::unknown);
+    for (const std::string_view target : { "vhdl:work.ctx", R"(vhdl:work.\ctx\)" }) {
+        fsim::project::Config config;
+        config.project.tops.push_back({ std::string { target }, { } });
+        fsim::diagnostic::Engine diagnostics;
+        assert(detail::resolve_workspace_tops(config, catalogs, diagnostics));
+        assert(!diagnostics.has_error());
+        assert(config.project.tops.front().target == target);
     }
-
-    fsim::project::Config extended_config;
-    extended_config.project.tops.push_back({ R"(vhdl:work.\ctx\)", { } });
-    fsim::diagnostic::Engine extended_diagnostics;
-    assert(detail::resolve_workspace_tops(extended_config, store, catalogs,
-        extended_diagnostics));
-    assert(!extended_diagnostics.has_error());
-    assert(extended_config.project.tops.front().target
-        == R"(vhdl:work.\ctx\)");
-}
-
-void check_legacy_vhdl_primary_identifier_hydration(
-    const std::filesystem::path& root)
-{
-    const auto object = compile_vhdl(root / "source", "primary-hydration", R"(
-entity primary_shape is end entity;
-architecture rtl of primary_shape is
-begin
-end architecture;
-)");
-    assert(object.active_units.size() == 2U);
-    const auto compiled_architecture = std::ranges::find_if(
-        object.active_units, [](const auto& unit) {
-            return unit.kind == "architecture";
-        });
-    assert(compiled_architecture != object.active_units.end());
-    assert(compiled_architecture->primary_name == "primary_shape");
-    assert(compiled_architecture->primary_name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { object });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    assert(catalogs.front().artifacts.size() == 1U);
-    const auto legacy_architecture = std::ranges::find_if(
-        catalogs.front().artifacts.front().units, [](const auto& unit) {
-            return unit.unit.kind == "architecture";
-        });
-    assert(legacy_architecture
-        != catalogs.front().artifacts.front().units.end());
-    assert(legacy_architecture->unit.primary_name == "primary_shape");
-    assert(legacy_architecture->unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-    assert(legacy_architecture->unit.primary_name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-
-    fsim::project::Config config;
-    config.project.tops.push_back({ "vhdl:work.primary_shape", { } });
-    fsim::diagnostic::Engine diagnostics;
-    assert(detail::resolve_workspace_tops(config, store, catalogs, diagnostics));
-    assert(!diagnostics.has_error());
-    const auto hydrated_architecture = std::ranges::find_if(
-        catalogs.front().artifacts.front().units, [](const auto& unit) {
-            return unit.unit.kind == "architecture";
-        });
-    assert(hydrated_architecture
-        != catalogs.front().artifacts.front().units.end());
-    assert(hydrated_architecture->unit.name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-    assert(hydrated_architecture->unit.primary_name == "primary_shape");
-    assert(hydrated_architecture->unit.primary_name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-}
-
-void check_legacy_vhdl_primary_form_conflict_fails_closed(
-    const std::filesystem::path& root)
-{
-    auto object = compile_vhdl(root / "source", "primary-form-conflict", R"(
-entity primary_shape is end entity;
-architecture rtl of primary_shape is
-begin
-end architecture;
-)");
-    fsim::diagnostic::Engine metadata_diagnostics;
-    auto metadata = fsim::artifact::load_object_metadata(
-        object.path, metadata_diagnostics);
-    assert(metadata && !metadata_diagnostics.has_error());
-    const auto architecture = std::ranges::find_if(
-        metadata->units, [](const auto& unit) {
-            return unit.kind == "architecture";
-        });
-    assert(architecture != metadata->units.end());
-    assert(architecture->primary_name == "primary_shape");
-    assert(architecture->primary_name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-    architecture->primary_name_form
-        = fsim::library::VhdlIdentifierForm::extended;
-    metadata->compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(*metadata);
-    write_object_metadata(object.path, *metadata);
-
-    fsim::diagnostic::Engine diagnostics;
-    assert(!detail::load_workspace_objects(std::array { object }, diagnostics));
-    assert(std::ranges::any_of(diagnostics.diagnostics(), [](const auto& item) {
-        return item.code == "FSIM-ART-0005"
-            && item.message.find(
-                ".fsimobj unit identity does not match its compiled-HIR index")
-                != std::string::npos;
-    }));
-}
-
-void check_legacy_vhdl_known_form_conflict_fails_closed(
-    const std::filesystem::path& root)
-{
-    auto object = compile_vhdl(root / "source", "form-conflict", R"(
-entity form_conflict is end entity;
-)");
-    fsim::diagnostic::Engine metadata_diagnostics;
-    auto metadata = fsim::artifact::load_object_metadata(
-        object.path, metadata_diagnostics);
-    assert(metadata && !metadata_diagnostics.has_error());
-    assert(metadata->units.size() == 1U);
-    assert(metadata->units.front().name_form
-        == fsim::library::VhdlIdentifierForm::basic);
-    metadata->units.front().name_form
-        = fsim::library::VhdlIdentifierForm::extended;
-    metadata->compilation_digest
-        = fsim::artifact::compute_object_compilation_digest(*metadata);
-    write_object_metadata(object.path, *metadata);
-
-    fsim::diagnostic::Engine diagnostics;
-    assert(!detail::load_workspace_objects(std::array { object }, diagnostics));
-    assert(has_diagnostic_code(diagnostics, "FSIM-ART-0005"));
-    assert(std::ranges::any_of(diagnostics.diagnostics(), [](const auto& item) {
-        return item.code == "FSIM-ART-0005"
-            && item.message.find(
-                ".fsimobj unit identity does not match its compiled-HIR index")
-                != std::string::npos;
-    }));
-}
-
-void check_legacy_vhdl_identifier_collision_fails_closed(
-    const std::filesystem::path& root)
-{
-    const auto collision = compile_vhdl(root / "collision-source", "collision", R"(
-entity ctx is end entity;
-entity \ctx\ is end entity;
-)");
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { collision });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    fsim::project::Config config;
-    config.project.tops.push_back({ "vhdl:work.ctx", { } });
-    fsim::diagnostic::Engine diagnostics;
-    assert(!detail::resolve_workspace_tops(config, store, catalogs, diagnostics));
-    assert(diagnostics.has_error());
-    assert(has_diagnostic_code(diagnostics, "FSIM-WORKSPACE-004"));
-    assert(std::ranges::any_of(diagnostics.diagnostics(), [](const auto& item) {
-        return item.message.find("ambiguous") != std::string::npos;
-    }));
-    fsim::project::Config selector_config;
-    selector_config.project.tops.push_back({ "vhdl:work.ctx", { } });
-    diagnostics.clear();
-    assert(!detail::select_workspace_design(
-        selector_config, store, catalogs, diagnostics));
-    assert(diagnostics.has_error());
-    assert(has_diagnostic_code(diagnostics, "FSIM-WORKSPACE-004"));
-    assert(std::ranges::any_of(diagnostics.diagnostics(), [](const auto& item) {
-        return item.message.find("ambiguous") != std::string::npos;
-    }));
-}
-
-void check_missing_legacy_vhdl_hir_fails_closed(
-    const std::filesystem::path& root)
-{
-    const auto basic = compile_vhdl(root / "source", "missing-hir", R"(
-entity missing_hir is end entity;
-)");
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { basic });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    std::string error;
-    const auto path = store.artifact_path(catalogs.front().location,
-        catalogs.front().artifacts.front(), error);
-    assert(path && error.empty());
-    fsim::diagnostic::Engine metadata_diagnostics;
-    const auto metadata = fsim::artifact::load_object_metadata(
-        *path, metadata_diagnostics);
-    assert(metadata && !metadata_diagnostics.has_error());
-    assert(!metadata->compiled_hir_artifact.empty());
-    std::filesystem::remove(*path / metadata->compiled_hir_artifact);
-
-    fsim::project::Config config;
-    config.project.tops.push_back({ "vhdl:work.missing_hir", { } });
-    fsim::diagnostic::Engine diagnostics;
-    assert(!detail::resolve_workspace_tops(config, store, catalogs, diagnostics));
-    assert(diagnostics.has_error());
-    assert(config.project.tops.front().target == "vhdl:work.missing_hir");
-    fsim::project::Config selector_config;
-    selector_config.project.tops.push_back({ "vhdl:work.missing_hir", { } });
-    diagnostics.clear();
-    assert(!detail::select_workspace_design(
-        selector_config, store, catalogs, diagnostics));
-    assert(diagnostics.has_error());
 }
 
 constexpr std::string_view extended_package = R"(
@@ -926,38 +650,6 @@ package body \CallablePkg\ is
   end function;
 end package body;
 )";
-
-constexpr std::string_view extended_package_consumer = R"(
-library work;
-use work.\Pkg\.all;
-entity client is end entity;
-architecture rtl of client is
-  constant copied : integer := value;
-begin
-end architecture;
-)";
-
-std::optional<std::vector<workspace::UnitDependency>> dependencies_for_client(
-    const std::filesystem::path& root, workspace::Store& store,
-    const detail::WorkspaceObjectSelection& imported_object,
-    const detail::WorkspaceCatalogs& catalogs,
-    fsim::diagnostic::Engine& diagnostics)
-{
-    const std::array imported_objects { imported_object };
-    auto imported = detail::load_workspace_objects(imported_objects, diagnostics);
-    assert(imported && !diagnostics.has_error());
-    auto checked = check_vhdl_with_imported(root, "client",
-        extended_package_consumer, *imported, diagnostics);
-    if (!checked) {
-        return std::nullopt;
-    }
-    const auto owner = checked->find_unit(
-        fsim::semantic::UnitKind::vhdl_architecture, "work", "client", "rtl");
-    assert(owner && owner->identity);
-    const std::array owners { owner->identity->id };
-    return detail::workspace_dependencies(
-        store, *checked, owners, catalogs, diagnostics);
-}
 
 void check_vhdl_package_reference_targeting(
     const std::filesystem::path& root)
@@ -1076,175 +768,6 @@ end architecture;
 )", R"(\CallablePkg\)", "CallablePkg", true, fsim::semantic::UnitKind::vhdl_architecture);
 }
 
-void check_legacy_vhdl_dependency_hydration(const std::filesystem::path& root)
-{
-    const auto provider = compile_vhdl(root / "provider", "extended-provider",
-        extended_package);
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { provider });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    assert(catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-
-    fsim::diagnostic::Engine diagnostics;
-    auto dependencies = dependencies_for_client(root / "consumer", store,
-        provider, catalogs, diagnostics);
-    if (!dependencies) {
-        fsim::diagnostic::print_text(std::cerr, diagnostics);
-    }
-    assert(dependencies && !diagnostics.has_error());
-    assert(std::ranges::any_of(*dependencies, [](const auto& dependency) {
-        return dependency.library == "work" && dependency.unit.name == "Pkg"
-            && dependency.unit.name_form
-            == fsim::library::VhdlIdentifierForm::extended;
-    }));
-    assert(catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-
-    workspace::ArtifactRecord consumer;
-    consumer.id = "consumer-client";
-    consumer.fingerprint = "consumer-fingerprint";
-    fsim::library::UnitIndexEntry consumer_unit;
-    consumer_unit.language = "vhdl";
-    consumer_unit.kind = "entity";
-    consumer_unit.name = "client";
-    consumer_unit.name_form = fsim::library::VhdlIdentifierForm::basic;
-    consumer.units.push_back({ std::move(consumer_unit), "consumer.vhd" });
-    consumer.dependencies = *dependencies;
-    catalogs.front().artifacts.push_back(std::move(consumer));
-    fsim::project::Config config;
-    config.project.tops.push_back({ "vhdl:work.client", { } });
-    diagnostics.clear();
-    assert(detail::resolve_workspace_tops(config, store, catalogs, diagnostics));
-    assert(!diagnostics.has_error());
-    assert(catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::extended);
-    assert(detail::validate_workspace_dependencies(catalogs, diagnostics));
-    assert(!diagnostics.has_error());
-}
-
-void check_legacy_vhdl_dependency_mismatch_is_not_matched(
-    const std::filesystem::path& root)
-{
-    const auto basic = compile_vhdl(root / "basic-provider", "basic-provider",
-        basic_package);
-    const auto extended = compile_vhdl(root / "extended-provider", "extended-provider",
-        extended_package);
-    const std::array imported_objects { basic, extended };
-    fsim::diagnostic::Engine diagnostics;
-    auto imported = detail::load_workspace_objects(imported_objects, diagnostics);
-    assert(imported && !diagnostics.has_error());
-    auto checked = check_vhdl_with_imported(root / "consumer", "client",
-        extended_package_consumer, *imported, diagnostics);
-    assert(checked && !diagnostics.has_error());
-    const auto owner = checked->find_unit(
-        fsim::semantic::UnitKind::vhdl_architecture, "work", "client", "rtl");
-    assert(owner && owner->identity);
-    const std::array owners { owner->identity->id };
-
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { basic });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    const auto dependencies = detail::workspace_dependencies(
-        store, *checked, owners, catalogs, diagnostics);
-    assert(dependencies && !diagnostics.has_error());
-    assert(std::ranges::none_of(*dependencies, [](const auto& dependency) {
-        return dependency.library == "work" && dependency.unit.name == "pkg";
-    }));
-    assert(catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-}
-
-void check_ambiguous_legacy_vhdl_dependency_fails_closed(
-    const std::filesystem::path& root)
-{
-    const auto collision = compile_vhdl(root / "collision-provider", "collision-provider", R"(
-package same is
-  constant basic_value : integer := 1;
-end package;
-package \same\ is
-  constant extended_value : integer := 2;
-end package;
-)");
-    const auto extended_provider = compile_vhdl(root / "extended-provider",
-        "extended-provider", R"(
-package \same\ is
-  constant extended_value : integer := 2;
-end package;
-)");
-    fsim::diagnostic::Engine diagnostics;
-    const std::array imported_objects { extended_provider };
-    auto imported = detail::load_workspace_objects(imported_objects, diagnostics);
-    assert(imported && !diagnostics.has_error());
-    auto checked = check_vhdl_with_imported(root / "consumer", "client", R"(
-library work;
-use work.\same\.all;
-entity client is end entity;
-architecture rtl of client is
-  constant copied : integer := extended_value;
-begin
-end architecture;
-)",
-        *imported, diagnostics);
-    assert(checked && !diagnostics.has_error());
-    const auto owner = checked->find_unit(
-        fsim::semantic::UnitKind::vhdl_architecture, "work", "client", "rtl");
-    assert(owner && owner->identity);
-    const std::array owners { owner->identity->id };
-
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { collision });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    const auto dependencies = detail::workspace_dependencies(
-        store, *checked, owners, catalogs, diagnostics);
-    assert(!dependencies);
-    assert(diagnostics.has_error());
-    assert(has_diagnostic_code(diagnostics, "FSIM-WORKSPACE-004"));
-    assert(std::ranges::all_of(catalogs.front().artifacts.front().units,
-        [](const auto& owned) {
-            return owned.unit.name_form
-                == fsim::library::VhdlIdentifierForm::unknown;
-        }));
-}
-
-void check_missing_legacy_vhdl_dependency_hir_fails_closed(
-    const std::filesystem::path& root)
-{
-    const auto provider = compile_vhdl(root / "provider", "extended-provider",
-        extended_package);
-    fsim::diagnostic::Engine diagnostics;
-    const std::array imported_objects { provider };
-    auto imported = detail::load_workspace_objects(imported_objects, diagnostics);
-    assert(imported && !diagnostics.has_error());
-    auto checked = check_vhdl_with_imported(root / "consumer", "client",
-        extended_package_consumer, *imported, diagnostics);
-    assert(checked && !diagnostics.has_error());
-    const auto owner = checked->find_unit(
-        fsim::semantic::UnitKind::vhdl_architecture, "work", "client", "rtl");
-    assert(owner && owner->identity);
-    const std::array owners { owner->identity->id };
-
-    workspace::Store store { root / "workspace" };
-    auto fixture = make_legacy_catalog(store, { provider });
-    detail::WorkspaceCatalogs catalogs { fixture.catalog };
-    std::string error;
-    const auto path = store.artifact_path(
-        catalogs.front().location, catalogs.front().artifacts.front(), error);
-    assert(path && error.empty());
-    const auto metadata = fsim::artifact::load_object_metadata(
-        *path, diagnostics);
-    assert(metadata && !diagnostics.has_error());
-    assert(!metadata->compiled_hir_artifact.empty());
-    std::filesystem::remove(*path / metadata->compiled_hir_artifact);
-
-    const auto dependencies = detail::workspace_dependencies(
-        store, *checked, owners, catalogs, diagnostics);
-    assert(!dependencies);
-    assert(diagnostics.has_error());
-    assert(catalogs.front().artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-}
-
 } // namespace
 
 int main()
@@ -1262,27 +785,9 @@ int main()
     check_compilation_unit_partition(temporary.path / "mutable-state", true);
     check_compilation_unit_partition(temporary.path / "constant-support", false);
     check_global_class_partition(temporary.path / "global-classes");
-    check_legacy_vhdl_identifier_hydration(
-        temporary.path / "legacy-vhdl-hydration");
-    check_legacy_vhdl_primary_identifier_hydration(
-        temporary.path / "legacy-vhdl-primary-hydration");
-    check_legacy_vhdl_primary_form_conflict_fails_closed(
-        temporary.path / "legacy-vhdl-primary-form-conflict");
-    check_legacy_vhdl_known_form_conflict_fails_closed(
-        temporary.path / "legacy-vhdl-known-form-conflict");
-    check_legacy_vhdl_identifier_collision_fails_closed(
-        temporary.path / "legacy-vhdl-collision");
-    check_missing_legacy_vhdl_hir_fails_closed(
-        temporary.path / "legacy-vhdl-missing-hir");
+    check_vhdl_extended_top_resolution(
+        temporary.path / "vhdl-extended-top-resolution");
     check_vhdl_package_reference_targeting(
         temporary.path / "vhdl-package-reference-targeting");
-    check_legacy_vhdl_dependency_hydration(
-        temporary.path / "legacy-vhdl-dependency");
-    check_legacy_vhdl_dependency_mismatch_is_not_matched(
-        temporary.path / "legacy-vhdl-dependency-mismatch");
-    check_ambiguous_legacy_vhdl_dependency_fails_closed(
-        temporary.path / "legacy-vhdl-dependency-ambiguous");
-    check_missing_legacy_vhdl_dependency_hir_fails_closed(
-        temporary.path / "legacy-vhdl-dependency-missing-hir");
     return 0;
 }

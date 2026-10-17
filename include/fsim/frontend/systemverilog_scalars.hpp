@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace fsim::frontend {
 
@@ -21,6 +22,17 @@ enum class SystemVerilogScalarKind {
   return kind == SystemVerilogScalarKind::ShortReal
       || kind == SystemVerilogScalarKind::Real
       || kind == SystemVerilogScalarKind::Realtime;
+}
+
+// The scalar kind a builtin type keyword names; None for any other spelling.
+[[nodiscard]] constexpr SystemVerilogScalarKind systemverilog_scalar_kind(
+    const std::string_view spelling) noexcept {
+  return spelling == "shortreal" ? SystemVerilogScalarKind::ShortReal
+      : spelling == "real"       ? SystemVerilogScalarKind::Real
+      : spelling == "realtime"   ? SystemVerilogScalarKind::Realtime
+      : spelling == "time"       ? SystemVerilogScalarKind::Time
+      : spelling == "chandle"    ? SystemVerilogScalarKind::Chandle
+                                 : SystemVerilogScalarKind::None;
 }
 
 enum class SystemVerilogDecimalLiteralKind {

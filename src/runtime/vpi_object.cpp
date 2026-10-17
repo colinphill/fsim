@@ -14,6 +14,22 @@ namespace fsim::runtime {
 
 namespace {
 
+// A copy of the registered observers, taken under the registry lock so
+// they can be notified after it is released.
+template <typename Observer>
+std::vector<Observer> snapshot_observers(
+    const std::map<std::uint64_t, Observer>& registered)
+{
+    std::vector<Observer> result;
+    result.reserve(registered.size());
+    for (const auto& [id, observer] : registered) {
+        (void)id;
+        result.push_back(observer);
+    }
+    return result;
+}
+
+
     constexpr std::uint64_t slot_mask = (1ULL << 24U) - 1U;
     constexpr std::uint64_t epoch_mask = (1ULL << 16U) - 1U;
     constexpr std::uint64_t iterator_bit = 1ULL << 63U;
@@ -1248,11 +1264,7 @@ SystemVerilogVpiObjectRegistry::update_bound_value(
     const bool changed = !record.forced_value && *record.value != value;
     if (changed && !value_observers_.empty()) {
         published = value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     record.value = std::move(value);
     lock.unlock();
@@ -1289,11 +1301,7 @@ SystemVerilogVpiObjectRegistry::update_forced_value(
     const bool changed = !record.forced_value || *record.forced_value != value;
     if (changed && !value_observers_.empty()) {
         published = value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     record.forced_value = std::move(value);
     lock.unlock();
@@ -1329,11 +1337,7 @@ SystemVerilogVpiObjectRegistry::release_bound_force(
     if (*record.forced_value != *record.value
         && !value_observers_.empty()) {
         published = record.value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     record.forced_value.reset();
     lock.unlock();
@@ -1375,21 +1379,13 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::deposit_value(
         && (!record.value || *record.value != value);
     if (changed && !value_observers_.empty()) {
         published = value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     if (!value_state_observers_.empty()) {
         state_update = SystemVerilogVpiValueStateUpdate {
             handle, value, record.forced_value
         };
-        state_observers.reserve(value_state_observers_.size());
-        for (const auto& [id, observer] : value_state_observers_) {
-            (void)id;
-            state_observers.push_back(observer);
-        }
+        state_observers = snapshot_observers(value_state_observers_);
     }
     previous_value = record.value;
     record.value = std::move(value);
@@ -1440,21 +1436,13 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::force_value(
     const bool changed = !record.forced_value || *record.forced_value != value;
     if (changed && !value_observers_.empty()) {
         published = value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     if (!value_state_observers_.empty() && record.value) {
         state_update = SystemVerilogVpiValueStateUpdate {
             handle, *record.value, value
         };
-        state_observers.reserve(value_state_observers_.size());
-        for (const auto& [id, observer] : value_state_observers_) {
-            (void)id;
-            state_observers.push_back(observer);
-        }
+        state_observers = snapshot_observers(value_state_observers_);
     }
     previous_forced_value = record.forced_value;
     record.forced_value = std::move(value);
@@ -1505,21 +1493,13 @@ SystemVerilogVpiObjectRegistry::release_forced_value(
     const bool changed = record.value && *record.forced_value != *record.value;
     if (changed && !value_observers_.empty()) {
         published = record.value;
-        observers.reserve(value_observers_.size());
-        for (const auto& [id, observer] : value_observers_) {
-            (void)id;
-            observers.push_back(observer);
-        }
+        observers = snapshot_observers(value_observers_);
     }
     if (!value_state_observers_.empty() && record.value) {
         state_update = SystemVerilogVpiValueStateUpdate {
             handle, *record.value, std::nullopt
         };
-        state_observers.reserve(value_state_observers_.size());
-        for (const auto& [id, observer] : value_state_observers_) {
-            (void)id;
-            state_observers.push_back(observer);
-        }
+        state_observers = snapshot_observers(value_state_observers_);
     }
     previous_forced_value = record.forced_value;
     record.forced_value.reset();
@@ -1583,18 +1563,10 @@ SystemVerilogVpiObjectRegistry::reset_values()
                 [](const ResetChange& change) {
                     return change.published.has_value();
                 })) {
-            observers.reserve(value_observers_.size());
-            for (const auto& [id, observer] : value_observers_) {
-                (void)id;
-                observers.push_back(observer);
-            }
+            observers = snapshot_observers(value_observers_);
         }
         if (!changes.empty() && !value_state_observers_.empty()) {
-            state_observers.reserve(value_state_observers_.size());
-            for (const auto& [id, observer] : value_state_observers_) {
-                (void)id;
-                state_observers.push_back(observer);
-            }
+            state_observers = snapshot_observers(value_state_observers_);
         }
     } catch (...) {
         return SystemVerilogVpiValueError::ResourceLimit;
@@ -1740,11 +1712,7 @@ SystemVerilogVpiObjectRegistry::restore_values(
     std::vector<SystemVerilogVpiValueStateUpdate> state_updates;
     try {
         if (!value_state_observers_.empty()) {
-            state_observers.reserve(value_state_observers_.size());
-            for (const auto& [id, observer] : value_state_observers_) {
-                (void)id;
-                state_observers.push_back(observer);
-            }
+            state_observers = snapshot_observers(value_state_observers_);
             state_updates.reserve(pending.size());
             for (const auto& restore : pending) {
                 if (restore.value) {

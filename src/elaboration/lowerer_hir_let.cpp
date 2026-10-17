@@ -57,9 +57,7 @@ const semantic::sv::LetDeclaration* Lowerer::hir_let_declaration(
         return nullptr;
     }
 
-    const semantic::CompiledDesignResolver resolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    };
+    const auto resolver = hir_resolver();
     const auto declaration = resolver.resolve_systemverilog_let(
         source.text, source.scope).unique();
     return declaration != nullptr

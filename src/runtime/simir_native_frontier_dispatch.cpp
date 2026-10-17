@@ -68,18 +68,6 @@ constexpr std::uint64_t kSystemVerilogWavePayload
     };
 }
 
-[[nodiscard]] bool same_frontier_key(
-    const RegionFrontierKeyV1& left,
-    const RegionFrontierKeyV1& right) noexcept
-{
-    return left.time == right.time && left.delta == right.delta
-        && left.systemverilog_round == right.systemverilog_round
-        && left.stable_order == right.stable_order
-        && left.sequence == right.sequence
-        && left.process_domain == right.process_domain
-        && left.phase == right.phase;
-}
-
 [[nodiscard]] bool decode_wave_payload(
     const std::uint64_t payload,
     ProcessId& process) noexcept
@@ -147,7 +135,7 @@ void Interpreter::Impl::record_systemverilog_readiness_key(
     }
     queued.static_trigger_mask |= trigger_mask;
     if (receipt_key_valid) {
-        if (queued.key_valid && !same_frontier_key(queued.queued_key, key)) {
+        if (queued.key_valid && queued.queued_key != key) {
             if (component < region_frontier_runtime_by_component.size()) {
                 const auto& runtime
                     = region_frontier_runtime_by_component[component];
@@ -196,7 +184,7 @@ void Interpreter::Impl::record_systemverilog_readiness_key(
         | RegionFrontierMemberFlagsV1::queued_key_valid;
     const auto present_flags = member.flags & queued_flags;
     if (present_flags == queued_flags) {
-        if (!same_frontier_key(member.queued_key, queued.queued_key)) {
+        if (member.queued_key != queued.queued_key) {
             runtime->invalidate();
             return;
         }
@@ -424,8 +412,7 @@ Interpreter::Impl::try_execute_region_frontier_prefix(
                 || queued.component != component
                 || queued.member
                     != region_readiness_member_index_by_process[process]
-                || !same_frontier_key(
-                    queued.queued_key, frontier_key(frontier, task))) {
+                || queued.queued_key != frontier_key(frontier, task)) {
                 break;
             }
             domain = member_domain;
@@ -465,8 +452,7 @@ Interpreter::Impl::try_execute_region_frontier_prefix(
                 && queued.component == component
                 && queued.member
                     == region_readiness_member_index_by_process[process]
-                && same_frontier_key(
-                    queued.queued_key, frontier_key(frontier, task));
+                && queued.queued_key == frontier_key(frontier, task);
         }
         if (receipts_still_current) {
             for (std::size_t index = 0U;
@@ -1153,8 +1139,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
         if (!runtime.scheduler_state_seeded
             && *matching_task_count == 1U && matching_task != nullptr
             && queued.key_valid
-            && !same_frontier_key(queued.queued_key,
-                frontier_key(frontier, *matching_task))) {
+            && queued.queued_key != frontier_key(frontier, *matching_task)) {
             return decline_before_entry();
         }
         bool frame_key_valid { };
@@ -1278,7 +1263,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
             return false;
         }
         if (queued_sidecar.key_valid
-            && !same_frontier_key(queued_sidecar.queued_key, key)) {
+            && queued_sidecar.queued_key != key) {
             return false;
         }
         constexpr auto queued_flags
@@ -1286,7 +1271,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
             | RegionFrontierMemberFlagsV1::queued_key_valid;
         const auto present_flags = member.flags & queued_flags;
         if (present_flags == queued_flags) {
-            if (!same_frontier_key(member.queued_key, key)) {
+            if (member.queued_key != key) {
                 return false;
             }
         } else if (present_flags != 0U
@@ -1374,7 +1359,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
             | RegionFrontierMemberFlagsV1::queued_key_valid;
         const auto present_flags = member.flags & queued_flags;
         if (present_flags == queued_flags) {
-            if (!same_frontier_key(member.queued_key, queued.queued_key)) {
+            if (member.queued_key != queued.queued_key) {
                 return false;
             }
         } else if (present_flags != 0U) {
@@ -1455,8 +1440,8 @@ Interpreter::Impl::try_execute_region_frontier_component(
                         || !queued_receipt_is_valid(
                             process, member_index, queued);
                 } else if (queued.key_valid
-                    && !same_frontier_key(queued.queued_key,
-                        frontier_key(frontier, *matching_task))) {
+                    && queued.queued_key
+                        != frontier_key(frontier, *matching_task)) {
                     return decline_before_entry();
                 }
             } else if (*matching_task_count != 0U) {
@@ -1585,8 +1570,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 if (!frame_key_valid && !receipt_valid) {
                     has_untracked_queued_member = true;
                 } else if (frame_key_valid && receipt_valid
-                    && !same_frontier_key(
-                        member.queued_key, queued.queued_key)) {
+                    && member.queued_key != queued.queued_key) {
                     return decline_before_entry();
                 }
                 continue;
@@ -1597,11 +1581,11 @@ Interpreter::Impl::try_execute_region_frontier_component(
             }
             const auto key = frontier_key(frontier, *matching_task);
             if (member_queue_state == queued_flags
-                && !same_frontier_key(member.queued_key, key)) {
+                && member.queued_key != key) {
                 return decline_before_entry();
             }
             if (queued.key_valid
-                && !same_frontier_key(queued.queued_key, key)) {
+                && queued.queued_key != key) {
                 return decline_before_entry();
             }
         }
@@ -2282,7 +2266,7 @@ bool Interpreter::Impl::synchronize_frontier_process_states(
                 frame.slot.process_domain,
                 frame.slot.phase,
             };
-            if (same_frontier_key(queued_key, consumed_key)) {
+            if (queued_key == consumed_key) {
                 return true;
             }
         }

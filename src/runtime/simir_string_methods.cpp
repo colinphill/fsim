@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/simir.hpp"
+#include "fsim/support/vhdl_time.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
@@ -438,17 +439,7 @@ std::string vhdl_time_text(const PackedLogic4& value,
     const std::uint32_t unit_index,
     const std::uint64_t resolution_femtoseconds)
 {
-    constexpr std::array<std::pair<std::string_view, std::uint64_t>, 8U>
-        units { {
-            { "fs", 1U },
-            { "ps", 1'000U },
-            { "ns", 1'000'000U },
-            { "us", 1'000'000'000U },
-            { "ms", 1'000'000'000'000U },
-            { "sec", 1'000'000'000'000'000U },
-            { "min", 60'000'000'000'000'000U },
-            { "hr", 3'600'000'000'000'000'000U },
-        } };
+    const auto& units = support::vhdl_time_units;
     const auto word = value.low_word();
     if (word.bval != 0) {
         throw std::runtime_error { "VHDL TIME value contains X or Z" };

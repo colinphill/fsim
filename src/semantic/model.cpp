@@ -488,4 +488,66 @@ Model::process_identities() const noexcept {
     return process_identities_;
 }
 
+const SourceSpan* find_source_span(
+    const Model& model, const SourceSpanId id) noexcept
+{
+    const auto& spans = model.source_spans();
+    return id.valid() && id.value() < spans.size() && spans[id.value()].id == id
+        ? &spans[id.value()]
+        : nullptr;
+}
+
+const SourceFile* find_source_file(
+    const Model& model, const SourceSpan& span) noexcept
+{
+    const auto& files = model.source_files();
+    const auto id = span.file;
+    return id.valid() && id.value() < files.size() && files[id.value()].id == id
+        ? &files[id.value()]
+        : nullptr;
+}
+
+bool same_physical_source(const Model& model, const SourceSpanId left_id,
+    const SourceSpanId right_id) noexcept
+{
+    const auto* const left = find_source_span(model, left_id);
+    const auto* const right = find_source_span(model, right_id);
+    if (left == nullptr || right == nullptr || !left->file.valid()
+        || !right->file.valid()) {
+        return false;
+    }
+    if (left->file == right->file) {
+        return true;
+    }
+    const auto* const left_file = find_source_file(model, *left);
+    const auto* const right_file = find_source_file(model, *right);
+    return left_file != nullptr && right_file != nullptr
+        && !left_file->physical_name.empty()
+        && left_file->physical_name == right_file->physical_name;
+}
+
+std::optional<std::size_t> scope_distance(const Model& model,
+    const ScopeId inner, const ScopeId outer) noexcept
+{
+    const auto& scopes = model.scopes();
+    auto scope = inner;
+    for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
+        if (scope == outer) {
+            return depth;
+        }
+        if (!scope.valid() || scope.value() >= scopes.size()
+            || !scopes[scope.value()].parent) {
+            return std::nullopt;
+        }
+        scope = *scopes[scope.value()].parent;
+    }
+    return std::nullopt;
+}
+
+bool scope_within(const Model& model, const ScopeId inner,
+    const ScopeId outer) noexcept
+{
+    return inner.valid() && scope_distance(model, inner, outer).has_value();
+}
+
 } // namespace fsim::semantic

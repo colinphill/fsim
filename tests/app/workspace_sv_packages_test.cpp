@@ -189,8 +189,7 @@ app::application_detail::WorkspaceCatalogs provider_catalogs(
     return { std::move(catalog) };
 }
 
-void expect_catalog_dependencies(const std::filesystem::path& directory,
-    const semantic::CompiledDesign& consumer,
+void expect_catalog_dependencies(const semantic::CompiledDesign& consumer,
     const semantic::CompiledDesign& provider, const std::string& library,
     const bool expect_class)
 {
@@ -198,18 +197,15 @@ void expect_catalog_dependencies(const std::filesystem::path& directory,
         "work", "consumer");
     assert(owner);
     const std::array owners { owner->identity->id };
-    app::workspace::Store store { directory / "dependency-workspace" };
-    diagnostic::Engine diagnostics;
     const auto dependencies = app::application_detail::workspace_dependencies(
-        store, consumer, owners, provider_catalogs(provider, library), diagnostics);
-    assert(dependencies && !diagnostics.has_error());
-    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
+        consumer, owners, provider_catalogs(provider, library));
+    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
         return dependency.library == library
             && dependency.unit.language == "systemverilog"
             && dependency.unit.kind == "package" && dependency.unit.name == "values"
             && dependency.fingerprint == "sv-package-fingerprint";
     }));
-    assert(std::ranges::none_of(*dependencies, [](const auto& dependency) {
+    assert(std::ranges::none_of(dependencies, [](const auto& dependency) {
         return dependency.unit.language == "vhdl"
             || dependency.fingerprint == "unrelated-vhdl-fingerprint";
     }));
@@ -221,7 +217,7 @@ void expect_catalog_dependencies(const std::filesystem::path& directory,
     const auto metadata = app::application_detail::compiled_class_metadata_entry(
         provider, *declaration, library);
     assert(metadata);
-    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
+    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
         return dependency.library == library && dependency.unit.kind == "class"
             && dependency.unit.name == metadata->name
             && dependency.fingerprint == "sv-class-fingerprint";
@@ -246,7 +242,7 @@ module consumer;
 endmodule
 )", "work", &provider);
     expect_signal(consumer, "0010101");
-    expect_catalog_dependencies(directory, consumer, provider, library, true);
+    expect_catalog_dependencies(consumer, provider, library, true);
 }
 
 void transitive_package(const std::filesystem::path& directory)
@@ -284,7 +280,7 @@ module consumer;
 endmodule
 )", "work", &provider);
     expect_signal(consumer, "0001110");
-    expect_catalog_dependencies(directory, consumer, provider, "external", false);
+    expect_catalog_dependencies(consumer, provider, "external", false);
     const auto unit = consumer.find_unit(semantic::UnitKind::verilog_module,
         "work", "consumer");
     assert(unit);
@@ -539,13 +535,9 @@ endmodule
             && reference.target;
     }));
     const std::array owners { owner->identity->id };
-    app::workspace::Store store { directory / "dependency-workspace" };
-    diagnostic::Engine dependency_diagnostics;
     const auto dependencies = app::application_detail::workspace_dependencies(
-        store, consumer, owners, provider_catalogs(provider, "external"),
-        dependency_diagnostics);
-    assert(dependencies && !dependency_diagnostics.has_error());
-    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
+        consumer, owners, provider_catalogs(provider, "external"));
+    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
         return dependency.library == "external" && dependency.unit.kind == "class"
             && dependency.unit.name == semantic::sv::class_declaration_identity(*declaration)
             && dependency.fingerprint == "sv-class-fingerprint";

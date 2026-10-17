@@ -1,51 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "lowerer_vhdl_vital_names.hpp"
 
 #include <cctype>
 #include <map>
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
+using namespace vital_detail;
 
 namespace {
-
-std::string_view vital_state_simple_name(const std::string_view name)
-{
-    const auto separator = name.find_last_of('.');
-    return name.substr(
-        separator == std::string_view::npos ? 0U : separator + 1U);
-}
-
-std::string_view vital_state_name(const semantic::vhdl::Name& name)
-{
-    return name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
-}
-
-std::string canonical_vital_state_identifier(const std::string_view name)
-{
-    auto result = std::string { name };
-    lowercase_ascii(result);
-    return result;
-}
-
-bool has_vital_primitives_qualification(const std::string_view name)
-{
-    const auto member_separator = name.find_last_of('.');
-    if (member_separator == std::string_view::npos) {
-        return true;
-    }
-    const auto owner = name.substr(0U, member_separator);
-    const auto package_separator = owner.find_last_of('.');
-    if (package_separator == std::string_view::npos) {
-        return equal_ignoring_ascii_case(owner, "vital_primitives");
-    }
-    return equal_ignoring_ascii_case(
-               owner.substr(package_separator + 1U), "vital_primitives")
-        && equal_ignoring_ascii_case(
-            owner.substr(0U, package_separator), "ieee");
-}
 
 std::optional<char> vital_state_symbol(
     const semantic::vhdl::Expression& expression)
@@ -83,21 +47,14 @@ bool Lowerer::is_hir_vhdl_vital_state_table_call(
         return false;
     }
     const auto& procedure = statement->vhdl->procedure;
-    const auto qualified_name = vital_state_name(procedure);
+    const auto qualified_name = procedure.text();
     if (!equal_ignoring_ascii_case(
-            vital_state_simple_name(qualified_name), "vitalstatetable")
-        || !has_vital_primitives_qualification(qualified_name)) {
+            vital_simple_name(qualified_name), "vitalstatetable")
+        || !has_vital_package_qualification(
+            qualified_name, "vital_primitives")) {
         return false;
     }
-    if (procedure.selected || !procedure.overloads.empty()) {
-        return false;
-    }
-    semantic::CompiledDesignResolver resolver { *specialized_hir_unit_ };
-    return resolver.resolve_vhdl_callable_candidates(
-                       procedure, statement->vhdl->scope)
-               .candidates.empty()
-        && resolver.vhdl_standard_package_member_visible(
-            procedure, statement->vhdl->scope);
+    return hir_vhdl_vital_intrinsic_visible(procedure, statement->vhdl->scope);
 }
 
 bool Lowerer::lower_hir_vhdl_vital_state_table_call(
@@ -114,59 +71,19 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
     const auto& source = *statement->vhdl;
     const auto statement_span = hir_source_span(source.source);
 
-    std::vector<semantic::ExpressionId> positional;
-    std::map<std::string, semantic::ExpressionId, std::less<>> named;
-    bool saw_named { };
     bool valid = true;
-    for (const auto& association : source.procedure_arguments) {
-        if (association.formal) {
-            saw_named = true;
-            const auto formal = canonical_vital_state_identifier(
-                vital_state_simple_name(vital_state_name(*association.formal)));
-            if (!named.emplace(formal, association.actual).second) {
-                report("FSIM-ELAB-VITAL-013",
-                    "duplicate VitalStateTable actual for formal '"
-                        + formal + "'",
-                    hir_source_span(association.source));
-                valid = false;
-            }
-        } else {
-            if (saw_named) {
-                report("FSIM-ELAB-VITAL-013",
-                    "a positional VitalStateTable actual cannot follow a named actual",
-                    hir_source_span(association.source));
-                valid = false;
-            }
-            positional.push_back(association.actual);
-        }
-    }
-    const auto expression_span = [&](const semantic::ExpressionId id) {
-        const auto expression = specialized_hir_unit_->find_expression(id);
-        return expression && expression->vhdl != nullptr
-            ? hir_source_span(expression->vhdl->source)
-            : statement_span;
-    };
-    for (const auto& [formal, expression_id] : named) {
+    const auto actuals = collect_hir_vital_actuals(source.procedure_arguments,
+        "FSIM-ELAB-VITAL-013", "VitalStateTable", valid);
+    for (const auto& [formal, expression_id] : actuals.named) {
         if (formal != "result" && formal != "previousdatain"
             && formal != "statetable" && formal != "datain"
             && formal != "numstates") {
             report("FSIM-ELAB-VITAL-013",
                 "VitalStateTable has no formal parameter '" + formal + "'",
-                expression_span(expression_id));
+                hir_expression_span(expression_id, statement_span));
             valid = false;
         }
     }
-    const auto actual = [&](const std::string_view formal,
-                            const std::size_t position)
-        -> std::optional<semantic::ExpressionId> {
-        const auto selected = named.find(formal);
-        if (selected != named.end()) {
-            return selected->second;
-        }
-        return position < positional.size()
-            ? std::optional { positional[position] }
-            : std::nullopt;
-    };
     const auto binding = [&](const semantic::ExpressionId expression_id,
                              const bool require_storage)
         -> std::optional<HirRuntimeBinding> {
@@ -180,7 +97,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
             : std::nullopt;
     };
 
-    const auto result_expression = actual("result", 0U);
+    const auto result_expression = actuals.find("result", 0U);
     const auto result_binding = result_expression
         ? binding(*result_expression, true)
         : std::nullopt;
@@ -188,8 +105,9 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         || (!result_binding->local && !result_binding->signal)) {
         report("FSIM-ELAB-VITAL-014",
             "VitalStateTable Result requires a writable variable or signal",
-            result_expression ? expression_span(*result_expression)
-                              : statement_span);
+            result_expression
+                ? hir_expression_span(*result_expression, statement_span)
+                : statement_span);
         return true;
     }
     const bool variable_profile = result_binding->local.has_value();
@@ -197,7 +115,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         || result_binding->width == 0U) {
         report("FSIM-ELAB-VITAL-014",
             "VitalStateTable Result must have a concrete standard-logic width",
-            expression_span(*result_expression));
+            hir_expression_span(*result_expression, statement_span));
         return true;
     }
     const auto result_width = result_binding->width;
@@ -210,16 +128,16 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
     }
 
     const auto previous_expression = variable_profile
-        ? actual("previousdatain", 1U)
+        ? actuals.find("previousdatain", 1U)
         : std::nullopt;
-    const auto table_expression = actual(
+    const auto table_expression = actuals.find(
         "statetable", variable_profile ? 2U : 1U);
-    const auto data_expression = actual(
+    const auto data_expression = actuals.find(
         "datain", variable_profile ? 3U : 2U);
-    const auto states_expression = actual(
+    const auto states_expression = actuals.find(
         "numstates", variable_profile ? 4U : 3U);
     const auto maximum_actuals = variable_profile ? 5U : 4U;
-    if (positional.size() > maximum_actuals) {
+    if (actuals.positional.size() > maximum_actuals) {
         report("FSIM-ELAB-VITAL-013",
             "VitalStateTable has too many positional actuals",
             statement_span);
@@ -239,7 +157,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         || table->vhdl->operands.empty()) {
         report("FSIM-ELAB-VITAL-015",
             "VitalStateTable requires a nonempty static two-dimensional table",
-            expression_span(*table_expression));
+            hir_expression_span(*table_expression, statement_span));
         return true;
     }
 
@@ -261,7 +179,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         if (!width) {
             report("FSIM-ELAB-VITAL-014",
                 "VitalStateTable DataIn requires a concrete vector width",
-                expression_span(*data_expression));
+                hir_expression_span(*data_expression, statement_span));
             return true;
         }
         data_width = *width;
@@ -273,7 +191,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                     != frontend::ValueDomain::Logic9) {
                 report("FSIM-ELAB-VITAL-014",
                     "VitalStateTable DataIn must be a standard-logic vector",
-                    expression_span(*data_expression));
+                    hir_expression_span(*data_expression, statement_span));
                 return true;
             }
         }
@@ -282,13 +200,13 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         if (!data_binding || !data_binding->signal) {
             report("FSIM-ELAB-VITAL-014",
                 "the signal VitalStateTable profile requires a signal DataIn",
-                expression_span(*data_expression));
+                hir_expression_span(*data_expression, statement_span));
             return true;
         }
         if (data_binding->domain != frontend::ValueDomain::Logic9) {
             report("FSIM-ELAB-VITAL-014",
                 "VitalStateTable DataIn must be a standard-logic vector",
-                expression_span(*data_expression));
+                hir_expression_span(*data_expression, statement_span));
             return true;
         }
         data_width = data_binding->width;
@@ -308,7 +226,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         if (!value || *value < 0) {
             report("FSIM-ELAB-VITAL-015",
                 "VitalStateTable NumStates must be a static natural value",
-                expression_span(*states_expression));
+                hir_expression_span(*states_expression, statement_span));
             valid = false;
         } else {
             num_states = static_cast<std::size_t>(*value);
@@ -336,7 +254,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
             report("FSIM-ELAB-VITAL-014",
                 "VitalStateTable PreviousDataIn must be a writable "
                 "standard-logic vector at least as wide as DataIn",
-                expression_span(*previous_expression));
+                hir_expression_span(*previous_expression, statement_span));
             return true;
         }
         previous_register = previous_binding->local;
@@ -352,10 +270,8 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
     }
 
     const auto bool_constant = [&](const bool value) {
-        const auto result = allocate_register(
-            1U, frontend::ValueDomain::Boolean);
-        process_.operations.emplace_back(LoadConstant {
-            result, unsigned_value(value ? 1U : 0U, 1U) });
+        const auto result = load_constant(unsigned_value(value ? 1U : 0U, 1U),
+            frontend::ValueDomain::Boolean);
         return result;
     };
     const auto logic_constant = [&](const runtime::Logic9 value) {
@@ -488,7 +404,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                 "present-state, and Result symbols with exact profile widths",
                 row && row->vhdl != nullptr
                     ? hir_source_span(row->vhdl->source)
-                    : expression_span(*row_id));
+                    : hir_expression_span(*row_id, statement_span));
             return true;
         }
         auto row_match = bool_constant(true);
@@ -502,8 +418,10 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                 : std::nullopt;
             if (!symbol || *symbol == 'Z') {
                 report("FSIM-ELAB-VITAL-016",
-                    "a VitalStateTable input column contains an invalid state symbol",
-                    expression_span(row->vhdl->operands[column]));
+                    "a VitalStateTable input column contains an invalid state "
+                    "symbol",
+                    hir_expression_span(
+                        row->vhdl->operands[column], statement_span));
                 return true;
             }
             const auto matched = symbol_match(*symbol,
@@ -511,8 +429,10 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                 bit(*data_register, data_width, column), false);
             if (!matched) {
                 report("FSIM-ELAB-VITAL-016",
-                    "a VitalStateTable input column contains an invalid state symbol",
-                    expression_span(row->vhdl->operands[column]));
+                    "a VitalStateTable input column contains an invalid state "
+                    "symbol",
+                    hir_expression_span(
+                        row->vhdl->operands[column], statement_span));
                 return true;
             }
             row_match = both(row_match, *matched);
@@ -532,8 +452,10 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                 : std::nullopt;
             if (!matched) {
                 report("FSIM-ELAB-VITAL-016",
-                    "a VitalStateTable present-state column requires X, 0, 1, -, or B",
-                    expression_span(row->vhdl->operands[table_column]));
+                    "a VitalStateTable present-state column requires X, 0, 1, "
+                    "-, or B",
+                    hir_expression_span(
+                        row->vhdl->operands[table_column], statement_span));
                 return true;
             }
             row_match = both(row_match, *matched);
@@ -560,8 +482,10 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
                 value = bit(result_register, result_width, output);
             } else {
                 report("FSIM-ELAB-VITAL-016",
-                    "a VitalStateTable output column requires X, 0, 1, -, Z, or S",
-                    expression_span(row->vhdl->operands[table_column]));
+                    "a VitalStateTable output column requires X, 0, 1, -, Z, "
+                    "or S",
+                    hir_expression_span(
+                        row->vhdl->operands[table_column], statement_span));
                 return true;
             }
             const auto selected = allocate_register(

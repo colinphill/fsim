@@ -20,7 +20,7 @@ inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
 // Portable metadata cannot reconstruct whether a normalized VHDL designator
 // came from a basic or extended identifier unless this form is retained.
-// `unknown` is used only when importing older metadata that omitted the form.
+// `unknown` is used for non-VHDL units and for an empty primary name.
 enum class VhdlIdentifierForm : std::uint8_t {
   unknown,
   basic,

@@ -466,4 +466,21 @@ private:
     std::map<SpanKey, SourceSpanId> source_span_by_key_;
 };
 
+/// The source span with this identity, or null.
+[[nodiscard]] const SourceSpan* find_source_span(
+    const Model& model, SourceSpanId id) noexcept;
+/// The file of a source span, or null.
+[[nodiscard]] const SourceFile* find_source_file(
+    const Model& model, const SourceSpan& span) noexcept;
+/// The number of parent steps from `inner` up to `outer` (0 when they are
+/// equal), or nothing when `outer` does not enclose `inner`.
+[[nodiscard]] std::optional<std::size_t> scope_distance(
+    const Model& model, ScopeId inner, ScopeId outer) noexcept;
+/// Whether the valid scope `inner` is `outer` or lies within it.
+[[nodiscard]] bool scope_within(
+    const Model& model, ScopeId inner, ScopeId outer) noexcept;
+/// Whether two spans lie in the same physical file.
+[[nodiscard]] bool same_physical_source(
+    const Model& model, SourceSpanId left, SourceSpanId right) noexcept;
+
 } // namespace fsim::semantic

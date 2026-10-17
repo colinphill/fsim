@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <charconv>
 #include <functional>
@@ -11,7 +12,7 @@ namespace {
 
     [[nodiscard]] std::string canonical_name(const std::string_view text)
     {
-        if (text.size() >= 2U && text.front() == '\\' && text.back() == '\\') {
+        if (support::is_extended_vhdl_identifier(text)) {
             return std::string { text };
         }
         std::string result;

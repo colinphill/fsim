@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_type_descriptor.hpp"
+#include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -215,11 +216,8 @@ namespace {
             }
             std::size_t count = 1;
             for (const auto& range : descriptor.ranges) {
-                const auto distance = range.left >= range.right
-                    ? static_cast<std::uint64_t>(range.left)
-                        - static_cast<std::uint64_t>(range.right)
-                    : static_cast<std::uint64_t>(range.right)
-                        - static_cast<std::uint64_t>(range.left);
+                const auto distance
+                    = support::index_distance(range.left, range.right);
                 if (distance == std::numeric_limits<std::uint64_t>::max()) {
                     return SystemVerilogVpiDescriptorError::ArithmeticOverflow;
                 }

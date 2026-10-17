@@ -557,6 +557,25 @@ private:
     bool instantiate_compiled_vhdl_child(
         CompiledVhdlChildActivationContext context);
 
+    // One SystemC port association after language-specific normalization:
+    // the formal spelling if named, and the actual signal name when the
+    // actual is an expression (empty when it does not name a signal).
+    struct SystemCPortAssociation {
+        std::optional<std::string> formal;
+        std::optional<std::string> actual_name;
+        frontend::SourceSpan source;
+    };
+    // Connects a SystemC instance's ports and instantiates it; VHDL
+    // formals and actuals use VHDL name matching.
+    bool instantiate_systemc_ports(
+        const SystemCInstanceDescription& description,
+        std::span<const SystemCPortAssociation> associations,
+        bool vhdl,
+        const SignalMap& working_signals,
+        std::string_view working_path,
+        const std::string& child_path,
+        const Binding* external_binding,
+        const frontend::SourceSpan& instance_source);
     bool instantiate_compiled_vhdl_systemc_child(
         const semantic::vhdl::Instance& effective_instance,
         const semantic::SpecializedHirUnit& working_specialization,
@@ -1468,6 +1487,13 @@ private:
         const semantic::sv::Unit& unit,
         SpecializationInfo& specialization,
         std::optional<std::uint32_t> program_owner);
+    void append_generated_vhdl_processes(Lowerer& source,
+        const semantic::vhdl::Unit& owner,
+        SpecializationInfo& specialization);
+    // Reports a VHDL-2019 unspecified interface type that a callable
+    // profile cannot infer; true when one was reported.
+    bool report_vhdl_unspecified_inference(
+        std::optional<semantic::SourceSpanId> failure);
 
     bool materialize_compiled_systemverilog_static_storage(
         const semantic::sv::Unit& unit,
@@ -1604,6 +1630,15 @@ private:
         const semantic::SpecializedHirUnit& parent,
         const std::string& path,
         std::string_view target);
+    const SystemCInstanceDescription* construct_systemc_instance(
+        const std::string& path,
+        std::string_view target,
+        const std::vector<SystemCConstructionParameter>& schema,
+        const std::vector<std::optional<std::int64_t>>& actuals,
+        std::size_t diagnostics_before,
+        const frontend::SourceSpan& instance_source,
+        std::string_view missing_actual_code,
+        std::string_view invalid_value_code);
     void instantiate_systemc(
         const SystemCInstanceDescription& instance,
         const std::string& path,

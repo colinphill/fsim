@@ -7,9 +7,35 @@
 #include <utility>
 
 namespace fsim::elaboration {
-namespace {
 
-} // namespace
+void HierarchyBuilder::append_generated_vhdl_processes(Lowerer& source,
+    const semantic::vhdl::Unit& owner, SpecializationInfo& specialization)
+{
+    auto generated_processes = source.take_generated_processes();
+    record_lowering_census(
+        vhdl_lowerer_generated_processes_, generated_processes.size());
+    for (auto& generated : generated_processes) {
+        generated.language_standard = owner.standard;
+        generated.compatibility_profile = owner.compatibility_profile;
+        canonicalize_process_operations(generated);
+        specialization.processes.push_back(generated.id);
+        design_.append_process_record(std::move(generated));
+    }
+}
+
+bool HierarchyBuilder::report_vhdl_unspecified_inference(
+    const std::optional<semantic::SourceSpanId> failure)
+{
+    if (!failure) {
+        return false;
+    }
+    report(
+        "FSIM-ELAB-VHUNSPEC-001",
+        "VHDL-2019 unspecified interface types do not infer one "
+        "consistent callable profile",
+        compiled_source_span(*compiled_, *failure));
+    return true;
+}
 
 bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
     std::vector<VhdlHirMaterialization>& materializations,
@@ -22,36 +48,6 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
     SpecializationInfo& specialization,
     std::size_t& concurrent_order)
 {
-    const auto append_generated_processes = [&](
-                                                Lowerer& source,
-                                                const semantic::vhdl::Unit& owner) {
-        auto generated_processes = source.take_generated_processes();
-        record_lowering_census(
-            vhdl_lowerer_generated_processes_,
-            generated_processes.size());
-        for (auto& generated : generated_processes) {
-            generated.language_standard = owner.standard;
-            generated.compatibility_profile
-                = owner.compatibility_profile;
-            canonicalize_process_operations(generated);
-            specialization.processes.push_back(generated.id);
-            design_.append_process_record(std::move(generated));
-        }
-    };
-    const auto report_unspecified_inference = [&](Lowerer& source,
-                                                  const auto id) {
-        const auto failure
-            = source.hir_vhdl_unspecified_inference_failure(id);
-        if (!failure) {
-            return false;
-        }
-        report(
-            "FSIM-ELAB-VHUNSPEC-001",
-            "VHDL-2019 unspecified interface types do not infer one "
-            "consistent callable profile",
-            compiled_source_span(*compiled_, *failure));
-        return true;
-    };
 
     // Signals a generated occurrence may name: the architecture's and the
     // generate region's.
@@ -113,7 +109,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             canonicalize_process_operations(*lowered);
             specialization.processes.push_back(lowered->id);
             design_.append_process_record(std::move(*lowered));
-            append_generated_processes(generated_lowerer, architecture);
+            append_generated_vhdl_processes(
+                generated_lowerer, architecture, specialization);
         }
         for (const auto statement_id :
             materialization.region->concurrent_statements) {
@@ -124,8 +121,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     && statement->vhdl != nullptr
                 ? statement->vhdl->source
                 : materialization.region->source;
-            if (report_unspecified_inference(
-                    generated_lowerer, statement_id)) {
+            if (report_vhdl_unspecified_inference(
+                    generated_lowerer.hir_vhdl_unspecified_inference_failure(
+                        statement_id))) {
                 return false;
             }
             record_lowering_census(vhdl_generated_concurrent_occurrences_);
@@ -167,7 +165,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     design_.append_process_record(
                         std::move(process_instance));
                 }
-                append_generated_processes(generated_lowerer, architecture);
+                append_generated_vhdl_processes(
+                    generated_lowerer, architecture, specialization);
                 continue;
             }
             auto lowered = generated_lowerer
@@ -191,7 +190,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             canonicalize_process_operations(*lowered);
             specialization.processes.push_back(lowered->id);
             design_.append_process_record(std::move(*lowered));
-            append_generated_processes(generated_lowerer, architecture);
+            append_generated_vhdl_processes(
+                generated_lowerer, architecture, specialization);
         }
         for (const auto process_id :
             materialization.region->processes) {
@@ -201,8 +201,9 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     && process->vhdl != nullptr
                 ? process->vhdl->source
                 : materialization.region->source;
-            if (report_unspecified_inference(
-                    generated_lowerer, process_id)) {
+            if (report_vhdl_unspecified_inference(
+                    generated_lowerer.hir_vhdl_unspecified_inference_failure(
+                        process_id))) {
                 return false;
             }
             record_lowering_census(vhdl_generated_process_lower_requests_);
@@ -248,7 +249,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     process_instance.id, process_id);
                 design_.append_process_record(std::move(process_instance));
             }
-            append_generated_processes(generated_lowerer, architecture);
+            append_generated_vhdl_processes(
+                generated_lowerer, architecture, specialization);
         }
     }
     return true;

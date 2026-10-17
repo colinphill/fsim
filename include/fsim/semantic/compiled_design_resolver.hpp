@@ -37,6 +37,24 @@ using CompiledBindingFrame = std::vector<CompiledActualBinding>;
 using CompiledDeclarationPredicate =
     std::function<bool(const CompiledDeclarationView&)>;
 
+/// A VHDL type, subtype or generic type declaration.
+[[nodiscard]] inline bool is_vhdl_type_declaration(
+    const CompiledDeclarationView& candidate) noexcept
+{
+    return candidate.vhdl != nullptr
+        && (candidate.vhdl->form == vhdl::DeclarationForm::type
+            || candidate.vhdl->form == vhdl::DeclarationForm::subtype
+            || candidate.vhdl->form == vhdl::DeclarationForm::generic_type);
+}
+
+/// A VHDL declaration that denotes a type.
+[[nodiscard]] inline bool declares_vhdl_type(
+    const CompiledDeclarationView& candidate) noexcept
+{
+    return candidate.vhdl != nullptr
+        && candidate.vhdl->declared_type.has_value();
+}
+
 struct CompiledDeclarationResolution {
     CompiledResolutionStatus status {
         CompiledResolutionStatus::not_found

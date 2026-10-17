@@ -15,18 +15,6 @@ namespace {
 
 constexpr std::uint64_t kGenericProjectedRegionPayload = UINT64_C(1) << 60U;
 
-[[nodiscard]] bool frontier_keys_equal(
-    const RegionFrontierKeyV2& left,
-    const RegionFrontierKeyV2& right) noexcept
-{
-    return left.time == right.time && left.delta == right.delta
-        && left.systemverilog_round == right.systemverilog_round
-        && left.stable_order == right.stable_order
-        && left.sequence == right.sequence
-        && left.process_domain == right.process_domain
-        && left.phase == right.phase;
-}
-
 [[nodiscard]] bool decode_generic_process_payload(
     const std::uint64_t payload,
     ProcessId& process) noexcept
@@ -645,9 +633,8 @@ bool Interpreter::Impl::stage_generic_frontier_update_batch(
             const auto expected_origin = activation_key_for_task(
                 frame.slot,
                 runtime.original_scheduler_tasks[*origin_task_index]);
-            if (!frontier_keys_equal(
-                    runtime.members[site.member_index].activation_origin,
-                    expected_origin)
+            if (runtime.members[site.member_index].activation_origin
+                    != expected_origin
                 || (have_previous_event
                     && (*origin_task_index < previous_event_task_index
                         || (*origin_task_index == previous_event_task_index
@@ -668,10 +655,8 @@ bool Interpreter::Impl::stage_generic_frontier_update_batch(
                         ProcessSchedulingDomain::generic)
                 || event.origin.phase
                     != static_cast<std::uint32_t>(SchedulerPhase::active)
-                || !frontier_keys_equal(
-                    event.origin, expected_origin)
-                || !frontier_keys_equal(
-                    pending.origin, expected_origin)
+                || event.origin != expected_origin
+                || pending.origin != expected_origin
                 || pending.member_index != site.member_index
                 || pending.signal_slot != site.signal_slot
                 || pending.source_instruction != site.source_instruction

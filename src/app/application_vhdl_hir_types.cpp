@@ -32,7 +32,7 @@ namespace fsim::app::application_detail {
         vh::ModeViewElement element;
         element.element = vh::Name {
             input_element.name,
-            canonical_vhdl_name(input_element.name),
+            support::canonical_vhdl_spelling(input_element.name),
             source(input_element.span),
             std::nullopt,
             { }
@@ -83,14 +83,15 @@ namespace fsim::app::application_detail {
         parent);
     auto& output = declaration(id);
     auto declared_subtype = input.type;
-    auto declaration_identity = canonical_vhdl_name(
+    auto declaration_identity = support::canonical_vhdl_spelling(
         declared_subtype.vhdl_type_declaration);
     if (const auto separator = declaration_identity.find_last_of(".:");
         separator != std::string::npos) {
         declaration_identity.erase(0U, separator + 1U);
     }
     if (subtype_form
-        && declaration_identity == canonical_vhdl_name(input.name)) {
+        && declaration_identity
+            == support::canonical_vhdl_spelling(input.name)) {
         // The declaration identity names this new subtype; its HIR
         // base must continue to reference the subtype indication
         // written after `is`.  Preserve an explicit, distinct base marker

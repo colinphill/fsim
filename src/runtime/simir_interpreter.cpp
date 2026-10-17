@@ -83,19 +83,11 @@ void Interpreter::set_region_kernel_backend_provider(
     impl_->region_kernel_backend_provider = std::move(provider);
 }
 
-void Interpreter::set_class_allocate_hook(ClassAllocateHook hook)
-{
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->class_allocate_hook = std::move(hook);
-    impl_->class_allocate_context_hook = { };
-}
-
 void Interpreter::set_class_allocate_context_hook(
     ClassAllocateContextHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_allocate_context_hook = std::move(hook);
-    impl_->class_allocate_hook = { };
 }
 
 void Interpreter::set_coverage_sample_hook(CoverageSampleHook hook)
@@ -160,19 +152,11 @@ void Interpreter::set_class_property_container_hook(
     impl_->class_property_container_hook = std::move(hook);
 }
 
-void Interpreter::set_class_method_call_hook(ClassMethodCallHook hook)
-{
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->class_method_call_hook = std::move(hook);
-    impl_->class_method_call_context_hook = { };
-}
-
 void Interpreter::set_class_method_call_context_hook(
     ClassMethodCallContextHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_method_call_context_hook = std::move(hook);
-    impl_->class_method_call_hook = { };
 }
 
 void Interpreter::set_class_static_property_read_hook(
@@ -189,20 +173,11 @@ void Interpreter::set_class_static_property_write_hook(
     impl_->class_static_property_write_hook = std::move(hook);
 }
 
-void Interpreter::set_class_static_method_call_hook(
-    ClassStaticMethodCallHook hook)
-{
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->class_static_method_call_hook = std::move(hook);
-    impl_->class_static_method_call_context_hook = { };
-}
-
 void Interpreter::set_class_static_method_call_context_hook(
     ClassStaticMethodCallContextHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_static_method_call_context_hook = std::move(hook);
-    impl_->class_static_method_call_hook = { };
 }
 
 void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
@@ -1625,20 +1600,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         }
         for (const auto object : container_write_closure) {
             const auto& target = container_objects[object];
-            const bool has_signal_alias
-                = (object < container_signal_aliases.size()
-                    && container_signal_aliases[object])
-                || (object < container_aggregate_signal_aliases.size()
-                    && container_aggregate_signal_aliases[object])
-                || (object < container_element_signal_aliases.size()
-                    && std::ranges::any_of(
-                        container_element_signal_aliases[object],
-                        [](const auto& alias) {
-                            return alias.has_value();
-                        }));
             if (target.package_owner_id != package_owner_id
                 || target.slice_alias
-                || has_signal_alias) {
+                || container_has_signal_alias(object)) {
                 throw std::invalid_argument {
                     "SimIR package startup container permission is not direct owned storage"
                 };
@@ -3859,49 +3823,10 @@ void Interpreter::Impl::initialize_package_static_string_object(
     const std::string_view value,
     const std::optional<ProcessId> process)
 {
-    if (!package_static_initialization_active
-        || started || region_graph || scheduler.has_pending()
-        || object_id >= string_objects.size()) {
-        throw std::logic_error {
-            "package static string write is outside startup actions"
-        };
-    }
-    if (process) {
-        if (package_static_initialization_callback_active
-            || *process != package_static_initialization_process) {
-            throw std::logic_error {
-                "package static string process identity is not active"
-            };
-        }
-        const auto program = processes.program_view(*process);
-        if (program.startup_phase()
-                != ProcessStartupPhase::package_static_initializer
-            || program.startup_package_owner_id() == 0U
-            || program.startup_package_owner_id()
-                != string_objects[object_id].package_owner_id
-            || !std::ranges::binary_search(
-                program.startup_writable_string_object_ids(), object_id)) {
-            throw std::logic_error {
-                "package static process wrote outside its direct string closure"
-            };
-        }
-    } else {
-        if (!package_static_initialization_callback_active
-            || package_static_initialization_callback_index
-                >= package_static_startup_callbacks.size()) {
-            throw std::logic_error {
-                "package static string write is outside its startup callback"
-            };
-        }
-        const auto& callback = package_static_startup_callbacks[
-            package_static_initialization_callback_index];
-        if (!std::ranges::binary_search(
-                callback.writable_string_object_ids, object_id)) {
-            throw std::logic_error {
-                "package static callback wrote outside its string closure"
-            };
-        }
-    }
+    const bool in_range = object_id < string_objects.size();
+    require_package_static_write("string", in_range,
+        in_range ? string_objects[object_id].package_owner_id : 0U,
+        object_id, process, false);
     if (value.size() > maximum_string_bytes) {
         throw std::length_error {
             "SimIR string object exceeds byte limit"
@@ -3982,19 +3907,7 @@ void Interpreter::deposit_container_object_element(
             if (selected >= impl_->container_objects.size()) {
                 break;
             }
-            const bool has_signal_alias
-                = (selected < impl_->container_signal_aliases.size()
-                    && impl_->container_signal_aliases[selected])
-                || (selected
-                        < impl_->container_aggregate_signal_aliases.size()
-                    && impl_->container_aggregate_signal_aliases[selected])
-                || (selected < impl_->container_element_signal_aliases.size()
-                    && std::ranges::any_of(
-                        impl_->container_element_signal_aliases[selected],
-                        [](const auto& alias) {
-                            return alias.has_value();
-                        }));
-            if (has_signal_alias) {
+            if (impl_->container_has_signal_alias(selected)) {
                 impl_->require_all_region_forwarding_role_journals_flushed();
                 break;
             }

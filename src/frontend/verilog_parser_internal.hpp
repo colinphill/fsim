@@ -10,6 +10,7 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +20,36 @@
 #include <vector>
 
 namespace fsim::frontend {
+
+/// The binary operator a compound assignment applies (`+=` applies "+"),
+/// or empty for any other token (IEEE 1800-2017 11.4.1).
+[[nodiscard]] constexpr std::string_view compound_assignment_operator(
+    const TokenKind kind) noexcept
+{
+    switch (kind) {
+    case TokenKind::PlusAssign: return "+";
+    case TokenKind::MinusAssign: return "-";
+    case TokenKind::StarAssign: return "*";
+    case TokenKind::SlashAssign: return "/";
+    case TokenKind::PercentAssign: return "%";
+    case TokenKind::AmpersandAssign: return "&";
+    case TokenKind::PipeAssign: return "|";
+    case TokenKind::CaretAssign: return "^";
+    case TokenKind::ShiftLeftAssign: return "<<";
+    case TokenKind::ShiftRightAssign: return ">>";
+    case TokenKind::ArithmeticShiftLeftAssign: return "<<<";
+    case TokenKind::ArithmeticShiftRightAssign: return ">>>";
+    default: return { };
+    }
+}
+
+/// Whether a token is `=` or a compound assignment operator.
+[[nodiscard]] constexpr bool is_blocking_assignment_operator(
+    const TokenKind kind) noexcept
+{
+    return kind == TokenKind::Assign
+        || !compound_assignment_operator(kind).empty();
+}
 
 // Static instance arrays are materialized as owning frontend records.  This
 // host-resource guard is intentionally derived from their actual in-memory
@@ -75,6 +106,8 @@ enum class SystemVerilogAnnexConstruct {
     StandardRevision standard);
 [[nodiscard]] unsigned keyword_set_rank(KeywordSet set);
 [[nodiscard]] std::optional<StandardRevision> declaration_word_standard(
+    std::string_view word);
+[[nodiscard]] std::optional<StandardRevision> structural_word_standard(
     std::string_view word);
 [[nodiscard]] bool contains_word(
     std::initializer_list<std::string_view> words,
@@ -526,6 +559,20 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<VerilogUdpOutputSymbol> parse_udp_output_symbol(
       bool allow_no_change);
 
+  struct AnsiCallableFormal {
+    Token name;
+    Type type;
+    PortDirection direction{PortDirection::Input};
+    bool reference{};
+    bool const_reference{};
+    bool static_reference{};
+    std::optional<Expression> default_value;
+  };
+
+  std::vector<AnsiCallableFormal> parse_ansi_callable_formals(
+      std::string_view kind,
+      const std::function<void(const Token&)>& declare);
+
   FunctionDeclaration parse_function(
       const Token& start,
       bool prototype = false,
@@ -655,7 +702,9 @@ class VerilogParser final : private detail::ParserBase {
       DesignUnit& unit,
       const Token& start);
 
-  Type parse_systemverilog_aggregate_type();
+  // A struct or union type; `complete` is cleared when its member list is
+  // missing.
+  Type parse_systemverilog_aggregate_type(bool* complete = nullptr);
   Type parse_systemverilog_enum_type(
       std::vector<EnumLiteralDeclaration>* literals = nullptr);
 

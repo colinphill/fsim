@@ -63,16 +63,7 @@ void require_container_signal_role_materialized(
         if (object >= owner.container_objects.size()) {
             return;
         }
-        const bool has_signal_alias
-            = (object < owner.container_signal_aliases.size()
-                && owner.container_signal_aliases[object])
-            || (object < owner.container_aggregate_signal_aliases.size()
-                && owner.container_aggregate_signal_aliases[object])
-            || (object < owner.container_element_signal_aliases.size()
-                && std::ranges::any_of(
-                    owner.container_element_signal_aliases[object],
-                    [](const auto& alias) { return alias.has_value(); }));
-        if (has_signal_alias) {
+        if (owner.container_has_signal_alias(object)) {
             owner.require_all_region_forwarding_role_journals_flushed();
             return;
         }
@@ -2058,67 +2049,80 @@ void Interpreter::Impl::write_container_alias_driver_family(
     finalize_container_alias_driver_family(prepared);
 }
 
+bool Interpreter::Impl::container_has_signal_alias(
+    const ContainerObjectId object) const noexcept
+{
+    return (object < container_signal_aliases.size()
+               && container_signal_aliases[object])
+        || (object < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object])
+        || (object < container_element_signal_aliases.size()
+            && std::ranges::any_of(container_element_signal_aliases[object],
+                [](const auto& alias) { return alias.has_value(); }));
+}
+
+void Interpreter::Impl::require_package_static_write(
+    const std::string_view kind, const bool in_range,
+    const std::uint64_t owner, const std::uint32_t object,
+    const std::optional<ProcessId> process, const bool container) const
+{
+    const auto fail_with = [&](const std::string_view what) {
+        throw std::logic_error { std::string { "package static " }
+            + std::string { what } };
+    };
+    if (!package_static_initialization_active
+        || started || region_graph || scheduler.has_pending() || !in_range) {
+        fail_with(std::string { kind } + " write is outside startup actions");
+    }
+    if (process) {
+        if (package_static_initialization_callback_active
+            || *process != package_static_initialization_process) {
+            fail_with(std::string { kind } + " process identity is not active");
+        }
+        const auto program = processes.program_view(*process);
+        const auto writable = container
+            ? program.startup_writable_container_object_ids()
+            : program.startup_writable_string_object_ids();
+        if (program.startup_phase()
+                != ProcessStartupPhase::package_static_initializer
+            || program.startup_package_owner_id() == 0U
+            || program.startup_package_owner_id() != owner
+            || !std::ranges::binary_search(writable, object)) {
+            fail_with("process wrote outside its direct "
+                + std::string { kind } + " closure");
+        }
+        return;
+    }
+    if (!package_static_initialization_callback_active
+        || package_static_initialization_callback_index
+            >= package_static_startup_callbacks.size()) {
+        fail_with(
+            std::string { kind } + " write is outside its startup callback");
+    }
+    const auto& callback = package_static_startup_callbacks[
+        package_static_initialization_callback_index];
+    const auto& writable = container
+        ? callback.writable_container_object_ids
+        : callback.writable_string_object_ids;
+    if (!std::ranges::binary_search(writable, object)) {
+        fail_with("callback wrote outside its " + std::string { kind }
+            + " closure");
+    }
+}
+
 void Interpreter::Impl::initialize_package_static_container_object(
     const ContainerObjectId object_id,
     const ContainerValue& value,
     const std::optional<ProcessId> process)
 {
-    if (!package_static_initialization_active
-        || started || region_graph || scheduler.has_pending()
-        || object_id >= container_objects.size()
-        || object_id >= container_value_reference_exposed.size()) {
-        throw std::logic_error {
-            "package static container write is outside startup actions"
-        };
-    }
-    if (process) {
-        if (package_static_initialization_callback_active
-            || *process != package_static_initialization_process) {
-            throw std::logic_error {
-                "package static container process identity is not active"
-            };
-        }
-        const auto program = processes.program_view(*process);
-        if (program.startup_phase()
-                != ProcessStartupPhase::package_static_initializer
-            || program.startup_package_owner_id() == 0U
-            || program.startup_package_owner_id()
-                != container_objects[object_id].package_owner_id
-            || !std::ranges::binary_search(
-                program.startup_writable_container_object_ids(), object_id)) {
-            throw std::logic_error {
-                "package static process wrote outside its direct container closure"
-            };
-        }
-    } else {
-        if (!package_static_initialization_callback_active
-            || package_static_initialization_callback_index
-                >= package_static_startup_callbacks.size()) {
-            throw std::logic_error {
-                "package static container write is outside its startup callback"
-            };
-        }
-        const auto& callback = package_static_startup_callbacks[
-            package_static_initialization_callback_index];
-        if (!std::ranges::binary_search(
-                callback.writable_container_object_ids, object_id)) {
-            throw std::logic_error {
-                "package static callback wrote outside its container closure"
-            };
-        }
-    }
+    const bool in_range = object_id < container_objects.size()
+        && object_id < container_value_reference_exposed.size();
+    require_package_static_write("container", in_range,
+        in_range ? container_objects[object_id].package_owner_id : 0U,
+        object_id, process, true);
     validate_container_value(value);
     const auto& object = container_objects[object_id];
-    const bool has_signal_alias
-        = (object_id < container_signal_aliases.size()
-            && container_signal_aliases[object_id])
-        || (object_id < container_aggregate_signal_aliases.size()
-            && container_aggregate_signal_aliases[object_id])
-        || (object_id < container_element_signal_aliases.size()
-            && std::ranges::any_of(
-                container_element_signal_aliases[object_id],
-                [](const auto& alias) { return alias.has_value(); }));
-    if (object.slice_alias || has_signal_alias
+    if (object.slice_alias || container_has_signal_alias(object_id)
         || container_value_reference_exposed[object_id] != 0U
         || object.initial_value.type != value.type) {
         throw std::logic_error {

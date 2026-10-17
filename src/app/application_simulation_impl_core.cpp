@@ -600,18 +600,14 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
                 "class allocation owner process has no design occurrence"
             };
         }
-        const auto specialization_id = owner_occurrence->specialization;
-        const auto& specializations = built.design_ir.specializations();
-        if (!specialization_id.valid()
-            || specialization_id.value() >= specializations.size()
-            || specializations[specialization_id.value()].id
-                != specialization_id) {
+        const auto* exact = exact_specialization(
+            built.design_ir, owner_occurrence->specialization);
+        if (exact == nullptr) {
             throw std::logic_error {
                 "class allocation owner has no exact specialization"
             };
         }
-        const auto& owner_specialization
-            = specializations[specialization_id.value()];
+        const auto& owner_specialization = *exact;
         if (owner_specialization.language
                 != semantic::Language::system_verilog
             || !owner_specialization.unit.valid()
@@ -652,10 +648,10 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
                 if (!is_owner_declaration(*parameter.declaration)) {
                     return nullptr;
                 }
-                const auto declaration = std::ranges::find(
-                    built.systemverilog_hir.declarations(),
-                    *parameter.declaration, &semantic::sv::Declaration::id);
-                if (declaration == built.systemverilog_hir.declarations().end()
+                const auto* declaration
+                    = built.systemverilog_hir.find_declaration(
+                        *parameter.declaration);
+                if (declaration == nullptr
                     || declaration->name != parameter.name) {
                     throw std::logic_error {
                         "class allocation owner parameter identity is stale"
@@ -673,10 +669,9 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
             }
             const semantic::sv::Declaration* selected = nullptr;
             for (const auto declaration_id : owner_unit->declarations) {
-                const auto declaration = std::ranges::find(
-                    built.systemverilog_hir.declarations(), declaration_id,
-                    &semantic::sv::Declaration::id);
-                if (declaration == built.systemverilog_hir.declarations().end()
+                const auto* declaration
+                    = built.systemverilog_hir.find_declaration(declaration_id);
+                if (declaration == nullptr
                     || declaration->name != parameter.name
                     || (declaration->form
                             != semantic::sv::DeclarationForm::parameter

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 namespace fsim::frontend {
 namespace {
@@ -300,8 +301,8 @@ DesignUnit VhdlParser::parse_vhdl_psl_verification_unit(
     if (at(TokenKind::Identifier)) {
         const auto name = advance();
         unit.name = vhdl_name(name.text);
-        unit.vhdl_extended_name = name.text.size() >= 2U
-            && name.text.front() == '\\' && name.text.back() == '\\';
+        unit.vhdl_extended_name
+            = support::is_extended_vhdl_identifier(name.text);
     } else {
         error(current(), "FSIM-VHDL-PSL-001",
             "a PSL verification unit requires a name");

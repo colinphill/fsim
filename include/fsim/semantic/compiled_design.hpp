@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fsim::semantic {
@@ -242,6 +243,14 @@ public:
     find_process(ProcessId id) const noexcept;
     [[nodiscard]] std::optional<CompiledInstanceView>
     find_instance(InstanceId id) const noexcept;
+    /// The semantic scope with this identity, or null.
+    [[nodiscard]] const Scope* find_scope(ScopeId id) const noexcept;
+    /// The VHDL unit that owns a scope, or null.
+    [[nodiscard]] const vhdl::Unit* vhdl_scope_unit(
+        ScopeId scope) const noexcept;
+    /// Whether a VHDL scope belongs to package `library`.`package`.
+    [[nodiscard]] bool vhdl_scope_in_package(ScopeId scope,
+        std::string_view library, std::string_view package) const noexcept;
     /// Return the compiled declaration identities owned by one semantic
     /// scope. A disengaged result means that the non-owning lookup indexes are
     /// stale, so callers which must remain correct during mutation fall back
@@ -460,5 +469,46 @@ validate_compiled_design(const CompiledDesign&);
 /// unit or nested generate region and the semantic scope chain agrees.
 [[nodiscard]] std::string vhdl_instance_ownership_error(
     const CompiledDesign&);
+
+/// The definition at the end of a VHDL type's subtype/alias chain: the
+/// first that is neither a subtype nor an alias. Null for a missing link or
+/// a cycle. `Hir` is CompiledDesign or SpecializedHirUnit.
+template <typename Hir>
+[[nodiscard]] const vhdl::TypeDefinition* vhdl_base_type_definition(
+    const Hir& hir, TypeId type)
+{
+    std::unordered_set<std::uint32_t> visited;
+    while (type.valid() && visited.insert(type.value()).second) {
+        const auto record = hir.find_type(type);
+        if (!record || record->vhdl == nullptr) {
+            return nullptr;
+        }
+        if (record->vhdl->form != vhdl::TypeForm::subtype
+            && record->vhdl->form != vhdl::TypeForm::alias) {
+            return record->vhdl;
+        }
+        type = record->vhdl->base.type_mark.target;
+    }
+    return nullptr;
+}
+
+/// The last type along a VHDL subtype/alias chain whose base is still
+/// resolved; `type` itself when it is not a subtype or alias.
+template <typename Hir>
+[[nodiscard]] TypeId vhdl_root_type(const Hir& hir, TypeId type)
+{
+    std::unordered_set<std::uint32_t> visited;
+    while (type.valid() && visited.insert(type.value()).second) {
+        const auto record = hir.find_type(type);
+        if (!record || record->vhdl == nullptr
+            || (record->vhdl->form != vhdl::TypeForm::subtype
+                && record->vhdl->form != vhdl::TypeForm::alias)
+            || !record->vhdl->base.type_mark.target.valid()) {
+            break;
+        }
+        type = record->vhdl->base.type_mark.target;
+    }
+    return type;
+}
 
 } // namespace fsim::semantic

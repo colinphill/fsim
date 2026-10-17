@@ -570,9 +570,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto& event = selected != nullptr
                         ? selected->last_event
                         : signal_events[op.signal];
-                    const auto active = event
-                        && event->first == scheduler.now()
-                        && event->second == scheduler.delta();
+                    const auto active
+                        = signal_attribute_detail::in_current_delta(
+                            *this, event);
                     get_register(process, op.destination) = PackedLogic4(
                         1, active ? Logic4::one : Logic4::zero);
                     ++process.pc;
@@ -611,10 +611,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto& event = selected != nullptr
                         ? selected->last_event
                         : signal_events[op.signal];
-                    const auto elapsed = event
-                        ? scheduler.now() - event->first
-                        : static_cast<SimulationTick>(
-                              std::numeric_limits<std::int64_t>::max());
+                    const auto elapsed
+                        = signal_attribute_detail::elapsed_since(*this, event);
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, elapsed, 0);
                     ++process.pc;
                 } else if constexpr (
@@ -645,9 +643,9 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto& transaction = selected != nullptr
                         ? selected->last_transaction
                         : signal_transactions[op.signal];
-                    const auto active = transaction
-                        && transaction->first == scheduler.now()
-                        && transaction->second == scheduler.delta();
+                    const auto active
+                        = signal_attribute_detail::in_current_delta(
+                            *this, transaction);
                     get_register(process, op.destination) = PackedLogic4(
                         1, active ? Logic4::one : Logic4::zero);
                     ++process.pc;
@@ -661,11 +659,8 @@ void Interpreter::Impl::execute(ProcessId id)
                             fail(process,
                                 "selected SimIR last-active range was not registered");
                         }
-                        elapsed = selected->last_transaction
-                            ? scheduler.now()
-                                - selected->last_transaction->first
-                            : static_cast<SimulationTick>(
-                                  std::numeric_limits<std::int64_t>::max());
+                        elapsed = signal_attribute_detail::elapsed_since(
+                            *this, selected->last_transaction);
                     } else {
                         elapsed = signal_attribute_detail::last_active(
                             *this, op.signal);
@@ -711,8 +706,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     get_register(process, op.destination) = std::move(converted);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
-                    if (!class_allocate_hook
-                        && !class_allocate_context_hook) {
+                    if (!class_allocate_context_hook) {
                         fail(process, "class allocation service is unavailable");
                     }
                     std::vector<PackedLogic4> actuals;
@@ -733,17 +727,8 @@ void Interpreter::Impl::execute(ProcessId id)
                                 ? process.frame->string_registers.at(actual)
                                 : std::string { });
                     }
-                    const auto handle = class_allocate_context_hook
-                        ? class_allocate_context_hook(
+                    const auto handle = class_allocate_context_hook(
                               process.id,
-                              process.cold().design_process,
-                              process.program().name(),
-                              op.specialization_identity,
-                              op.declared_type,
-                              actuals,
-                              string_actuals,
-                              op.constructor_actual_names)
-                        : class_allocate_hook(
                               process.cold().design_process,
                               process.program().name(),
                               op.specialization_identity,
@@ -775,8 +760,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, ClassMethodCall>) {
-                    if (!class_method_call_hook
-                        && !class_method_call_context_hook) {
+                    if (!class_method_call_context_hook) {
                         fail(process, "class method service is unavailable");
                     }
                     std::vector<PackedLogic4> actuals;
@@ -797,18 +781,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     const auto handle = get_register(process, op.receiver).low_word().aval;
                     get_register(process, op.destination)
-                        = class_method_call_context_hook
-                        ? class_method_call_context_hook(
+                        = class_method_call_context_hook(
                               process.id,
-                              handle,
-                              op.method_identity,
-                              actuals,
-                              string_actuals,
-                              op.actual_names,
-                              op.actual_directions,
-                              op.inline_constraints,
-                              op.virtual_dispatch)
-                        : class_method_call_hook(
                               handle,
                               op.method_identity,
                               actuals,
@@ -853,8 +827,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto dpi = std::string_view { op.method_identity }
                         .starts_with(systemverilog_dpi_function_prefix);
                     if ((dpi && !dpi_function_call_hook)
-                        || (!dpi && !class_static_method_call_hook
-                            && !class_static_method_call_context_hook)) {
+                        || (!dpi && !class_static_method_call_context_hook)) {
                         fail(process, dpi
                             ? "SystemVerilog DPI function service is unavailable"
                             : "class static method service is unavailable");
@@ -886,15 +859,8 @@ void Interpreter::Impl::execute(ProcessId id)
                               string_actuals,
                               op.actual_names,
                               op.actual_directions)
-                        : class_static_method_call_context_hook
-                        ? class_static_method_call_context_hook(
+                        : class_static_method_call_context_hook(
                               process.id,
-                              identity,
-                              actuals,
-                              string_actuals,
-                              op.actual_names,
-                              op.actual_directions)
-                        : class_static_method_call_hook(
                               identity,
                               actuals,
                               string_actuals,

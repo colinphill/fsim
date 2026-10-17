@@ -18,16 +18,6 @@ namespace {
 
 constexpr std::size_t maximum_generate_iterations = 1'000'000U;
 
-bool vhdl_name_equal(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::equal(left.begin(), left.end(), right.begin(), right.end(),
-            [](const unsigned char lhs, const unsigned char rhs) {
-                return std::tolower(lhs) == std::tolower(rhs);
-            });
-}
-
 std::string append_path(
     const std::string_view parent, const std::string_view component)
 {
@@ -146,7 +136,8 @@ private:
             : region.alternative_label;
         const auto found = std::ranges::find_if(
             region.nested, [&](const vhdl::GenerateRegion& candidate) {
-                return vhdl_name_equal(candidate.label, label);
+                return support::equal_ignoring_ascii_case(
+                    candidate.label, label);
             });
         return found == region.nested.end() ? nullptr : &*found;
     }
@@ -160,7 +151,8 @@ private:
             : alternative.label;
         const auto found = std::ranges::find_if(
             region.nested, [&](const vhdl::GenerateRegion& candidate) {
-                return vhdl_name_equal(candidate.label, label);
+                return support::equal_ignoring_ascii_case(
+                    candidate.label, label);
             });
         return found == region.nested.end() ? nullptr : &*found;
     }
@@ -187,7 +179,7 @@ private:
                     == vhdl::ExpressionKind::name) {
                 bool ambiguous { };
                 const auto consider = [&](const vhdl::Declaration& value) {
-                    if (!vhdl_name_equal(
+                    if (!support::equal_ignoring_ascii_case(
                             value.name, candidate->vhdl->text)) {
                         return;
                     }
@@ -238,7 +230,7 @@ private:
             const auto matches = [&](const std::string_view literal) {
                 return spelling.starts_with('\'')
                     ? spelling == literal
-                    : vhdl_name_equal(spelling, literal);
+                    : support::equal_ignoring_ascii_case(spelling, literal);
             };
             std::set<TypeId> visiting;
             const auto resolve = [&](const auto& self,
@@ -305,7 +297,8 @@ private:
                 region.source);
         }
         if (std::ranges::any_of(identities, [&](const auto& identity) {
-                return vhdl_name_equal(identity.name, region.iterator);
+                return support::equal_ignoring_ascii_case(
+                    identity.name, region.iterator);
             })) {
             return reject("FSIM-ELAB-GEN-007",
                 "nested loop-generate variable '" + region.iterator

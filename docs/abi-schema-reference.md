@@ -13,19 +13,9 @@ fsim v3 distinguishes public native ABIs from persisted development artifacts:
 
 - Public C and plug-in records are versioned, size-prefixed where specified,
   and append-only. A consumer validates the required prefix before using it.
-- Current writers emit only the current artifact formats. The `.fsimlib`
-  reader accepts format 6/schema 15 as a legacy index with unknown VHDL
-  identifier forms; the `.fsimobj` reader accepts format 8/schema 15 with the
-  same unknown-form rule. Neither reader guesses a missing form. A legacy
-  index can regain a form only from its checksummed compiled-HIR bundle after
-  one unique identity match; an ambiguous match fails closed. Workspace top
-  selection and dependency matching first narrow possible legacy VHDL records
-  by library, kind, and name, then hydrate from that evidence in memory. Missing
-  or ambiguous HIR prevents selection or dependency publication; it never
-  widens identifier matching.
-- Workspace library catalog schema 1 is readable with unknown forms and is
-  rebuilt as schema 2 on the next successful catalog write inside the same
-  SQLite transaction. Other unsupported or mixed schemas are rejected.
+- Portable and native artifact readers are exact-current readers. They do not
+  migrate, downgrade, infer omitted legacy fields, or dual-write old formats.
+  The workspace library catalog accepts only SQLite schema 2.
 - Portable payloads are independent of the producer host when all declared
   language, standard, compatibility, schema, and content identities match.
 - Native payloads and caches require the exact producer identity. They are
@@ -161,7 +151,7 @@ type information.
 | `.fsimobj` | `FSIMOBJ\0`, format 9, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
 | `.fsimdesign` | `FSIMDES\0`, format 14, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
 | `.fsimlib` | canonical TOML format 7, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
-| Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns; schema 1 reads as unknown and upgrades on a successful write |
+| Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
 | Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
@@ -174,12 +164,11 @@ rebuild against these headers. The C API and plug-in record layouts do not
 change. `.fsimlib` format 7/schema 16 writes `name_form` and
 `primary_name_form` as `unknown`, `basic`, or `extended` for each unit index.
 `.fsimobj` format 9/schema 16 writes the corresponding two little-endian
-32-bit enum values per unit and includes them in compilation identity. Its
-format 8/schema 15 reader omits those fields and checks the legacy v8 digest
-domain. The compiled-HIR schema remains 3 because the HIR already carries the
-identifier form. SQLite schema 2 stores both forms as checked integer values;
-schema 1 reads them as unknown and is transactionally rebuilt when a catalog
-write succeeds.
+32-bit enum values per unit and includes them in compilation identity.
+Earlier identities (`.fsimobj` format 8/schema 15, `.fsimlib` format 6/schema
+15, catalog schema 1) are rejected like any other stale identity. The
+compiled-HIR schema remains 3 because the HIR already carries the identifier
+form. SQLite schema 2 stores both forms as checked integer values.
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees
@@ -193,8 +182,7 @@ Objects, designs, design-cache records, and LLVM native-object keys retain the
 schema-3 code-coverage configuration and model identity. Disabled coverage uses
 model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
-rejected directly. The bounded previous-version readers above do not extend
-to older object or design identities.
+rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 4,
 SystemVerilog HIR schema 14, and VHDL HIR schema 8. The standalone design's
@@ -292,14 +280,9 @@ a destination/staging tree.
 
 ## Regeneration and rebuild workflows
 
-There is no supported in-place migration command. The bounded `.fsimlib`,
-`.fsimobj`, and workspace-catalog compatibility paths described above apply
-only to their listed identities. Artifact writers publish current formats; a
-schema-1 catalog is refreshed as schema 2 only on its next successful
-transactional write. These bounded paths do not provide a command to migrate
-arbitrary artifacts in place. Recover other older or ambiguous metadata by
-rebuilding from the nearest available source or portable boundary with the
-current fsim build:
+There is no supported in-place migration command and no legacy compatibility
+reader. Recover from an identity mismatch by rebuilding from the nearest
+available source or portable boundary with the current fsim build:
 
 ```sh
 # Replace this source's managed HDL units in work.

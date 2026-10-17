@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_mapping_validation.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "sdf_diagnostic.hpp"
 
 #include <algorithm>
@@ -189,11 +190,8 @@ namespace {
         const SdfEndpointSelect& select,
         const elaboration::SignalInfo& signal)
     {
-        const auto distance = select.left >= select.right
-            ? static_cast<std::uint64_t>(select.left)
-                - static_cast<std::uint64_t>(select.right)
-            : static_cast<std::uint64_t>(select.right)
-                - static_cast<std::uint64_t>(select.left);
+        const auto distance
+            = support::index_distance(select.left, select.right);
         if (distance >= std::numeric_limits<std::size_t>::max()
             || select.width != static_cast<std::size_t>(distance + 1U)
             || select.width > signal.width) {

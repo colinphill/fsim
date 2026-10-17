@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "specialization_cache.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -355,11 +356,7 @@ void convert_to_two_state(Value& value)
             }
         }
         if (left && right) {
-            const auto distance = *left >= *right
-                ? static_cast<std::uint64_t>(*left)
-                    - static_cast<std::uint64_t>(*right)
-                : static_cast<std::uint64_t>(*right)
-                    - static_cast<std::uint64_t>(*left);
+            const auto distance = support::index_distance(*left, *right);
             if (distance != std::numeric_limits<std::uint64_t>::max()) {
                 return distance + 1U;
             }
@@ -1157,11 +1154,7 @@ private:
             error_ = "constant function array bounds must be known integers";
             return false;
         }
-        const auto distance = *left >= *right
-            ? static_cast<std::uint64_t>(*left)
-                - static_cast<std::uint64_t>(*right)
-            : static_cast<std::uint64_t>(*right)
-                - static_cast<std::uint64_t>(*left);
+        const auto distance = support::index_distance(*left, *right);
         if (distance >= maximum_constant_local_array_elements) {
             error_ = "constant function local array exceeds the element limit";
             return false;
@@ -1313,11 +1306,7 @@ private:
             if (!left || !right) {
                 return finish(std::nullopt);
             }
-            const auto distance = *left >= *right
-                ? static_cast<std::uint64_t>(*left)
-                    - static_cast<std::uint64_t>(*right)
-                : static_cast<std::uint64_t>(*right)
-                    - static_cast<std::uint64_t>(*left);
+            const auto distance = support::index_distance(*left, *right);
             return finish(distance < maximum_constant_width
                     ? std::optional {
                           static_cast<std::uint32_t>(distance + 1U) }
@@ -2434,11 +2423,8 @@ private:
             }
             width = static_cast<std::uint64_t>(*second_index);
         } else {
-            const auto distance = *first_index >= *second_index
-                ? static_cast<std::uint64_t>(*first_index)
-                    - static_cast<std::uint64_t>(*second_index)
-                : static_cast<std::uint64_t>(*second_index)
-                    - static_cast<std::uint64_t>(*first_index);
+            const auto distance
+                = support::index_distance(*first_index, *second_index);
             width = distance + 1U;
         }
         if (width == 0U || width > maximum_constant_width) {
@@ -4142,23 +4128,7 @@ private:
 [[nodiscard]] ScalarKind scalar_kind(
     const semantic::sv::TypeReference& type) noexcept
 {
-    const auto& spelling = type.target.spelling;
-    if (spelling == "shortreal") {
-        return ScalarKind::ShortReal;
-    }
-    if (spelling == "real") {
-        return ScalarKind::Real;
-    }
-    if (spelling == "realtime") {
-        return ScalarKind::Realtime;
-    }
-    if (spelling == "time") {
-        return ScalarKind::Time;
-    }
-    if (spelling == "chandle") {
-        return ScalarKind::Chandle;
-    }
-    return ScalarKind::None;
+    return frontend::systemverilog_scalar_kind(type.target.spelling);
 }
 
 [[nodiscard]] ScalarKind promote_scalar_kind(
@@ -4807,17 +4777,7 @@ private:
             }
             const auto name = std::string_view { record.text }.substr(
                 cast_prefix.size());
-            const auto target = name == "shortreal"
-                ? ScalarKind::ShortReal
-                : name == "real"
-                ? ScalarKind::Real
-                : name == "realtime"
-                ? ScalarKind::Realtime
-                : name == "time"
-                ? ScalarKind::Time
-                : name == "chandle"
-                ? ScalarKind::Chandle
-                : ScalarKind::None;
+            const auto target = frontend::systemverilog_scalar_kind(name);
             if (target != ScalarKind::None) {
                 return frontend::convert_systemverilog_scalar_constant(
                     *operand, target, error_);

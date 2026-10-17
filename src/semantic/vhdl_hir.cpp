@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -14,11 +15,7 @@ SubtypeIndication constrained_element_subtype(
     SubtypeIndication element)
 {
     const auto same_step = [&](const std::string& candidate) {
-        return std::ranges::equal(candidate, step,
-            [](const char left, const char right) {
-                return std::tolower(static_cast<unsigned char>(left))
-                    == std::tolower(static_cast<unsigned char>(right));
-            });
+        return support::equal_ignoring_ascii_case(candidate, step);
     };
     for (const auto& constraint : owner.element_constraints) {
         if (constraint.path.empty() || !same_step(constraint.path.front())) {
@@ -53,6 +50,18 @@ const std::vector<Declaration>& Hir::declarations() const noexcept {
     return declarations_;
 }
 const std::vector<TypeDefinition>& Hir::types() const noexcept { return types_; }
+
+const Declaration* Hir::find_declaration(const DeclarationId id) const noexcept
+{
+    const auto found = std::ranges::find(declarations_, id, &Declaration::id);
+    return found != declarations_.end() ? &*found : nullptr;
+}
+
+const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
+{
+    const auto found = std::ranges::find(types_, id, &TypeDefinition::id);
+    return found != types_.end() ? &*found : nullptr;
+}
 const std::vector<OverloadSet>& Hir::overload_sets() const noexcept {
     return overload_sets_;
 }
@@ -104,18 +113,6 @@ std::vector<Instance>& Hir::mutable_instances() noexcept {
 
 namespace {
 
-std::string canonical_name(std::string value)
-{
-    if (!value.empty() && value.front() != '\\'
-        && value.front() != '\'') {
-        std::ranges::transform(value, value.begin(), [](const char byte) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(byte)));
-        });
-    }
-    return value;
-}
-
 bool valid_instance_ids(
     const Model& semantics, const std::span<const Instance> instances)
 {
@@ -152,7 +149,7 @@ bool top_level_hir_collections_well_formed(
         if (!overload.scope.valid()
             || overload.scope.value() >= semantics.scopes().size()
             || overload.canonical_name.empty()
-            || canonical_name(overload.canonical_name)
+            || support::canonical_vhdl_spelling(overload.canonical_name)
                 != overload.canonical_name
             || overload.declarations.empty()
             || !identities.emplace(
@@ -166,7 +163,7 @@ bool top_level_hir_collections_well_formed(
                 : declarations.end();
             if (declaration == declarations.end()
                 || declaration->second->scope != overload.scope
-                || canonical_name(declaration->second->name)
+                || support::canonical_vhdl_spelling(declaration->second->name)
                     != overload.canonical_name
                 || !local_members.insert(member.value()).second
                 || !members.insert(member.value()).second) {

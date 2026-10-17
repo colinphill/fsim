@@ -182,77 +182,9 @@ bool systemc_construction_name_equal(
                 instance_source);
         }
 
-        std::vector<std::pair<std::string, std::int64_t>> values;
-        values.reserve(schema->size());
-        for (std::size_t index { }; index < schema->size(); ++index) {
-            const auto value = actuals[index]
-                ? actuals[index]
-                : schema->at(index).default_value;
-            if (!value) {
-                report(
-                    "FSIM-ELAB-SC-PARAM-001",
-                    "SystemC construction parameter '"
-                        + schema->at(index).name + "' requires an actual",
-                    instance_source);
-                continue;
-            }
-            if (!valid_systemc_construction_value(
-                    schema->at(index).type, *value)) {
-                report(
-                    "FSIM-ELAB-SC-PARAM-005",
-                    "SystemC construction parameter '"
-                        + schema->at(index).name
-                        + "' violates its declared scalar subtype",
-                    instance_source);
-                continue;
-            }
-            values.emplace_back(schema->at(index).name, *value);
-        }
-        if (diagnostics_.size() != diagnostics_before) {
-            return nullptr;
-        }
-
-        auto constructed = systemc_provider_->instantiate(
-            path, target, values, error);
-        if (!constructed) {
-            report(
-                "FSIM-ELAB-SC-PARAM-008",
-                "cannot construct SystemC instance '" + path + "': "
-                    + error,
-                instance_source);
-            return nullptr;
-        }
-        if (constructed->path != path
-            || constructed->target != target) {
-            report(
-                "FSIM-ELAB-SC-PARAM-008",
-                "SystemC factory provider returned inconsistent instance "
-                "identity for '" + path + "'",
-                instance_source);
-            return nullptr;
-        }
-        constructed->construction_identity_values.clear();
-        constructed->construction_identity_values.reserve(values.size());
-        for (std::size_t index { }; index < values.size(); ++index) {
-            constructed->construction_identity_values.emplace_back(
-                values[index].first,
-                "systemcconst-v1:type="
-                    + std::to_string(static_cast<unsigned>(
-                        schema->at(index).type))
-                    + ";value=" + std::to_string(values[index].second));
-        }
-        owned_systemc_instances_.push_back(std::move(*constructed));
-        const auto* description = &owned_systemc_instances_.back();
-        if (!systemc_instances_.emplace(path, description).second) {
-            report(
-                "FSIM-ELAB-BIND-032",
-                "duplicate constructed SystemC instance path '" + path
-                    + "'",
-                instance_source);
-            return nullptr;
-        }
-        used_systemc_instances_.insert(path);
-        return description;
+        return construct_systemc_instance(path, target, *schema, actuals,
+            diagnostics_before, instance_source, "FSIM-ELAB-SC-PARAM-001",
+            "FSIM-ELAB-SC-PARAM-005");
     }
 
 const SystemCInstanceDescription*
@@ -369,36 +301,55 @@ HierarchyBuilder::construct_systemc_description(
             instance_source);
     }
 
+    return construct_systemc_instance(path, target, *schema, actuals,
+        diagnostics_before, instance_source, "FSIM-ELAB-GENERIC-001",
+        "FSIM-ELAB-GENERIC-008");
+}
+
+// Applies schema defaults to the evaluated construction actuals, checks
+// them, and constructs the SystemC instance. The HDL front end chooses the
+// diagnostic codes for a missing actual and a value outside its subtype.
+const SystemCInstanceDescription*
+HierarchyBuilder::construct_systemc_instance(const std::string& path,
+    const std::string_view target,
+    const std::vector<SystemCConstructionParameter>& schema,
+    const std::vector<std::optional<std::int64_t>>& actuals,
+    const std::size_t diagnostics_before,
+    const frontend::SourceSpan& instance_source,
+    const std::string_view missing_actual_code,
+    const std::string_view invalid_value_code)
+{
     std::vector<std::pair<std::string, std::int64_t>> values;
-    values.reserve(schema->size());
-    for (std::size_t index { }; index < schema->size(); ++index) {
+    values.reserve(schema.size());
+    for (std::size_t index { }; index < schema.size(); ++index) {
         const auto value = actuals[index]
             ? actuals[index]
-            : schema->at(index).default_value;
+            : schema.at(index).default_value;
         if (!value) {
             report(
-                "FSIM-ELAB-GENERIC-001",
+                std::string { missing_actual_code },
                 "SystemC construction parameter '"
-                    + schema->at(index).name + "' requires an actual",
+                    + schema.at(index).name + "' requires an actual",
                 instance_source);
             continue;
         }
         if (!valid_systemc_construction_value(
-                schema->at(index).type, *value)) {
+                schema.at(index).type, *value)) {
             report(
-                "FSIM-ELAB-GENERIC-008",
+                std::string { invalid_value_code },
                 "SystemC construction parameter '"
-                    + schema->at(index).name
+                    + schema.at(index).name
                     + "' violates its declared scalar subtype",
                 instance_source);
             continue;
         }
-        values.emplace_back(schema->at(index).name, *value);
+        values.emplace_back(schema.at(index).name, *value);
     }
     if (diagnostics_.size() != diagnostics_before) {
         return nullptr;
     }
 
+    std::string error;
     auto constructed = systemc_provider_->instantiate(
         path, target, values, error);
     if (!constructed) {
@@ -425,7 +376,7 @@ HierarchyBuilder::construct_systemc_description(
             values[index].first,
             "systemcconst-v1:type="
                 + std::to_string(static_cast<unsigned>(
-                    schema->at(index).type))
+                    schema.at(index).type))
                 + ";value=" + std::to_string(values[index].second));
     }
     owned_systemc_instances_.push_back(std::move(*constructed));
@@ -441,6 +392,7 @@ HierarchyBuilder::construct_systemc_description(
     used_systemc_instances_.insert(path);
     return description;
 }
+
 
     void HierarchyBuilder::instantiate_systemc(
         const SystemCInstanceDescription& instance,

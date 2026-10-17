@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/vhdl_toggle_inventory.hpp"
+#include "toggle_inventory_internal.hpp"
 
 #include "fsim/frontend/source.hpp"
 #include "fsim/support/identity128.hpp"
@@ -21,42 +22,8 @@ using namespace fsim::elaboration;
 namespace {
 
     using Error = VhdlToggleInventoryError;
-
-    struct PendingObject {
-        runtime::CodeCoveragePointId source_point;
-        runtime::CodeCoveragePointId point;
-        std::string hierarchy_path;
-        VhdlToggleObjectKind kind { VhdlToggleObjectKind::Signal };
-        std::size_t source_index { };
-        frontend::CodeCoverageSourceSpan span;
-        std::uint64_t line { };
-        std::size_t width { };
-    };
-
-    void update_string(support::Sha256& hash, const std::string_view value) noexcept
-    {
-        support::sha256_update_u64_be(hash, value.size());
-        hash.update(value);
-    }
-
-    runtime::CodeCoveragePointId instance_point_identity(
-        const runtime::CodeCoveragePointId source_point,
-        const CoverageInstanceIdentity instance,
-        const VhdlToggleObjectKind kind,
-        const std::string_view hierarchy_path) noexcept
-    {
-        support::Sha256 hash;
-        update_string(hash, kVhdlToggleInventorySchema);
-        support::sha256_update_u64_be(hash, source_point.high);
-        support::sha256_update_u64_be(hash, source_point.low);
-        support::sha256_update_u64_be(hash, instance.high);
-        support::sha256_update_u64_be(hash, instance.low);
-        support::sha256_update_u64_be(hash, static_cast<std::uint8_t>(kind));
-        update_string(hash, hierarchy_path);
-        const auto digest = hash.finish();
-        return { support::sha256_digest_word_be(digest, 0U),
-            support::sha256_digest_word_be(digest, 8U) };
-    }
+    using Collector = toggle_inventory_detail::ToggleObjectCollector<Error,
+        VhdlToggleObjectKind, VhdlToggleInventoryLimits>;
 
     bool valid_standard(const frontend::VhdlStandard standard) noexcept
     {
@@ -81,11 +48,6 @@ namespace {
             + architecture.primary_name + "(" + architecture.name + ")";
     }
 
-    bool invalid_text(const std::string_view text) noexcept
-    {
-        return text.find('\0') != std::string_view::npos;
-    }
-
     bool directly_packed_vhdl_vector(const frontend::Type& type) noexcept
     {
         if (!type.vhdl_array || type.vhdl_array->dimensions.size() != 1U
@@ -102,14 +64,6 @@ namespace {
             && element.width() == 1U
             && (element.domain == frontend::ValueDomain::Bit2
                 || element.domain == frontend::ValueDomain::Logic9);
-    }
-
-    bool object_less(const PendingObject& left, const PendingObject& right) noexcept
-    {
-        return std::tie(left.hierarchy_path, left.kind,
-                   left.source_point.high, left.source_point.low)
-            < std::tie(right.hierarchy_path, right.kind,
-                right.source_point.high, right.source_point.low);
     }
 
 } // namespace
@@ -175,196 +129,57 @@ VhdlToggleInventoryResult make_vhdl_toggle_inventory(
         const auto unit_library = architecture.library.empty()
             ? std::string_view { "work" }
             : std::string_view { architecture.library };
-        if (owner.instance.empty() || owner.source.empty()
-            || owner.library.empty() || owner.unit.empty()
-            || owner.unit != vhdl_unit_identity(architecture)
-            || owner.library != unit_library
-            || invalid_text(owner.instance)) {
-            return reject(Error::InstanceOwnerMismatch);
+        Collector collector { owner, sources, limits,
+            kVhdlToggleInventorySchema, frontend::CodeCoverageLanguage::Vhdl,
+            is_vhdl_toggle_type };
+        if (const auto error = collector.begin(
+                vhdl_unit_identity(architecture), unit_library,
+                ports.size() + architecture.signals.size()
+                    + architecture.variables.size());
+            error != Error::None) {
+            return reject(error);
         }
-        const auto instance = make_coverage_instance_identity(
-            { owner.instance, owner.language, owner.library, owner.unit,
-                owner.parameter_identities },
-            limits.instance_identity);
-        if (!instance.ok()) {
-            return reject(Error::InvalidInstanceIdentity);
-        }
-        if (sources.size() > limits.maximum_sources) {
-            return reject(Error::ResourceLimit);
-        }
-
-        std::map<std::string_view, std::size_t, std::less<>> source_by_name;
-        std::set<std::string> source_identities;
-        for (std::size_t index = 0U; index < sources.size(); ++index) {
-            const auto& source = sources[index];
-            if (source.source_name.empty()) {
-                return reject(Error::EmptySourceName);
-            }
-            if (!frontend::is_code_coverage_source_identity_valid(
-                    source.identity)) {
-                return reject(Error::InvalidSourceIdentity);
-            }
-            if (!source_by_name.emplace(source.source_name, index).second) {
-                return reject(Error::DuplicateSourceName);
-            }
-            if (!source_identities.emplace(
-                                      frontend::code_coverage_source_identity_hex(
-                                          source.identity))
-                    .second) {
-                return reject(Error::DuplicateSourceIdentity);
-            }
-        }
-
-        const auto declaration_count = ports.size()
-            + architecture.signals.size() + architecture.variables.size();
-        if (declaration_count > limits.maximum_objects) {
-            return reject(Error::ResourceLimit);
-        }
-        std::vector<PendingObject> pending;
-        pending.reserve(declaration_count);
-        std::set<std::string> hierarchy_paths;
-        std::set<std::pair<std::uint64_t, std::uint64_t>> point_ids;
-        std::size_t total_bits = 0U;
-        std::size_t visited = 0U;
-
-        const auto append = [&](const std::string_view name,
-                                const frontend::Type& type,
-                                const frontend::SourceSpan& source_span,
-                                const VhdlToggleObjectKind kind) -> Error {
-            const auto index = visited++;
-            if (!is_vhdl_toggle_type(type)) {
-                return Error::None;
-            }
-            if (name.empty()) {
-                result.object_index = index;
-                return Error::EmptyObjectName;
-            }
-            if (invalid_text(name)
-                || name.size() > limits.maximum_object_name_bytes) {
-                result.object_index = index;
-                return name.size() > limits.maximum_object_name_bytes
-                    ? Error::ResourceLimit
-                    : Error::InvalidObjectName;
-            }
-            std::string hierarchy_path;
-            if (name.size() > limits.maximum_hierarchy_bytes
-                || owner.instance.size()
-                    > limits.maximum_hierarchy_bytes - name.size()
-                || owner.instance.size() + name.size()
-                    >= limits.maximum_hierarchy_bytes) {
-                result.object_index = index;
-                return Error::ResourceLimit;
-            }
-            hierarchy_path.reserve(owner.instance.size() + name.size() + 1U);
-            hierarchy_path.append(owner.instance);
-            hierarchy_path.push_back('.');
-            hierarchy_path.append(name);
-            if (!hierarchy_paths.emplace(hierarchy_path).second) {
-                result.object_index = index;
-                return Error::DuplicateObjectPath;
-            }
-
-            const auto physical_name = frontend::physical_source(source_span);
-            const auto source = source_by_name.find(physical_name);
-            if (source == source_by_name.end()) {
-                result.object_index = index;
-                return Error::UnknownObjectSource;
-            }
-            if (physical_name != owner.source
-                && std::ranges::find(owner.source_dependencies, physical_name)
-                    == owner.source_dependencies.end()) {
-                result.object_index = index;
-                return Error::ObjectSourceOwnershipMismatch;
-            }
-            const frontend::CodeCoverageSourceSpan span {
-                static_cast<std::uint64_t>(source_span.begin.offset),
-                static_cast<std::uint64_t>(source_span.end.offset),
-            };
-            const auto source_point
-                = frontend::make_code_coverage_point_identity(
-                    sources[source->second].identity,
-                    frontend::CodeCoverageLanguage::Vhdl,
-                    frontend::CodeCoverageConstructKind::ToggleObject, span);
-            if (!source_point.ok()) {
-                result.object_index = index;
-                return Error::InvalidObjectSpan;
-            }
-            if (source_span.begin.line == 0U
-                || source_span.begin.line > limits.maximum_line_number) {
-                result.object_index = index;
-                return Error::InvalidObjectLine;
-            }
-            const auto width = type.width();
-            if (!width) {
-                result.object_index = index;
-                return Error::UnspecializedObjectWidth;
-            }
-            if (*width == 0U
-                || *width > limits.maximum_object_width
-                || *width > std::numeric_limits<std::size_t>::max()) {
-                result.object_index = index;
-                return *width > limits.maximum_object_width
-                    ? Error::ResourceLimit
-                    : Error::InvalidObjectWidth;
-            }
-            const auto width_value = static_cast<std::size_t>(*width);
-            if (width_value > limits.maximum_bits - total_bits) {
-                result.object_index = index;
-                return Error::ResourceLimit;
-            }
-            total_bits += width_value;
-            const auto point = instance_point_identity(*source_point.identity,
-                *instance.identity, kind, hierarchy_path);
-            if (!runtime::is_code_coverage_identity_valid(point)
-                || !point_ids.emplace(point.high, point.low).second) {
-                result.object_index = index;
-                return Error::DuplicateObjectIdentity;
-            }
-            pending.push_back(PendingObject { *source_point.identity, point,
-                std::move(hierarchy_path), kind, source->second, span,
-                static_cast<std::uint64_t>(source_span.begin.line),
-                width_value });
-            return Error::None;
+        const auto append = [&](const auto& declaration,
+                                const VhdlToggleObjectKind kind) {
+            return collector.append(
+                declaration.name, declaration.type, declaration.span, kind);
         };
-
         for (const auto& port : ports) {
-            if (const auto error = append(port.name, port.type, port.span,
-                    VhdlToggleObjectKind::Port);
+            if (const auto error = append(port, VhdlToggleObjectKind::Port);
                 error != Error::None) {
-                return reject(error, result.object_index);
+                return reject(error, collector.object_index());
             }
         }
         for (const auto& signal : architecture.signals) {
-            if (const auto error = append(signal.name, signal.type, signal.span,
-                    VhdlToggleObjectKind::Signal);
+            if (const auto error = append(signal, VhdlToggleObjectKind::Signal);
                 error != Error::None) {
-                return reject(error, result.object_index);
+                return reject(error, collector.object_index());
             }
         }
         for (const auto& variable : architecture.variables) {
             if (!variable.vhdl_shared || variable.vhdl_file) {
-                ++visited;
+                collector.skip();
                 continue;
             }
-            if (const auto error = append(variable.name, variable.type,
-                    variable.span, VhdlToggleObjectKind::RetainedVariable);
+            if (const auto error = append(
+                    variable, VhdlToggleObjectKind::RetainedVariable);
                 error != Error::None) {
-                return reject(error, result.object_index);
+                return reject(error, collector.object_index());
             }
         }
 
-        std::ranges::sort(pending, object_less);
         VhdlToggleInventory inventory;
-        inventory.instance_identity = *instance.identity;
+        inventory.instance_identity = collector.instance();
         inventory.specialization = owner.specialization;
         inventory.instance = owner.instance;
         inventory.standard = architecture.vhdl_standard;
+        auto& pending = collector.sorted_objects();
         inventory.objects.reserve(pending.size());
-        inventory.outcomes.reserve(total_bits);
+        inventory.outcomes.reserve(collector.total_bits());
         for (auto& object : pending) {
             const auto first_outcome = inventory.outcomes.size();
             inventory.objects.push_back(VhdlToggleObject {
-                object.source_point, object.point, *instance.identity,
+                object.source_point, object.point, collector.instance(),
                 owner.specialization, std::move(object.hierarchy_path),
                 object.kind, object.source_index, object.span, object.line,
                 object.width, first_outcome });
@@ -378,9 +193,9 @@ VhdlToggleInventoryResult make_vhdl_toggle_inventory(
         result.object_index = 0U;
         return result;
     } catch (const std::bad_alloc&) {
-        return reject(Error::ResourceLimit, result.object_index);
+        return reject(Error::ResourceLimit);
     } catch (const std::length_error&) {
-        return reject(Error::ResourceLimit, result.object_index);
+        return reject(Error::ResourceLimit);
     }
 }
 

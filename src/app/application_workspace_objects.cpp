@@ -116,27 +116,6 @@ std::string_view normalized_library(const std::string_view library)
     return library.empty() ? std::string_view { "work" } : library;
 }
 
-bool unit_index_identity_compatible(
-    const library::UnitIndexEntry& indexed,
-    const library::UnitIndexEntry& candidate)
-{
-    const auto form_matches = [](const library::VhdlIdentifierForm left,
-                                 const library::VhdlIdentifierForm right) {
-        return left == library::VhdlIdentifierForm::unknown
-            || right == library::VhdlIdentifierForm::unknown || left == right;
-    };
-    return indexed.language == candidate.language
-        && indexed.kind == candidate.kind && indexed.name == candidate.name
-        && indexed.primary_name == candidate.primary_name
-        && indexed.architecture == candidate.architecture
-        && indexed.artifact == candidate.artifact
-        && indexed.checksum == candidate.checksum
-        && indexed.standard == candidate.standard
-        && indexed.compatibility_profile == candidate.compatibility_profile
-        && form_matches(indexed.name_form, candidate.name_form)
-        && form_matches(indexed.primary_name_form, candidate.primary_name_form);
-}
-
 std::vector<semantic::UnitId> indexed_unit_ids(
     const semantic::CompiledDesign& design, const std::string_view library)
 {
@@ -165,7 +144,7 @@ struct ObjectSelection {
 
 std::optional<ObjectSelection> resolve_selection(
     const WorkspaceObjectSelection& selection,
-    artifact::ObjectMetadata& metadata,
+    const artifact::ObjectMetadata& metadata,
     const semantic::CompiledDesign& design,
     std::set<std::string>& known_units,
     diagnostic::Engine& diagnostics)
@@ -185,74 +164,33 @@ std::optional<ObjectSelection> resolve_selection(
         }
     }
     for (const auto& entry : selection.active_units) {
-        auto indexed = metadata.units.end();
-        std::size_t indexed_count = 0U;
-        for (auto candidate = metadata.units.begin();
-             candidate != metadata.units.end(); ++candidate) {
-            if (unit_index_identity_compatible(entry, *candidate)) {
-                indexed = candidate;
-                ++indexed_count;
-            }
-        }
-        if (indexed_count != 1U) {
+        if (std::ranges::find(metadata.units, entry) == metadata.units.end()) {
             diagnostics.error(std::string { workspace_object_diagnostic },
-                indexed_count == 0U
-                    ? "library catalog selects an absent or changed object '"
-                        + metadata.library + '.' + entry.name + "' in "
-                            + support::path_to_utf8(selection.path)
-                    : "legacy library catalog unit identity is ambiguous for '"
-                        + metadata.library + '.' + entry.name + "' in "
-                            + support::path_to_utf8(selection.path));
+                "library catalog selects an absent or changed object '"
+                    + metadata.library + '.' + entry.name + "' in "
+                    + support::path_to_utf8(selection.path));
             return std::nullopt;
         }
-        auto resolved_entry = *indexed;
-        std::optional<std::size_t> compiled_unit_index;
-        if (resolved_entry.kind != "class"
-            && resolved_entry.kind != "primitive") {
-            for (std::size_t index = 0; index < entries.size(); ++index) {
-                if (!unit_index_identity_compatible(resolved_entry, entries[index])) {
-                    continue;
-                }
-                if (compiled_unit_index) {
-                    diagnostics.error(std::string { workspace_object_diagnostic },
-                        "legacy object identity is ambiguous without VHDL identifier forms: '"
-                            + metadata.library + '.' + entry.name + "'");
-                    return std::nullopt;
-                }
-                compiled_unit_index = index;
-            }
-            if (!compiled_unit_index) {
-                diagnostics.error(std::string { workspace_object_diagnostic },
-                    "library object has no compiled identity: '"
-                        + metadata.library + '.' + entry.name + "'");
-                return std::nullopt;
-            }
-            // Old object and catalog schemas omit the identifier form. The HIR
-            // unit index is checksummed with the object and supplies it when the
-            // normalized identity has exactly one possible match.
-            indexed->name_form = entries[*compiled_unit_index].name_form;
-            indexed->primary_name_form
-                = entries[*compiled_unit_index].primary_name_form;
-            resolved_entry = *indexed;
-        }
-        const auto key = compiled_unit_metadata_key(resolved_entry, metadata.library);
+        const auto key = compiled_unit_metadata_key(entry, metadata.library);
         if (!known_units.insert(key).second) {
             diagnostics.error(std::string { workspace_object_diagnostic },
                 "library catalog selects duplicate object '" + key + "'");
             return std::nullopt;
         }
-        if (resolved_entry.kind == "class") {
-            result.classes.push_back(resolved_entry.name);
-        } else if (resolved_entry.kind == "primitive") {
-            result.udps.push_back({ metadata.library, resolved_entry.name });
+        if (entry.kind == "class") {
+            result.classes.push_back(entry.name);
+        } else if (entry.kind == "primitive") {
+            result.udps.push_back({ metadata.library, entry.name });
         } else {
-            if (!compiled_unit_index) {
+            const auto found = std::ranges::find(entries, entry);
+            if (found == entries.end()) {
                 diagnostics.error(std::string { workspace_object_diagnostic },
-                    "library object has no compiled identity: '"
+                    "library catalog object has no compiled identity: '"
                         + metadata.library + '.' + entry.name + "'");
                 return std::nullopt;
             }
-            result.units.push_back(ids[*compiled_unit_index]);
+            result.units.push_back(ids[static_cast<std::size_t>(
+                std::distance(entries.begin(), found))]);
         }
     }
     return result;
@@ -446,77 +384,6 @@ compiled_object_unit_entries(const semantic::CompiledDesign& design,
     return result;
 }
 
-std::optional<library::UnitIndexEntry> hydrate_legacy_vhdl_identifier_forms(
-    const WorkspaceObjectSelection& selection,
-    const library::UnitIndexEntry& indexed,
-    diagnostic::Engine& diagnostics)
-{
-    if (indexed.language != "vhdl"
-        || (indexed.name_form != library::VhdlIdentifierForm::unknown
-            && (indexed.primary_name.empty()
-                || indexed.primary_name_form
-                    != library::VhdlIdentifierForm::unknown))) {
-        return indexed;
-    }
-
-    const auto metadata = artifact::load_object_metadata(
-        selection.path, diagnostics);
-    if (!metadata) {
-        return std::nullopt;
-    }
-    const WorkspaceObjectSelection single {
-        selection.path, { indexed }, selection.catalog_rank
-    };
-    const auto design = load_workspace_objects(
-        std::array { single }, diagnostics, false);
-    if (!design) {
-        return std::nullopt;
-    }
-
-    const auto entries = compiled_object_unit_entries(*design,
-        normalized_library(metadata->library));
-    const library::UnitIndexEntry* resolved = nullptr;
-    std::size_t match_count = 0U;
-    for (const auto& [unit_id, candidate] : entries) {
-        (void)unit_id;
-        if (!unit_index_identity_compatible(indexed, candidate)) {
-            continue;
-        }
-        resolved = &candidate;
-        ++match_count;
-    }
-    if (match_count != 1U || resolved == nullptr) {
-        diagnostics.error(std::string { workspace_object_diagnostic },
-            match_count == 0U
-                ? "checksummed compiled HIR has no matching legacy VHDL unit"
-                : "checksummed compiled HIR has ambiguous legacy VHDL unit identity");
-        return std::nullopt;
-    }
-
-    const auto name_form = resolved->name_form;
-    const auto primary_name_form = resolved->primary_name_form;
-    if ((indexed.name_form == library::VhdlIdentifierForm::unknown
-            && name_form == library::VhdlIdentifierForm::unknown)
-        || (indexed.primary_name_form
-                == library::VhdlIdentifierForm::unknown
-            && !indexed.primary_name.empty()
-            && primary_name_form == library::VhdlIdentifierForm::unknown)
-        || (indexed.name_form != library::VhdlIdentifierForm::unknown
-            && indexed.name_form != name_form)
-        || (indexed.primary_name_form
-                != library::VhdlIdentifierForm::unknown
-            && indexed.primary_name_form != primary_name_form)) {
-        diagnostics.error(std::string { workspace_object_diagnostic },
-            "checksummed compiled HIR does not provide a unique compatible VHDL identifier form");
-        return std::nullopt;
-    }
-
-    auto result = indexed;
-    result.name_form = name_form;
-    result.primary_name_form = primary_name_form;
-    return result;
-}
-
 std::optional<CompilationWorkspace> load_workspace_objects(
     const std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,
@@ -575,7 +442,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         if (!input) {
             return std::nullopt;
         }
-        auto metadata = artifact::load_object_metadata(
+        const auto metadata = artifact::load_object_metadata(
             selection.path, diagnostics);
         if (!metadata) {
             return std::nullopt;

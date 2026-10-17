@@ -52,17 +52,6 @@ std::optional<std::uint64_t> unsigned_decimal(std::string_view text)
     return value;
 }
 
-std::uint64_t index_distance(
-    const std::int64_t lhs,
-    const std::int64_t rhs) noexcept
-{
-    return lhs >= rhs
-        ? static_cast<std::uint64_t>(lhs)
-            - static_cast<std::uint64_t>(rhs)
-        : static_cast<std::uint64_t>(rhs)
-            - static_cast<std::uint64_t>(lhs);
-}
-
 PackedLogic4 unsigned_value(
     const std::uint64_t value,
     const std::size_t width)

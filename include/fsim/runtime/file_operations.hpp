@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -168,6 +169,59 @@ struct FileScan {
     {
     }
 };
+
+// A VHDL TextIO READ/SREAD is lowered to a string-source FileScan with one
+// conversion whose prefix is one of these markers.
+inline constexpr std::string_view vhdl_textio_read_marker
+    = "\x1f" "fsim-vhdl-textio-read";
+inline constexpr std::string_view vhdl_textio_read_2008_marker
+    = "\x1f" "fsim-vhdl-textio-read-2008";
+inline constexpr std::string_view vhdl_textio_radix_read_2008_marker
+    = "\x1f" "fsim-vhdl-textio-radix-read-2008";
+inline constexpr std::string_view vhdl_textio_sread_marker
+    = "\x1f" "fsim-vhdl-textio-sread";
+
+/// The TextIO marker of a VHDL TextIO scan, or empty for any other scan.
+[[nodiscard]] inline std::string_view vhdl_textio_marker(
+    const FileScan& operation) noexcept
+{
+    if (!operation.string_source || !operation.consume_string_source
+        || operation.conversions.size() != 1U) {
+        return { };
+    }
+    const std::string_view prefix { operation.conversions.front().prefix };
+    return prefix == vhdl_textio_read_marker
+            || prefix == vhdl_textio_read_2008_marker
+            || prefix == vhdl_textio_radix_read_2008_marker
+            || prefix == vhdl_textio_sread_marker
+        ? prefix
+        : std::string_view { };
+}
+
+[[nodiscard]] inline bool vhdl_textio_read(const FileScan& operation) noexcept
+{
+    return !vhdl_textio_marker(operation).empty();
+}
+
+[[nodiscard]] inline bool vhdl_textio_read_2008(
+    const FileScan& operation) noexcept
+{
+    const auto marker = vhdl_textio_marker(operation);
+    return marker == vhdl_textio_read_2008_marker
+        || marker == vhdl_textio_radix_read_2008_marker;
+}
+
+[[nodiscard]] inline bool vhdl_textio_radix_read_2008(
+    const FileScan& operation) noexcept
+{
+    return vhdl_textio_marker(operation)
+        == vhdl_textio_radix_read_2008_marker;
+}
+
+[[nodiscard]] inline bool vhdl_textio_sread(const FileScan& operation) noexcept
+{
+    return vhdl_textio_marker(operation) == vhdl_textio_sread_marker;
+}
 
 enum class FileBinaryTargetKind : std::uint8_t {
     packed_register,

@@ -266,20 +266,8 @@ Expression VerilogParser::parse_lvalue()
                 if (kind == TokenKind::LeftParen) {
                     return true;
                 }
-                if (kind == TokenKind::Assign
-                    || kind == TokenKind::LessEqual
-                    || kind == TokenKind::PlusAssign
-                    || kind == TokenKind::MinusAssign
-                    || kind == TokenKind::StarAssign
-                    || kind == TokenKind::SlashAssign
-                    || kind == TokenKind::PercentAssign
-                    || kind == TokenKind::AmpersandAssign
-                    || kind == TokenKind::PipeAssign
-                    || kind == TokenKind::CaretAssign
-                    || kind == TokenKind::ShiftLeftAssign
-                    || kind == TokenKind::ShiftRightAssign
-                    || kind == TokenKind::ArithmeticShiftLeftAssign
-                    || kind == TokenKind::ArithmeticShiftRightAssign) {
+                if (kind == TokenKind::LessEqual
+                    || is_blocking_assignment_operator(kind)) {
                     return false;
                 }
             }
@@ -1660,15 +1648,8 @@ Expression VerilogParser::parse_primary_impl()
         const auto open = previous();
         const auto inner_begin = index_;
         Expression expression = parse_expression();
-        const auto assignment_operator = at(TokenKind::Assign)
-            || at(TokenKind::PlusAssign) || at(TokenKind::MinusAssign)
-            || at(TokenKind::StarAssign) || at(TokenKind::SlashAssign)
-            || at(TokenKind::PercentAssign) || at(TokenKind::AmpersandAssign)
-            || at(TokenKind::PipeAssign) || at(TokenKind::CaretAssign)
-            || at(TokenKind::ShiftLeftAssign)
-            || at(TokenKind::ShiftRightAssign)
-            || at(TokenKind::ArithmeticShiftLeftAssign)
-            || at(TokenKind::ArithmeticShiftRightAssign);
+        const auto assignment_operator
+            = is_blocking_assignment_operator(current().kind);
         if (assignment_operator && statement_hoist_depth_ != 0U
             && language_ == Language::SystemVerilog2017
             && constraint_parse_depth_ == 0U) {

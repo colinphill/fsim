@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include "elaborator_internal.hpp"
 
@@ -35,6 +36,18 @@ using semantic::vhdl::RangeKind;
 using semantic::vhdl::SubtypeIndication;
 using semantic::vhdl::TypeDefinition;
 using semantic::vhdl::TypeForm;
+
+// The number of values from `low` through `high` (low <= high), or nothing
+// when it does not fit in 64 bits.
+[[nodiscard]] constexpr std::optional<std::uint64_t> inclusive_extent(
+    const std::int64_t low, const std::int64_t high) noexcept
+{
+    const auto distance = static_cast<std::uint64_t>(high)
+        - static_cast<std::uint64_t>(low);
+    return distance == std::numeric_limits<std::uint64_t>::max()
+        ? std::nullopt
+        : std::optional<std::uint64_t> { distance + 1U };
+}
 
 enum class ProfileKind : std::uint8_t {
     unknown,
@@ -77,6 +90,21 @@ public:
         , entity_ { entity }
         , architecture_ { architecture }
     {
+    }
+
+    // An analysis-only validator: the expression rules it answers read no
+    // entity or architecture state.
+    explicit Validator(const semantic::SpecializedHirUnit& specialization)
+        : Validator { specialization, detached_unit(), detached_unit() }
+    {
+    }
+
+    [[nodiscard]] bool locally_static(const semantic::ExpressionId id) const
+    {
+        std::unordered_set<std::uint32_t> active_expressions;
+        std::unordered_set<std::uint32_t> active_declarations;
+        return locally_static_expression(
+            id, active_expressions, active_declarations);
     }
 
     // Check only the VHNAME name rules, skipping the type
@@ -486,12 +514,8 @@ private:
                     ? array_root(*actual_type) : std::nullopt;
                 if (return_root && actual_root
                     && *return_root == *actual_root) {
-                    std::unordered_set<std::uint32_t> return_visiting;
-                    std::unordered_set<std::uint32_t> actual_visiting;
-                    const auto return_profile = profile(
-                        return_subtype, return_visiting);
-                    const auto actual_profile = profile(
-                        actual_subtype, actual_visiting);
+                    const auto return_profile = profile(return_subtype);
+                    const auto actual_profile = profile(actual_subtype);
                     const auto is_unconstrained_rank_one_array
                         = [](const TypeProfile& candidate) {
                               return candidate.kind == ProfileKind::array
@@ -635,8 +659,7 @@ private:
         const auto attribute = value.kind
                 == semantic::vhdl::ExpressionKind::call
             && !value.operands.empty()
-            && (value.text == "'left" || value.text == "'right"
-                || value.text == "'low" || value.text == "'high"
+            && (semantic::vhdl::is_scalar_bound_attribute(value.text)
                 || value.text == "'length"
                 || value.text == "'ascending");
         if (!attribute) {
@@ -650,12 +673,8 @@ private:
             std::optional<semantic::TypeId> type;
             if (prefix_expression
                 && prefix_expression->vhdl != nullptr) {
-                const semantic::CompiledDeclarationPredicate
-                    type_declaration
-                    = [](const semantic::CompiledDeclarationView& candidate) {
-                          return candidate.vhdl != nullptr
-                              && candidate.vhdl->declared_type.has_value();
-                      };
+                const semantic::CompiledDeclarationPredicate type_declaration
+                    = semantic::declares_vhdl_type;
                 const semantic::CompiledDesignResolver resolver {
                     specialization_
                 };
@@ -683,8 +702,7 @@ private:
             guard();
             return std::nullopt;
         }
-        std::unordered_set<std::uint32_t> profile_visiting;
-        const auto prefix_profile = profile(*prefix, profile_visiting);
+        const auto prefix_profile = profile(*prefix);
         std::int64_t dimension { 1 };
         if (value.operands.size() == 2U) {
             const auto selected = static_integer(value.operands[1], active);
@@ -817,10 +835,8 @@ private:
                 const auto attribute = specialization_.find_expression(
                     *expression);
                 if (attribute && attribute->vhdl != nullptr
-                    && (attribute->vhdl->text == "'left"
-                        || attribute->vhdl->text == "'right"
-                        || attribute->vhdl->text == "'low"
-                        || attribute->vhdl->text == "'high")
+                    && (semantic::vhdl::is_scalar_bound_attribute(
+                        attribute->vhdl->text))
                     && attribute->vhdl->kind
                         == semantic::vhdl::ExpressionKind::call
                     && attribute->vhdl->operands.size() == 1U) {
@@ -836,13 +852,9 @@ private:
                     const auto index_root = index_type
                         ? enumeration_root_type(*index_type)
                         : std::nullopt;
-                    std::unordered_set<std::uint32_t> active_expressions;
-                    std::unordered_set<std::uint32_t> active_declarations;
                     if (prefix_root && index_root
                         && *prefix_root == *index_root
-                        && locally_static_expression(
-                            *expression, active_expressions,
-                            active_declarations)) {
+                        && locally_static(*expression)) {
                         return bound(std::nullopt, expression);
                     }
                 }
@@ -858,12 +870,9 @@ private:
             const auto attribute = specialization_.find_expression(
                 *expression);
             if (attribute && attribute->vhdl != nullptr
-                && (attribute->vhdl->text == "'left"
-                    || attribute->vhdl->text == "'right"
-                    || attribute->vhdl->text == "'low"
-                    || attribute->vhdl->text == "'high")
-                && attribute->vhdl->kind
-                    == semantic::vhdl::ExpressionKind::call
+                && (semantic::vhdl::is_scalar_bound_attribute(
+                    attribute->vhdl->text))
+                && attribute->vhdl->kind == semantic::vhdl::ExpressionKind::call
                 && attribute->vhdl->operands.size() == 1U) {
                 const auto prefix = specialization_.find_expression(
                     attribute->vhdl->operands.front());
@@ -886,62 +895,40 @@ private:
         return bound(value, expression);
     }
 
+    // An unconstrained index of the ascending range `minimum to maximum`.
+    static ArrayDimensionProfile ascending_index_profile(
+        const std::int64_t minimum, const std::int64_t maximum)
+    {
+        auto result = ArrayDimensionProfile { minimum, maximum, false, false };
+        result.left = minimum;
+        result.right = maximum;
+        result.bounds_known = true;
+        result.direction_known = true;
+        result.null_known = true;
+        return result;
+    }
+
     static ArrayDimensionProfile index_profile(
         const std::string_view spelling)
     {
+        constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
         const auto name = simple_name_of(spelling);
         if (equal_ignoring_ascii_case(name, "natural")) {
-            auto result = ArrayDimensionProfile {
-                0, std::numeric_limits<std::int64_t>::max(), false, false };
-            result.left = 0;
-            result.right = std::numeric_limits<std::int64_t>::max();
-            result.bounds_known = true;
-            result.direction_known = true;
-            result.null_known = true;
-            return result;
+            return ascending_index_profile(0, maximum);
         }
         if (equal_ignoring_ascii_case(name, "positive")) {
-            auto result = ArrayDimensionProfile {
-                1, std::numeric_limits<std::int64_t>::max(), false, false };
-            result.left = 1;
-            result.right = std::numeric_limits<std::int64_t>::max();
-            result.bounds_known = true;
-            result.direction_known = true;
-            result.null_known = true;
-            return result;
+            return ascending_index_profile(1, maximum);
         }
         if (equal_ignoring_ascii_case(name, "integer")) {
-            auto result = ArrayDimensionProfile {
-                std::numeric_limits<std::int64_t>::min(),
-                std::numeric_limits<std::int64_t>::max(),
-                false,
-                false,
-            };
-            result.left = std::numeric_limits<std::int64_t>::min();
-            result.right = std::numeric_limits<std::int64_t>::max();
-            result.bounds_known = true;
-            result.direction_known = true;
-            result.null_known = true;
-            return result;
+            return ascending_index_profile(
+                std::numeric_limits<std::int64_t>::min(), maximum);
         }
         if (equal_ignoring_ascii_case(name, "boolean")
             || equal_ignoring_ascii_case(name, "bit")) {
-            auto result = ArrayDimensionProfile { 0, 1, false, false };
-            result.left = 0;
-            result.right = 1;
-            result.bounds_known = true;
-            result.direction_known = true;
-            result.null_known = true;
-            return result;
+            return ascending_index_profile(0, 1);
         }
         if (equal_ignoring_ascii_case(name, "character")) {
-            auto result = ArrayDimensionProfile { 0, 255, false, false };
-            result.left = 0;
-            result.right = 255;
-            result.bounds_known = true;
-            result.direction_known = true;
-            result.null_known = true;
-            return result;
+            return ascending_index_profile(0, 255);
         }
         return { };
     }
@@ -971,15 +958,8 @@ private:
                         std::numeric_limits<std::int64_t>::max())) {
                     break;
                 }
-                result.minimum = 0;
-                result.maximum = static_cast<std::int64_t>(last);
-                result.descending = false;
-                result.left = 0;
-                result.right = static_cast<std::int64_t>(last);
-                result.bounds_known = true;
-                result.direction_known = true;
-                result.null_known = true;
-                return result;
+                return ascending_index_profile(
+                    0, static_cast<std::int64_t>(last));
             }
             if (definition->scalar_range) {
                 const auto& range = *definition->scalar_range;
@@ -1039,22 +1019,11 @@ private:
     std::optional<semantic::TypeId> enumeration_root_type(
         semantic::TypeId type) const
     {
-        std::unordered_set<std::uint32_t> visiting;
-        while (type.valid() && visiting.insert(type.value()).second) {
-            const auto* definition = type_definition(type);
-            if (definition == nullptr) {
-                return std::nullopt;
-            }
-            if (definition->form == TypeForm::enumeration) {
-                return definition->id;
-            }
-            if (definition->form != TypeForm::subtype
-                && definition->form != TypeForm::alias) {
-                return std::nullopt;
-            }
-            type = definition->base.type_mark.target;
-        }
-        return std::nullopt;
+        const auto* base
+            = semantic::vhdl_base_type_definition(specialization_, type);
+        return base != nullptr && base->form == TypeForm::enumeration
+            ? std::optional { base->id }
+            : std::nullopt;
     }
 
     std::optional<std::int64_t> enumeration_index_value(
@@ -1085,7 +1054,7 @@ private:
         const auto& value = *expression->vhdl;
         using Kind = semantic::vhdl::ExpressionKind;
         constexpr std::string_view qualified_prefix {
-            "@vhdl-qualified:" };
+            semantic::vhdl::qualified_expression_prefix };
         if (value.kind == Kind::call
             && value.text.starts_with(qualified_prefix)
             && value.operands.size() == 1U) {
@@ -1099,11 +1068,7 @@ private:
             if (!qualified_root || *qualified_root != *expected_root) {
                 return std::nullopt;
             }
-            std::unordered_set<std::uint32_t> active_expressions;
-            std::unordered_set<std::uint32_t> active_declarations;
-            if (!locally_static_expression(
-                    expression_id, active_expressions,
-                    active_declarations)) {
+            if (!locally_static(expression_id)) {
                 return std::nullopt;
             }
             return enumeration_index_value(
@@ -1140,9 +1105,7 @@ private:
                     }
                 } else {
                     const auto spelling = prefix_name
-                        ? (prefix_name->canonical.empty()
-                                ? std::string_view { prefix_name->spelling }
-                                : std::string_view { prefix_name->canonical })
+                        ? (prefix_name->text())
                         : std::string_view { prefix->vhdl->text };
                     prefix_type
                         = semantic::CompiledDesignResolver { specialization_ }
@@ -1197,11 +1160,7 @@ private:
                         != expected_operand_type.root) {
                     return std::nullopt;
                 }
-                std::unordered_set<std::uint32_t> active_expressions;
-                std::unordered_set<std::uint32_t> active_declarations;
-                if (!locally_static_expression(
-                        expression_id, active_expressions,
-                        active_declarations)) {
+                if (!locally_static(expression_id)) {
                     return std::nullopt;
                 }
                 // Keep the selected enum identity through the initializer;
@@ -1252,9 +1211,7 @@ private:
             type = declaration->vhdl->declared_type;
         } else if (!index_name.spelling.empty()) {
             const auto scope = type_declaration_scope(array);
-            const auto spelling = index_name.canonical.empty()
-                ? std::string_view { index_name.spelling }
-                : std::string_view { index_name.canonical };
+            const auto spelling = index_name.text();
             type = semantic::CompiledDesignResolver { specialization_ }
                        .resolve_vhdl_named_type(
                            spelling,
@@ -1336,9 +1293,7 @@ private:
         }
         const auto& index_name
             = array.array_dimensions[dimension_index].index_subtype;
-        const auto spelling = index_name.canonical.empty()
-            ? std::string_view { index_name.spelling }
-            : std::string_view { index_name.canonical };
+        const auto spelling = index_name.text();
         if (index_name.selected
             || !equal_ignoring_ascii_case(
                 index_name.spelling, "std_ulogic")
@@ -1584,6 +1539,13 @@ private:
         return result;
     }
 
+    TypeProfile profile(const SubtypeIndication& original,
+        const semantic::ScopeId use_scope = {}) const
+    {
+        std::unordered_set<std::uint32_t> visiting;
+        return profile(original, visiting, use_scope);
+    }
+
     TypeProfile profile(
         const SubtypeIndication& original,
         std::unordered_set<std::uint32_t>& visiting,
@@ -1681,10 +1643,8 @@ private:
                     result.dimensions.push_back(converted);
                 }
                 if (definition->element_subtype) {
-                    std::unordered_set<std::uint32_t> element_visiting;
                     const auto element = profile(
-                        *definition->element_subtype,
-                        element_visiting, nested_scope);
+                        *definition->element_subtype, nested_scope);
                     result.indefinite_element
                         = element.kind == ProfileKind::unknown
                         || element.kind == ProfileKind::integer
@@ -1881,8 +1841,7 @@ private:
         }
         auto unconstrained = original;
         unconstrained.constraints.clear();
-        std::unordered_set<std::uint32_t> visiting;
-        const auto base = profile(unconstrained, visiting, constraint_scope);
+        const auto base = profile(unconstrained, constraint_scope);
         const auto source = subtype.constraints.front().source.valid()
             ? subtype.constraints.front().source
             : fallback;
@@ -2057,21 +2016,15 @@ private:
         };
         const auto left = bound_type(range->left, range->left_expression);
         const auto right = bound_type(range->right, range->right_expression);
-        const auto known = [](const OperandClass kind) {
-            return kind != OperandClass::unknown;
-        };
-        if (!known(left.kind) || !known(right.kind)) {
+        if (!known_class(left.kind) || !known_class(right.kind)) {
             return;
         }
-        const auto numeric_class = [](const OperandClass kind) {
-            return kind == OperandClass::integer || kind == OperandClass::floating;
-        };
         // The bounds of an integer or floating type definition need only
         // be of some integer or floating type (IEEE 1076-1993 3.1.2, 3.1.4).
         const auto mismatch = left.kind != right.kind
             || (!scalar_definition && left.kind == OperandClass::enumeration
                 && roots_conflict(left.root, right.root))
-            || (scalar_definition && !numeric_class(left.kind));
+            || (scalar_definition && !integer_or_floating_class(left.kind));
         if (mismatch) {
             report("FSIM-ELAB-VHRANGE-001",
                 "the bounds of a VHDL range must have the same type"
@@ -2120,7 +2073,7 @@ private:
         auto type = subtype_type(subtype);
         if (!type) {
             auto name = std::string_view { subtype.type_mark.spelling };
-            name.remove_prefix(name.find_last_of(".:") + 1U);
+            name = simple_name_of(name);
             return equal_ignoring_ascii_case(name, "string") || equal_ignoring_ascii_case(name, "bit_vector");
         }
         std::unordered_set<std::uint32_t> visiting;
@@ -2408,7 +2361,7 @@ private:
                     || operation == "and" || operation == "or" || operation == "nand"
                     || operation == "nor" || operation == "xor" || operation == "xnor";
             };
-            if ((base.kind == OperandClass::integer || base.kind == OperandClass::floating)
+            if (integer_or_floating_class(base.kind)
                 && (non_numeric(range.left_expression)
                     || non_numeric(range.right_expression))) {
                 report("FSIM-ELAB-VHRANGE-001",
@@ -2550,7 +2503,7 @@ private:
                 }
                 if (!index_declaration) {
                     auto spelling = std::string_view { dimension.index_subtype.spelling };
-                    spelling.remove_prefix(spelling.find_last_of(".:") + 1U);
+                    spelling = simple_name_of(spelling);
                     for (const auto predefined : { "bit_vector", "string", "real", "time",
                              "std_logic_vector", "std_ulogic_vector" }) {
                         if (equal_ignoring_ascii_case(spelling, predefined)) {
@@ -2649,8 +2602,7 @@ private:
                 type.source);
             return;
         }
-        std::unordered_set<std::uint32_t> visiting;
-        const auto element = profile(*type.element_subtype, visiting);
+        const auto element = profile(*type.element_subtype);
         // VHDL-2008 permits an unbounded element subtype that object
         // declarations constrain (IEEE 1076-2008 5.3.2.1).
         const bool unbounded_elements
@@ -2713,8 +2665,7 @@ private:
         validate_constraints(
             *declaration.subtype, declaration.source,
             declaration.scope);
-        std::unordered_set<std::uint32_t> visiting;
-        const auto object = profile(subtype, visiting, declaration.scope);
+        const auto object = profile(subtype, declaration.scope);
         if (object.kind != ProfileKind::array) {
             return;
         }
@@ -2760,18 +2711,9 @@ private:
             = specialization_.design().vhdl_hir.declarations();
         const auto visible_in = [&](const semantic::ScopeId inner,
                                     const semantic::ScopeId outer) {
-            auto scope = inner;
-            for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
-                if (scope == outer) {
-                    return true;
-                }
-                if (!scope.valid() || scope.value() >= scopes.size()
-                    || !scopes[scope.value()].parent) {
-                    return false;
-                }
-                scope = *scopes[scope.value()].parent;
-            }
-            return false;
+            return semantic::scope_distance(
+                specialization_.design().semantics, inner, outer)
+                .has_value();
         };
         const auto class_forms = [](const std::string_view entity_class)
             -> std::vector<Form> {
@@ -2989,28 +2931,12 @@ private:
     }
 
     std::optional<semantic::TypeId> array_root(
-        semantic::TypeId id) const
+        const semantic::TypeId id) const
     {
-        std::unordered_set<std::uint32_t> visiting;
-        while (id.valid() && visiting.insert(id.value()).second) {
-            const auto* type = type_definition(id);
-            if (type == nullptr) {
-                return std::nullopt;
-            }
-            if (type->form == TypeForm::array) {
-                return id;
-            }
-            if (type->form != TypeForm::subtype
-                && type->form != TypeForm::alias) {
-                return std::nullopt;
-            }
-            const auto base = subtype_type(type->base);
-            if (!base) {
-                return std::nullopt;
-            }
-            id = *base;
-        }
-        return std::nullopt;
+        const auto* root = root_type_definition(id);
+        return root != nullptr && root->form == TypeForm::array
+            ? std::optional { root->id }
+            : std::nullopt;
     }
 
     std::optional<semantic::TypeId> expression_array_root(
@@ -3083,11 +3009,8 @@ private:
                         || selector->vhdl->text.ends_with("'reverse_range"));
             });
         using Form = semantic::vhdl::DeclarationForm;
-        const auto object = declaration->vhdl->form == Form::signal
-            || declaration->vhdl->form == Form::variable
-            || declaration->vhdl->form == Form::constant
-            || declaration->vhdl->form == Form::port
-            || declaration->vhdl->form == Form::generic_constant
+        const auto object
+            = semantic::vhdl::is_value_object_form(declaration->vhdl->form)
             || declaration->vhdl->form == Form::alias;
         if ((expression->vhdl->kind == semantic::vhdl::ExpressionKind::index
                 || (expression->vhdl->kind
@@ -3232,8 +3155,7 @@ private:
             if (!subtype || !element) {
                 continue;
             }
-            std::unordered_set<std::uint32_t> visiting;
-            const auto shape = profile(*subtype, visiting);
+            const auto shape = profile(*subtype);
             const auto element_type = subtype_operand_type(*element, 0U);
             if (shape.kind != ProfileKind::array
                 || shape.dimensions.size() != 1U
@@ -3272,16 +3194,13 @@ private:
                       return false;
                   }
                   const auto form = candidate.vhdl->form;
-                  return form == Form::variable
-                      || form == Form::signal || form == Form::constant
-                      || form == Form::port || form == Form::alias
-                      || form == Form::generic_constant || form == Form::file;
+                  return semantic::vhdl::is_value_object_form(form)
+                      || form == Form::alias || form == Form::file;
               };
         const auto same_identifier = [](const std::string_view left,
                                          const std::string_view right) {
             const auto extended = [](const std::string_view name) {
-                return name.size() >= 2U && name.front() == '\\'
-                    && name.back() == '\\';
+                return support::is_extended_vhdl_identifier(name);
             };
             return extended(left) || extended(right)
                 ? left == right
@@ -3428,17 +3347,12 @@ private:
         std::optional<std::string_view> package_name;
         std::optional<std::string_view> package_library;
         const auto scope_id = declaration->vhdl->scope;
-        const auto& scopes = specialization_.design().semantics.scopes();
-        const auto scope
-            = std::ranges::find(scopes, scope_id, &semantic::Scope::id);
-        if (scope_id.valid() && scope != scopes.end()) {
-            const auto unit = specialization_.design().find_unit(scope->unit);
-            if (unit && unit->vhdl != nullptr
-                && unit->vhdl->kind == semantic::vhdl::UnitKind::package
-                && declaration->vhdl->scope == unit->vhdl->scope) {
-                package_name = unit->vhdl->name;
-                package_library = unit->vhdl->library;
-            }
+        if (const auto* unit
+            = specialization_.design().vhdl_scope_unit(scope_id);
+            unit != nullptr && unit->kind == semantic::vhdl::UnitKind::package
+            && scope_id == unit->scope) {
+            package_name = unit->name;
+            package_library = unit->library;
         }
 
         std::optional<std::size_t> object_component;
@@ -3517,7 +3431,7 @@ private:
                 return selection_result_subtype(*selection);
             }
             constexpr std::string_view qualified_prefix {
-                "@vhdl-qualified:"
+                semantic::vhdl::qualified_expression_prefix
             };
             if (value.text.starts_with(qualified_prefix)
                 && value.operands.size() == 1U) {
@@ -3618,14 +3532,9 @@ private:
                 prefix.canonical = prefix.spelling;
                 const semantic::CompiledDeclarationPredicate object
                     = [](const semantic::CompiledDeclarationView& candidate) {
-                          using Form = semantic::vhdl::DeclarationForm;
                           return candidate.vhdl != nullptr
-                              && (candidate.vhdl->form == Form::variable
-                                  || candidate.vhdl->form == Form::signal
-                                  || candidate.vhdl->form == Form::constant
-                                  || candidate.vhdl->form == Form::port
-                                  || candidate.vhdl->form
-                                      == Form::generic_constant);
+                              && semantic::vhdl::is_value_object_form(
+                                  candidate.vhdl->form);
                       };
                 selected_object = semantic::CompiledDesignResolver {
                     specialization_ }
@@ -3650,9 +3559,8 @@ private:
                             subtype = *object_subtype;
                         }
                     }
-                    const auto object = form == Form::generic_constant
-                        || form == Form::port || form == Form::signal
-                        || form == Form::constant || form == Form::variable
+                    const auto object
+                        = semantic::vhdl::is_value_object_form(form)
                         || form == Form::alias;
                     auto remaining = std::string_view { value.text };
                     const auto separator = remaining.find('.');
@@ -3798,8 +3706,7 @@ private:
                 std::nullopt, { }, false };
         }
         if (const auto subtype = expression_subtype(id)) {
-            std::unordered_set<std::uint32_t> visiting;
-            return profile(*subtype, visiting, expression->vhdl->scope);
+            return profile(*subtype, expression->vhdl->scope);
         }
         return std::nullopt;
     }
@@ -3816,6 +3723,28 @@ private:
         null,
         other,
     };
+
+    // Scalar types are the enumeration, integer, physical and floating
+    // types; integer, physical and floating types are the numeric types
+    // (IEEE 1076-2008 5.2.1).
+    static constexpr bool known_class(const OperandClass kind) noexcept
+    {
+        return kind != OperandClass::unknown;
+    }
+    static constexpr bool integer_or_floating_class(
+        const OperandClass kind) noexcept
+    {
+        return kind == OperandClass::integer || kind == OperandClass::floating;
+    }
+    static constexpr bool numeric_class(const OperandClass kind) noexcept
+    {
+        return integer_or_floating_class(kind)
+            || kind == OperandClass::physical;
+    }
+    static constexpr bool scalar_class(const OperandClass kind) noexcept
+    {
+        return numeric_class(kind) || kind == OperandClass::enumeration;
+    }
 
     struct OperandType {
         OperandClass kind { OperandClass::unknown };
@@ -3943,9 +3872,7 @@ private:
         const SubtypeIndication& subtype, const std::size_t depth) const
     {
         auto result = subtype_operand_class(subtype, depth);
-        if (result.kind == OperandClass::integer || result.kind == OperandClass::floating
-            || result.kind == OperandClass::physical
-            || result.kind == OperandClass::enumeration) {
+        if (scalar_class(result.kind)) {
             if (const auto declared = declared_scalar_root(subtype)) {
                 result.root = *declared;
             }
@@ -4076,8 +4003,10 @@ private:
                 return { OperandClass::physical, { } };
             }
             // T'(e) has the type of its type mark (9.3.5).
-            if (constexpr std::string_view qualified { "@vhdl-qualified:" };
-                value.text.starts_with(qualified) && value.operands.size() == 1U) {
+            if (constexpr std::string_view qualified {
+                    semantic::vhdl::qualified_expression_prefix };
+                value.text.starts_with(qualified)
+                && value.operands.size() == 1U) {
                 const auto mark = std::string_view { value.text }.substr(qualified.size());
                 SubtypeIndication subtype;
                 subtype.type_mark.spelling = std::string { mark };
@@ -4088,8 +4017,7 @@ private:
             }
             // T'LEFT, T'RIGHT, T'LOW and T'HIGH of a scalar type mark have
             // the type of T (IEEE 1076-1993 14.1).
-            if ((value.text == "'left" || value.text == "'right"
-                    || value.text == "'low" || value.text == "'high")
+            if ((semantic::vhdl::is_scalar_bound_attribute(value.text))
                 && value.operands.size() == 1U) {
                 const auto prefix = specialization_.find_expression(
                     value.operands.front());
@@ -4130,10 +4058,6 @@ private:
             }
             const auto left = operand_type(value.operands[0], depth + 1U);
             const auto right = operand_type(value.operands[1], depth + 1U);
-            const auto numeric = [](const OperandClass kind) {
-                return kind == OperandClass::integer
-                    || kind == OperandClass::floating;
-            };
             const auto same = [&]() -> OperandType {
                 if (types_conflict(left, right)) {
                     return { };
@@ -4143,19 +4067,21 @@ private:
             const auto& operation = value.text;
             if (operation == "+" || operation == "-" || operation == "mod"
                 || operation == "rem") {
-                return numeric(left.kind) || left.kind == OperandClass::physical
+                return numeric_class(left.kind)
                     ? same()
                     : OperandType { };
             }
             if (operation == "*" || operation == "/") {
-                if (numeric(left.kind) && numeric(right.kind)) {
+                if (integer_or_floating_class(left.kind)
+                    && integer_or_floating_class(right.kind)) {
                     return same();
                 }
-                if (left.kind == OperandClass::physical && numeric(right.kind)) {
+                if (left.kind == OperandClass::physical
+                    && integer_or_floating_class(right.kind)) {
                     return left;
                 }
                 if (operation == "*" && right.kind == OperandClass::physical
-                    && numeric(left.kind)) {
+                    && integer_or_floating_class(left.kind)) {
                     return right;
                 }
                 if (operation == "/" && left.kind == OperandClass::physical
@@ -4164,7 +4090,7 @@ private:
                 }
                 return { };
             }
-            if (operation == "**" && numeric(left.kind)) {
+            if (operation == "**" && integer_or_floating_class(left.kind)) {
                 return left;
             }
             return { };
@@ -4219,14 +4145,10 @@ private:
             && value.text.find('.') == std::string::npos) {
             const auto declaration = specialization_.find_declaration(
                 *value.referenced_name->selected);
-            using Form = semantic::vhdl::DeclarationForm;
             if (declaration && declaration->vhdl != nullptr
                 && declaration->vhdl->subtype
-                && (declaration->vhdl->form == Form::variable
-                    || declaration->vhdl->form == Form::signal
-                    || declaration->vhdl->form == Form::constant
-                    || declaration->vhdl->form == Form::port
-                    || declaration->vhdl->form == Form::generic_constant)) {
+                && semantic::vhdl::is_value_object_form(
+                    declaration->vhdl->form)) {
                 const auto& declared_subtype = *declaration->vhdl->subtype;
                 auto result = subtype_operand_type(
                     specialized_subtype(declared_subtype), depth);
@@ -4496,9 +4418,7 @@ private:
                 return bound;
             }
         }
-        const auto& spelling = dimension.index_subtype.canonical.empty()
-            ? dimension.index_subtype.spelling
-            : dimension.index_subtype.canonical;
+        const auto spelling = dimension.index_subtype.text();
         if (!spelling.empty()) {
             SubtypeIndication subtype;
             subtype.type_mark.spelling = spelling;
@@ -4524,31 +4444,19 @@ private:
         if (expression.operands.size() != 1U || !expression.referenced_name) {
             return;
         }
-        const auto mark = expression.referenced_name->canonical.empty()
-            ? expression.referenced_name->spelling
-            : expression.referenced_name->canonical;
+        const auto mark = expression.referenced_name->text();
         const auto target_id = named_type(mark, expression.scope);
         const auto operand = operand_type(expression.operands.front());
         if (!target_id || !operand.root.starts_with('#')) {
             return;
         }
-        const auto array_of = [&](semantic::TypeId id) -> const TypeDefinition* {
-            std::unordered_set<std::uint32_t> visiting;
-            while (visiting.insert(id.value()).second) {
-                const auto* definition = type_definition(id);
-                if (definition == nullptr) {
-                    return nullptr;
-                }
-                if (definition->form == TypeForm::array) {
-                    return definition;
-                }
-                if (definition->form != TypeForm::subtype
-                    || !definition->base.type_mark.target.valid()) {
-                    return nullptr;
-                }
-                id = definition->base.type_mark.target;
-            }
-            return nullptr;
+        const auto array_of = [&](const semantic::TypeId id)
+            -> const TypeDefinition* {
+            const auto* base
+                = semantic::vhdl_base_type_definition(specialization_, id);
+            return base != nullptr && base->form == TypeForm::array
+                ? base
+                : nullptr;
         };
         std::uint32_t operand_id { };
         const auto digits = std::string_view { operand.root }.substr(1U);
@@ -4597,7 +4505,9 @@ private:
         if (expression.kind != semantic::vhdl::ExpressionKind::call) {
             return;
         }
-        constexpr std::string_view qualified_prefix { "@vhdl-qualified:" };
+        constexpr std::string_view qualified_prefix {
+            semantic::vhdl::qualified_expression_prefix
+        };
         if (expression.operands.empty()) {
             return;
         }
@@ -4628,14 +4538,7 @@ private:
                                             const std::size_t level) -> bool {
                     return std::ranges::any_of(value.associations,
                         [&](const semantic::vhdl::AggregateAssociation& association) {
-                            if (equal_ignoring_ascii_case(association.choice_spelling, "others")
-                                || std::ranges::any_of(association.choices,
-                                    [&](const semantic::ExpressionId choice) {
-                                        const auto found = specialization_.find_expression(choice);
-                                        return found && found->vhdl != nullptr
-                                            && found->vhdl->kind
-                                                == semantic::vhdl::ExpressionKind::default_choice;
-                                    })) {
+                            if (choice_is_others(association)) {
                                 return true;
                             }
                             const auto nested = specialization_.find_expression(association.value);
@@ -4718,19 +4621,11 @@ private:
                                 || (constraint.descending
                                     ? *left < *right
                                     : *left > *right));
-                        const auto distance = *left >= *right
-                            ? static_cast<std::uint64_t>(*left)
-                                - static_cast<std::uint64_t>(*right)
-                            : static_cast<std::uint64_t>(*right)
-                                - static_cast<std::uint64_t>(*left);
-                        const bool known_extent = null_range
-                            || distance
-                                != std::numeric_limits<std::uint64_t>::max();
                         const auto extent = null_range
-                            ? std::uint64_t { 0U }
-                            : known_extent ? distance + 1U
-                                            : std::uint64_t { 0U };
-                        if (known_extent && extent != value->size()) {
+                            ? std::optional<std::uint64_t> { 0U }
+                            : inclusive_extent(std::min(*left, *right),
+                                  std::max(*left, *right));
+                        if (extent && *extent != value->size()) {
                             report(
                                 "FSIM-ELAB-VHQUAL-003",
                                 "a VHDL qualified STRING operand does not "
@@ -4741,11 +4636,7 @@ private:
                     }
                 }
             }
-            const auto scalar = [](const OperandClass kind) {
-                return kind == OperandClass::integer || kind == OperandClass::floating
-                    || kind == OperandClass::physical || kind == OperandClass::enumeration;
-            };
-            const auto comparable = scalar(expected.kind)
+            const auto comparable = scalar_class(expected.kind)
                 || expected.kind == OperandClass::record;
             if (comparable && actual.kind != OperandClass::unknown
                 && actual.kind != OperandClass::null
@@ -5041,17 +4932,8 @@ private:
             || !declaration->vhdl->scope.valid()) {
             return false;
         }
-        const auto& design = specialization_.design();
-        const auto& scopes = design.semantics.scopes();
-        const auto owner_scope = std::ranges::find(
-            scopes, declaration->vhdl->scope, &semantic::Scope::id);
-        const auto owner = owner_scope != scopes.end()
-            ? design.find_unit(owner_scope->unit)
-            : std::nullopt;
-        return owner && owner->vhdl != nullptr
-            && owner->vhdl->kind == semantic::vhdl::UnitKind::package
-            && equal_ignoring_ascii_case(owner->vhdl->library, library)
-            && equal_ignoring_ascii_case(owner->vhdl->name, package);
+        return specialization_.design().vhdl_scope_in_package(
+            declaration->vhdl->scope, library, package);
     }
 
     bool declaration_is_ieee_function(
@@ -5107,10 +4989,7 @@ private:
             return false;
         }
         auto spelling = std::string_view { name.spelling };
-        constexpr auto builtin_prefix = std::string_view { "@builtin:" };
-        if (spelling.starts_with(builtin_prefix)) {
-            spelling.remove_prefix(builtin_prefix.size());
-        }
+        spelling = semantic::vhdl::without_builtin_prefix(spelling);
         const auto first_separator = spelling.find_first_of(".:");
         const auto last_separator = spelling.find_last_of(".:");
         const auto is_package = [](const std::string_view package) {
@@ -5299,13 +5178,43 @@ private:
             return finish(expression.operands.size() == 1U
                 && locally_static_operator(expression)
                 && all_operands_static());
-        case Kind::binary:
-            return finish(expression.operands.size() == 2U
-                && locally_static_operator(expression)
+        case Kind::binary: {
+            if (expression.operands.size() != 2U) {
+                return finish(false);
+            }
+            if (equal_ignoring_ascii_case(expression.text, "to")
+                || equal_ignoring_ascii_case(expression.text, "downto")) {
+                // Aggregate discrete ranges are encoded as binary nodes, but
+                // their direction keyword is range syntax rather than a
+                // callable operator. Only their bounds need to be locally
+                // static.
+                const auto& direction = expression.referenced_name;
+                const auto resolver
+                    = semantic::CompiledDesignResolver { specialization_ };
+                const bool unbound_range_direction = direction
+                    && equal_ignoring_ascii_case(
+                        direction->spelling, expression.text)
+                    && equal_ignoring_ascii_case(
+                        direction->text(), expression.text)
+                    && !direction->selected && direction->overloads.empty()
+                    && expression.builtin_operator
+                        == semantic::vhdl::BuiltinOperatorIdentity::none
+                    && resolver
+                           .resolve_vhdl_callables(
+                               *direction, expression.scope)
+                           .candidates.empty()
+                    && resolver
+                           .resolve_vhdl_callable_candidates(
+                               *direction, expression.scope)
+                           .candidates.empty();
+                return finish(unbound_range_direction && all_operands_static());
+            }
+            return finish(locally_static_operator(expression)
                 && all_operands_static());
+        }
         case Kind::call: {
             constexpr auto qualified_prefix
-                = std::string_view { "@vhdl-qualified:" };
+                = semantic::vhdl::qualified_expression_prefix;
             const auto conversion_subtype = [&](const auto& name,
                                                 const semantic::ScopeId scope)
                 -> std::optional<SubtypeIndication> {
@@ -5491,27 +5400,17 @@ private:
             return true;
         }
         if (value.kind == Kind::index && value.operands.size() >= 2U) {
-            std::unordered_set<std::uint32_t> active_expressions;
-            std::unordered_set<std::uint32_t> active_declarations;
             return std::ranges::all_of(
                        std::span { value.operands }.subspan(1U),
                        [&](const semantic::ExpressionId index) {
-                           return locally_static_expression(
-                               index, active_expressions,
-                               active_declarations);
+                           return locally_static(index);
                        })
                 && aggregate_target_name_is_locally_static(
                     value.operands.front(), depth + 1U);
         }
         if (value.kind == Kind::slice && value.operands.size() == 3U) {
-            std::unordered_set<std::uint32_t> active_expressions;
-            std::unordered_set<std::uint32_t> active_declarations;
-            return locally_static_expression(
-                       value.operands[1], active_expressions,
-                       active_declarations)
-                && locally_static_expression(
-                    value.operands[2], active_expressions,
-                    active_declarations)
+            return locally_static(value.operands[1])
+                && locally_static(value.operands[2])
                 && aggregate_target_name_is_locally_static(
                     value.operands.front(), depth + 1U);
         }
@@ -5712,9 +5611,11 @@ private:
                             });
                     }
                     if (!static_name
-                        && (value.kind == Kind::aggregate || value.kind == Kind::index
+                        && (value.kind == Kind::aggregate
+                            || value.kind == Kind::index
                             || value.kind == Kind::slice
-                            || value.text.starts_with("@vhdl-qualified:")
+                            || value.text.starts_with(
+                                semantic::vhdl::qualified_expression_prefix)
                             || value.kind == Kind::string_literal)) {
                         report("FSIM-ELAB-VHSENS-001",
                             "a VHDL sensitivity list names signals with static names",
@@ -5848,24 +5749,13 @@ private:
                 && unconstrained_array_subtype(*formal_declaration->vhdl->subtype)
                 && std::ranges::any_of(aggregate->vhdl->associations,
                     [&](const semantic::vhdl::AggregateAssociation& association) {
-                        return equal_ignoring_ascii_case(association.choice_spelling, "others")
-                            || std::ranges::any_of(association.choices,
-                                [&](const semantic::ExpressionId choice) {
-                                    const auto found = specialization_.find_expression(choice);
-                                    return found && found->vhdl != nullptr
-                                        && found->vhdl->kind
-                                            == semantic::vhdl::ExpressionKind::default_choice;
-                                });
+                        return choice_is_others(association);
                     })) {
                 return false;
             }
             const auto expected = subtype_operand_type(*formal_declaration->vhdl->subtype, 0U);
             const auto given = operand_type(actual);
-            const auto scalar = [](const OperandClass kind) {
-                return kind == OperandClass::integer || kind == OperandClass::floating
-                    || kind == OperandClass::physical || kind == OperandClass::enumeration;
-            };
-            return !scalar(expected.kind) || !scalar(given.kind)
+            return !scalar_class(expected.kind) || !scalar_class(given.kind)
                 || (!types_conflict(given, expected));
         };
         for (std::size_t index { }; index < actuals.size(); ++index) {
@@ -6692,18 +6582,13 @@ private:
         }
         const auto target = operand_type(target_id);
         const auto value = operand_type(value_id);
-        const auto scalar = [](const OperandClass kind) {
-            return kind == OperandClass::integer || kind == OperandClass::floating
-                || kind == OperandClass::physical
-                || kind == OperandClass::enumeration;
-        };
-        if (!scalar(target.kind) && target.kind != OperandClass::array
+        if (!scalar_class(target.kind) && target.kind != OperandClass::array
             && target.kind != OperandClass::record) {
             return;
         }
         // A scalar value (a parenthesized one, as `(25)`, is not an
         // aggregate) is not of a composite type.
-        if (!scalar(target.kind) && scalar(value.kind)) {
+        if (!scalar_class(target.kind) && scalar_class(value.kind)) {
             const auto expression = specialization_.find_expression(value_id);
             report("FSIM-ELAB-VHASSIGN-001",
                 "a scalar value is assigned to a VHDL target of a composite type",
@@ -6713,7 +6598,7 @@ private:
             return;
         }
         // An allocator or `null` is an access value (9.3.7).
-        if (!scalar(target.kind)) {
+        if (!scalar_class(target.kind)) {
             if (value.kind == OperandClass::access || value.kind == OperandClass::null) {
                 const auto expression = specialization_.find_expression(value_id);
                 report("FSIM-ELAB-VHASSIGN-001",
@@ -6757,8 +6642,7 @@ private:
         if (depth == 0U
             && expression.kind
                 == semantic::vhdl::ExpressionKind::aggregate) {
-            std::unordered_set<std::uint32_t> context_visiting;
-            if (profile(context, context_visiting).kind
+            if (profile(context).kind
                 == ProfileKind::array) {
                 // Function-return validation enters this legacy ExpressionId
                 // overload. Run the rank-aware array walk here too.
@@ -6766,13 +6650,13 @@ private:
             }
         }
         if (expression.kind == semantic::vhdl::ExpressionKind::call
-            && expression.text.starts_with("@vhdl-qualified:")
+            && expression.text.starts_with(
+                semantic::vhdl::qualified_expression_prefix)
             && expression.operands.size() == 1U) {
             const auto operand = specialization_.find_expression(
                 expression.operands.front());
-            std::unordered_set<std::uint32_t> context_visiting;
             const auto context_kind = profile(
-                context, context_visiting).kind;
+                context).kind;
             const bool aggregate_context
                 = context_kind == ProfileKind::array
                 || context_kind == ProfileKind::record;
@@ -6796,8 +6680,7 @@ private:
                         && std::ranges::any_of(
                             operand->vhdl->associations,
                             [](const auto& association) {
-                                return !association.choices.empty()
-                                    || !association.choice_spelling.empty();
+                                return !association.positional();
                             });
                     if (named_array_aggregate) {
                         // Named choices establish an unconstrained source
@@ -6807,14 +6690,9 @@ private:
                         const auto actual_subtype
                             = expression_subtype(aggregate_id);
                         if (actual_subtype) {
-                            std::unordered_set<std::uint32_t>
-                                expected_visiting;
-                            std::unordered_set<std::uint32_t>
-                                actual_visiting;
-                            const auto expected_profile
-                                = profile(context, expected_visiting);
+                            const auto expected_profile = profile(context);
                             const auto actual_profile
-                                = profile(*actual_subtype, actual_visiting);
+                                = profile(*actual_subtype);
                             const auto named_choices_fit_index_subtype
                                 = !actual_profile.dimensions.empty()
                                 && actual_profile.dimensions.front().minimum
@@ -6891,7 +6769,7 @@ private:
             const auto* array = root_definition(context);
             if (array != nullptr && array->form == TypeForm::array && array->element_subtype) {
                 auto element = std::string_view { array->element_subtype->type_mark.spelling };
-                element.remove_prefix(element.find_last_of(".:") + 1U);
+                element = simple_name_of(element);
                 const std::string_view allowed = equal_ignoring_ascii_case(element, "bit") ? "01"
                     : (equal_ignoring_ascii_case(element, "std_ulogic") || equal_ignoring_ascii_case(element, "std_logic"))
                         ? "UX01ZWLH-"
@@ -6914,8 +6792,7 @@ private:
         // IEEE 1076-2008 9.3.3.3: a named choice of a one-dimensional array
         // aggregate is given once and lies in the contextual index range.
         {
-            std::unordered_set<std::uint32_t> visiting;
-            const auto shape = profile(context, visiting);
+            const auto shape = profile(context);
             if (shape.kind == ProfileKind::array && shape.dimensions.size() == 1U) {
                 const auto& range = shape.dimensions.front();
                 std::set<std::int64_t> chosen;
@@ -6966,18 +6843,10 @@ private:
             ? type_declaration_scope(*definition)
             : semantic::ScopeId { };
         const auto is_others = [&](const semantic::vhdl::AggregateAssociation& association) {
-            if (equal_ignoring_ascii_case(association.choice_spelling, "others")) {
-                return true;
-            }
-            return std::ranges::any_of(association.choices, [&](const semantic::ExpressionId choice) {
-                const auto found = specialization_.find_expression(choice);
-                return found && found->vhdl != nullptr
-                    && (found->vhdl->kind == semantic::vhdl::ExpressionKind::default_choice
-                        || equal_ignoring_ascii_case(found->vhdl->text, "others"));
-            });
+            return choice_is_others(association);
         };
         const auto positional = [&](const semantic::vhdl::AggregateAssociation& association) {
-            return association.choices.empty() && association.choice_spelling.empty();
+            return association.positional();
         };
         bool any_positional { };
         bool any_named { };
@@ -7014,12 +6883,9 @@ private:
                         expected_declaration_scope);
             }
             const auto expected = subtype_operand_type(element, 0U);
-            const auto scalar = [](const OperandClass kind) {
-                return kind == OperandClass::integer || kind == OperandClass::floating
-                    || kind == OperandClass::physical || kind == OperandClass::enumeration;
-            };
             auto actual = operand_type(value);
-            if (scalar(expected.kind) && actual.kind == OperandClass::unknown) {
+            if (scalar_class(expected.kind)
+                && actual.kind == OperandClass::unknown) {
                 const auto found = specialization_.find_expression(value);
                 if (found && found->vhdl != nullptr
                     && (found->vhdl->kind == semantic::vhdl::ExpressionKind::unary
@@ -7063,7 +6929,8 @@ private:
                     || found->vhdl->text == ">" || found->vhdl->text == ">=")) {
                 actual = { OperandClass::enumeration, "boolean" };
             }
-            return !scalar(expected.kind) || actual.kind == OperandClass::unknown
+            return !scalar_class(expected.kind)
+                || actual.kind == OperandClass::unknown
                 || (!types_conflict(actual, expected));
         };
         if (definition->form == TypeForm::array) {
@@ -7100,8 +6967,7 @@ private:
                         && inner.constraint && inner.constraint->left && inner.constraint->right
                         && std::ranges::all_of(value->vhdl->associations,
                             [](const semantic::vhdl::AggregateAssociation& association) {
-                                return association.choices.empty()
-                                    && association.choice_spelling.empty();
+                                return association.positional();
                             })) {
                         const auto expected = (inner.constraint->descending
                                 ? *inner.constraint->left - *inner.constraint->right
@@ -7166,9 +7032,8 @@ private:
                             && (choice->vhdl->text == "to"
                                 ? *left > *right
                                 : *left < *right);
-                        std::unordered_set<std::uint32_t> context_visiting;
                         const auto context_profile
-                            = profile(context, context_visiting);
+                            = profile(context);
                         const bool null_context
                             = context_profile.kind
                                     == ProfileKind::array
@@ -7470,7 +7335,7 @@ private:
         }
         // Index constraints of the predefined NATURAL/POSITIVE-indexed arrays.
         auto mark = std::string_view { subtype.type_mark.spelling };
-        mark.remove_prefix(mark.find_last_of(".:") + 1U);
+        mark = simple_name_of(mark);
         const std::optional<std::int64_t> minimum
             = equal_ignoring_ascii_case(mark, "bit_vector") ? std::optional<std::int64_t> { 0 }
             : equal_ignoring_ascii_case(mark, "string")     ? std::optional<std::int64_t> { 1 }
@@ -7562,15 +7427,15 @@ private:
                     break;
                 }
                 auto name = std::string_view { current.type_mark.spelling };
-                name.remove_prefix(name.find_last_of(".:") + 1U);
-                if (equal_ignoring_ascii_case(name, "natural")) {
-                    range = std::pair { std::int64_t { 0 },
-                        std::int64_t { std::numeric_limits<std::int32_t>::max() } };
-                    break;
-                }
-                if (equal_ignoring_ascii_case(name, "positive")) {
-                    range = std::pair { std::int64_t { 1 },
-                        std::int64_t { std::numeric_limits<std::int32_t>::max() } };
+                name = simple_name_of(name);
+                const bool positive
+                    = equal_ignoring_ascii_case(name, "positive");
+                if (positive || equal_ignoring_ascii_case(name, "natural")) {
+                    range = std::pair {
+                        std::int64_t { positive ? 1 : 0 },
+                        elaboration_detail::vhdl_integer_maximum(
+                            architecture_.standard == "2019" ? 64U : 32U)
+                    };
                     break;
                 }
                 const auto type = subtype_type(current);
@@ -7589,8 +7454,7 @@ private:
         // A fixed selector length for a one-dimensional array selector.
         std::optional<std::int64_t> selector_length;
         if (selector_subtype && selector_type.kind == OperandClass::array) {
-            std::unordered_set<std::uint32_t> visiting;
-            if (const auto shape = profile(*selector_subtype, visiting);
+            if (const auto shape = profile(*selector_subtype);
                 shape.dimensions.size() == 1U && shape.dimensions.front().minimum
                 && shape.dimensions.front().maximum) {
                 selector_length = *shape.dimensions.front().maximum
@@ -7755,8 +7619,7 @@ private:
                 // A predefined scalar type (INTEGER, REAL, TIME, BOOLEAN,
                 // CHARACTER) has no retained definition.
                 const auto type = subtype_operand_type(subtype, 0U);
-                if (type.kind == OperandClass::integer || type.kind == OperandClass::floating
-                    || type.kind == OperandClass::physical) {
+                if (numeric_class(type.kind)) {
                     report("FSIM-ELAB-VHARRAYSEL-005",
                         "a VHDL indexed name requires an array prefix",
                         source->vhdl->source);
@@ -7765,9 +7628,7 @@ private:
             }
             if (definition->form != TypeForm::array) {
                 const auto type = subtype_operand_type(subtype, 0U);
-                if (type.kind == OperandClass::integer || type.kind == OperandClass::floating
-                    || type.kind == OperandClass::enumeration
-                    || type.kind == OperandClass::physical
+                if (scalar_class(type.kind)
                     || type.kind == OperandClass::record) {
                     report("FSIM-ELAB-VHARRAYSEL-005",
                         "a VHDL indexed name requires an array prefix",
@@ -7869,11 +7730,7 @@ private:
             ? operand_type(*alias.initializer)
             : subtype_operand_type(*target->vhdl->subtype, 0U);
         const auto given = subtype_operand_type(*alias.subtype, 0U);
-        const auto scalar = [](const OperandClass kind) {
-            return kind == OperandClass::integer || kind == OperandClass::floating
-                || kind == OperandClass::physical || kind == OperandClass::enumeration;
-        };
-        if ((scalar(expected.kind) || scalar(given.kind))
+        if ((scalar_class(expected.kind) || scalar_class(given.kind))
             && expected.kind != OperandClass::unknown && given.kind != OperandClass::unknown
             && types_conflict(expected, given)) {
             report("FSIM-ELAB-VHALIAS-002",
@@ -7881,6 +7738,36 @@ private:
                     + "' does not have the type of the aliased object",
                 alias.source);
         }
+    }
+
+    // The bound expressions and direction of a slice name, kept as a slice
+    // or as an index whose argument is a range.
+    struct SliceBounds {
+        semantic::ExpressionId left;
+        semantic::ExpressionId right;
+        bool descending { };
+    };
+    std::optional<SliceBounds> slice_bounds(
+        const semantic::vhdl::Expression& target) const
+    {
+        if (target.kind == semantic::vhdl::ExpressionKind::slice
+            && target.operands.size() == 3U) {
+            return SliceBounds { target.operands[1U], target.operands[2U],
+                target.text == "downto" };
+        }
+        if (target.kind != semantic::vhdl::ExpressionKind::index
+            || target.operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto range = specialization_.find_expression(target.operands[1U]);
+        if (!range || range->vhdl == nullptr
+            || range->vhdl->kind != semantic::vhdl::ExpressionKind::binary
+            || (range->vhdl->text != "to" && range->vhdl->text != "downto")
+            || range->vhdl->operands.size() != 2U) {
+            return std::nullopt;
+        }
+        return SliceBounds { range->vhdl->operands[0U],
+            range->vhdl->operands[1U], range->vhdl->text == "downto" };
     }
 
     // Return the subtype determined by a slice target. When its bounds are
@@ -7896,36 +7783,13 @@ private:
             || target->vhdl->operands.empty()) {
             return std::nullopt;
         }
-        std::optional<semantic::ExpressionId> left;
-        std::optional<semantic::ExpressionId> right;
-        bool descending { };
-        if (target->vhdl->kind
-                == semantic::vhdl::ExpressionKind::slice
-            && target->vhdl->operands.size() == 3U) {
-            left = target->vhdl->operands[1U];
-            right = target->vhdl->operands[2U];
-            descending = target->vhdl->text == "downto";
-        } else if (target->vhdl->kind
-                == semantic::vhdl::ExpressionKind::index
-            && target->vhdl->operands.size() == 2U) {
-            const auto range = specialization_.find_expression(
-                target->vhdl->operands[1U]);
-            if (range && range->vhdl != nullptr
-                && range->vhdl->kind
-                    == semantic::vhdl::ExpressionKind::binary
-                && (range->vhdl->text == "to"
-                    || range->vhdl->text == "downto")
-                && range->vhdl->operands.size() == 2U) {
-                left = range->vhdl->operands[0U];
-                right = range->vhdl->operands[1U];
-                descending = range->vhdl->text == "downto";
-            }
-        }
-        if (!left || !right) {
+        const auto bounds = slice_bounds(*target->vhdl);
+        if (!bounds) {
             return std::nullopt;
         }
-        const auto low = specialization_.evaluate_integral_expression(*left);
-        const auto high = specialization_.evaluate_integral_expression(*right);
+        const auto [left, right, descending] = *bounds;
+        const auto low = specialization_.evaluate_integral_expression(left);
+        const auto high = specialization_.evaluate_integral_expression(right);
         auto context = expression_subtype(target->vhdl->operands.front());
         if (!context) {
             const auto prefix = specialization_.find_expression(
@@ -7949,8 +7813,8 @@ private:
         selected_range.kind = semantic::vhdl::RangeKind::array_index;
         selected_range.left = low;
         selected_range.right = high;
-        selected_range.left_expression = *left;
-        selected_range.right_expression = *right;
+        selected_range.left_expression = left;
+        selected_range.right_expression = right;
         selected_range.descending = descending;
         selected_range.null = low && high
             && (descending ? *low < *high : *low > *high);
@@ -7981,37 +7845,16 @@ private:
         if (!target || target->vhdl == nullptr || target->vhdl->operands.empty()) {
             return;
         }
-        // A slice is kept as a slice or as an index whose argument is a range.
-        std::optional<semantic::ExpressionId> left;
-        std::optional<semantic::ExpressionId> right;
-        bool descending { };
-        if (target->vhdl->kind == semantic::vhdl::ExpressionKind::slice
-            && target->vhdl->operands.size() == 3U) {
-            left = target->vhdl->operands[1];
-            right = target->vhdl->operands[2];
-            descending = target->vhdl->text == "downto";
-        } else if (target->vhdl->kind == semantic::vhdl::ExpressionKind::index
-            && target->vhdl->operands.size() == 2U) {
-            const auto range = specialization_.find_expression(target->vhdl->operands[1]);
-            if (range && range->vhdl != nullptr
-                && range->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                && (range->vhdl->text == "to" || range->vhdl->text == "downto")
-                && range->vhdl->operands.size() == 2U) {
-                left = range->vhdl->operands[0];
-                right = range->vhdl->operands[1];
-                descending = range->vhdl->text == "downto";
-            }
-        }
-        if (!left || !right) {
+        const auto bounds = slice_bounds(*target->vhdl);
+        if (!bounds) {
             return;
         }
+        const auto [left, right, descending] = *bounds;
         validate_slice_prefix(target->vhdl->operands.front(), source);
         // A slice is an array: a scalar value cannot be assigned to it.
         {
             const auto value_kind = operand_type(value_id).kind;
-            if (value_kind == OperandClass::integer || value_kind == OperandClass::floating
-                || value_kind == OperandClass::physical
-                || value_kind == OperandClass::enumeration) {
+            if (scalar_class(value_kind)) {
                 report("FSIM-ELAB-VHASSIGN-001",
                     "a scalar value cannot be assigned to a VHDL slice", source);
                 return;
@@ -8020,8 +7863,8 @@ private:
         if (const auto context = slice_assignment_context(target_id)) {
             validate_aggregate(value_id, *context);
         }
-        const auto low = specialization_.evaluate_integral_expression(*left);
-        const auto high = specialization_.evaluate_integral_expression(*right);
+        const auto low = specialization_.evaluate_integral_expression(left);
+        const auto high = specialization_.evaluate_integral_expression(right);
         if (!low || !high) {
             return;
         }
@@ -8040,7 +7883,7 @@ private:
             && !value->vhdl->associations.empty()
             && std::ranges::all_of(value->vhdl->associations,
                 [](const semantic::vhdl::AggregateAssociation& association) {
-                    return association.choices.empty() && association.choice_spelling.empty();
+                    return association.positional();
                 })) {
             value_length = static_cast<std::int64_t>(value->vhdl->associations.size());
         }
@@ -8104,11 +7947,7 @@ private:
         validate_aggregate(*statement.value, *function->callable->return_type);
         const auto expected = subtype_operand_type(*function->callable->return_type, 0U);
         const auto given = operand_type(*statement.value);
-        const auto scalar = [](const OperandClass kind) {
-            return kind == OperandClass::integer || kind == OperandClass::floating
-                || kind == OperandClass::physical || kind == OperandClass::enumeration;
-        };
-        if (scalar(expected.kind) && scalar(given.kind)
+        if (scalar_class(expected.kind) && scalar_class(given.kind)
             && types_conflict(given, expected)) {
             report("FSIM-ELAB-VHRETURN-001",
                 "the value of a VHDL return statement does not have the function's "
@@ -8137,9 +7976,7 @@ private:
             return;
         }
         const auto type = subtype_operand_type(*declaration->vhdl->subtype, 0U);
-        if (type.kind == OperandClass::integer || type.kind == OperandClass::floating
-            || type.kind == OperandClass::enumeration || type.kind == OperandClass::physical
-            || type.kind == OperandClass::record) {
+        if (scalar_class(type.kind) || type.kind == OperandClass::record) {
             report("FSIM-ELAB-VHARRAYSEL-005",
                 "a VHDL slice requires a one-dimensional array prefix", source);
         }
@@ -8218,10 +8055,7 @@ private:
     {
         const auto left = operand_type(left_id);
         const auto right = operand_type(right_id);
-        const auto known = [](const OperandType& type) {
-            return type.kind != OperandClass::unknown;
-        };
-        if (known(left) && known(right)
+        if (known_class(left.kind) && known_class(right.kind)
             && types_conflict(left, right)) {
             report("FSIM-ELAB-VHRANGE-001",
                 "the bounds of a VHDL range must have the same type", source);
@@ -8260,7 +8094,7 @@ private:
             return;
         }
         for (const auto& bound : { left, right }) {
-            if (known(bound) && known(index_type)
+            if (known_class(bound.kind) && known_class(index_type.kind)
                 && types_conflict(bound, index_type)) {
                 report("FSIM-ELAB-VHRANGE-001",
                     "a VHDL slice range must have the index type of its prefix",
@@ -8290,13 +8124,6 @@ private:
                 != semantic::vhdl::BuiltinOperatorIdentity::none) {
             return;
         }
-        const auto numeric = [](const OperandClass kind) {
-            return kind == OperandClass::integer || kind == OperandClass::floating
-                || kind == OperandClass::physical;
-        };
-        const auto known = [](const OperandClass kind) {
-            return kind != OperandClass::unknown;
-        };
         const auto reject = [&] {
             report("FSIM-ELAB-VHOPER-001",
                 "the predefined VHDL operator \"" + operation
@@ -8326,7 +8153,7 @@ private:
             const auto operand = operand_type(expression.operands.front());
             // STRING has no arithmetic; other library arrays may have it
             // (NUMERIC_STD).
-            if (known(operand.kind) && !numeric(operand.kind)
+            if (known_class(operand.kind) && !numeric_class(operand.kind)
                 && !(operand.kind == OperandClass::array
                     && !operand.root.starts_with('#') && operand.root != "string")) {
                 reject();
@@ -8347,7 +8174,7 @@ private:
                 reject();
                 return;
             }
-            if (!known(left.kind) || !known(right.kind)) {
+            if (!known_class(left.kind) || !known_class(right.kind)) {
                 return;
             }
             const auto library_array = [](const OperandType& operand) {
@@ -8439,13 +8266,13 @@ private:
             return;
         }
         const auto non_numeric = [&](const OperandType& operand) {
-            return known(operand.kind) && !numeric(operand.kind);
+            return known_class(operand.kind) && !numeric_class(operand.kind);
         };
         if (non_numeric(left) || non_numeric(right)) {
             reject();
             return;
         }
-        if (!known(left.kind) || !known(right.kind)) {
+        if (!known_class(left.kind) || !known_class(right.kind)) {
             return;
         }
         const auto same_type = !types_conflict(left, right);
@@ -8547,8 +8374,7 @@ private:
         }
         if (actual->vhdl->kind
             == semantic::vhdl::ExpressionKind::aggregate) {
-            std::unordered_set<std::uint32_t> visiting;
-            const auto expected_kind = profile(expected, visiting).kind;
+            const auto expected_kind = profile(expected).kind;
             return expected_kind == ProfileKind::array
                 || expected_kind == ProfileKind::record;
         }
@@ -8556,10 +8382,8 @@ private:
         if (!actual_subtype) {
             return true;
         }
-        std::unordered_set<std::uint32_t> expected_visiting;
-        std::unordered_set<std::uint32_t> actual_visiting;
-        const auto expected_kind = profile(expected, expected_visiting).kind;
-        const auto actual_kind = profile(*actual_subtype, actual_visiting).kind;
+        const auto expected_kind = profile(expected).kind;
+        const auto actual_kind = profile(*actual_subtype).kind;
         // An array value cannot serve as a scalar aggregate element (or vice
         // versa). This also rejects a full-rank array where a nested
         // multidimensional aggregate requires a single scalar element.
@@ -8606,9 +8430,8 @@ private:
         if (unit_standard(scope) < std::string_view { "2008" }) {
             return std::nullopt;
         }
-        std::unordered_set<std::uint32_t> expected_visiting;
         const auto expected_profile = profile(
-            expected_array, expected_visiting);
+            expected_array);
         if (expected_profile.kind != ProfileKind::array
             || expected_profile.dimensions.size() != 1U) {
             return std::nullopt;
@@ -8661,13 +8484,8 @@ private:
                 || (!descending && *left > *right)) {
                 return std::uint64_t { 0U };
             }
-            const auto low = std::min(*left, *right);
-            const auto high = std::max(*left, *right);
-            const auto distance = static_cast<std::uint64_t>(high)
-                - static_cast<std::uint64_t>(low);
-            return distance == std::numeric_limits<std::uint64_t>::max()
-                ? std::nullopt
-                : std::optional<std::uint64_t> { distance + 1U };
+            return inclusive_extent(
+                std::min(*left, *right), std::max(*left, *right));
         }
 
         const auto actual = expression_subtype(value_id);
@@ -8675,8 +8493,7 @@ private:
             if (!same_nominal_array_type(expected_array, *actual, scope)) {
                 return std::nullopt;
             }
-            std::unordered_set<std::uint32_t> visiting;
-            const auto actual_profile = profile(*actual, visiting);
+            const auto actual_profile = profile(*actual);
             if (actual_profile.kind != ProfileKind::array
                 || actual_profile.dimensions.size() != 1U) {
                 return std::nullopt;
@@ -8690,12 +8507,8 @@ private:
                     || !dimension.minimum || !dimension.maximum) {
                     return std::nullopt;
                 }
-                const auto distance
-                    = static_cast<std::uint64_t>(*dimension.maximum)
-                    - static_cast<std::uint64_t>(*dimension.minimum);
-                return distance == std::numeric_limits<std::uint64_t>::max()
-                    ? std::nullopt
-                    : std::optional<std::uint64_t> { distance + 1U };
+                return inclusive_extent(
+                    *dimension.minimum, *dimension.maximum);
             }
 
             // A qualified array aggregate may have an unconstrained subtype
@@ -8703,7 +8516,7 @@ private:
             // cardinality. Unwrap only the compiler's qualified-expression
             // marker after verifying exact nominal identity and rank above.
             constexpr std::string_view qualified_prefix {
-                "@vhdl-qualified:"
+                semantic::vhdl::qualified_expression_prefix
             };
             if (value->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
@@ -8730,9 +8543,8 @@ private:
                 != semantic::vhdl::ExpressionKind::aggregate) {
             return std::nullopt;
         }
-        std::unordered_set<std::uint32_t> element_visiting;
         const auto element_profile = profile(
-            expected_element, element_visiting);
+            expected_element);
         const bool scalar_element
             = element_profile.kind == ProfileKind::scalar
             || element_profile.kind == ProfileKind::integer
@@ -8740,8 +8552,7 @@ private:
         if (!scalar_element
             || !std::ranges::all_of(
                 value->vhdl->associations, [](const auto& association) {
-                    return association.choice_spelling.empty()
-                        && association.choices.empty();
+                    return association.positional();
                 })) {
             return std::nullopt;
         }
@@ -8759,8 +8570,7 @@ private:
                 const auto child_type
                     = expression_subtype(association.value);
                 if (child_type) {
-                    std::unordered_set<std::uint32_t> child_visiting;
-                    if (profile(*child_type, child_visiting).kind
+                    if (profile(*child_type).kind
                         == ProfileKind::array) {
                         // Do not silently count an array-valued expression
                         // as one scalar element when its segment length is
@@ -8791,6 +8601,14 @@ private:
         if (!type) {
             type = subtype_type(original);
         }
+        return root_type_definition(type);
+    }
+
+    // The definition at the end of a subtype/alias chain, resolving each
+    // base by its type mark (or spelling when the mark has no target).
+    const TypeDefinition* root_type_definition(
+        std::optional<semantic::TypeId> type) const
+    {
         std::unordered_set<std::uint32_t> visiting;
         while (type && visiting.insert(type->value()).second) {
             const auto* definition = type_definition(*type);
@@ -8831,25 +8649,11 @@ private:
                 return std::nullopt;
             }
         }
-        switch (subtype.builtin_type) {
-        case semantic::vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector:
-            return "ieee.std_logic_1164.std_logic_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector:
-            return "ieee.std_logic_1164.std_ulogic_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_string:
-            return "std.standard.string";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
-            return "std.standard.bit_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_boolean_vector:
-            return "std.standard.boolean_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_integer_vector:
-            return "std.standard.integer_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_real_vector:
-            return "std.standard.real_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::std_standard_time_vector:
-            return "std.standard.time_vector";
-        case semantic::vhdl::BuiltinTypeIdentity::none:
-            break;
+        if (subtype.builtin_type != semantic::vhdl::BuiltinTypeIdentity::none) {
+            return std::string { semantic::vhdl::builtin_type_package(
+                       subtype.builtin_type) }
+                + "." + std::string { semantic::vhdl::builtin_type_name(
+                    subtype.builtin_type) };
         }
         if (target) {
             const auto* retained = type_definition(*target);
@@ -8890,6 +8694,21 @@ private:
             std::string_view { "real_vector" },
             std::string_view { "time_vector" },
         };
+        // An array type's root definition and the unit declaring it.
+        const auto root_and_owner
+            = [&](const std::optional<semantic::TypeId> root)
+            -> std::pair<const semantic::vhdl::TypeDefinition*,
+                const semantic::vhdl::Unit*> {
+            const auto* definition = root ? type_definition(*root) : nullptr;
+            const auto declaration = definition != nullptr
+                ? specialization_.find_declaration(definition->declaration)
+                : std::nullopt;
+            return { definition,
+                declaration && declaration->vhdl != nullptr
+                    ? specialization_.design().vhdl_scope_unit(
+                          declaration->vhdl->scope)
+                    : nullptr };
+        };
         const auto standard_array = [&](const std::string_view name) {
             return std::ranges::find(standard_arrays, name)
                 != standard_arrays.end();
@@ -8916,43 +8735,31 @@ private:
                 }
                 const auto declaration = specialization_.find_declaration(
                     definition->declaration);
-                const auto& scopes
-                    = specialization_.design().semantics.scopes();
-                const auto owner_scope = declaration
-                        && declaration->vhdl != nullptr
-                        && declaration->vhdl->scope.valid()
-                    ? std::ranges::find(
-                          scopes, declaration->vhdl->scope, &semantic::Scope::id)
-                    : scopes.end();
-                const auto owner = owner_scope != scopes.end()
-                    ? specialization_.design().find_unit(owner_scope->unit)
-                    : std::nullopt;
+                const semantic::vhdl::Unit* owner
+                    = declaration && declaration->vhdl != nullptr
+                    ? specialization_.design().vhdl_scope_unit(
+                          declaration->vhdl->scope)
+                    : nullptr;
                 const auto type_name = lowercase_ascii_copy(
                     simple_name_of(definition->name));
-                if (owner && owner->vhdl != nullptr
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->library, "std")
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->name, "standard")
+                if (semantic::vhdl::is_package(owner, "std", "standard")
                     && standard_array(type_name)
                     && standard_revision_available(type_name)) {
                     return standard_qualified_name(type_name);
                 }
-                if (owner && owner->vhdl != nullptr
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->library, "ieee")) {
-                    if (equal_ignoring_ascii_case(
-                            owner->vhdl->name, "std_logic_1164")
+                {
+                    if (semantic::vhdl::is_package(
+                            owner, "ieee", "std_logic_1164")
                         && (type_name == "std_logic_vector"
                             || type_name == "std_ulogic_vector")) {
                         return "ieee.std_logic_1164." + type_name;
                     }
                     const bool numeric_std_package
-                        = equal_ignoring_ascii_case(
-                            owner->vhdl->name, "numeric_std");
+                        = semantic::vhdl::is_package(
+                            owner, "ieee", "numeric_std");
                     const bool numeric_bit_package
-                        = equal_ignoring_ascii_case(
-                            owner->vhdl->name, "numeric_bit");
+                        = semantic::vhdl::is_package(
+                            owner, "ieee", "numeric_bit");
                     if (numeric_std_package || numeric_bit_package) {
                         const auto numeric_type
                             = std::string_view { type_name };
@@ -8996,7 +8803,7 @@ private:
             }
         }
         auto spelling = std::string_view { subtype.type_mark.spelling };
-        constexpr auto compiler_builtin = std::string_view { "@builtin:" };
+        constexpr auto compiler_builtin = semantic::vhdl::builtin_prefix;
         const bool compiler_owned = spelling.starts_with(compiler_builtin);
         if (compiler_owned) {
             spelling.remove_prefix(compiler_builtin.size());
@@ -9032,16 +8839,7 @@ private:
             reference.spelling = canonical;
             reference.canonical = canonical;
             const semantic::CompiledDeclarationPredicate type_declaration
-                = [](const semantic::CompiledDeclarationView& candidate) {
-                      if (candidate.vhdl == nullptr) {
-                          return false;
-                      }
-                      using Form = semantic::vhdl::DeclarationForm;
-                      const auto form = candidate.vhdl->form;
-                      return form == Form::type
-                          || form == Form::subtype
-                          || form == Form::generic_type;
-                  };
+                = semantic::is_vhdl_type_declaration;
             const semantic::CompiledDesignResolver resolver {
                 specialization_ };
             const auto resolution = resolver.resolve_vhdl(
@@ -9058,37 +8856,15 @@ private:
                         && declaration->vhdl->declared_type
                     ? array_root(*declaration->vhdl->declared_type)
                     : std::nullopt;
-                const auto* definition = root
-                    ? type_definition(*root)
-                    : nullptr;
-                const auto definition_declaration = definition != nullptr
-                    ? specialization_.find_declaration(
-                          definition->declaration)
-                    : std::nullopt;
-                const auto& scopes
-                    = specialization_.design().semantics.scopes();
-                const auto owner_scope = definition_declaration
-                        && definition_declaration->vhdl != nullptr
-                        && definition_declaration->vhdl->scope.valid()
-                    ? std::ranges::find(
-                          scopes, definition_declaration->vhdl->scope,
-                          &semantic::Scope::id)
-                    : scopes.end();
-                const auto owner = owner_scope != scopes.end()
-                    ? specialization_.design().find_unit(owner_scope->unit)
-                    : std::nullopt;
-                if (definition != nullptr && owner
-                    && owner->vhdl != nullptr
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->library, "ieee")
-                    && (equal_ignoring_ascii_case(
-                            owner->vhdl->name, "numeric_std")
-                        || equal_ignoring_ascii_case(
-                            owner->vhdl->name, "numeric_bit"))
+                const auto [definition, owner] = root_and_owner(root);
+                if (definition != nullptr
+                    && (semantic::vhdl::is_package(owner, "ieee", "numeric_std")
+                        || semantic::vhdl::is_package(
+                            owner, "ieee", "numeric_bit"))
                     && equal_ignoring_ascii_case(
                         simple_name_of(definition->name), canonical)) {
                     const auto package = equal_ignoring_ascii_case(
-                        owner->vhdl->name, "numeric_bit")
+                        owner->name, "numeric_bit")
                         ? std::string_view { "numeric_bit" }
                         : std::string_view { "numeric_std" };
                     return "ieee." + std::string { package }
@@ -9149,16 +8925,7 @@ private:
             reference.spelling = canonical;
             reference.canonical = canonical;
             const semantic::CompiledDeclarationPredicate type_declaration
-                = [](const semantic::CompiledDeclarationView& candidate) {
-                      if (candidate.vhdl == nullptr) {
-                          return false;
-                      }
-                      using Form = semantic::vhdl::DeclarationForm;
-                      const auto form = candidate.vhdl->form;
-                      return form == Form::type
-                          || form == Form::subtype
-                          || form == Form::generic_type;
-                  };
+                = semantic::is_vhdl_type_declaration;
             const semantic::CompiledDesignResolver resolver {
                 specialization_ };
             const auto resolution = resolver.resolve_vhdl(
@@ -9178,31 +8945,9 @@ private:
                 && declaration->vhdl->declared_type) {
                 const auto root = array_root(
                     *declaration->vhdl->declared_type);
-                const auto* definition = root
-                    ? type_definition(*root)
-                    : nullptr;
-                const auto definition_declaration = definition != nullptr
-                    ? specialization_.find_declaration(
-                          definition->declaration)
-                    : std::nullopt;
-                const auto& scopes
-                    = specialization_.design().semantics.scopes();
-                const auto owner_scope = definition_declaration
-                        && definition_declaration->vhdl != nullptr
-                        && definition_declaration->vhdl->scope.valid()
-                    ? std::ranges::find(
-                          scopes, definition_declaration->vhdl->scope,
-                          &semantic::Scope::id)
-                    : scopes.end();
-                const auto owner = owner_scope != scopes.end()
-                    ? specialization_.design().find_unit(owner_scope->unit)
-                    : std::nullopt;
-                if (definition != nullptr && owner
-                    && owner->vhdl != nullptr
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->library, "ieee")
-                    && equal_ignoring_ascii_case(
-                        owner->vhdl->name, *ieee_package)
+                const auto [definition, owner] = root_and_owner(root);
+                if (definition != nullptr
+                    && semantic::vhdl::is_package(owner, "ieee", *ieee_package)
                     && equal_ignoring_ascii_case(
                         simple_name_of(definition->name), canonical)) {
                     return qualified;
@@ -9221,16 +8966,7 @@ private:
         reference.spelling = canonical;
         reference.canonical = reference.spelling;
         const semantic::CompiledDeclarationPredicate type_declaration
-            = [](const semantic::CompiledDeclarationView& candidate) {
-                  if (candidate.vhdl == nullptr) {
-                      return false;
-                  }
-                  using Form = semantic::vhdl::DeclarationForm;
-                  const auto form = candidate.vhdl->form;
-                  return form == Form::type
-                      || form == Form::subtype
-                      || form == Form::generic_type;
-              };
+            = semantic::is_vhdl_type_declaration;
         const auto resolution = semantic::CompiledDesignResolver {
             specialization_ }
                                       .resolve_vhdl(
@@ -9254,27 +8990,79 @@ private:
         const auto definition_declaration = definition != nullptr
             ? specialization_.find_declaration(definition->declaration)
             : std::nullopt;
-        const auto& scopes
-            = specialization_.design().semantics.scopes();
-        const auto owner_scope = definition_declaration
-                && definition_declaration->vhdl != nullptr
-                && definition_declaration->vhdl->scope.valid()
-            ? std::ranges::find(
-                  scopes, definition_declaration->vhdl->scope, &semantic::Scope::id)
-            : scopes.end();
-        const auto owner = owner_scope != scopes.end()
-            ? specialization_.design().find_unit(owner_scope->unit)
-            : std::nullopt;
-        return definition != nullptr && owner
-                && owner->vhdl != nullptr
-                && equal_ignoring_ascii_case(
-                    owner->vhdl->library, "std")
-                && equal_ignoring_ascii_case(
-                    owner->vhdl->name, "standard")
+        const semantic::vhdl::Unit* owner
+            = definition_declaration && definition_declaration->vhdl != nullptr
+            ? specialization_.design().vhdl_scope_unit(
+                  definition_declaration->vhdl->scope)
+            : nullptr;
+        return definition != nullptr
+                && semantic::vhdl::is_package(owner, "std", "standard")
                 && equal_ignoring_ascii_case(
                     simple_name_of(definition->name), canonical)
             ? std::optional { standard_qualified_name(canonical) }
             : std::nullopt;
+    }
+
+    // Whether every character of a string literal is a CHARACTER literal of
+    // the enumeration type `element` denotes through unconstrained subtypes
+    // and aliases; empty when `element` denotes no such type.
+    std::optional<bool> string_enumeration_membership(const std::string& text,
+        const SubtypeIndication& element,
+        const semantic::ScopeId type_scope) const
+    {
+        auto element_type = element.type_mark.target;
+        if (!element_type.valid()) {
+            semantic::vhdl::Name reference;
+            reference.spelling = element.type_mark.spelling;
+            reference.canonical = reference.spelling;
+            const semantic::CompiledDeclarationPredicate type_declaration
+                = semantic::declares_vhdl_type;
+            const auto declaration
+                = semantic::CompiledDesignResolver { specialization_ }
+                      .resolve_vhdl(
+                          reference, type_scope, type_declaration)
+                      .unique();
+            const auto view = declaration
+                ? specialization_.find_declaration(*declaration)
+                : std::nullopt;
+            if (!view || view->vhdl == nullptr
+                || !view->vhdl->declared_type) {
+                return std::nullopt;
+            }
+            element_type = *view->vhdl->declared_type;
+        }
+        std::unordered_set<std::uint32_t> visited;
+        while (element_type.valid()
+            && visited.insert(element_type.value()).second) {
+            const auto* definition = type_definition(element_type);
+            if (definition == nullptr) {
+                return std::nullopt;
+            }
+            if (definition->form == TypeForm::enumeration) {
+                return std::ranges::all_of(
+                    text, [&](const char character) {
+                        std::string literal_spelling { '\'' };
+                        literal_spelling.push_back(character);
+                        literal_spelling.push_back('\'');
+                        return std::ranges::any_of(
+                            definition->enumeration_literals,
+                            [&](const auto& literal) {
+                                return literal.spelling
+                                    == literal_spelling;
+                            });
+                    });
+            }
+            if (definition->form != TypeForm::subtype
+                && definition->form != TypeForm::alias) {
+                return std::nullopt;
+            }
+            if (definition->scalar_range
+                || !definition->base.constraints.empty()) {
+                return std::nullopt;
+            }
+            element_type = definition->base.type_mark.target;
+        }
+        return std::nullopt;
     }
 
     bool contextual_string_array_value_for(
@@ -9325,8 +9113,7 @@ private:
         if (!element || !element->constraints.empty()) {
             return false;
         }
-        std::unordered_set<std::uint32_t> element_visiting;
-        if (profile(*element, element_visiting).kind
+        if (profile(*element).kind
             != ProfileKind::enumeration) {
             // STD.STANDARD.CHARACTER may not have a retained TypeDefinition.
             // Resolve the spelling in the expected type's declaration scope
@@ -9352,16 +9139,7 @@ private:
             reference.spelling = element->type_mark.spelling;
             reference.canonical = reference.spelling;
             const semantic::CompiledDeclarationPredicate type_declaration
-                = [](const semantic::CompiledDeclarationView& candidate) {
-                      if (candidate.vhdl == nullptr) {
-                          return false;
-                      }
-                      using Form = semantic::vhdl::DeclarationForm;
-                      const auto form = candidate.vhdl->form;
-                      return form == Form::type
-                          || form == Form::subtype
-                          || form == Form::generic_type;
-                  };
+                = semantic::is_vhdl_type_declaration;
             const auto visible = semantic::CompiledDesignResolver {
                 specialization_ }
                                       .resolve_vhdl(
@@ -9384,76 +9162,14 @@ private:
                     >= specialization_.design().semantics.scopes().size()) {
                 return false;
             }
-            const auto& scopes
-                = specialization_.design().semantics.scopes();
-            const auto owner_scope = std::ranges::find(
-                scopes, declaration->vhdl->scope, &semantic::Scope::id);
-            const auto owner = owner_scope != scopes.end()
-                ? specialization_.design().find_unit(owner_scope->unit)
-                : std::nullopt;
-            return owner && owner->vhdl != nullptr
-                && equal_ignoring_ascii_case(owner->vhdl->library, "std")
-                && equal_ignoring_ascii_case(owner->vhdl->name, "standard")
+            return specialization_.design().vhdl_scope_in_package(
+                       declaration->vhdl->scope, "std", "standard")
                 && equal_ignoring_ascii_case(
                     declaration->vhdl->name, "character");
         }
 
-        auto element_type = element->type_mark.target;
-        if (!element_type.valid()) {
-            semantic::vhdl::Name reference;
-            reference.spelling = element->type_mark.spelling;
-            reference.canonical = reference.spelling;
-            const semantic::CompiledDeclarationPredicate type_declaration
-                = [](const semantic::CompiledDeclarationView& candidate) {
-                      return candidate.vhdl != nullptr
-                          && candidate.vhdl->declared_type.has_value();
-                  };
-            const auto declaration
-                = semantic::CompiledDesignResolver { specialization_ }
-                      .resolve_vhdl(
-                          reference, type_scope, type_declaration)
-                      .unique();
-            const auto view = declaration
-                ? specialization_.find_declaration(*declaration)
-                : std::nullopt;
-            if (!view || view->vhdl == nullptr
-                || !view->vhdl->declared_type) {
-                return false;
-            }
-            element_type = *view->vhdl->declared_type;
-        }
-        std::unordered_set<std::uint32_t> visited;
-        while (element_type.valid()
-            && visited.insert(element_type.value()).second) {
-            const auto* definition = type_definition(element_type);
-            if (definition == nullptr) {
-                return false;
-            }
-            if (definition->form == TypeForm::enumeration) {
-                return std::ranges::all_of(
-                    text, [&](const char character) {
-                        std::string literal_spelling { '\'' };
-                        literal_spelling.push_back(character);
-                        literal_spelling.push_back('\'');
-                        return std::ranges::any_of(
-                            definition->enumeration_literals,
-                            [&](const auto& literal) {
-                                return literal.spelling
-                                    == literal_spelling;
-                            });
-                    });
-            }
-            if (definition->form != TypeForm::subtype
-                && definition->form != TypeForm::alias) {
-                return false;
-            }
-            if (definition->scalar_range
-                || !definition->base.constraints.empty()) {
-                return false;
-            }
-            element_type = definition->base.type_mark.target;
-        }
-        return false;
+        return string_enumeration_membership(text, *element, type_scope)
+            .value_or(false);
     }
 
     std::optional<bool> contextual_string_enum_membership_for(
@@ -9470,8 +9186,7 @@ private:
             || !expected_element.constraints.empty()) {
             return std::nullopt;
         }
-        std::unordered_set<std::uint32_t> profile_visiting;
-        if (profile(expected_element, profile_visiting).kind
+        if (profile(expected_element).kind
             != ProfileKind::enumeration) {
             return std::nullopt;
         }
@@ -9479,64 +9194,8 @@ private:
         const auto type_scope = expected_declaration_scope.valid()
             ? expected_declaration_scope
             : operand_scope;
-        auto element_type = expected_element.type_mark.target;
-        if (!element_type.valid()) {
-            semantic::vhdl::Name reference;
-            reference.spelling = expected_element.type_mark.spelling;
-            reference.canonical = reference.spelling;
-            const semantic::CompiledDeclarationPredicate type_declaration
-                = [](const semantic::CompiledDeclarationView& candidate) {
-                      return candidate.vhdl != nullptr
-                          && candidate.vhdl->declared_type.has_value();
-                  };
-            const auto declaration
-                = semantic::CompiledDesignResolver { specialization_ }
-                      .resolve_vhdl(
-                          reference, type_scope, type_declaration)
-                      .unique();
-            const auto view = declaration
-                ? specialization_.find_declaration(*declaration)
-                : std::nullopt;
-            if (!view || view->vhdl == nullptr
-                || !view->vhdl->declared_type) {
-                return std::nullopt;
-            }
-            element_type = *view->vhdl->declared_type;
-        }
-
-        std::unordered_set<std::uint32_t> visited;
-        while (element_type.valid()
-            && visited.insert(element_type.value()).second) {
-            const auto* definition = type_definition(element_type);
-            if (definition == nullptr) {
-                return std::nullopt;
-            }
-            if (definition->form == TypeForm::enumeration) {
-                const auto& text = *expression->vhdl->decoded_string;
-                return std::ranges::all_of(
-                    text, [&](const char character) {
-                        std::string literal_spelling { '\'' };
-                        literal_spelling.push_back(character);
-                        literal_spelling.push_back('\'');
-                        return std::ranges::any_of(
-                            definition->enumeration_literals,
-                            [&](const auto& literal) {
-                                return literal.spelling
-                                    == literal_spelling;
-                            });
-                    });
-            }
-            if (definition->form != TypeForm::subtype
-                && definition->form != TypeForm::alias) {
-                return std::nullopt;
-            }
-            if (definition->scalar_range
-                || !definition->base.constraints.empty()) {
-                return std::nullopt;
-            }
-            element_type = definition->base.type_mark.target;
-        }
-        return std::nullopt;
+        return string_enumeration_membership(
+            *expression->vhdl->decoded_string, expected_element, type_scope);
     }
 
     std::optional<SubtypeIndication> predefined_array_element_subtype(
@@ -9610,6 +9269,9 @@ private:
         return false;
     }
 
+    // Whether an element association is `others => ...`. OTHERS is a
+    // reserved word, so a choice spelled or named `others` can be nothing
+    // else.
     bool choice_is_others(
         const semantic::vhdl::AggregateAssociation& association) const
     {
@@ -9617,15 +9279,15 @@ private:
                 "others")) {
             return true;
         }
-        return association.choices.size() == 1U
-            && [&] {
-                   const auto choice = specialization_.find_expression(
-                       association.choices.front());
-                   return choice && choice->vhdl != nullptr
-                       && choice->vhdl->kind
-                           == semantic::vhdl::ExpressionKind::name
-                       && equal_ignoring_ascii_case(choice->vhdl->text, "others");
-               }();
+        return std::ranges::any_of(association.choices,
+            [&](const semantic::ExpressionId id) {
+                const auto choice = specialization_.find_expression(id);
+                return choice && choice->vhdl != nullptr
+                    && (choice->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::default_choice
+                        || equal_ignoring_ascii_case(
+                            choice->vhdl->text, "others"));
+            });
     }
 
     std::optional<std::size_t> literal_width(
@@ -9697,14 +9359,8 @@ private:
                 != semantic::vhdl::ExpressionKind::string_literal) {
             const auto expected_operand = subtype_operand_type(expected, 0U);
             const auto actual_operand = operand_type(actual_id);
-            const auto scalar = [](const OperandClass kind) {
-                return kind == OperandClass::integer
-                    || kind == OperandClass::floating
-                    || kind == OperandClass::physical
-                    || kind == OperandClass::enumeration;
-            };
-            if (scalar(expected_operand.kind)
-                && scalar(actual_operand.kind)
+            if (scalar_class(expected_operand.kind)
+                && scalar_class(actual_operand.kind)
                 && types_conflict(actual_operand, expected_operand)) {
                 report(
                     "FSIM-ELAB-VHARRAYAGG-014",
@@ -9744,9 +9400,8 @@ private:
         if (actual && actual->vhdl != nullptr
             && actual->vhdl->kind
                 == semantic::vhdl::ExpressionKind::string_literal) {
-            std::unordered_set<std::uint32_t> expected_visiting;
             const auto expected_profile = profile(
-                expected, expected_visiting);
+                expected);
             if (expected_profile.kind == ProfileKind::array
                 && expected_profile.dimensions.size() == 1U) {
                 const auto& dimension
@@ -9764,12 +9419,9 @@ private:
                     && !dimension.null && dimension.bounds_known
                     && dimension.minimum && dimension.maximum
                     && actual_characters) {
-                    const auto distance
-                        = static_cast<std::uint64_t>(*dimension.maximum)
-                        - static_cast<std::uint64_t>(*dimension.minimum);
-                    if (distance
-                            != std::numeric_limits<std::uint64_t>::max()
-                        && distance + 1U != *actual_characters) {
+                    const auto extent = inclusive_extent(
+                        *dimension.minimum, *dimension.maximum);
+                    if (extent && *extent != *actual_characters) {
                         report(
                             "FSIM-ELAB-VHARRAYAGG-006",
                             "VHDL array aggregate element width does not "
@@ -9823,8 +9475,7 @@ private:
                     association.source);
                 continue;
             }
-            if (association.choice_spelling.empty()
-                && association.choices.empty()) {
+            if (association.positional()) {
                 continue;
             }
             if (choice_is_others(association)) {
@@ -9876,10 +9527,9 @@ private:
                 aggregate.source);
             return;
         }
-        std::unordered_set<std::uint32_t> element_visiting;
-        const auto element_profile = profile(element, element_visiting);
+        const auto element_profile = profile(element);
         constexpr std::string_view qualified_prefix {
-            "@vhdl-qualified:" };
+            semantic::vhdl::qualified_expression_prefix };
         for (const auto& association : aggregate.associations) {
             const auto value = specialization_.find_expression(
                 association.value);
@@ -9926,9 +9576,8 @@ private:
                         expression.operands.front());
                     const auto actual_subtype = expression_subtype(
                         association.value);
-                    std::unordered_set<std::uint32_t> actual_visiting;
                     const auto actual_profile = actual_subtype
-                        ? profile(*actual_subtype, actual_visiting)
+                        ? profile(*actual_subtype)
                         : TypeProfile { };
                     const auto expected_type = subtype_type(array_subtype);
                     const auto actual_type = actual_subtype
@@ -10076,12 +9725,7 @@ private:
             = dimension.constrained && dimension.direction_known;
         const bool context_descending = dimension.descending;
         const auto positional_count = [&]() -> std::optional<std::uint64_t> {
-            if (aggregate.associations.empty()
-                || !std::ranges::all_of(
-                    aggregate.associations, [](const auto& association) {
-                        return association.choice_spelling.empty()
-                            && association.choices.empty();
-                    })) {
+            if (!semantic::vhdl::positional_aggregate(aggregate)) {
                 return std::nullopt;
             }
             std::uint64_t count { };
@@ -10192,15 +9836,14 @@ private:
             -> void {
             const auto expression = specialization_.find_expression(value);
             constexpr std::string_view qualified_prefix {
-                "@vhdl-qualified:" };
+                semantic::vhdl::qualified_expression_prefix };
             if (expression && expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::call
                 && expression->vhdl->text.starts_with(qualified_prefix)
                 && expression->vhdl->operands.size() == 1U) {
-                std::unordered_set<std::uint32_t> element_visiting;
                 const auto element_profile = profile(
-                    element, element_visiting);
+                    element);
                 const auto operand = specialization_.find_expression(
                     expression->vhdl->operands.front());
                 if ((element_profile.kind == ProfileKind::array
@@ -10233,9 +9876,8 @@ private:
             if (expression && expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::aggregate) {
-                std::unordered_set<std::uint32_t> element_visiting;
                 const auto element_profile = profile(
-                    element, element_visiting);
+                    element);
                 if (element_profile.kind == ProfileKind::array
                     || element_profile.kind == ProfileKind::record) {
                     validate_aggregate(value, element);
@@ -10273,16 +9915,13 @@ private:
                         || !nested_dimension->maximum) {
                         return;
                     }
-                    const auto distance
-                        = static_cast<std::uint64_t>(
-                              *nested_dimension->maximum)
-                        - static_cast<std::uint64_t>(
-                              *nested_dimension->minimum);
-                    if (distance
-                        == std::numeric_limits<std::uint64_t>::max()) {
+                    const auto extent = inclusive_extent(
+                        *nested_dimension->minimum,
+                        *nested_dimension->maximum);
+                    if (!extent) {
                         return;
                     }
-                    const auto count = distance + 1U;
+                    const auto count = *extent;
                     if (count != 0U
                         && expected_elements
                             > std::numeric_limits<std::uint64_t>::max()
@@ -10474,12 +10113,8 @@ private:
                 actual_subtype = expression_subtype(value);
             }
             if (actual_subtype) {
-                std::unordered_set<std::uint32_t> actual_visiting;
-                std::unordered_set<std::uint32_t> element_visiting;
-                const auto actual_profile = profile(
-                    *actual_subtype, actual_visiting);
-                const auto element_profile = profile(
-                    element, element_visiting);
+                const auto actual_profile = profile(*actual_subtype);
+                const auto element_profile = profile(element);
                 const auto scope = expression->vhdl->scope;
                 if (actual_profile.kind == ProfileKind::array
                     && (element_profile.kind != ProfileKind::array
@@ -10525,14 +10160,12 @@ private:
         const auto slice_value = [&](const semantic::ExpressionId value,
                                      const std::int64_t left,
                                      const std::int64_t right) {
-            const auto low = std::min(left, right);
-            const auto high = std::max(left, right);
-            const auto distance = static_cast<std::uint64_t>(high)
-                - static_cast<std::uint64_t>(low);
-            if (distance == std::numeric_limits<std::uint64_t>::max()) {
+            const auto extent = inclusive_extent(
+                std::min(left, right), std::max(left, right));
+            if (!extent) {
                 return false;
             }
-            const auto count = distance + 1U;
+            const auto count = *extent;
             if (!same_nominal_array_value(value)) {
                 return false;
             }
@@ -10586,8 +10219,7 @@ private:
             if (!prefix) {
                 return std::nullopt;
             }
-            std::unordered_set<std::uint32_t> visiting;
-            const auto prefix_profile = profile(*prefix, visiting);
+            const auto prefix_profile = profile(*prefix);
             if (prefix_profile.kind != ProfileKind::array) {
                 return std::nullopt;
             }
@@ -10697,8 +10329,7 @@ private:
                     association.source);
                 continue;
             }
-            if (association.choice_spelling.empty()
-                && association.choices.empty()) {
+            if (association.positional()) {
                 const auto value
                     = specialization_.find_expression(association.value);
                 const auto scope = value && value->vhdl != nullptr
@@ -10953,8 +10584,7 @@ private:
         const semantic::vhdl::Expression& aggregate,
         const SubtypeIndication& target)
     {
-        std::unordered_set<std::uint32_t> visiting;
-        const auto context = profile(target, visiting);
+        const auto context = profile(target);
         if (context.kind == ProfileKind::array) {
             auto element = array_element_subtype(target);
             if (!element) {
@@ -10988,12 +10618,9 @@ private:
         const semantic::vhdl::Expression& expression,
         const bool discrete_range_context)
     {
-        const auto attribute = expression.text == "'left"
-            || expression.text == "'right"
-            || expression.text == "'low"
-            || expression.text == "'high"
-            || expression.text == "'length"
-            || expression.text == "'ascending"
+        const auto attribute
+            = semantic::vhdl::is_scalar_bound_attribute(expression.text)
+            || expression.text == "'length" || expression.text == "'ascending"
             || expression.text == "'range"
             || expression.text == "'reverse_range";
         if (!attribute || expression.operands.empty()) {
@@ -11028,16 +10655,14 @@ private:
         if (!prefix) {
             return;
         }
-        std::unordered_set<std::uint32_t> visiting;
-        const auto prefix_profile = profile(*prefix, visiting);
+        const auto prefix_profile = profile(*prefix);
         // Only an array attribute takes a dimension argument; 'LEFT, 'RIGHT,
         // 'LOW and 'HIGH of a scalar have none (IEEE 1076-1993 14.1).
         if (expression.operands.size() == 2U
             && (prefix_profile.kind == ProfileKind::scalar
                 || prefix_profile.kind == ProfileKind::integer
                 || prefix_profile.kind == ProfileKind::enumeration)
-            && (expression.text == "'left" || expression.text == "'right"
-                || expression.text == "'low" || expression.text == "'high")) {
+            && (semantic::vhdl::is_scalar_bound_attribute(expression.text))) {
             report("FSIM-ELAB-VHATTR-015",
                 "the scalar attribute " + expression.text
                     + " does not take an argument",
@@ -11104,12 +10729,8 @@ private:
                               return false;
                           }
                           const auto form = candidate.vhdl->form;
-                          return form == Form::variable
-                              || form == Form::signal
-                              || form == Form::constant
-                              || form == Form::port
-                              || form == Form::alias
-                              || form == Form::generic_constant;
+                          return semantic::vhdl::is_value_object_form(form)
+                              || form == Form::alias;
                       };
                 if (separator != std::string::npos) {
                     semantic::vhdl::Name object_name;
@@ -11250,9 +10871,8 @@ private:
                 || *formal_root != *actual_root) {
                 return false;
             }
-            std::unordered_set<std::uint32_t> actual_visiting;
             const auto actual_profile = profile(
-                *actual_subtype, actual_visiting);
+                *actual_subtype);
             return actual_profile.kind == ProfileKind::array
                 && actual_profile.dimensions.size() == 1U
                 && std::ranges::all_of(
@@ -11325,8 +10945,7 @@ private:
         if (!selector || selector->vhdl == nullptr) {
             return std::nullopt;
         }
-        std::unordered_set<std::uint32_t> array_visiting;
-        const auto array_profile = profile(array_subtype, array_visiting);
+        const auto array_profile = profile(array_subtype);
         if (array_profile.kind != ProfileKind::array
             || array_profile.dimensions.size() != 1U) {
             return std::nullopt;
@@ -11397,9 +11016,8 @@ private:
             if (!prefix_subtype) {
                 return std::nullopt;
             }
-            std::unordered_set<std::uint32_t> prefix_visiting;
             const auto prefix_profile = profile(
-                *prefix_subtype, prefix_visiting);
+                *prefix_subtype);
             if (prefix_profile.kind != ProfileKind::array
                 || prefix_profile.dimensions.size() != 1U
                 || !prefix_profile.dimensions.front().constrained) {
@@ -11487,17 +11105,15 @@ private:
             }
             using Form = semantic::vhdl::DeclarationForm;
             const auto form = declaration->vhdl->form;
-            const auto indexed_object = form == Form::generic_constant
-                || form == Form::port || form == Form::signal
-                || form == Form::constant || form == Form::variable
+            const auto indexed_object
+                = semantic::vhdl::is_value_object_form(form)
                 || form == Form::alias;
             if (!indexed_object) {
                 return std::nullopt;
             }
             const auto subtype = specialized_subtype(
                 *declaration->vhdl->subtype);
-            std::unordered_set<std::uint32_t> visiting;
-            const auto selected_profile = profile(subtype, visiting);
+            const auto selected_profile = profile(subtype);
             if (selected_profile.kind != ProfileKind::array) {
                 return std::nullopt;
             }
@@ -11532,15 +11148,13 @@ private:
             if (!subtype) {
                 return std::nullopt;
             }
-            std::unordered_set<std::uint32_t> visiting;
-            const auto base_profile = profile(*subtype, visiting);
+            const auto base_profile = profile(*subtype);
             if (base_profile.kind != ProfileKind::array) {
                 return std::nullopt;
             }
             base = Selection { *subtype, { }, value.source, false };
         }
-        std::unordered_set<std::uint32_t> visiting;
-        const auto base_profile = profile(base->subtype, visiting);
+        const auto base_profile = profile(base->subtype);
         if (base->slice_result) {
             if (base->selectors.size() == 1U) {
                 if (const auto selected_range = slice_selection_range(
@@ -11571,8 +11185,7 @@ private:
             base->slice_result = true;
         } else {
             const auto group_size = value.operands.size() - 1U;
-            std::unordered_set<std::uint32_t> group_visiting;
-            const auto group_profile = profile(base->subtype, group_visiting);
+            const auto group_profile = profile(base->subtype);
             const auto rank = group_profile.dimensions.size();
             if (!base->selectors.empty() || group_size != rank) {
                 base->invalid_index_group = true;
@@ -11694,9 +11307,8 @@ private:
             validate_string_index(id);
             return;
         }
-        std::unordered_set<std::uint32_t> visiting;
         const auto selected_profile = profile(
-            selected->subtype, visiting);
+            selected->subtype);
         if (selected->invalid_index_group
             || selected->selectors.size()
                 > selected_profile.dimensions.size()
@@ -11784,9 +11396,8 @@ private:
                         ? std::nullopt
                         : expression_subtype(
                               expression.operands.front());
-                    std::unordered_set<std::uint32_t> range_visiting;
                     const auto range_profile = range_prefix
-                        ? profile(*range_prefix, range_visiting)
+                        ? profile(*range_prefix)
                         : TypeProfile { };
                     if (range_profile.kind != ProfileKind::array
                         || range_profile.dimensions.size() != 1U) {
@@ -12111,11 +11722,7 @@ private:
                 // 6.4.2: an initial value has the object's type.
                 const auto expected = subtype_operand_type(*stored.subtype, 0U);
                 const auto given = operand_type(*stored.initializer);
-                const auto scalar = [](const OperandClass kind) {
-                    return kind == OperandClass::integer || kind == OperandClass::floating
-                        || kind == OperandClass::physical || kind == OperandClass::enumeration;
-                };
-                if (scalar(expected.kind) && scalar(given.kind)
+                if (scalar_class(expected.kind) && scalar_class(given.kind)
                     && types_conflict(given, expected)) {
                     report("FSIM-ELAB-VHASSIGN-001",
                         "the initial value of VHDL object '" + stored.name
@@ -12637,29 +12244,11 @@ private:
                         || target_expression->vhdl->operands.empty()) {
                         return false;
                     }
-                    const auto& target_value = *target_expression->vhdl;
-                    std::optional<semantic::ExpressionId> prefix_id;
-                    if (target_value.kind
-                            == semantic::vhdl::ExpressionKind::slice
-                        && target_value.operands.size() == 3U) {
-                        prefix_id = target_value.operands.front();
-                    } else if (target_value.kind
-                            == semantic::vhdl::ExpressionKind::index
-                        && target_value.operands.size() == 2U) {
-                        const auto selector
-                            = specialization_.find_expression(
-                                target_value.operands[1U]);
-                        if (selector && selector->vhdl != nullptr
-                            && selector->vhdl->kind
-                                == semantic::vhdl::ExpressionKind::binary
-                            && (selector->vhdl->text == "to"
-                                || selector->vhdl->text == "downto")) {
-                            prefix_id = target_value.operands.front();
-                        }
-                    }
-                    if (!prefix_id) {
+                    if (!slice_bounds(*target_expression->vhdl)) {
                         return false;
                     }
+                    const std::optional prefix_id
+                        = target_expression->vhdl->operands.front();
                     const auto prefix
                         = specialization_.find_expression(*prefix_id);
                     if (!prefix || prefix->vhdl == nullptr) {
@@ -12725,14 +12314,10 @@ private:
                                 || !declaration->vhdl->subtype) {
                                 return false;
                             }
-                            using Form = semantic::vhdl::DeclarationForm;
-                            const auto form = declaration->vhdl->form;
-                            return form == Form::generic_constant
-                                || form == Form::port
-                                || form == Form::signal
-                                || form == Form::constant
-                                || form == Form::variable
-                                || form == Form::alias;
+                            return semantic::vhdl::is_value_object_form(
+                                       declaration->vhdl->form)
+                                || declaration->vhdl->form
+                                    == semantic::vhdl::DeclarationForm::alias;
                         }
                         return false;
                     }();
@@ -12789,8 +12374,7 @@ private:
                     if (!prefix_subtype) {
                         return false;
                     }
-                    std::unordered_set<std::uint32_t> visiting;
-                    return profile(*prefix_subtype, visiting).kind
+                    return profile(*prefix_subtype).kind
                         == ProfileKind::array;
                 }();
                 auto target_subtype = expression_subtype(
@@ -12819,31 +12403,11 @@ private:
                 // IEEE 1076-2008 3.2.4: entity statements are passive.
                 // A subprogram declared in the entity is not an entity
                 // statement.
-                const auto in_subprogram = [&](semantic::ScopeId scope) {
-                    const auto& scopes = specialization_.design().semantics.scopes();
-                    for (std::size_t depth { }; depth < 64U && scope.valid()
-                         && scope.value() < scopes.size(); ++depth) {
-                        if (std::ranges::any_of(
-                                specialization_.design().vhdl_hir.declarations(),
-                                [&](const semantic::vhdl::Declaration& candidate) {
-                                    return candidate.callable
-                                        && candidate.nested_scope == scope;
-                                })) {
-                            return true;
-                        }
-                        const auto parent = scopes[scope.value()].parent;
-                        if (!parent) {
-                            break;
-                        }
-                        scope = *parent;
-                    }
-                    return false;
-                };
                 if (const auto& all_scopes = specialization_.design().semantics.scopes();
                     statement.scope.valid() && statement.scope.value() < all_scopes.size()
                     && all_scopes[statement.scope.value()].unit == entity_.id
                     && entity_.id != architecture_.id
-                    && !in_subprogram(statement.scope)) {
+                    && !within_subprogram(statement.scope)) {
                     report("FSIM-ELAB-VHPASSIVE-001",
                         "a VHDL entity statement must be passive (it assigns a signal)",
                         statement.source);
@@ -12982,8 +12546,7 @@ private:
                     const auto range_prefix = expression_subtype(
                         range->vhdl->operands.front());
                     if (range_prefix) {
-                        std::unordered_set<std::uint32_t> visiting;
-                        if (profile(*range_prefix, visiting).kind
+                        if (profile(*range_prefix).kind
                             == ProfileKind::array) {
                             discrete_range_attributes.insert(
                                 range->vhdl->id.value());
@@ -13009,9 +12572,8 @@ private:
             const auto selector_subtype = expression_subtype(
                 selector->vhdl->operands.front());
             if (selector_subtype) {
-                std::unordered_set<std::uint32_t> visiting;
                 const auto selector_profile = profile(
-                    *selector_subtype, visiting);
+                    *selector_subtype);
                 if (selector_profile.kind != ProfileKind::array) {
                     continue;
                 }
@@ -13195,13 +12757,8 @@ private:
                     expression.operands[sibling_index]);
                 if (aggregate && aggregate->vhdl != nullptr && context) {
                     const bool positional
-                        = !aggregate->vhdl->associations.empty()
-                        && std::ranges::all_of(
-                            aggregate->vhdl->associations,
-                            [](const auto& association) {
-                                return association.choice_spelling.empty()
-                                    && association.choices.empty();
-                            });
+                        = semantic::vhdl::positional_aggregate(
+                            *aggregate->vhdl);
                     if (positional) {
                         const auto predefined
                             = !context->type_mark.target.valid()
@@ -13327,7 +12884,8 @@ private:
                     || expression.kind == semantic::vhdl::ExpressionKind::unary
                     || (expression.kind == semantic::vhdl::ExpressionKind::call
                         && expression.operands.size() == 1U
-                        && expression.text.starts_with("@vhdl-qualified:")))) {
+                        && expression.text.starts_with(
+                            semantic::vhdl::qualified_expression_prefix)))) {
                 for (const auto operand : expression.operands) {
                     validate_value_name(operand);
                 }
@@ -13567,6 +13125,12 @@ private:
         }
     }
 
+    static const semantic::vhdl::Unit& detached_unit() noexcept
+    {
+        static const semantic::vhdl::Unit unit { };
+        return unit;
+    }
+
     const semantic::SpecializedHirUnit& specialization_;
     const semantic::vhdl::Unit& entity_;
     const semantic::vhdl::Unit& architecture_;
@@ -13617,18 +13181,9 @@ resolve_vhdl_user_attribute_subtype(
         = specialization.design().vhdl_hir.declarations();
     const auto visible_in = [&](const semantic::ScopeId inner,
                                 const semantic::ScopeId outer) {
-        auto scope = inner;
-        for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
-            if (scope == outer) {
-                return true;
-            }
-            if (!scope.valid() || scope.value() >= scopes.size()
-                || !scopes[scope.value()].parent) {
-                return false;
-            }
-            scope = *scopes[scope.value()].parent;
-        }
-        return false;
+        return semantic::scope_distance(
+            specialization.design().semantics, inner, outer)
+            .has_value();
     };
     const auto unit_matches_prefix = [&](const semantic::ScopeId scope) {
         if (!scope.valid() || scope.value() >= scopes.size()) {
@@ -13655,18 +13210,9 @@ resolve_vhdl_user_attribute_subtype(
     };
     const auto scope_distance = [&](const semantic::ScopeId inner,
                                     const semantic::ScopeId outer) {
-        auto scope = inner;
-        for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
-            if (scope == outer) {
-                return depth;
-            }
-            if (!scope.valid() || scope.value() >= scopes.size()
-                || !scopes[scope.value()].parent) {
-                break;
-            }
-            scope = *scopes[scope.value()].parent;
-        }
-        return scopes.size() + 1U;
+        return semantic::scope_distance(
+            specialization.design().semantics, inner, outer)
+            .value_or(scopes.size() + 1U);
     };
 
     const semantic::vhdl::Declaration* selected_specification { };
@@ -13743,6 +13289,13 @@ resolve_vhdl_user_attribute_subtype(
     }
 
     return std::nullopt;
+}
+
+bool vhdl_locally_static_expression(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression)
+{
+    return Validator { specialization }.locally_static(expression);
 }
 
 std::vector<VhdlHirTypeValidationIssue> validate_vhdl_hir_types(

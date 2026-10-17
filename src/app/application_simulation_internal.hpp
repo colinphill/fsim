@@ -28,6 +28,18 @@
 namespace fsim::app {
 using namespace application_detail;
 
+// The specialization `id` names exactly, or null.
+[[nodiscard]] inline const semantic::design::Specialization*
+exact_specialization(const semantic::design::DesignIr& design,
+    const semantic::design::SpecializationId id) noexcept
+{
+    const auto& specializations = design.specializations();
+    return id.valid() && id.value() < specializations.size()
+            && specializations[id.value()].id == id
+        ? &specializations[id.value()]
+        : nullptr;
+}
+
 struct Simulation::Impl {
 
     struct ObserverDispatchGeneration {
@@ -434,6 +446,8 @@ struct Simulation::Impl {
     // Package class allocations are evaluated after the class heap and its
     // construction services are configured, so retain their exact signal and
     // expression identities before the interpreter takes ownership of design.
+    // Derived from HIR only to cross-check the stored startup metadata; empty
+    // for a trusted artifact.
     std::vector<std::pair<runtime::simir::SignalId, semantic::ExpressionId>>
         package_class_handle_initializers;
 

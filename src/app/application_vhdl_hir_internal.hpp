@@ -2,6 +2,7 @@
 #pragma once
 
 #include "application_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <functional>
 #include <map>
@@ -12,11 +13,6 @@
 namespace fsim::app::application_detail {
 namespace vh = semantic::vhdl;
 
-[[nodiscard]] std::string canonical_vhdl_name(std::string value);
-[[nodiscard]] std::vector<std::string_view> vhdl_name_parts(
-    std::string_view value);
-[[nodiscard]] bool same_vhdl_unit_name(
-    const vh::Unit& unit, std::string_view spelling);
 [[nodiscard]] vh::UnitKind vhdl_unit_kind(frontend::UnitKind kind) noexcept;
 [[nodiscard]] vh::Direction vhdl_direction(
     frontend::PortDirection direction) noexcept;

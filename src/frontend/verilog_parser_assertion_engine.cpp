@@ -842,36 +842,10 @@ private:
         const auto span = cover(item.front().span, item.back().span);
         const auto assignment_operator = [](const TokenKind kind)
             -> std::optional<std::string_view> {
-            switch (kind) {
-            case TokenKind::Assign:
-                return std::string_view { };
-            case TokenKind::PlusAssign:
-                return "+";
-            case TokenKind::MinusAssign:
-                return "-";
-            case TokenKind::StarAssign:
-                return "*";
-            case TokenKind::SlashAssign:
-                return "/";
-            case TokenKind::PercentAssign:
-                return "%";
-            case TokenKind::AmpersandAssign:
-                return "&";
-            case TokenKind::PipeAssign:
-                return "|";
-            case TokenKind::CaretAssign:
-                return "^";
-            case TokenKind::ShiftLeftAssign:
-                return "<<";
-            case TokenKind::ShiftRightAssign:
-                return ">>";
-            case TokenKind::ArithmeticShiftLeftAssign:
-                return "<<<";
-            case TokenKind::ArithmeticShiftRightAssign:
-                return ">>>";
-            default:
+            if (!is_blocking_assignment_operator(kind)) {
                 return std::nullopt;
             }
+            return compound_assignment_operator(kind);
         };
         if (item.size() >= 3U
             && item.front().kind == TokenKind::Identifier) {

@@ -87,21 +87,10 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
     const auto validate_generic_callables
         = [&](const std::span<const semantic::DeclarationId> declarations) {
               using Form = semantic::vhdl::DeclarationForm;
-              const auto& scopes = compiled_->semantics.scopes();
-              const auto scope_within = [&](semantic::ScopeId inner,
+              const auto scope_within = [&](const semantic::ScopeId inner,
                                             const semantic::ScopeId outer) {
-                  for (std::size_t depth { };
-                      inner.valid() && depth <= scopes.size(); ++depth) {
-                      if (inner == outer) {
-                          return true;
-                      }
-                      if (inner.value() >= scopes.size()
-                          || !scopes[inner.value()].parent) {
-                          return false;
-                      }
-                      inner = *scopes[inner.value()].parent;
-                  }
-                  return false;
+                  return semantic::scope_within(
+                      compiled_->semantics, inner, outer);
               };
               for (const auto declaration_id : declarations) {
                   const auto declaration
@@ -119,9 +108,7 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                   }
                   const auto& template_name
                       = declaration->vhdl->package->template_name;
-                  const auto spelling = template_name.canonical.empty()
-                      ? std::string_view { template_name.spelling }
-                      : std::string_view { template_name.canonical };
+                  const auto spelling = template_name.text();
                   if (name_part_count(spelling) != 1U) {
                       append_diagnostic(
                           "FSIM-ELAB-VHGSUB-009",
@@ -203,10 +190,7 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                                          || *reference.selected
                                              == callable->body))
                               || name_equal(
-                                  reference.canonical.empty()
-                                      ? std::string_view {
-                                            reference.spelling }
-                                      : std::string_view { reference.canonical },
+                                  reference.text(),
                                   template_declaration->vhdl->name);
                       });
                   if (recursive) {
@@ -273,11 +257,7 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                   }
                   using Form = semantic::vhdl::DeclarationForm;
                   const auto form = record->vhdl->form;
-                  if (form == Form::generic_constant
-                      || form == Form::generic_type
-                      || form == Form::generic_function
-                      || form == Form::generic_procedure
-                      || form == Form::generic_package) {
+                  if (semantic::vhdl::is_generic_formal(form)) {
                       generics.push_back(child);
                   } else if (form == Form::function
                       || form == Form::procedure) {

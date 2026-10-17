@@ -179,8 +179,7 @@ end package body;
 )";
 
 void test_context_dependency_fingerprints(const semantic::CompiledDesign& design,
-    const semantic::UnitId context_id, const semantic::UnitId architecture_id,
-    const workspace::Store& store)
+    const semantic::UnitId context_id, const semantic::UnitId architecture_id)
 {
     detail::WorkspaceCatalogs catalogs;
     for (const std::string_view library : { "support", "work" }) {
@@ -233,14 +232,10 @@ void test_context_dependency_fingerprints(const semantic::CompiledDesign& design
     auto& architecture = artifact_for("work", "architecture");
     const std::array context_owner { context_id };
     const std::array architecture_owner { architecture_id };
-    fsim::diagnostic::Engine dependency_diagnostics;
-    auto context_dependencies = detail::workspace_dependencies(
-        store, design, context_owner, catalogs, dependency_diagnostics);
-    auto architecture_dependencies = detail::workspace_dependencies(
-        store, design, architecture_owner, catalogs, dependency_diagnostics);
-    assert(context_dependencies && architecture_dependencies);
-    context.dependencies = std::move(*context_dependencies);
-    architecture.dependencies = std::move(*architecture_dependencies);
+    context.dependencies = detail::workspace_dependencies(
+        design, context_owner, catalogs);
+    architecture.dependencies = detail::workspace_dependencies(
+        design, architecture_owner, catalogs);
     assert(has_dependency(architecture.dependencies, context, context.fingerprint));
     assert(has_dependency(architecture.dependencies, specification, specification.fingerprint));
     assert(has_dependency(architecture.dependencies, body, body.fingerprint));
@@ -251,11 +246,8 @@ void test_context_dependency_fingerprints(const semantic::CompiledDesign& design
     const auto old_body_fingerprint = body.fingerprint;
     const auto context_fingerprint = context.fingerprint;
     body.fingerprint = body.id + "-v2";
-    dependency_diagnostics.clear();
-    context_dependencies = detail::workspace_dependencies(
-        store, design, context_owner, catalogs, dependency_diagnostics);
-    assert(context_dependencies);
-    context.dependencies = std::move(*context_dependencies);
+    context.dependencies = detail::workspace_dependencies(
+        design, context_owner, catalogs);
     assert(context.fingerprint == context_fingerprint);
     assert(has_dependency(context.dependencies, body, body.fingerprint));
     assert(has_dependency(architecture.dependencies, body, old_body_fingerprint));
@@ -356,9 +348,8 @@ end architecture;
     assert(packed && packed->bits == "1010");
     const auto& label = named_declaration(design, *compiled_package->vhdl, "label_text");
     assert(specialized->evaluate_string_declaration(label.id) == "OK");
-    const workspace::Store store { directory / "workspace" };
     test_context_dependency_fingerprints(design, compiled_context->identity->id,
-        architecture->identity->id, store);
+        architecture->identity->id);
 
     fsim::diagnostic::Engine mismatch;
     const auto incompatible = compile(directory, "standard_mismatch", R"(
@@ -440,7 +431,6 @@ end configuration;
         work_catalog.artifacts.push_back(std::move(artifact));
     }
     catalogs.push_back(std::move(work_catalog));
-    const workspace::Store store { directory / "configuration-bindings" };
     const auto has_dependency = [&](const auto& dependencies,
                                     const std::string_view kind,
                                     const std::string_view name,
@@ -459,17 +449,15 @@ end configuration;
     };
     const std::array architecture_owner { owner_architecture->identity->id };
     const std::array configuration_owner { owner_configuration->identity->id };
-    fsim::diagnostic::Engine diagnostics;
     const auto architecture_dependencies = detail::workspace_dependencies(
-        store, design, architecture_owner, catalogs, diagnostics);
+        design, architecture_owner, catalogs);
     const auto configuration_dependencies = detail::workspace_dependencies(
-        store, design, configuration_owner, catalogs, diagnostics);
-    assert(architecture_dependencies && configuration_dependencies);
-    assert(has_dependency(*architecture_dependencies,
+        design, configuration_owner, catalogs);
+    assert(has_dependency(architecture_dependencies,
         "entity", "bound_target", ""));
-    assert(has_dependency(*architecture_dependencies,
+    assert(has_dependency(architecture_dependencies,
         "architecture", "chosen", "bound_target"));
-    assert(has_dependency(*configuration_dependencies,
+    assert(has_dependency(configuration_dependencies,
         "configuration", "target_configuration", "bound_target"));
 
     fsim::diagnostic::Engine missing_architecture;
@@ -554,16 +542,13 @@ begin instance : leaf; end architecture;
     }
     work.artifacts.push_back(std::move(artifact));
     catalogs.push_back(std::move(work));
-    const workspace::Store store { directory / "default-architecture" };
     const auto has_architecture_dependency = [&](const semantic::UnitId owner,
                                                  const std::string_view name,
                                                  const std::string_view primary) {
         const std::array owners { owner };
-        fsim::diagnostic::Engine diagnostics;
         const auto dependencies = detail::workspace_dependencies(
-            store, design, owners, catalogs, diagnostics);
-        assert(dependencies);
-        return std::ranges::any_of(*dependencies, [&](const auto& dependency) {
+            design, owners, catalogs);
+        return std::ranges::any_of(dependencies, [&](const auto& dependency) {
             return dependency.fingerprint == "default-architecture-fingerprint"
                 && dependency.unit.language == "vhdl"
                 && dependency.unit.kind == "architecture"

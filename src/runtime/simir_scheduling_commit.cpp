@@ -3046,6 +3046,37 @@ bool Interpreter::Impl::can_try_wide_unresolved_owner_alias(
         && owners.front().aliases_stored;
 }
 
+// Whether a plain wire or std_logic signal has no state (drivers, forces,
+// waits, observers or aliases) that a wide direct commit would bypass.
+bool Interpreter::Impl::wide_commit_signal_eligible(
+    const SignalId signal_id) const
+{
+    const auto& signal = signals[signal_id];
+    if (signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || owned_driver_active(signal_id)
+        || external_driver_values[signal_id] || forced_values[signal_id]
+        || forced_driver_values[signal_id]
+        || direct_signal_materialization_pending[signal_id] != 0U
+        || native_signal_has_runtime_dependency(signal_id)
+        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
+        || !signal_container_aliases[signal_id].empty()
+        || (signal_id < signal_transaction_observed.size()
+            && signal_transaction_observed[signal_id])) {
+        return false;
+    }
+    if ((signal.value_kind == ValueKind::logic4
+            && signal.resolution != ResolutionKind::sv_wire)
+        || (signal.value_kind == ValueKind::logic9
+            && signal.resolution != ResolutionKind::std_logic)
+        || (signal.value_kind != ValueKind::logic4
+            && signal.value_kind != ValueKind::logic9)) {
+        return false;
+    }
+    return true;
+}
+
 bool Interpreter::Impl::can_try_wide_single_owner_commit(
     const ProcessId process,
     const SignalId signal_id)
@@ -3077,27 +3108,7 @@ bool Interpreter::Impl::can_try_wide_single_owner_commit(
         return false;
     }
 
-    const auto& signal = signals[signal_id];
-    if (signal.event_variable || signal.has_implicit_driver
-        || signal.has_charge_strength
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
-        || owned_driver_active(signal_id)
-        || external_driver_values[signal_id] || forced_values[signal_id]
-        || forced_driver_values[signal_id]
-        || direct_signal_materialization_pending[signal_id] != 0U
-        || native_signal_has_runtime_dependency(signal_id)
-        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
-        || !signal_container_aliases[signal_id].empty()
-        || (signal_id < signal_transaction_observed.size()
-            && signal_transaction_observed[signal_id])) {
-        return false;
-    }
-    if ((signal.value_kind == ValueKind::logic4
-            && signal.resolution != ResolutionKind::sv_wire)
-        || (signal.value_kind == ValueKind::logic9
-            && signal.resolution != ResolutionKind::std_logic)
-        || (signal.value_kind != ValueKind::logic4
-            && signal.value_kind != ValueKind::logic9)) {
+    if (!wide_commit_signal_eligible(signal_id)) {
         return false;
     }
 
@@ -3172,28 +3183,8 @@ bool Interpreter::Impl::can_try_wide_disjoint_signal_commit(
         return false;
     }
 
-    const auto& signal = signals[signal_id];
-    if (signal.initial_value.width() == 0U
-        || signal.event_variable || signal.has_implicit_driver
-        || signal.has_charge_strength
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
-        || owned_driver_active(signal_id)
-        || external_driver_values[signal_id] || forced_values[signal_id]
-        || forced_driver_values[signal_id]
-        || direct_signal_materialization_pending[signal_id] != 0U
-        || native_signal_has_runtime_dependency(signal_id)
-        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
-        || !signal_container_aliases[signal_id].empty()
-        || (signal_id < signal_transaction_observed.size()
-            && signal_transaction_observed[signal_id])) {
-        return false;
-    }
-    if ((signal.value_kind == ValueKind::logic4
-            && signal.resolution != ResolutionKind::sv_wire)
-        || (signal.value_kind == ValueKind::logic9
-            && signal.resolution != ResolutionKind::std_logic)
-        || (signal.value_kind != ValueKind::logic4
-            && signal.value_kind != ValueKind::logic9)) {
+    if (signals[signal_id].initial_value.width() == 0U
+        || !wide_commit_signal_eligible(signal_id)) {
         return false;
     }
 
@@ -3231,6 +3222,7 @@ bool Interpreter::Impl::can_try_wide_disjoint_signal_commit(
     if (!layout.contains(signal_id)) {
         return false;
     }
+    const auto& signal = signals[signal_id];
     const auto& layout_signal = layout.signal(signal_id);
     const auto owners = layout.owners(signal_id);
     if (layout_signal.storage_class

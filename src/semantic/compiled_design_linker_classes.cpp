@@ -55,10 +55,8 @@ void append_type_reference(std::vector<CompiledReference>& references,
 const sv::Declaration* declaration_for(
     const CompiledDesign& design, const DeclarationId id)
 {
-    const auto found = std::ranges::find(
-        design.systemverilog_hir.declarations(), id,
-        &sv::Declaration::id);
-    return found == design.systemverilog_hir.declarations().end()
+    const auto* found = design.systemverilog_hir.find_declaration(id);
+    return found == nullptr
         ? nullptr
         : &*found;
 }

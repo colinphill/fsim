@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/scope_randomize.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_execution_context.hpp"
@@ -541,9 +542,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         return value.type.ranges[dimension];
     };
     const auto range_length = [](const VhdlReflectionRange& value) {
-        const auto distance = value.left >= value.right
-            ? static_cast<std::uint64_t>(value.left - value.right)
-            : static_cast<std::uint64_t>(value.right - value.left);
+        const auto distance = support::index_distance(value.left, value.right);
         return distance + 1U;
     };
     const auto bound = [&](const VhdlReflectionRange& value) {
@@ -879,9 +878,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
             if (index < low || index > high) {
                 fail(process, "array reflection index is outside the subtype");
             }
-            const auto ordinal = index >= bounds.right
-                ? static_cast<std::uint64_t>(index - bounds.right)
-                : static_cast<std::uint64_t>(bounds.right - index);
+            const auto ordinal = support::index_distance(index, bounds.right);
             if (ordinal != 0U
                 && stride > std::numeric_limits<std::uint64_t>::max()
                     / ordinal) {

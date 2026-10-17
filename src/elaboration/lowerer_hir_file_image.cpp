@@ -337,12 +337,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
                                       const runtime::simir::OutputFormat format,
                                       const bool signed_decimal,
                                       const frontend::SystemVerilogScalarKind kind) {
-        StringMethod operation;
-        operation.operation = StringMethodOperator::format_packed;
-        operation.source = target;
-        operation.first = source;
-        operation.second = load(32U, bits, frontend::ValueDomain::Bit2);
-        operation.format = format;
+        auto operation = hir_format_packed(target, source, bits, format);
         operation.signed_decimal = signed_decimal;
         operation.suppress_leading_zero = format == runtime::simir::OutputFormat::decimal;
         operation.scalar_kind = kind;
@@ -427,8 +422,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             if (aggregate
                 && std::ranges::all_of(expression->vhdl->associations,
                     [](const auto& association) {
-                        return association.choices.empty()
-                            && association.choice_spelling.empty();
+                        return association.positional();
                     })) {
                 value_width = expression->vhdl->associations.size() * part_width;
             }
@@ -904,9 +898,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         process_.operations.emplace_back(Assert { ok,
             "VHDL file read did not convert the requested element",
             AssertionSeverity::failure,
-            SourceLocation { span.source_name.str(),
-                static_cast<std::uint32_t>(span.begin.line),
-                static_cast<std::uint32_t>(span.begin.column) } });
+            runtime_source_location(span) });
     };
     if (!unconstrained_top) {
         std::vector<RegisterId> parts;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_compiled_environment_sv.hpp"
+#include "application_compiled_source.hpp"
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -1036,17 +1037,7 @@ public:
 private:
     diagnostic::SourceSpan source_span(semantic::SourceSpanId id) const
     {
-        if (!id.valid() || id.value() >= design_.semantics.source_spans().size())
-            return { };
-        const auto& span = design_.semantics.source_spans()[id.value()];
-        diagnostic::SourceSpan result;
-        result.path = span.logical_name;
-        if (span.file.valid() && span.file.value() < design_.semantics.source_files().size())
-            result.path = result.path.empty()
-                ? design_.semantics.source_files()[span.file.value()].physical_name : result.path;
-        result.begin = { span.begin.line, span.begin.column, span.begin.offset };
-        result.end = { span.end.line, span.end.column, span.end.offset };
-        return result;
+        return compiled_source_span(design_.semantics, id);
     }
 
     const sv::Unit* scope_unit(semantic::ScopeId scope) const

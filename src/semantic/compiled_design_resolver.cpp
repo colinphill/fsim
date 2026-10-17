@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_time.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,8 @@
 
 namespace fsim::semantic {
 namespace {
+
+using support::same_vhdl_identifier;
 
 const bool semantic_profile_diagnostics_enabled
     = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
@@ -42,6 +46,15 @@ void profile_vhdl_package_member_lookup(const bool indexed_empty)
     if (indexed_empty) {
         profile.indexed_empty.fetch_add(1U, std::memory_order_relaxed);
     }
+}
+
+// An import written at or after a reference does not yet make its names
+// visible there (IEEE 1800-2017 26.3); an unknown order (0) never hides.
+bool import_follows_reference(
+    const std::uint64_t import_order, const std::uint64_t reference_order)
+{
+    return reference_order != 0U && import_order != 0U
+        && import_order >= reference_order;
 }
 
 std::string_view normalized_library(const std::string_view library)
@@ -78,53 +91,6 @@ const sv::Unit* source_package_for_compilation_unit(
     return &*found;
 }
 
-bool extended_vhdl_identifier(const std::string_view value)
-{
-    return value.size() >= 2U && value.front() == '\\'
-        && value.back() == '\\';
-}
-
-bool same_vhdl_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    if (extended_vhdl_identifier(left)
-        || extended_vhdl_identifier(right)) {
-        return left == right;
-    }
-    const auto lower_ascii = [](const unsigned char character) {
-        return character >= 'A' && character <= 'Z'
-            ? static_cast<unsigned char>(character - 'A' + 'a')
-            : character;
-    };
-    return left.size() == right.size()
-        && std::ranges::equal(left, right,
-            [&](const unsigned char lhs, const unsigned char rhs) {
-                return lower_ascii(lhs) == lower_ascii(rhs);
-            });
-}
-
-bool same_vhdl_unit_name(
-    const vhdl::Unit& unit, const std::string_view spelling)
-{
-    const auto extended = extended_vhdl_identifier(spelling);
-    if (unit.extended_name != extended) {
-        return false;
-    }
-    if (!extended) {
-        return same_vhdl_identifier(unit.name, spelling);
-    }
-    std::string decoded;
-    decoded.reserve(spelling.size() - 2U);
-    for (std::size_t index = 1U; index + 1U < spelling.size(); ++index) {
-        decoded.push_back(spelling[index]);
-        if (spelling[index] == '\\' && index + 2U < spelling.size()
-            && spelling[index + 1U] == '\\') {
-            ++index;
-        }
-    }
-    return unit.name == decoded;
-}
-
 bool simple_systemverilog_identifier(const std::string_view value)
 {
     return !value.empty()
@@ -137,9 +103,7 @@ bool simple_systemverilog_identifier(const std::string_view value)
 
 std::string_view vhdl_spelling(const vhdl::Name& name)
 {
-    return name.canonical.empty()
-        ? std::string_view { name.spelling }
-        : std::string_view { name.canonical };
+    return name.text();
 }
 
 class VhdlNameParts {
@@ -192,31 +156,10 @@ private:
 VhdlNameParts vhdl_name_parts(const std::string_view name)
 {
     VhdlNameParts result;
-    std::size_t begin { };
-    bool in_extended_identifier { };
-    for (std::size_t index { }; index < name.size(); ++index) {
-        if (name[index] == '\\') {
-            if (in_extended_identifier && index + 1U < name.size()
-                && name[index + 1U] == '\\') {
-                ++index;
-                continue;
-            }
-            in_extended_identifier = !in_extended_identifier;
-            continue;
-        }
-        if (name[index] != '.' || in_extended_identifier) {
-            continue;
-        }
-        if (index == begin) {
-            return { };
-        }
-        result.push_back(name.substr(begin, index - begin));
-        begin = index + 1U;
-    }
-    if (begin == name.size()) {
+    if (!support::visit_vhdl_selected_name(name,
+            [&](const std::string_view part) { result.push_back(part); })) {
         return { };
     }
-    result.push_back(name.substr(begin));
     return result;
 }
 
@@ -238,6 +181,31 @@ const Scope* find_scope(const CompiledDesign& design, const ScopeId id)
 }
 
 
+// The effective specialization's view of a type, expression or declaration
+// when one is active and has it, else the design's.
+std::optional<CompiledTypeView> find_type(const CompiledDesign& design,
+    const SpecializedHirUnit* effective, const TypeId id)
+{
+    if (effective != nullptr) {
+        if (const auto type = effective->find_type(id)) {
+            return type;
+        }
+    }
+    return design.find_type(id);
+}
+
+std::optional<CompiledExpressionView> find_expression(
+    const CompiledDesign& design, const SpecializedHirUnit* effective,
+    const ExpressionId id)
+{
+    if (effective != nullptr) {
+        if (const auto expression = effective->find_expression(id)) {
+            return expression;
+        }
+    }
+    return design.find_expression(id);
+}
+
 std::optional<CompiledDeclarationView> find_declaration(
     const CompiledDesign& design, const SpecializedHirUnit* effective,
     const DeclarationId id)
@@ -248,6 +216,42 @@ std::optional<CompiledDeclarationView> find_declaration(
         }
     }
     return design.find_declaration(id);
+}
+
+// A `[package::]member` SystemVerilog reference and the SystemVerilog unit
+// that owns its use scope (else the selected unit).
+struct SystemVerilogScopedReference {
+    std::string_view member;
+    std::string_view package_name;
+    std::optional<CompiledUnitView> owner;
+};
+
+std::optional<SystemVerilogScopedReference> systemverilog_scoped_reference(
+    const CompiledDesign& design, const UnitId selected_unit,
+    const std::string_view name, const ScopeId use_scope)
+{
+    const auto separator = name.rfind("::");
+    const auto member = separator == std::string_view::npos
+        ? name
+        : name.substr(separator + 2U);
+    const auto package_name = separator == std::string_view::npos
+        ? std::string_view { }
+        : name.substr(0U, separator);
+    if (member.empty()
+        || (separator != std::string_view::npos && package_name.empty())) {
+        return std::nullopt;
+    }
+    auto owner = design.find_unit(selected_unit);
+    if (const auto* scope = find_scope(design, use_scope)) {
+        if (const auto scoped = design.find_unit(scope->unit);
+            scoped && scoped->systemverilog != nullptr) {
+            owner = scoped;
+        }
+    }
+    if (!owner || owner->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    return SystemVerilogScopedReference { member, package_name, owner };
 }
 
 template <typename Visitor>
@@ -672,16 +676,6 @@ void collect_systemverilog_package_exports(
     visiting.erase(package.id.value());
 }
 
-bool vhdl_actual_form(const vhdl::DeclarationForm form)
-{
-    using Form = vhdl::DeclarationForm;
-    return form == Form::generic_constant
-        || form == Form::generic_type
-        || form == Form::generic_function
-        || form == Form::generic_procedure
-        || form == Form::generic_package;
-}
-
 bool vhdl_callable_form(const vhdl::DeclarationForm form)
 {
     using Form = vhdl::DeclarationForm;
@@ -850,8 +844,7 @@ VhdlProfileTypeClass vhdl_profile_type_class(
         }
     }
     const auto spelling = simple_vhdl_name(subtype.type_mark.spelling);
-    if (same_vhdl_identifier(spelling, "time")
-        || same_vhdl_identifier(spelling, "delay_length")) {
+    if (support::is_vhdl_time_type_name(spelling)) {
         return VhdlProfileTypeClass::physical;
     }
     if (same_vhdl_identifier(spelling, "real")) {
@@ -1017,23 +1010,9 @@ std::vector<CompiledVhdlImport> collect_vhdl_linked_imports(
                     if (parts.size() != 2U && parts.size() != 3U) {
                         continue;
                     }
-                    const auto library_prefix = parts.size() == 3U
-                        || (parts.size() == 2U
-                            && (same_vhdl_identifier(parts.front(), "work")
-                                || same_vhdl_identifier(
-                                    parts.front(), "std")
-                                || std::ranges::any_of(unit->context,
-                                    [&](const vhdl::ContextItem& context) {
-                                        return context.kind
-                                                == vhdl::ContextKind::library_clause
-                                            && std::ranges::any_of(
-                                                context.selected_names,
-                                                [&](const vhdl::Name& selected_name) {
-                                                    return same_vhdl_identifier(
-                                                        vhdl_spelling(selected_name),
-                                                        parts.front());
-                                                });
-                                    })));
+                    const auto library_prefix
+                        = vhdl::use_name_has_library_prefix(
+                            *unit, parts.size(), parts.front());
                     const auto specified_library = library_prefix
                         ? std::string_view { parts.front() }
                         : normalized_library(unit->library);
@@ -1107,6 +1086,44 @@ std::string_view effective_vhdl_library(const std::string_view requested,
     return same_vhdl_identifier(requested, "work")
         ? normalized_library(owner)
         : normalized_library(requested);
+}
+
+// The library named by a context reference `[library.]context`, relative
+// to the referencing unit's library (IEEE 1076-2019 13.4).
+std::string_view context_reference_library(
+    const VhdlNameParts& parts, const std::string_view owner_library)
+{
+    return parts.size() >= 2U
+        ? effective_vhdl_library(parts[parts.size() - 2U], owner_library)
+        : normalized_library(owner_library);
+}
+
+bool is_named_vhdl_context(const vhdl::Unit& candidate,
+    const std::string_view library, const std::string_view name)
+{
+    return candidate.kind == vhdl::UnitKind::context
+        && same_vhdl_identifier(normalized_library(candidate.library), library)
+        && vhdl::unit_name_matches(candidate, name);
+}
+
+// Calls `visitor(context)` for each context declaration a context reference
+// names; stops and returns true when the visitor does.
+template <typename Visitor>
+bool visit_referenced_vhdl_contexts(const CompiledDesign& design,
+    const VhdlNameParts& parts, const std::string_view owner_library,
+    Visitor&& visitor)
+{
+    if (parts.empty()) {
+        return false;
+    }
+    const auto library = context_reference_library(parts, owner_library);
+    for (const auto& context : design.vhdl_units()) {
+        if (is_named_vhdl_context(context, library, parts.back())
+            && visitor(context)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool standard_package_exports(const vhdl::Unit& package,
@@ -1197,8 +1214,7 @@ CompiledVhdlStandardScalarIdentity builtin_standard_scalar_type_identity(
     if (same_vhdl_identifier(simple, "severity_level")) {
         return CompiledVhdlStandardScalarIdentity::severity_level;
     }
-    if (same_vhdl_identifier(simple, "time")
-        || same_vhdl_identifier(simple, "delay_length")) {
+    if (support::is_vhdl_time_type_name(simple)) {
         return CompiledVhdlStandardScalarIdentity::time;
     }
     return CompiledVhdlStandardScalarIdentity::none;
@@ -1531,9 +1547,8 @@ CompiledDesignResolver::actual_declaration(
             }
             next = binding->actual_declaration;
             if (!next && binding->expression) {
-                const auto view = effective_ != nullptr
-                    ? effective_->find_expression(*binding->expression)
-                    : design_->find_expression(*binding->expression);
+                const auto view = find_expression(
+                    *design_, effective_, *binding->expression);
                 if (view && view->systemverilog != nullptr
                     && view->systemverilog->referenced_name) {
                     next = view->systemverilog->referenced_name->selected;
@@ -1689,31 +1704,14 @@ CompiledDesignResolver::resolve_systemverilog_class(
     const bool same_library_fallback,
     const std::uint64_t source_order) const
 {
-    if (design_ == nullptr) {
+    const auto reference = design_ != nullptr
+        ? systemverilog_scoped_reference(
+              *design_, selected_unit_, name, use_scope)
+        : std::nullopt;
+    if (!reference) {
         return { CompiledResolutionStatus::invalid, { } };
     }
-    const auto separator = name.rfind("::");
-    const auto member = separator == std::string_view::npos
-        ? name
-        : name.substr(separator + 2U);
-    const auto package_name = separator == std::string_view::npos
-        ? std::string_view { }
-        : name.substr(0U, separator);
-    if (member.empty() || (separator != std::string_view::npos
-                              && package_name.empty())) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
-
-    auto owner = design_->find_unit(selected_unit_);
-    if (const auto* scope = find_scope(*design_, use_scope)) {
-        if (const auto scoped = design_->find_unit(scope->unit);
-            scoped && scoped->systemverilog != nullptr) {
-            owner = scoped;
-        }
-    }
-    if (!owner || owner->systemverilog == nullptr) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
+    const auto [member, package_name, owner] = *reference;
     const auto make_result = [](auto candidates) {
         std::ranges::sort(candidates, {},
             &sv::ClassDeclaration::canonical_identity);
@@ -1757,8 +1755,7 @@ CompiledDesignResolver::resolve_systemverilog_class(
     }
     std::vector<const sv::ClassDeclaration*> explicit_candidates;
     for (const auto& import : owner->systemverilog->imports) {
-        if ((source_order != 0U && import.source_order != 0U
-                && import.source_order >= source_order)
+        if (import_follows_reference(import.source_order, source_order)
             || !import.member || import.member->spelling != member) {
             continue;
         }
@@ -1772,8 +1769,7 @@ CompiledDesignResolver::resolve_systemverilog_class(
     }
     std::vector<const sv::ClassDeclaration*> wildcard_candidates;
     for (const auto& import : owner->systemverilog->imports) {
-        if ((source_order != 0U && import.source_order != 0U
-                && import.source_order >= source_order)
+        if (import_follows_reference(import.source_order, source_order)
             || !import.wildcard) {
             continue;
         }
@@ -1882,9 +1878,8 @@ CompiledDesignResolver::resolve_systemverilog_name(
                         continue;
                     }
                     for (const auto& import : statement.imports) {
-                        if (name.source_order != 0U
-                            && import.source_order != 0U
-                            && import.source_order >= name.source_order) {
+                        if (import_follows_reference(
+                                import.source_order, name.source_order)) {
                             continue;
                         }
                         if (!import.wildcard
@@ -2073,31 +2068,14 @@ CompiledDesignResolver::resolve_systemverilog(
     const std::optional<ScopeId> stop_scope,
     const std::uint64_t source_order) const
 {
-    if (design_ == nullptr) {
+    const auto reference = design_ != nullptr
+        ? systemverilog_scoped_reference(
+              *design_, selected_unit_, name, use_scope)
+        : std::nullopt;
+    if (!reference) {
         return { CompiledResolutionStatus::invalid, { } };
     }
-    const auto separator = name.rfind("::");
-    const auto member = separator == std::string_view::npos
-        ? name
-        : name.substr(separator + 2U);
-    const auto package_name = separator == std::string_view::npos
-        ? std::string_view { }
-        : name.substr(0U, separator);
-    if (member.empty() || (separator != std::string_view::npos
-                              && package_name.empty())) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
-
-    auto owner = design_->find_unit(selected_unit_);
-    if (const auto* scope = find_scope(*design_, use_scope)) {
-        if (const auto scoped = design_->find_unit(scope->unit);
-            scoped && scoped->systemverilog != nullptr) {
-            owner = scoped;
-        }
-    }
-    if (!owner || owner->systemverilog == nullptr) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
+    const auto [member, package_name, owner] = *reference;
     const auto* compilation_unit_source = source_package_for_compilation_unit(
         *design_, *owner->systemverilog);
 
@@ -2165,8 +2143,8 @@ CompiledDesignResolver::resolve_systemverilog(
             if (const auto* imports = imports_in_scope(scope)) {
                 std::vector<DeclarationId> explicit_candidates;
                 for (const auto& import : *imports) {
-                    if (source_order != 0U && import.source_order != 0U
-                        && import.source_order >= source_order) {
+                    if (import_follows_reference(
+                            import.source_order, source_order)) {
                         continue;
                     }
                     if (!import.member || import.member->spelling != member) {
@@ -2185,8 +2163,8 @@ CompiledDesignResolver::resolve_systemverilog(
                 }
                 std::vector<DeclarationId> wildcard_candidates;
                 for (const auto& import : *imports) {
-                    if ((source_order != 0U && import.source_order != 0U
-                            && import.source_order >= source_order)
+                    if (import_follows_reference(
+                            import.source_order, source_order)
                         || !import.wildcard) {
                         continue;
                     }
@@ -2378,31 +2356,14 @@ CompiledSystemVerilogLetResolution
 CompiledDesignResolver::resolve_systemverilog_let(
     const std::string_view name, const ScopeId use_scope) const
 {
-    if (design_ == nullptr) {
+    const auto reference = design_ != nullptr
+        ? systemverilog_scoped_reference(
+              *design_, selected_unit_, name, use_scope)
+        : std::nullopt;
+    if (!reference) {
         return { CompiledResolutionStatus::invalid, { } };
     }
-    const auto separator = name.rfind("::");
-    const auto member = separator == std::string_view::npos
-        ? name
-        : name.substr(separator + 2U);
-    const auto package_name = separator == std::string_view::npos
-        ? std::string_view { }
-        : name.substr(0U, separator);
-    if (member.empty() || (separator != std::string_view::npos
-                              && package_name.empty())) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
-
-    auto owner = design_->find_unit(selected_unit_);
-    if (const auto* scope = find_scope(*design_, use_scope)) {
-        if (const auto scoped = design_->find_unit(scope->unit);
-            scoped && scoped->systemverilog != nullptr) {
-            owner = scoped;
-        }
-    }
-    if (!owner || owner->systemverilog == nullptr) {
-        return { CompiledResolutionStatus::invalid, { } };
-    }
+    const auto [member, package_name, owner] = *reference;
     const auto package_tier = [&](const std::string_view requested) {
         return resolve_systemverilog_package_let(
             owner->systemverilog->library, requested, member);
@@ -2544,9 +2505,7 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         return std::nullopt;
     }
     const auto find_type = [&](const TypeId id) {
-        return effective_ != nullptr
-            ? effective_->find_type(id)
-            : design_->find_type(id);
+        return semantic::find_type(*design_, effective_, id);
     };
     const auto last_colon = spelling.rfind(':');
     if (last_colon != std::string_view::npos && last_colon != 0U) {
@@ -2658,9 +2617,7 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
             const auto& template_name
                 = declaration->vhdl->package->template_name;
             const auto candidate = std::string { simple_vhdl_name(
-                template_name.canonical.empty()
-                    ? std::string_view { template_name.spelling }
-                    : std::string_view { template_name.canonical }) };
+                template_name.text()) };
             if (exported_package_template
                 && !same_vhdl_identifier(
                     *exported_package_template, candidate)) {
@@ -2844,10 +2801,7 @@ CompiledDesignResolver::resolve_vhdl_type_identity(
             vhdl::BuiltinTypeIdentity::none,
             CompiledVhdlStandardScalarIdentity::none };
     }
-    constexpr auto builtin_prefix = std::string_view { "@builtin:" };
-    if (spelling.starts_with(builtin_prefix)) {
-        spelling.remove_prefix(builtin_prefix.size());
-    }
+    spelling = vhdl::without_builtin_prefix(spelling);
     if (const auto type = resolve_vhdl_named_type(spelling, owner_scope)) {
         return { CompiledResolutionStatus::unique, type,
             vhdl::BuiltinTypeIdentity::none,
@@ -2896,9 +2850,8 @@ CompiledDesignResolver::resolve_vhdl_type_identity(
             }
             if (!result.type) {
                 for (const auto& stored : design_->vhdl_hir.types()) {
-                    const auto type = effective_ != nullptr
-                        ? effective_->find_type(stored.id)
-                        : design_->find_type(stored.id);
+                    const auto type
+                        = find_type(*design_, effective_, stored.id);
                     if (!type || type->vhdl == nullptr
                         || type->vhdl->declaration != *declaration_id) {
                         continue;
@@ -3014,9 +2967,8 @@ CompiledDesignResolver::effective_systemverilog_type(
                 }
             }
             if (binding->expression) {
-                const auto expression = effective_ != nullptr
-                    ? effective_->find_expression(*binding->expression)
-                    : design_->find_expression(*binding->expression);
+                const auto expression = find_expression(
+                    *design_, effective_, *binding->expression);
                 if (expression
                     && expression->systemverilog != nullptr
                     && expression->systemverilog->referenced_name
@@ -3070,12 +3022,8 @@ CompiledDesignResolver::effective_systemverilog_type(
                                       const ScopeId scope)
         -> std::optional<DeclarationId> {
         if (reference.target.target.valid()) {
-            const auto type = effective_ != nullptr
-                ? effective_->find_type(reference.target.target)
-                : design_->find_type(reference.target.target);
-            const auto fallback = type ? type
-                                       : design_->find_type(
-                                             reference.target.target);
+            const auto fallback
+                = find_type(*design_, effective_, reference.target.target);
             if (fallback && fallback->systemverilog != nullptr
                 && fallback->systemverilog->declaration.valid()) {
                 return fallback->systemverilog->declaration;
@@ -3146,15 +3094,8 @@ CompiledDesignResolver::effective_systemverilog_type(
                             = nominal_target.spelling.empty()
                             ? record.name
                             : nominal_target.spelling;
-                        const auto definition = effective_ != nullptr
-                            ? effective_->find_type(
-                                  *nominal_type)
-                            : design_->find_type(
-                                  *nominal_type);
-                        const auto fallback = definition
-                            ? definition
-                            : design_->find_type(
-                                  *nominal_type);
+                        const auto fallback
+                            = find_type(*design_, effective_, *nominal_type);
                         if (fallback
                             && fallback->systemverilog != nullptr
                             && (!candidate.value_form
@@ -3191,12 +3132,8 @@ CompiledDesignResolver::underlying_systemverilog_type(
     std::set<TypeId> visiting;
     while (current.target.target.valid()
         && visiting.insert(current.target.target).second) {
-        const auto type = effective_ != nullptr
-            ? effective_->find_type(current.target.target)
-            : design_->find_type(current.target.target);
-        const auto definition = type
-            ? type
-            : design_->find_type(current.target.target);
+        const auto definition
+            = find_type(*design_, effective_, current.target.target);
         if (!definition || definition->systemverilog == nullptr) {
             break;
         }
@@ -3226,9 +3163,7 @@ CompiledDesignResolver::vhdl_enumeration_literal_ordinal(
     if (design_ == nullptr || !expected_type.valid()) {
         return std::nullopt;
     }
-    const auto candidate = effective_ != nullptr
-        ? effective_->find_expression(expression)
-        : design_->find_expression(expression);
+    const auto candidate = find_expression(*design_, effective_, expression);
     if (!candidate || candidate->vhdl == nullptr
         || (candidate->vhdl->kind != vhdl::ExpressionKind::name
             && candidate->vhdl->kind
@@ -3247,10 +3182,7 @@ CompiledDesignResolver::vhdl_enumeration_literal_ordinal(
         if (!type_id.valid() || !visiting.insert(type_id).second) {
             return std::nullopt;
         }
-        const auto type = effective_ != nullptr
-            ? effective_->find_type(type_id)
-            : design_->find_type(type_id);
-        const auto fallback = type ? type : design_->find_type(type_id);
+        const auto fallback = find_type(*design_, effective_, type_id);
         if (!fallback || fallback->vhdl == nullptr) {
             return std::nullopt;
         }
@@ -3368,11 +3300,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (null_range) {
             return std::uint64_t { 0U };
         }
-        const auto distance = left >= right
-            ? static_cast<std::uint64_t>(left)
-                - static_cast<std::uint64_t>(right)
-            : static_cast<std::uint64_t>(right)
-                - static_cast<std::uint64_t>(left);
+        const auto distance = support::index_distance(left, right);
         if (distance == std::numeric_limits<std::uint64_t>::max()) {
             return std::nullopt;
         }
@@ -3389,11 +3317,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             auto spelling = std::string_view {
                 result.type_mark.spelling
             };
-            constexpr auto builtin_prefix
-                = std::string_view { "@builtin:" };
-            if (spelling.starts_with(builtin_prefix)) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
+            spelling = vhdl::without_builtin_prefix(spelling);
             const auto resolved = CompiledDesignResolver {
                 *design_, selected_unit_, effective_, active
             }.resolve_vhdl_type_identity(spelling, subtype_scope);
@@ -3412,11 +3336,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             auto type_name = std::string_view {
                 result.type_mark.spelling
             };
-            constexpr auto builtin_prefix
-                = std::string_view { "@builtin:" };
-            if (type_name.starts_with(builtin_prefix)) {
-                type_name.remove_prefix(builtin_prefix.size());
-            }
+            type_name = vhdl::without_builtin_prefix(type_name);
             if (type_name.empty()
                 || type_name.find_first_of(".:") != std::string_view::npos) {
                 return;
@@ -3558,9 +3478,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 && result.builtin_type == vhdl::BuiltinTypeIdentity::none
                 && same_vhdl_identifier(name, "string")
                 && result.type_mark.target.valid()) {
-                const auto shadow = effective_ != nullptr
-                    ? effective_->find_type(result.type_mark.target)
-                    : design_->find_type(result.type_mark.target);
+                const auto shadow
+                    = find_type(*design_, effective_, result.type_mark.target);
                 if (shadow && shadow->vhdl != nullptr
                     && shadow->vhdl->form == vhdl::TypeForm::array
                     && same_vhdl_identifier(shadow->vhdl->name, "string")) {
@@ -3795,12 +3714,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
             path.erase(path_key);
             return result;
         };
-        const auto left_expression = effective_ != nullptr
-            ? effective_->find_expression(*constraint.left_expression)
-            : design_->find_expression(*constraint.left_expression);
-        const auto right_expression = effective_ != nullptr
-            ? effective_->find_expression(*constraint.right_expression)
-            : design_->find_expression(*constraint.right_expression);
+        const auto left_expression = find_expression(
+            *design_, effective_, *constraint.left_expression);
+        const auto right_expression = find_expression(
+            *design_, effective_, *constraint.right_expression);
         if (!left_expression || left_expression->vhdl == nullptr
             || !right_expression || right_expression->vhdl == nullptr
             || left_expression->vhdl->kind != vhdl::ExpressionKind::call
@@ -3820,12 +3737,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
         }
         const auto prefix_id = left_call.operands.front();
         const auto paired_prefix_id = right_call.operands.front();
-        const auto prefix = effective_ != nullptr
-            ? effective_->find_expression(prefix_id)
-            : design_->find_expression(prefix_id);
-        const auto paired_prefix = effective_ != nullptr
-            ? effective_->find_expression(paired_prefix_id)
-            : design_->find_expression(paired_prefix_id);
+        const auto prefix = find_expression(*design_, effective_, prefix_id);
+        const auto paired_prefix
+            = find_expression(*design_, effective_, paired_prefix_id);
         if (!prefix || prefix->vhdl == nullptr
             || prefix->vhdl->kind != vhdl::ExpressionKind::name
             || !paired_prefix || paired_prefix->vhdl == nullptr
@@ -3846,11 +3760,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || *declaration_id != *paired_declaration_id) {
             const auto builtin_spelling = [](const vhdl::Name& name) {
                 auto spelling = vhdl_spelling(name);
-                constexpr auto prefix
-                    = std::string_view { "@builtin:" };
-                if (spelling.starts_with(prefix)) {
-                    spelling.remove_prefix(prefix.size());
-                }
+                spelling = vhdl::without_builtin_prefix(spelling);
                 return spelling;
             };
             const auto is_builtin_std_ulogic = [&](const vhdl::Name& name) {
@@ -3987,11 +3897,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             auto type_id = source_type_id;
             std::set<TypeId> visited;
             while (type_id.valid() && visited.insert(type_id).second) {
-                const auto type = effective_ != nullptr
-                    ? effective_->find_type(type_id)
-                    : design_->find_type(type_id);
-                const auto fallback = type ? type
-                                           : design_->find_type(type_id);
+                const auto fallback = find_type(*design_, effective_, type_id);
                 if (!fallback || fallback->vhdl == nullptr) {
                     return SourceTypeShape::unknown;
                 }
@@ -4078,10 +3984,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
         std::set<TypeId> visited;
         while (!source_range && type_id.valid()
             && visited.insert(type_id).second) {
-            const auto type = effective_ != nullptr
-                ? effective_->find_type(type_id)
-                : design_->find_type(type_id);
-            const auto fallback = type ? type : design_->find_type(type_id);
+            const auto fallback = find_type(*design_, effective_, type_id);
             if (!fallback || fallback->vhdl == nullptr) {
                 break;
             }
@@ -4178,12 +4081,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || !input.resolution_function.spelling.empty()
             || !input.resolution_function.canonical.empty()
             || input.unconstrained
-            || input.unspecified_class
-                != vhdl::UnspecifiedTypeClass::none
-            || !input.unspecified_component_classes.empty()
-            || !input.unspecified_component_type_marks.empty()
-            || input.unspecified_array_index_count != 0U
-            || !input.unspecified_inference_identity.empty()
+            || input.has_unspecified_parts()
             || std::ranges::any_of(input.constraints,
                 [](const vhdl::RangeConstraint& constraint) {
                     return !constraint.left || !constraint.right
@@ -4281,9 +4179,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
 
         std::optional<DeclarationId> declaration_id;
         if (result.type_mark.target.valid()) {
-            const auto type = effective_ != nullptr
-                ? effective_->find_type(result.type_mark.target)
-                : design_->find_type(result.type_mark.target);
+            const auto type
+                = find_type(*design_, effective_, result.type_mark.target);
             if (type && type->vhdl != nullptr) {
                 declaration_id = type->vhdl->declaration;
             }
@@ -4359,9 +4256,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (!active_types.insert(result.type_mark.target).second) {
             return result;
         }
-        const auto type = effective_ != nullptr
-            ? effective_->find_type(result.type_mark.target)
-            : design_->find_type(result.type_mark.target);
+        const auto type
+            = find_type(*design_, effective_, result.type_mark.target);
         if (!type || type->vhdl == nullptr) {
             active_types.erase(result.type_mark.target);
             complete_predefined(result, active_frames, scope);
@@ -4492,20 +4388,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 && definition_declaration->vhdl != nullptr
                 && definition.element_subtype->domain
                     == vhdl::ValueDomain::logic9) {
-                const auto& scopes = design_->semantics.scopes();
-                const auto owner_scope = std::ranges::find(
-                    scopes, definition_declaration->vhdl->scope,
-                    &Scope::id);
-                const auto owner = owner_scope != scopes.end()
-                    ? design_->find_unit(owner_scope->unit)
-                    : std::nullopt;
-                if (owner && owner->vhdl != nullptr
-                    && owner->vhdl->kind == vhdl::UnitKind::package
-                    && owner->vhdl->primary_name.empty()
-                    && same_vhdl_identifier(
-                        owner->vhdl->library, "ieee")
-                    && same_vhdl_identifier(
-                        owner->vhdl->name, "std_logic_1164")) {
+                const auto* owner = design_->vhdl_scope_unit(
+                    definition_declaration->vhdl->scope);
+                if (vhdl::is_package(owner, "ieee", "std_logic_1164")
+                    && owner->primary_name.empty()) {
                     if (same_vhdl_identifier(
                             definition.name, "std_logic_vector")) {
                         result.builtin_type = vhdl::BuiltinTypeIdentity::
@@ -4520,11 +4406,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             }
             const auto unresolved_predefined_character = [&](
                 std::string_view spelling, const ScopeId scope) {
-                constexpr auto builtin_prefix
-                    = std::string_view { "@builtin:" };
-                if (spelling.starts_with(builtin_prefix)) {
-                    spelling.remove_prefix(builtin_prefix.size());
-                }
+                spelling = vhdl::without_builtin_prefix(spelling);
                 if (spelling.empty()
                     || !same_vhdl_identifier(
                         simple_vhdl_name(spelling), "character")) {
@@ -4603,9 +4485,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 std::unordered_set<std::uint32_t> visited;
                 while (index_type
                     && visited.insert(index_type->value()).second) {
-                    const auto type = effective_ != nullptr
-                        ? effective_->find_type(*index_type)
-                        : design_->find_type(*index_type);
+                    const auto type
+                        = find_type(*design_, effective_, *index_type);
                     if (!type || type->vhdl == nullptr) {
                         return false;
                     }
@@ -4663,9 +4544,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 -> std::optional<TypeId> {
                 std::set<TypeId> visited;
                 while (type_id.valid() && visited.insert(type_id).second) {
-                    const auto type = effective_ != nullptr
-                        ? effective_->find_type(type_id)
-                        : design_->find_type(type_id);
+                    const auto type = find_type(*design_, effective_, type_id);
                     if (!type || type->vhdl == nullptr) {
                         return std::nullopt;
                     }
@@ -4765,9 +4644,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 evaluate_enum_declaration;
             const auto enum_literal_member = [&](const TypeId root,
                                                  const DeclarationId id) {
-                const auto type = effective_ != nullptr
-                    ? effective_->find_type(root)
-                    : design_->find_type(root);
+                const auto type = find_type(*design_, effective_, root);
                 return type && type->vhdl != nullptr
                     && std::ranges::any_of(
                         type->vhdl->enumeration_literals,
@@ -4776,12 +4653,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         });
             };
             const auto enum_literal_ordinal = [&](const TypeId root,
-                                                   const ExpressionId id) {
-                auto expression = design_->find_expression(id);
-                if ((!expression || expression->vhdl == nullptr)
-                    && effective_ != nullptr) {
-                    expression = effective_->find_expression(id);
-                }
+                                                  const ExpressionId id) {
+                const auto expression
+                    = find_expression(*design_, effective_, id);
                 if (!expression || expression->vhdl == nullptr) {
                     return std::optional<std::int64_t> { };
                 }
@@ -4800,9 +4674,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         return std::optional<std::int64_t> { };
                     }
                 }
-                const auto type = effective_ != nullptr
-                    ? effective_->find_type(root)
-                    : design_->find_type(root);
+                const auto type = find_type(*design_, effective_, root);
                 if (!type || type->vhdl == nullptr) {
                     return std::optional<std::int64_t> { };
                 }
@@ -4916,11 +4788,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     ExpressionId id;
                     ~ExpressionGuard() { active.erase(id); }
                 } guard { active_expressions, id };
-                auto expression = design_->find_expression(id);
-                if ((!expression || expression->vhdl == nullptr)
-                    && effective_ != nullptr) {
-                    expression = effective_->find_expression(id);
-                }
+                const auto expression
+                    = find_expression(*design_, effective_, id);
                 if (!expression || expression->vhdl == nullptr) {
                     return { std::nullopt, true };
                 }
@@ -4967,7 +4836,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     return { enum_literal_ordinal(root, id), true };
                 }
                 constexpr auto qualified_prefix
-                    = std::string_view { "@vhdl-qualified:" };
+                    = vhdl::qualified_expression_prefix;
                 if (source.kind == vhdl::ExpressionKind::call
                     && source.text.starts_with(qualified_prefix)) {
                     if (source.operands.size() != 1U
@@ -5027,9 +4896,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 -> std::optional<std::int64_t> {
                 // (An earlier fold may have taken '0' as a BIT value.)
                 if (residual && dimension < definition.array_dimensions.size()) {
-                    const auto expression = effective_ != nullptr
-                        ? effective_->find_expression(*residual)
-                        : design_->find_expression(*residual);
+                    const auto expression
+                        = find_expression(*design_, effective_, *residual);
                     if (predefined_character_index(
                             definition.array_dimensions[dimension])
                         && expression
@@ -5288,9 +5156,7 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
     const vhdl::TypeDefinition* array { };
     while (type_id.valid()
         && visited_types.insert(type_id.value()).second) {
-        const auto type = effective_ != nullptr
-            ? effective_->find_type(type_id)
-            : design_->find_type(type_id);
+        const auto type = find_type(*design_, effective_, type_id);
         if (!type || type->vhdl == nullptr) {
             break;
         }
@@ -5327,17 +5193,11 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
             auto spelling = std::string_view {
                 dimension.index_subtype.spelling
             };
-            constexpr auto builtin_prefix
-                = std::string_view { "@builtin:" };
-            if (spelling.starts_with(builtin_prefix)) {
-                spelling.remove_prefix(builtin_prefix.size());
-            }
+            spelling = vhdl::without_builtin_prefix(spelling);
             const auto resolved = resolve_vhdl_named_type(
                 spelling, array_scope);
             if (resolved) {
-                const auto type = effective_ != nullptr
-                    ? effective_->find_type(*resolved)
-                    : design_->find_type(*resolved);
+                const auto type = find_type(*design_, effective_, *resolved);
                 if (type && type->vhdl != nullptr) {
                     index_declaration = type->vhdl->declaration;
                 }
@@ -5402,17 +5262,15 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
 
     const auto positional_aggregate = [&](const ExpressionId expression_id)
         -> std::optional<std::pair<std::size_t, SourceSpanId>> {
-        const auto expression = effective_ != nullptr
-            ? effective_->find_expression(expression_id)
-            : design_->find_expression(expression_id);
+        const auto expression
+            = find_expression(*design_, effective_, expression_id);
         if (!expression || expression->vhdl == nullptr
             || expression->vhdl->kind != vhdl::ExpressionKind::aggregate
             || expression->vhdl->associations.empty()
             || !std::ranges::all_of(
                 expression->vhdl->associations,
                 [](const vhdl::AggregateAssociation& association) {
-                    return association.choices.empty()
-                        && association.choice_spelling.empty();
+                    return association.positional();
                 })
             || expression->vhdl->associations.size()
                 > static_cast<std::size_t>(
@@ -5430,9 +5288,8 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
         return subtype;
     }
     std::optional<std::pair<std::size_t, SourceSpanId>> inner;
-    const auto initializer = effective_ != nullptr
-        ? effective_->find_expression(*declaration->vhdl->initializer)
-        : design_->find_expression(*declaration->vhdl->initializer);
+    const auto initializer = find_expression(
+        *design_, effective_, *declaration->vhdl->initializer);
     if (!initializer || initializer->vhdl == nullptr) {
         return subtype;
     }
@@ -5441,16 +5298,13 @@ CompiledDesignResolver::effective_vhdl_constant_object_subtype(
         if (!row || (inner && inner->first != row->first)) {
             return subtype;
         }
-        const auto row_expression = effective_ != nullptr
-            ? effective_->find_expression(association.value)
-            : design_->find_expression(association.value);
+        const auto row_expression
+            = find_expression(*design_, effective_, association.value);
         if (!row_expression || row_expression->vhdl == nullptr
-            || !std::ranges::all_of(
-                row_expression->vhdl->associations,
+            || !std::ranges::all_of(row_expression->vhdl->associations,
                 [&](const vhdl::AggregateAssociation& element) {
-                    return (effective_ != nullptr
-                            ? effective_->find_expression(element.value)
-                            : design_->find_expression(element.value))
+                    return (
+                        find_expression(*design_, effective_, element.value))
                         .has_value();
                 })) {
             return subtype;
@@ -5530,10 +5384,7 @@ std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
         auto type = subtype.type_mark.target;
         std::set<TypeId> visiting;
         while (type.valid() && visiting.insert(type).second) {
-            const auto view = effective_ != nullptr
-                ? effective_->find_type(type)
-                : design_->find_type(type);
-            const auto fallback = view ? view : design_->find_type(type);
+            const auto fallback = find_type(*design_, effective_, type);
             if (!fallback || fallback->vhdl == nullptr) {
                 break;
             }
@@ -5633,11 +5484,7 @@ std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
             // the complete int64 domain has an unrepresentable uint64 length.
             const auto distance = [](const std::int64_t first,
                                       const std::int64_t last) {
-                return first >= last
-                    ? static_cast<std::uint64_t>(first)
-                        - static_cast<std::uint64_t>(last)
-                    : static_cast<std::uint64_t>(last)
-                        - static_cast<std::uint64_t>(first);
+                return support::index_distance(first, last);
             };
             if (!left_null
                 && distance(*left_first, *left_last)
@@ -5788,9 +5635,8 @@ CompiledDesignResolver::bind_vhdl_generics(
         if (declaration->vhdl->form
                 == vhdl::DeclarationForm::generic_type
             && !binding.vhdl_type && binding.expression) {
-            const auto expression = effective_ != nullptr
-                ? effective_->find_expression(*binding.expression)
-                : design_->find_expression(*binding.expression);
+            const auto expression
+                = find_expression(*design_, effective_, *binding.expression);
             if (expression && expression->vhdl != nullptr
                 && expression->vhdl->kind
                     == vhdl::ExpressionKind::name) {
@@ -5958,11 +5804,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 if (!declaration->vhdl->declared_type) {
                     continue;
                 }
-                const auto type = effective_ != nullptr
-                    ? effective_->find_type(
-                          *declaration->vhdl->declared_type)
-                    : design_->find_type(
-                          *declaration->vhdl->declared_type);
+                const auto type = find_type(
+                    *design_, effective_, *declaration->vhdl->declared_type);
                 if (!type || type->vhdl == nullptr) {
                     continue;
                 }
@@ -6015,7 +5858,7 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 const auto declaration = find_declaration(
                     *design_, effective_, id);
                 if (declaration && declaration->vhdl != nullptr
-                    && vhdl_actual_form(declaration->vhdl->form)) {
+                    && vhdl::is_generic_formal(declaration->vhdl->form)) {
                     formals.push_back(id);
                 }
             }
@@ -6263,24 +6106,14 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                         std::nullopt, nullptr);
                     continue;
                 }
-                if (item.kind != vhdl::ContextKind::context_reference
-                    || selected_parts.empty()) {
+                if (item.kind != vhdl::ContextKind::context_reference) {
                     continue;
                 }
-                const auto library = selected_parts.size() >= 2U
-                    ? effective_vhdl_library(
-                          selected_parts[selected_parts.size() - 2U],
-                          context_owner.library)
-                    : normalized_library(context_owner.library);
-                for (const auto& context : design_->vhdl_units()) {
-                    if (context.kind == vhdl::UnitKind::context
-                        && same_vhdl_identifier(
-                            normalized_library(context.library), library)
-                        && same_vhdl_unit_name(
-                            context, selected_parts.back())) {
+                visit_referenced_vhdl_contexts(*design_, selected_parts,
+                    context_owner.library, [&](const vhdl::Unit& context) {
                         self(self, context, &active);
-                    }
-                }
+                        return false;
+                    });
             }
         }
     };
@@ -6373,23 +6206,13 @@ bool CompiledDesignResolver::vhdl_package_member_visible(
                     }
                     continue;
                 }
-                if (item.kind != vhdl::ContextKind::context_reference
-                    || parts.empty()) {
-                    continue;
-                }
-                const auto library = parts.size() >= 2U
-                    ? effective_vhdl_library(
-                          parts[parts.size() - 2U], owner.library)
-                    : normalized_library(owner.library);
-                for (const auto& context : design_->vhdl_units()) {
-                    if (context.kind == vhdl::UnitKind::context
-                        && same_vhdl_identifier(
-                            normalized_library(context.library), library)
-                        && same_vhdl_unit_name(context, parts.back())
-                        && self(self, context)) {
-                        active_contexts.erase(owner.id.value());
-                        return true;
-                    }
+                if (item.kind == vhdl::ContextKind::context_reference
+                    && visit_referenced_vhdl_contexts(*design_, parts,
+                        owner.library, [&](const vhdl::Unit& context) {
+                            return self(self, context);
+                        })) {
+                    active_contexts.erase(owner.id.value());
+                    return true;
                 }
             }
         }
@@ -6447,23 +6270,13 @@ bool CompiledDesignResolver::vhdl_library_name_visible(
                     }
                     continue;
                 }
-                if (item.kind != vhdl::ContextKind::context_reference
-                    || parts.empty()) {
-                    continue;
-                }
-                const auto library = parts.size() >= 2U
-                    ? effective_vhdl_library(
-                          parts[parts.size() - 2U], context_owner.library)
-                    : normalized_library(context_owner.library);
-                for (const auto& context : design_->vhdl_units()) {
-                    if (context.kind == vhdl::UnitKind::context
-                        && same_vhdl_identifier(
-                            normalized_library(context.library), library)
-                        && same_vhdl_unit_name(context, parts.back())
-                        && self(self, context)) {
-                        active_contexts.erase(context_owner.id.value());
-                        return true;
-                    }
+                if (item.kind == vhdl::ContextKind::context_reference
+                    && visit_referenced_vhdl_contexts(*design_, parts,
+                        context_owner.library, [&](const vhdl::Unit& context) {
+                            return self(self, context);
+                        })) {
+                    active_contexts.erase(context_owner.id.value());
+                    return true;
                 }
             }
         }
@@ -6569,22 +6382,12 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
                     }
                 } else if (item.kind
                         == vhdl::ContextKind::context_reference
-                    && !selected_parts.empty()) {
-                    const auto library = selected_parts.size() >= 2U
-                        ? effective_vhdl_library(
-                              selected_parts[selected_parts.size() - 2U],
-                              context_owner.library)
-                        : normalized_library(context_owner.library);
-                    for (const auto& context : design_->vhdl_units()) {
-                        if (context.kind == vhdl::UnitKind::context
-                            && same_vhdl_identifier(
-                                context.library, library)
-                            && same_vhdl_unit_name(
-                                context, selected_parts.back())
-                            && self(self, context)) {
-                            return true;
-                        }
-                    }
+                    && visit_referenced_vhdl_contexts(*design_,
+                        selected_parts, context_owner.library,
+                        [&](const vhdl::Unit& context) {
+                            return self(self, context);
+                        })) {
+                    return true;
                 }
             }
         }
@@ -6613,10 +6416,7 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
 bool CompiledDesignResolver::vhdl_builtin_type_visible(
     std::string_view spelling, const ScopeId use_scope) const
 {
-    constexpr auto prefix = std::string_view { "@builtin:" };
-    if (spelling.starts_with(prefix)) {
-        spelling.remove_prefix(prefix.size());
-    }
+    spelling = vhdl::without_builtin_prefix(spelling);
     vhdl::Name name;
     name.spelling = spelling;
     name.canonical = spelling;
@@ -6659,19 +6459,13 @@ bool CompiledDesignResolver::vhdl_builtin_package_member_imported(
                 if (parts.empty()) {
                     continue;
                 }
-                const auto context_library = parts.size() >= 2U
-                    ? effective_vhdl_library(
-                          parts[parts.size() - 2U], owner.library)
-                    : normalized_library(owner.library);
+                const auto context_library
+                    = context_reference_library(parts, owner.library);
                 const vhdl::Unit* referenced_context { };
                 bool duplicate_context { };
                 for (const auto& candidate : design_->vhdl_units()) {
-                    if (candidate.kind != vhdl::UnitKind::context
-                        || !same_vhdl_identifier(
-                            normalized_library(candidate.library),
-                            context_library)
-                        || !same_vhdl_unit_name(
-                            candidate, parts.back())) {
+                    if (!is_named_vhdl_context(
+                            candidate, context_library, parts.back())) {
                         continue;
                     }
                     if (referenced_context != nullptr
@@ -6995,20 +6789,9 @@ CompiledDesignResolver::resolve_vhdl_callables(
             if (!subtype) {
                 return "-";
             }
-            auto type = subtype->type_mark.target;
-            std::set<std::uint32_t> visiting;
-            while (type.valid() && visiting.insert(type.value()).second) {
-                const auto definition = effective_ != nullptr
-                    ? effective_->find_type(type)
-                    : design_->find_type(type);
-                if (!definition || definition->vhdl == nullptr
-                    || (definition->vhdl->form != vhdl::TypeForm::subtype
-                        && definition->vhdl->form != vhdl::TypeForm::alias)
-                    || !definition->vhdl->base.type_mark.target.valid()) {
-                    break;
-                }
-                type = definition->vhdl->base.type_mark.target;
-            }
+            const auto type = effective_ != nullptr
+                ? vhdl_root_type(*effective_, subtype->type_mark.target)
+                : vhdl_root_type(*design_, subtype->type_mark.target);
             if (type.valid()) {
                 return "#" + std::to_string(type.value());
             }
@@ -7146,9 +6929,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
     };
     const auto referenced_declaration = [&](const ExpressionId expression)
         -> std::optional<DeclarationId> {
-        const auto view = effective_ != nullptr
-            ? effective_->find_expression(expression)
-            : design_->find_expression(expression);
+        const auto view = find_expression(*design_, effective_, expression);
         const auto* name = view && view->vhdl != nullptr
                 && view->vhdl->referenced_name
             ? &*view->vhdl->referenced_name
@@ -7340,7 +7121,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
                         if (!record || record->vhdl == nullptr) {
                             continue;
                         }
-                        if (vhdl_actual_form(record->vhdl->form)) {
+                        if (vhdl::is_generic_formal(record->vhdl->form)) {
                             generics.push_back(child);
                         } else if (record->vhdl->form
                                 == vhdl::DeclarationForm::function
@@ -7480,8 +7261,10 @@ CompiledDesignResolver::resolve_vhdl_default_callable(
             }
             return left < right;
         });
-        const auto duplicate = std::ranges::unique(
-            designators, same_vhdl_identifier);
+        const auto duplicate = std::ranges::unique(designators,
+            [](const std::string& left, const std::string& right) {
+                return same_vhdl_identifier(left, right);
+            });
         designators.erase(duplicate.begin(), duplicate.end());
         for (const auto& designator : designators) {
             vhdl::Name candidate_name;
@@ -7576,7 +7359,7 @@ bool CompiledDesignResolver::vhdl_package_generic_maps_match(
         const auto declaration = find_declaration(
             *design_, effective_, id);
         if (declaration && declaration->vhdl != nullptr
-            && vhdl_actual_form(declaration->vhdl->form)) {
+            && vhdl::is_generic_formal(declaration->vhdl->form)) {
             formals.push_back(id);
         }
     }
@@ -7589,8 +7372,7 @@ bool CompiledDesignResolver::vhdl_package_generic_maps_match(
         return false;
     }
     const auto expression_view = [&](const ExpressionId id) {
-        return effective_ != nullptr ? effective_->find_expression(id)
-                                     : design_->find_expression(id);
+        return find_expression(*design_, effective_, id);
     };
     const auto effective_package_subtype = [&](
         vhdl::SubtypeIndication input, const ScopeId use_scope) {
@@ -7909,9 +7691,7 @@ CompiledDesignResolver::resolve_expression_name(
         }
     } guard { resolving_expression_names_ };
 
-    const auto view = effective_ != nullptr
-        ? effective_->find_expression(expression)
-        : design_->find_expression(expression);
+    const auto view = find_expression(*design_, effective_, expression);
     if (!view) {
         return { CompiledResolutionStatus::invalid, { } };
     }
@@ -7959,9 +7739,7 @@ CompiledDesignResolver::resolve_systemverilog_expression(
     if (resolved.status != CompiledResolutionStatus::not_found) {
         return resolved;
     }
-    const auto view = effective_ != nullptr
-        ? effective_->find_expression(expression)
-        : design_->find_expression(expression);
+    const auto view = find_expression(*design_, effective_, expression);
     if (!view || view->systemverilog == nullptr) {
         return { CompiledResolutionStatus::invalid, { } };
     }
@@ -8022,13 +7800,8 @@ CompiledDesignResolver::resolve_systemverilog_expression(
                   if (!type.target.target.valid()) {
                       return false;
                   }
-                  auto definition = effective_ != nullptr
-                      ? effective_->find_type(type.target.target)
-                      : design_->find_type(type.target.target);
-                  // A package declaration's type belongs to the package.
-                  if (!definition && effective_ != nullptr) {
-                      definition = design_->find_type(type.target.target);
-                  }
+                  auto definition
+                      = find_type(*design_, effective_, type.target.target);
                   // A typedef of a structure (for example one imported
                   // from a package) denotes the structure.
                   std::unordered_set<std::uint32_t> aliases;
@@ -8042,12 +7815,7 @@ CompiledDesignResolver::resolve_systemverilog_expression(
                              .second) {
                       const auto base
                           = definition->systemverilog->base.target.target;
-                      definition = effective_ != nullptr
-                          ? effective_->find_type(base)
-                          : design_->find_type(base);
-                      if (!definition && effective_ != nullptr) {
-                          definition = design_->find_type(base);
-                      }
+                      definition = find_type(*design_, effective_, base);
                   }
                   if (!definition
                       || definition->systemverilog == nullptr) {
@@ -8089,9 +7857,7 @@ CompiledDesignResolver::resolve_systemverilog_target(
     std::unordered_set<std::uint32_t> visiting;
     while (expression.valid()
         && visiting.insert(expression.value()).second) {
-        const auto view = effective_ != nullptr
-            ? effective_->find_expression(expression)
-            : design_->find_expression(expression);
+        const auto view = find_expression(*design_, effective_, expression);
         if (!view || view->systemverilog == nullptr) {
             return { CompiledResolutionStatus::invalid, { } };
         }

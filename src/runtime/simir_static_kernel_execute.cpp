@@ -3,6 +3,7 @@
 // KIR execution of the engine v4 static kernel: the interpreter tier,
 // deoptimization, the generic bridge and the slow instruction semantics.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 
 #include <cctype>
 #include <cxxabi.h>
@@ -966,9 +967,8 @@ Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
                 if (selected < lower || selected > upper) {
                     continue;
                 }
-                const auto offset = selected >= part.right
-                    ? static_cast<std::uint64_t>(selected - part.right)
-                    : static_cast<std::uint64_t>(part.right - selected);
+                const auto offset
+                    = support::index_distance(selected, part.right);
                 if (offset > std::numeric_limits<std::uint32_t>::max()
                         - part.base_offset
                     || part.base_offset + offset >= inst.offset) {
@@ -1371,9 +1371,8 @@ void Interpreter::Impl::StaticKernel::move_wide(const CompiledBody& body,
                     if (selected < lower || selected > upper) {
                         continue;
                     }
-                    const auto offset = selected >= part.right
-                        ? static_cast<std::uint64_t>(selected - part.right)
-                        : static_cast<std::uint64_t>(part.right - selected);
+                    const auto offset
+                        = support::index_distance(selected, part.right);
                     if (offset > std::numeric_limits<std::uint32_t>::max()
                                 - part.base_offset
                         || part.base_offset + offset >= source.width) {

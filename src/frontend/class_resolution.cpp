@@ -251,21 +251,25 @@ void resolve_type(
       candidates.front()->declaration->canonical_identity;
 }
 
-void resolve_declaration_types(
+// Resolves the parameter and type-alias types of one scope; returns the
+// names its type parameters and aliases add to `shadowed_types`.
+template <typename Parameters, typename Aliases>
+std::set<std::string> resolve_declared_types(
+    Parameters& parameters,
+    Aliases& type_aliases,
+    std::set<std::string> shadowed_types,
     ClassEntry& owner,
     std::vector<ClassEntry>& entries,
     std::vector<Diagnostic>& diagnostics) {
-  auto& declaration = *owner.declaration;
-  std::set<std::string> shadowed_types;
-  for (const auto& parameter : declaration.parameters) {
+  for (const auto& parameter : parameters) {
     if (parameter.kind == ParameterKind::Type) {
       shadowed_types.insert(parameter.name);
     }
   }
-  for (const auto& alias : declaration.type_aliases) {
+  for (const auto& alias : type_aliases) {
     shadowed_types.insert(alias.name);
   }
-  for (auto& parameter : declaration.parameters) {
+  for (auto& parameter : parameters) {
     resolve_type(
         parameter.type, owner, entries, shadowed_types, diagnostics);
     if (parameter.default_type) {
@@ -277,10 +281,19 @@ void resolve_declaration_types(
           diagnostics);
     }
   }
-  for (auto& alias : declaration.type_aliases) {
-    resolve_type(
-        alias.type, owner, entries, shadowed_types, diagnostics);
+  for (auto& alias : type_aliases) {
+    resolve_type(alias.type, owner, entries, shadowed_types, diagnostics);
   }
+  return shadowed_types;
+}
+
+void resolve_declaration_types(
+    ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    std::vector<Diagnostic>& diagnostics) {
+  auto& declaration = *owner.declaration;
+  const auto shadowed_types = resolve_declared_types(declaration.parameters,
+      declaration.type_aliases, { }, owner, entries, diagnostics);
   for (auto& property : declaration.properties) {
     resolve_type(
         property.declaration.type,
@@ -579,39 +592,70 @@ void migrate_class_signals(
   signals = std::move(retained);
 }
 
+template <typename Process>
+void resolve_process_types(
+    Process& process,
+    ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    std::set<std::string> shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  for (const auto& alias : process.type_aliases) {
+    shadowed_types.insert(alias.name);
+  }
+  for (auto& alias : process.type_aliases) {
+    resolve_type(alias.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& variable : process.variables) {
+    resolve_type(variable.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& function : process.functions) {
+    resolve_function_types(
+        function, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& statement : process.statements) {
+    resolve_statement_types(
+        statement, owner, entries, shadowed_types, diagnostics);
+  }
+}
+
+void resolve_generate_body_types(
+    GenerateBody& body,
+    ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& inherited_shadowed_types,
+    std::vector<Diagnostic>& diagnostics);
+
+template <typename Regions>
+void resolve_generate_region_types(
+    Regions& regions,
+    ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  for (auto& region : regions) {
+    resolve_generate_body_types(
+        region.then_body, owner, entries, shadowed_types, diagnostics);
+    resolve_generate_body_types(
+        region.else_body, owner, entries, shadowed_types, diagnostics);
+    for (auto& alternative : region.alternatives) {
+      resolve_generate_body_types(
+          alternative.body, owner, entries, shadowed_types, diagnostics);
+    }
+  }
+}
+
 void resolve_generate_body_types(
     GenerateBody& body,
     ClassEntry& owner,
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& inherited_shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
-  auto shadowed_types = inherited_shadowed_types;
-  for (const auto& parameter : body.constants) {
-    if (parameter.kind == ParameterKind::Type) {
-      shadowed_types.insert(parameter.name);
+    const auto shadowed_types
+        = resolve_declared_types(body.constants, body.type_aliases,
+            inherited_shadowed_types, owner, entries, diagnostics);
+    for (auto& signal : body.signals) {
+        resolve_type(signal.type, owner, entries, shadowed_types, diagnostics);
     }
-  }
-  for (const auto& alias : body.type_aliases) {
-    shadowed_types.insert(alias.name);
-  }
-  for (auto& parameter : body.constants) {
-    resolve_type(
-        parameter.type, owner, entries, shadowed_types, diagnostics);
-    if (parameter.default_type) {
-      resolve_type(
-          *parameter.default_type,
-          owner,
-          entries,
-          shadowed_types,
-          diagnostics);
-    }
-  }
-  for (auto& alias : body.type_aliases) {
-    resolve_type(alias.type, owner, entries, shadowed_types, diagnostics);
-  }
-  for (auto& signal : body.signals) {
-    resolve_type(signal.type, owner, entries, shadowed_types, diagnostics);
-  }
   for (auto& variable : body.variables) {
     resolve_type(variable.type, owner, entries, shadowed_types, diagnostics);
   }
@@ -623,66 +667,13 @@ void resolve_generate_body_types(
     resolve_task_types(task, owner, entries, shadowed_types, diagnostics);
   }
   for (auto& process : body.processes) {
-    auto process_shadowed_types = shadowed_types;
-    for (const auto& alias : process.type_aliases) {
-      process_shadowed_types.insert(alias.name);
-    }
-    for (auto& alias : process.type_aliases) {
-      resolve_type(
-          alias.type,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& variable : process.variables) {
-      resolve_type(
-          variable.type,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& function : process.functions) {
-      resolve_function_types(
-          function,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& statement : process.statements) {
-      resolve_statement_types(
-          statement,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
+    resolve_process_types(
+        process, owner, entries, shadowed_types, diagnostics);
   }
   migrate_class_signals(body.signals, body.variables, diagnostics);
-  for (auto& region : body.generate_regions) {
-    resolve_generate_body_types(
-        region.then_body,
-        owner,
-        entries,
-        shadowed_types,
-        diagnostics);
-    resolve_generate_body_types(
-        region.else_body,
-        owner,
-        entries,
-        shadowed_types,
-        diagnostics);
-    for (auto& alternative : region.alternatives) {
-      resolve_generate_body_types(
-          alternative.body,
-          owner,
-          entries,
-          shadowed_types,
-          diagnostics);
-    }
-  }
+  resolve_generate_region_types(
+      body.generate_regions, owner, entries, shadowed_types,
+      diagnostics);
 }
 
 void resolve_unit_types(
@@ -697,31 +688,8 @@ void resolve_unit_types(
       &unit.systemverilog_imports,
       effective_library(unit.library),
       unit.compilation_unit_identity};
-  std::set<std::string> shadowed_types;
-  for (const auto& parameter : unit.parameters) {
-    if (parameter.kind == ParameterKind::Type) {
-      shadowed_types.insert(parameter.name);
-    }
-  }
-  for (const auto& alias : unit.type_aliases) {
-    shadowed_types.insert(alias.name);
-  }
-  for (auto& parameter : unit.parameters) {
-    resolve_type(
-        parameter.type, owner, entries, shadowed_types, diagnostics);
-    if (parameter.default_type) {
-      resolve_type(
-          *parameter.default_type,
-          owner,
-          entries,
-          shadowed_types,
-          diagnostics);
-    }
-  }
-  for (auto& alias : unit.type_aliases) {
-    resolve_type(
-        alias.type, owner, entries, shadowed_types, diagnostics);
-  }
+  const auto shadowed_types = resolve_declared_types(
+      unit.parameters, unit.type_aliases, { }, owner, entries, diagnostics);
   for (auto& port : unit.ports) {
     resolve_type(
         port.type, owner, entries, shadowed_types, diagnostics);
@@ -743,66 +711,13 @@ void resolve_unit_types(
         task, owner, entries, shadowed_types, diagnostics);
   }
   for (auto& process : unit.processes) {
-    auto process_shadowed_types = shadowed_types;
-    for (const auto& alias : process.type_aliases) {
-      process_shadowed_types.insert(alias.name);
-    }
-    for (auto& alias : process.type_aliases) {
-      resolve_type(
-          alias.type,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& variable : process.variables) {
-      resolve_type(
-          variable.type,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& function : process.functions) {
-      resolve_function_types(
-          function,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
-    for (auto& statement : process.statements) {
-      resolve_statement_types(
-          statement,
-          owner,
-          entries,
-          process_shadowed_types,
-          diagnostics);
-    }
+    resolve_process_types(
+        process, owner, entries, shadowed_types, diagnostics);
   }
   migrate_class_signals(unit.signals, unit.variables, diagnostics);
-  for (auto& region : unit.generate_regions) {
-    resolve_generate_body_types(
-        region.then_body,
-        owner,
-        entries,
-        shadowed_types,
-        diagnostics);
-    resolve_generate_body_types(
-        region.else_body,
-        owner,
-        entries,
-        shadowed_types,
-        diagnostics);
-    for (auto& alternative : region.alternatives) {
-      resolve_generate_body_types(
-          alternative.body,
-          owner,
-          entries,
-          shadowed_types,
-          diagnostics);
-    }
-  }
+  resolve_generate_region_types(
+      unit.generate_regions, owner, entries, shadowed_types,
+      diagnostics);
 }
 
 }  // namespace

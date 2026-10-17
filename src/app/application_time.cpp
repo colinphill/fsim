@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 
@@ -36,31 +37,7 @@ std::optional<ParsedMagnitude> magnitude_and_unit(std::string_view text)  {
 }
 
 std::optional<std::uint64_t> unit_femtoseconds(std::string_view unit)  {
-  if (unit == "fs") {
-    return 1;
-  }
-  if (unit == "ps") {
-    return 1'000;
-  }
-  if (unit == "ns") {
-    return 1'000'000;
-  }
-  if (unit == "us") {
-    return 1'000'000'000;
-  }
-  if (unit == "ms") {
-    return 1'000'000'000'000;
-  }
-  if (unit == "s" || unit == "sec") {
-    return 1'000'000'000'000'000;
-  }
-  if (unit == "min") {
-    return 60'000'000'000'000'000;
-  }
-  if (unit == "hr") {
-    return 3'600'000'000'000'000'000;
-  }
-  return std::nullopt;
+  return support::vhdl_time_unit_femtoseconds(unit == "s" ? "sec" : unit);
 }
 
 template <typename Function>
@@ -298,24 +275,6 @@ namespace {
 [[nodiscard]] std::optional<std::uint64_t> unsigned_literal(
     std::string_view text);
 
-[[nodiscard]] diagnostic::SourceSpan compiled_source_span(
-    const semantic::Model& model,
-    const semantic::SourceSpanId source) {
-  const auto& semantic_span = model.source_spans().at(source.value());
-  const auto& file = model.source_files().at(semantic_span.file.value());
-  diagnostic::SourceSpan result;
-  result.path = semantic_span.logical_name.empty()
-      ? file.physical_name
-      : semantic_span.logical_name;
-  result.begin.line = semantic_span.begin.line;
-  result.begin.column = semantic_span.begin.column;
-  result.begin.offset = semantic_span.begin.offset;
-  result.end.line = semantic_span.end.line;
-  result.end.column = semantic_span.end.column;
-  result.end.offset = semantic_span.end.offset;
-  return result;
-}
-
 template <typename Delay, typename Function>
 void visit_hir_delay(
     const Delay& delay,
@@ -531,6 +490,57 @@ std::optional<std::uint64_t> implicit_vhdl_time_unit(
     return resolver.resolve_vhdl(name, expression.scope).status
             == semantic::CompiledResolutionStatus::not_found
         ? factor : std::nullopt;
+}
+
+} // namespace
+
+namespace {
+
+// The exact tick count of a real physical time literal (`8.2 ms`) at a
+// project resolution; empty when it is not a whole number of ticks within
+// the INTEGER range of TIME.
+std::optional<std::uint64_t> real_time_literal_ticks(
+    const std::string_view magnitude, const std::uint64_t unit_scale,
+    const std::uint64_t tick_femtoseconds) {
+  const auto femtoseconds =
+      semantic::detail::decimal_physical_magnitude(magnitude, unit_scale);
+  if (!femtoseconds || *femtoseconds % tick_femtoseconds != 0
+      || *femtoseconds / tick_femtoseconds > static_cast<std::uint64_t>(
+             std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+  }
+  return *femtoseconds / tick_femtoseconds;
+}
+
+struct QuantizedDelayTicks {
+  std::uint64_t per_quantum = 1;
+  std::uint64_t total = 0;
+  std::string error;
+};
+
+// `quanta` delay quanta in ticks: one tick each, or a rounding quantum of
+// `rounding_femtoseconds` for a delay rounded to a declared precision.
+QuantizedDelayTicks quantized_delay_ticks(const std::uint64_t quanta,
+    const bool rounds, const std::uint64_t rounding_femtoseconds,
+    const std::uint64_t tick_femtoseconds, const std::string_view resolution) {
+  QuantizedDelayTicks result;
+  if (rounds) {
+    if (rounding_femtoseconds % tick_femtoseconds != 0) {
+      result.error = "rounded SystemVerilog delay is not representable at "
+                     "project resolution '"
+          + std::string{resolution} + "'";
+      return result;
+    }
+    result.per_quantum = rounding_femtoseconds / tick_femtoseconds;
+  }
+  if (quanta != 0
+      && result.per_quantum
+          > std::numeric_limits<std::uint64_t>::max() / quanta) {
+      result.error = "normalized HDL delay overflows 64-bit simulation ticks";
+      return result;
+  }
+  result.total = quanta * result.per_quantum;
+  return result;
 }
 
 } // namespace
@@ -769,12 +779,9 @@ bool normalize_delays(
       if (expression.operands.front().text.find_first_of(".eE")
               != std::string::npos
           && *tick_femtoseconds != 0) {
-        const auto femtoseconds = semantic::detail::decimal_physical_magnitude(
-            expression.operands.front().text, *factor);
-        if (!femtoseconds || *femtoseconds % *tick_femtoseconds != 0
-            || *femtoseconds / *tick_femtoseconds
-                > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int64_t>::max())) {
+        const auto ticks = real_time_literal_ticks(
+            expression.operands.front().text, *factor, *tick_femtoseconds);
+        if (!ticks) {
           diagnostics.error(
               "FSIM-ELAB-VHTIME-003",
               "physical time literal is not exactly representable at project "
@@ -784,7 +791,7 @@ bool normalize_delays(
           return false;
         }
         expression.kind = frontend::ExpressionKind::IntegerLiteral;
-        expression.text = std::to_string(*femtoseconds / *tick_femtoseconds);
+        expression.text = std::to_string(*ticks);
         expression.operands.clear();
         expression.nominal_type = "@builtin:time";
         return true;
@@ -1126,33 +1133,15 @@ bool normalize_delays(
         return;
       }
 
-      std::uint64_t ticks_per_quantum = 1;
-      if (has_declared_precision) {
-        if (rounding_femtoseconds % *tick_femtoseconds != 0) {
-          diagnostics.error(
-              "FSIM-TIME-0003",
-              "rounded SystemVerilog delay is not representable at "
-              "project resolution '" + std::string{effective_resolution}
-                  + "'",
-              span(delay.span));
-          valid = false;
-          return;
-        }
-        ticks_per_quantum =
-            rounding_femtoseconds / *tick_femtoseconds;
-      }
-      delay.rounding_quantum = ticks_per_quantum;
-      if (quanta != 0
-          && ticks_per_quantum
-              > std::numeric_limits<std::uint64_t>::max() / quanta) {
-        diagnostics.error(
-            "FSIM-TIME-0003",
-            "normalized HDL delay overflows 64-bit simulation ticks",
-            span(delay.span));
+      const auto ticks = quantized_delay_ticks(quanta, has_declared_precision,
+          rounding_femtoseconds, *tick_femtoseconds, effective_resolution);
+      if (!ticks.error.empty()) {
+        diagnostics.error("FSIM-TIME-0003", ticks.error, span(delay.span));
         valid = false;
         return;
       }
-      delay.magnitude = quanta * ticks_per_quantum;
+      delay.rounding_quantum = ticks.per_quantum;
+      delay.magnitude = ticks.total;
       delay.divisor = 1;
       delay.unit.clear();
     };
@@ -1748,12 +1737,10 @@ private:
             && expressions[operand.value()]->kind
                 == semantic::vhdl::ExpressionKind::real_literal
             && tick_femtoseconds_ && *tick_femtoseconds_ != 0U) {
-            const auto femtoseconds = semantic::detail::decimal_physical_magnitude(
-                expressions[operand.value()]->text, *factor);
-            if (!femtoseconds || *femtoseconds % *tick_femtoseconds_ != 0U
-                || *femtoseconds / *tick_femtoseconds_
-                    > static_cast<std::uint64_t>(
-                        std::numeric_limits<std::int64_t>::max())) {
+            const auto ticks = real_time_literal_ticks(
+                expressions[operand.value()]->text, *factor,
+                *tick_femtoseconds_);
+            if (!ticks) {
                 vhdl_error(
                     "FSIM-ELAB-VHTIME-003",
                     "physical time literal is not exactly representable at "
@@ -1769,8 +1756,7 @@ private:
             replacement.id = retained_id;
             replacement.scope = retained_scope;
             replacement.kind = semantic::vhdl::ExpressionKind::integer_literal;
-            replacement.text = std::to_string(
-                *femtoseconds / *tick_femtoseconds_);
+            replacement.text = std::to_string(*ticks);
             replacement.source = retained_source;
             replacement.origin = retained_origin;
             replacement.nominal_type = "@builtin:time";
@@ -1942,25 +1928,13 @@ private:
                     + resolution_ + "'");
             return;
         }
-        std::uint64_t ticks_per_quantum = 1U;
-        if (rounds) {
-            if (rounding_femtoseconds % *tick_femtoseconds_ != 0U) {
-                error(value.source,
-                    "rounded SystemVerilog delay is not representable at "
-                    "project resolution '" + resolution_ + "'");
-                return;
-            }
-            ticks_per_quantum
-                = rounding_femtoseconds / *tick_femtoseconds_;
-        }
-        if (quanta != 0U
-            && ticks_per_quantum
-                > std::numeric_limits<std::uint64_t>::max() / quanta) {
-            error(value.source,
-                "normalized HDL delay overflows 64-bit simulation ticks");
+        const auto ticks = quantized_delay_ticks(quanta, rounds,
+            rounding_femtoseconds, *tick_femtoseconds_, resolution_);
+        if (!ticks.error.empty()) {
+            error(value.source, ticks.error);
             return;
         }
-        value.magnitude = quanta * ticks_per_quantum;
+        value.magnitude = ticks.total;
         value.divisor = 1U;
         value.unit.clear();
     }

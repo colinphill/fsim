@@ -110,12 +110,7 @@ namespace {
         if (!type.systemverilog_net_type.empty()) {
             return true;
         }
-        return type.spelling == "wire" || type.spelling == "tri"
-            || type.spelling == "tri0" || type.spelling == "tri1"
-            || type.spelling == "wand" || type.spelling == "triand"
-            || type.spelling == "wor" || type.spelling == "trior"
-            || type.spelling == "trireg" || type.spelling == "uwire"
-            || type.spelling == "supply0" || type.spelling == "supply1";
+        return semantic::sv::is_builtin_net_kind(type.spelling);
     }
 
 } // namespace
@@ -170,7 +165,7 @@ namespace {
         && !input.named_type.empty() && output.target.target.valid();
     output.value_form = resolved_typedef_base
         ? std::optional<sv::TypeForm> { }
-        : std::optional<sv::TypeForm> { type_form(input) };
+        : std::optional<sv::TypeForm> { systemverilog_type_form(input) };
     if (!input.systemverilog_class_declaration.empty()) {
         output.value_form = sv::TypeForm::class_handle;
         output.class_identity = input.systemverilog_class_declaration;
@@ -178,26 +173,15 @@ namespace {
     output.virtual_interface = input.systemverilog_virtual_interface;
     output.interface_type = input.systemverilog_interface_type;
     output.interface_modport = input.systemverilog_interface_modport;
-    for (const auto& input_actual :
-        input.systemverilog_class_parameter_actuals) {
-        sv::ActualAssociation actual;
-        actual.formal = input_actual.name;
-        actual.source = source(input_actual.span);
-        if (input_actual.type_actual) {
-            actual.kind = sv::ActualKind::type;
-            actual.type = type_reference(
-                *input_actual.type_actual, input_actual.span,
-                scope, parent);
-        } else if (input_actual.value.kind
-            == frontend::ExpressionKind::Invalid) {
-            actual.kind = sv::ActualKind::default_value;
-        } else {
-            actual.expression = expression(
-                input_actual.value, scope, parent);
-        }
-        output.interface_parameter_actuals.push_back(
-            std::move(actual));
-    }
+    output.interface_parameter_actuals
+        = systemverilog_class_parameter_actuals(input,
+            [&](const auto& span) { return source(span); },
+            [&](const auto& type, const auto& span) {
+                return type_reference(type, span, scope, parent);
+            },
+            [&](const auto& value) {
+                return expression(value, scope, parent);
+            });
     output.systemverilog_net_type = input.systemverilog_net_type;
     output.systemverilog_resolution_function
         = input.systemverilog_resolution_function;
@@ -229,7 +213,7 @@ namespace {
     }
     if (input.systemverilog_container) {
         const auto& container = *input.systemverilog_container;
-        output.container_form = type_form(input);
+        output.container_form = systemverilog_type_form(input);
         output.queue_maximum = container.queue_maximum
             ? expression(*container.queue_maximum, scope, parent)
             : std::nullopt;
@@ -391,44 +375,6 @@ namespace {
     return id;
 }
 
-[[nodiscard]] sv::TypeForm SystemVerilogHirBuilder::type_form(
-    const frontend::Type& input) const noexcept
-{
-    if (input.systemverilog_container) {
-        switch (input.systemverilog_container->kind) {
-        case frontend::SystemVerilogContainerKind::DynamicArray:
-            return sv::TypeForm::dynamic_array;
-        case frontend::SystemVerilogContainerKind::Queue:
-            return sv::TypeForm::queue;
-        case frontend::SystemVerilogContainerKind::AssociativeArray:
-            return sv::TypeForm::associative_array;
-        case frontend::SystemVerilogContainerKind::StaticArray:
-            return sv::TypeForm::static_array;
-        }
-    }
-    switch (input.packed_aggregate) {
-    case frontend::PackedAggregateKind::Struct:
-        return sv::TypeForm::packed_structure;
-    case frontend::PackedAggregateKind::Union:
-        return sv::TypeForm::packed_union;
-    case frontend::PackedAggregateKind::TaggedUnion:
-        return sv::TypeForm::tagged_union;
-    case frontend::PackedAggregateKind::UnpackedStruct:
-        return sv::TypeForm::unpacked_structure;
-    case frontend::PackedAggregateKind::UnpackedUnion:
-        return sv::TypeForm::unpacked_union;
-    case frontend::PackedAggregateKind::None:
-        break;
-    }
-    if (!input.enumeration_literals.empty()) {
-        return sv::TypeForm::enumeration;
-    }
-    if (input.domain == frontend::ValueDomain::String) {
-        return sv::TypeForm::string;
-    }
-    return sv::TypeForm::packed_integral;
-}
-
 [[nodiscard]] semantic::DeclarationId SystemVerilogHirBuilder::add_type_declaration(
     const frontend::TypeAliasDeclaration& input,
     const semantic::ScopeId scope,
@@ -463,7 +409,7 @@ namespace {
     sv::TypeDefinition output;
     output.id = type_id;
     output.declaration = id;
-    output.form = type_form(input.type);
+    output.form = systemverilog_type_form(input.type);
     output.name = input.name;
     output.base = base;
     output.resolution_function = input.systemverilog_resolution_function;
@@ -533,7 +479,7 @@ void SystemVerilogHirBuilder::add_type_payload(
     if (input.type.systemverilog_container) {
         const auto& container = *input.type.systemverilog_container;
         sv::ContainerType converted;
-        converted.form = type_form(input.type);
+        converted.form = systemverilog_type_form(input.type);
         converted.queue_maximum = container.queue_maximum
             ? expression(*container.queue_maximum, scope, parent)
             : std::nullopt;
@@ -684,9 +630,8 @@ template <typename Input>
         const auto type_id = find_type(
             scope, input.type.named_type, std::nullopt,
             input.type.systemverilog_source_order);
-        const auto type = std::ranges::find(
-            hir_.types(), type_id, &sv::TypeDefinition::id);
-        if (type != hir_.types().end()) {
+        const auto* type = hir_.find_type(type_id);
+        if (type != nullptr) {
             net = declaration(type->declaration).form
                 == sv::DeclarationForm::nettype_declaration;
         }

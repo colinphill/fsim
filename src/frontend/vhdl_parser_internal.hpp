@@ -151,6 +151,21 @@ private:
   void parse_vhdl_generic_subprogram(DesignUnit &unit, const Token &start,
                                      bool allow_declaration);
 
+  void parse_vhdl_severity_clause(Statement& statement);
+  // The diagnostics of one generic association list.
+  struct VhdlGenericAssociationText {
+    std::string_view duplicate_code;
+    std::string_view duplicate;
+    std::string_view positional_code;
+    std::string_view positional;
+    std::string_view box;
+    std::string_view box_code;
+    bool allow_open{};
+  };
+  // Parses the associations of a generic map up to its ')'.
+  void parse_vhdl_generic_associations(
+      std::vector<ParameterOverride>& associations,
+      const VhdlGenericAssociationText& text);
   void parse_vhdl_subprogram_generic_map(
       std::vector<ParameterOverride> &associations, bool &box,
       const Token &start);
@@ -351,6 +366,13 @@ private:
 
   Expression parse_lvalue();
 
+  // After '(': a slice `left to|downto right)` or an index group
+  // `i[, j...])` of `prefix` (IEEE 1076-2008 8.4, 8.5). A chained suffix
+  // takes one index only.
+  Expression parse_index_or_slice_suffix(Expression prefix,
+      const SourceSpan& start, std::string_view slice_close,
+      std::string_view index_close, std::string_view code,
+      bool index_list = true);
   Expression parse_expression(int minimum_precedence = 0,
                               bool allow_conditional = true);
 

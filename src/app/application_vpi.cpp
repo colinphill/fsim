@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
@@ -549,9 +550,7 @@ namespace {
                 }
                 distance = left_magnitude + right_magnitude;
             } else {
-                distance = left >= right
-                    ? static_cast<std::uint64_t>(left - right)
-                    : static_cast<std::uint64_t>(right - left);
+                distance = support::index_distance(left, right);
             }
             if (distance == std::numeric_limits<std::uint64_t>::max()) {
                 return std::nullopt;
@@ -1339,12 +1338,10 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             if (!parameter.declaration) {
                 continue;
             }
-            const auto declaration = std::ranges::find(
-                project.systemverilog_hir.declarations(),
-                *parameter.declaration,
-                &semantic::sv::Declaration::id);
-            if (declaration
-                == project.systemverilog_hir.declarations().end()) {
+            const auto* declaration
+                = project.systemverilog_hir.find_declaration(
+                    *parameter.declaration);
+            if (declaration == nullptr) {
                 throw std::logic_error {
                     "VPI parameter declaration is absent from SystemVerilog HIR"
                 };

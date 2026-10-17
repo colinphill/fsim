@@ -282,6 +282,8 @@ private:
         semantic::DeclarationId id) const noexcept;
     [[nodiscard]] const semantic::sv::Expression* expression(
         semantic::ExpressionId id) const noexcept;
+    [[nodiscard]] const semantic::sv::TypeDefinition* type_definition(
+        semantic::TypeId id) const noexcept;
     [[nodiscard]] const semantic::sv::Statement* statement(
         semantic::StatementId id) const noexcept;
     [[nodiscard]] const semantic::sv::SpecializedClassProperty*
@@ -308,6 +310,13 @@ private:
         semantic::ExpressionId array,
         std::string_view query,
         std::size_t dimension,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment);
+    // A range bound: its folded value, else its expression evaluated for
+    // `handle`.
+    [[nodiscard]] std::optional<std::int64_t> evaluate_range_bound(
+        const std::optional<std::int64_t>& literal,
+        const std::optional<semantic::ExpressionId>& expression,
         runtime::SystemVerilogClassHandle handle,
         PackedEnvironment& environment);
     [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_packed(

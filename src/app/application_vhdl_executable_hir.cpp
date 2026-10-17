@@ -61,25 +61,25 @@ class VhdlExecutableBuilder final {
       const std::string_view spelling,
       const frontend::SourceSpan& span,
       const semantic::ScopeId scope) {
-    vh::Name result{
-        std::string{spelling}, canonical_vhdl_name(std::string{spelling}),
-        source(span), std::nullopt, {}};
-    auto visible_scope = std::optional<semantic::ScopeId>{scope};
-    while (visible_scope) {
-      const auto found = std::ranges::find_if(
-          hir_.overload_sets(), [&](const vh::OverloadSet& overload) {
-            return overload.scope == *visible_scope
-                && overload.canonical_name == result.canonical;
-          });
-      if (found != hir_.overload_sets().end()) {
-        result.overloads = found->declarations;
-        if (result.overloads.size() == 1) {
-          result.selected = result.overloads.front();
-        }
-        break;
+      vh::Name result { std::string { spelling },
+          support::canonical_vhdl_spelling(std::string { spelling }),
+          source(span), std::nullopt, { } };
+      auto visible_scope = std::optional<semantic::ScopeId> { scope };
+      while (visible_scope) {
+          const auto found = std::ranges::find_if(
+              hir_.overload_sets(), [&](const vh::OverloadSet& overload) {
+                  return overload.scope == *visible_scope
+                      && overload.canonical_name == result.canonical;
+              });
+          if (found != hir_.overload_sets().end()) {
+              result.overloads = found->declarations;
+              if (result.overloads.size() == 1) {
+                  result.selected = result.overloads.front();
+              }
+              break;
+          }
+          visible_scope = parent_scope(*visible_scope);
       }
-      visible_scope = parent_scope(*visible_scope);
-    }
     return result;
   }
 
@@ -174,7 +174,7 @@ class VhdlExecutableBuilder final {
           || input.kind == frontend::ExpressionKind::Unary
           || input.kind == frontend::ExpressionKind::Binary) {
           constexpr auto qualified_prefix
-              = std::string_view { "@vhdl-qualified:" };
+              = semantic::vhdl::qualified_expression_prefix;
           auto spelling = input.text.starts_with(qualified_prefix)
               ? std::string { std::string_view { input.text }.substr(
                     qualified_prefix.size()) }
@@ -354,8 +354,8 @@ class VhdlExecutableBuilder final {
       const auto found = std::ranges::find_if(
           model_.types(), [&](const semantic::Type& type) {
             return type.scope == *visible_scope
-                && canonical_vhdl_name(type.name)
-                    == canonical_vhdl_name(spelling);
+                && support::canonical_vhdl_spelling(type.name)
+                    == support::canonical_vhdl_spelling(spelling);
           });
       if (found != model_.types().end()) {
         target = found->id;
@@ -382,20 +382,20 @@ class VhdlExecutableBuilder final {
         };
         semantic::TypeId selected;
         for (const auto& unit : hir_.units()) {
-          if (unit.kind != vh::UnitKind::package
-              || !unit.primary_name.empty()
-              || canonical_vhdl_name(unit.name)
-                  != canonical_vhdl_name(std::string {package_name})
-              || canonical_vhdl_name(
-                     std::string {normalized_library(unit.library)})
-                  != canonical_vhdl_name(
-                     std::string {normalized_library(library)})) {
-            continue;
-          }
+            if (unit.kind != vh::UnitKind::package || !unit.primary_name.empty()
+                || support::canonical_vhdl_spelling(unit.name)
+                    != support::canonical_vhdl_spelling(
+                        std::string { package_name })
+                || support::canonical_vhdl_spelling(
+                       std::string { normalized_library(unit.library) })
+                    != support::canonical_vhdl_spelling(
+                        std::string { normalized_library(library) })) {
+                continue;
+            }
           for (const auto& type : model_.types()) {
             if (type.scope != unit.scope
-                || canonical_vhdl_name(type.name)
-                    != canonical_vhdl_name(std::string {member})) {
+                || support::canonical_vhdl_spelling(type.name)
+                    != support::canonical_vhdl_spelling(std::string {member})) {
               continue;
             }
             if (selected.valid() && selected != type.id) {
@@ -418,16 +418,14 @@ class VhdlExecutableBuilder final {
               || (declaration.form != vh::DeclarationForm::package_instance
                   && declaration.form
                       != vh::DeclarationForm::generic_package)
-              || canonical_vhdl_name(declaration.name)
-                  != canonical_vhdl_name(std::string {qualifier})
+              || support::canonical_vhdl_spelling(declaration.name)
+                  != support::canonical_vhdl_spelling(std::string {qualifier})
               || !declaration.package) {
             continue;
           }
           const auto& reference = declaration.package->template_name;
           const auto candidate = package_type(
-              reference.canonical.empty()
-                  ? std::string_view {reference.spelling}
-                  : std::string_view {reference.canonical});
+              reference.text());
           if (!candidate.valid()) {
             continue;
           }
@@ -613,7 +611,7 @@ class VhdlExecutableBuilder final {
         = output.kind == vh::StatementKind::wait_statement
         && input.sensitivities.empty() && !input.delay
         && input.condition.kind == frontend::ExpressionKind::BooleanLiteral
-        && canonical_vhdl_name(input.condition.text) == "true";
+        && support::canonical_vhdl_spelling(input.condition.text) == "true";
     if (!indefinite_wait) {
       output.condition = expression(
           input.condition, child_scope, statement_origin);
@@ -778,11 +776,11 @@ class VhdlExecutableBuilder final {
     const auto callable_source = source(span);
     const auto found = std::ranges::find_if(
         hir_.mutable_declarations(), [&](const vh::Declaration& declaration) {
-          return declaration.scope == scope
-              && declaration.form == form
-              && declaration.source == callable_source
-              && canonical_vhdl_name(declaration.name)
-                  == canonical_vhdl_name(std::string{callable_name});
+            return declaration.scope == scope && declaration.form == form
+                && declaration.source == callable_source
+                && support::canonical_vhdl_spelling(declaration.name)
+                == support::canonical_vhdl_spelling(
+                    std::string { callable_name });
         });
     return found == hir_.mutable_declarations().end()
         ? nullptr
@@ -854,8 +852,8 @@ class VhdlExecutableBuilder final {
             return declaration.scope == scope
                 && declaration.form == vh::DeclarationForm::type
                 && declaration.source == input_source
-                && canonical_vhdl_name(declaration.name)
-                    == canonical_vhdl_name(input.name);
+                && support::canonical_vhdl_spelling(declaration.name)
+                    == support::canonical_vhdl_spelling(input.name);
           });
       if (found == hir_.declarations().end() || !found->nested_scope) {
         continue;
@@ -954,7 +952,7 @@ class VhdlExecutableBuilder final {
                 });
             return found != hir_.declarations().end()
                 && found->form == vh::DeclarationForm::signal
-                && canonical_vhdl_name(found->name) == "guard";
+                && support::canonical_vhdl_spelling(found->name) == "guard";
           });
       const auto record = std::ranges::find_if(hir_.statements(),
           [&](const vh::Statement& candidate) {
@@ -1020,8 +1018,9 @@ class VhdlExecutableBuilder final {
     std::map<std::pair<semantic::ScopeId, std::string>,
              std::vector<semantic::DeclarationId>> groups;
     for (const auto& declaration : hir_.declarations()) {
-      groups[{declaration.scope, canonical_vhdl_name(declaration.name)}]
-          .push_back(declaration.id);
+        groups[{ declaration.scope,
+                   support::canonical_vhdl_spelling(declaration.name) }]
+            .push_back(declaration.id);
     }
     auto& overloads = hir_.mutable_overload_sets();
     overloads.clear();
@@ -1080,10 +1079,10 @@ class VhdlExecutableBuilder final {
               return unit.kind == expected_kind
                   && (expected_kind != vh::UnitKind::package
                       || unit.primary_name.empty())
-                  && canonical_vhdl_name(unit.library)
-                      == canonical_vhdl_name(owner->library)
-                  && canonical_vhdl_name(unit.name)
-                      == canonical_vhdl_name(owner->primary_name);
+                  && support::canonical_vhdl_spelling(unit.library)
+                      == support::canonical_vhdl_spelling(owner->library)
+                  && support::canonical_vhdl_spelling(unit.name)
+                      == support::canonical_vhdl_spelling(owner->primary_name);
             });
         if (primary != hir_.units().end()) {
           if (const auto* found = overload_in_scope(primary->scope, name);
@@ -1108,18 +1107,18 @@ class VhdlExecutableBuilder final {
       }
       const auto found = std::ranges::find_if(
           hir_.units(), [&](const vh::Unit& unit) {
-            return unit.kind == vh::UnitKind::package
-                && unit.primary_name.empty()
-                && canonical_vhdl_name(unit.library)
-                    == canonical_vhdl_name(std::string { library })
-                && canonical_vhdl_name(unit.name)
-                    == canonical_vhdl_name(std::string { package });
+              return unit.kind == vh::UnitKind::package
+                  && unit.primary_name.empty()
+                  && support::canonical_vhdl_spelling(unit.library)
+                  == support::canonical_vhdl_spelling(std::string { library })
+                  && support::canonical_vhdl_spelling(unit.name)
+                  == support::canonical_vhdl_spelling(std::string { package });
           });
       return found == hir_.units().end() ? nullptr : &*found;
     };
     const auto context_unit = [&](const std::string_view selected)
         -> const vh::Unit* {
-      const auto parts = vhdl_name_parts(selected);
+      const auto parts = support::split_vhdl_selected_name(selected);
       if (parts.empty()) {
         return nullptr;
       }
@@ -1130,9 +1129,9 @@ class VhdlExecutableBuilder final {
       const auto found = std::ranges::find_if(
           hir_.units(), [&](const vh::Unit& unit) {
             return unit.kind == vh::UnitKind::context
-                && canonical_vhdl_name(unit.library)
-                    == canonical_vhdl_name(std::string { library })
-                && same_vhdl_unit_name(unit, context);
+                && support::canonical_vhdl_spelling(unit.library)
+                    == support::canonical_vhdl_spelling(std::string { library })
+                && vh::unit_name_matches(unit, context);
           });
       return found == hir_.units().end() ? nullptr : &*found;
     };
@@ -1140,15 +1139,11 @@ class VhdlExecutableBuilder final {
                                          const std::string_view prefix)
         -> const vh::Unit* {
       if (const auto declaration_id = lexical_declaration(scope, prefix)) {
-        const auto declaration = std::ranges::find(
-            hir_.declarations(), *declaration_id,
-            &vh::Declaration::id);
-        if (declaration != hir_.declarations().end()
+        const auto* declaration = hir_.find_declaration(*declaration_id);
+        if (declaration != nullptr
             && declaration->package) {
           const auto& target = declaration->package->template_name;
-          return package_unit(target.canonical.empty()
-                  ? std::string_view { target.spelling }
-                  : std::string_view { target.canonical });
+          return package_unit(target.text());
         }
       }
       return package_unit(prefix);
@@ -1194,10 +1189,8 @@ class VhdlExecutableBuilder final {
           const auto root = std::string_view { name.canonical }.substr(
               0U, root_separator);
           if (const auto declaration = lexical_declaration(scope, root)) {
-            const auto record = std::ranges::find(
-                hir_.declarations(), *declaration,
-                &vh::Declaration::id);
-            if (record != hir_.declarations().end()
+            const auto* record = hir_.find_declaration(*declaration);
+            if (record != nullptr
                 && record->subtype) {
               name.overloads.push_back(*declaration);
             }
@@ -1232,9 +1225,7 @@ class VhdlExecutableBuilder final {
                 }
                 for (const auto& context : context_owner->context) {
                   for (const auto& selected : context.selected_names) {
-                    const auto spelling = selected.canonical.empty()
-                        ? std::string_view { selected.spelling }
-                        : std::string_view { selected.canonical };
+                    const auto spelling = selected.text();
                     if (context.kind == vh::ContextKind::context_reference) {
                       if (const auto* referenced = context_unit(spelling)) {
                         pending.push_back(referenced);
@@ -1263,13 +1254,14 @@ class VhdlExecutableBuilder final {
                   : vh::UnitKind::package;
               const auto primary = std::ranges::find_if(
                   hir_.units(), [&](const vh::Unit& candidate) {
-                    return candidate.kind == primary_kind
-                        && (primary_kind != vh::UnitKind::package
-                            || candidate.primary_name.empty())
-                        && canonical_vhdl_name(candidate.library)
-                            == canonical_vhdl_name(unit->library)
-                        && canonical_vhdl_name(candidate.name)
-                            == canonical_vhdl_name(unit->primary_name);
+                      return candidate.kind == primary_kind
+                          && (primary_kind != vh::UnitKind::package
+                              || candidate.primary_name.empty())
+                          && support::canonical_vhdl_spelling(candidate.library)
+                          == support::canonical_vhdl_spelling(unit->library)
+                          && support::canonical_vhdl_spelling(candidate.name)
+                          == support::canonical_vhdl_spelling(
+                              unit->primary_name);
                   });
               if (primary != hir_.units().end()) {
                 append_context(*primary);
@@ -1395,8 +1387,8 @@ class VhdlExecutableBuilder final {
       // A selected record element of the object (`v.re1(1)`) is an indexed
       // name too.
       const auto record_member = [&] {
-        const auto text = canonical_vhdl_name(expression.text);
-        const auto root = canonical_vhdl_name(declaration->name);
+        const auto text = support::canonical_vhdl_spelling(expression.text);
+        const auto root = support::canonical_vhdl_spelling(declaration->name);
         const auto at = text.find(root + ".");
         if (at == std::string::npos
             || (at != 0U && text[at - 1U] != '.')) {
@@ -1415,10 +1407,11 @@ class VhdlExecutableBuilder final {
             return false;
           }
           if (type->form == vh::TypeForm::record) {
-            return std::ranges::any_of(type->record_elements,
-                [&](const vh::RecordElement& element) {
-                  return canonical_vhdl_name(element.name) == member;
-                });
+              return std::ranges::any_of(
+                  type->record_elements, [&](const vh::RecordElement& element) {
+                      return support::canonical_vhdl_spelling(element.name)
+                          == member;
+                  });
           }
           if (type->form != vh::TypeForm::subtype
               && type->form != vh::TypeForm::alias) {
@@ -1428,8 +1421,8 @@ class VhdlExecutableBuilder final {
         }
         return false;
       };
-      if (canonical_vhdl_name(std::string { designator })
-              != canonical_vhdl_name(declaration->name)
+      if (support::canonical_vhdl_spelling(std::string { designator })
+              != support::canonical_vhdl_spelling(declaration->name)
           && !record_member()) {
         // A selected-name method with one actual can resolve its receiver as
         // an object while callable overload resolution is still pending. It
@@ -1528,8 +1521,8 @@ class VhdlExecutableBuilder final {
                 [&](const semantic::DeclarationId formal_id) {
                   const auto* formal = find_declaration(formal_id);
                   return formal != nullptr
-                      && canonical_vhdl_name(formal->name)
-                          == canonical_vhdl_name(
+                      && support::canonical_vhdl_spelling(formal->name)
+                          == support::canonical_vhdl_spelling(
                               expression.argument_names[index]);
                 });
             if (named == candidate->callable->formals.end()) {

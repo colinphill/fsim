@@ -243,11 +243,7 @@ namespace {
         if (declaration.form == Form::package_instance) {
             return runtime::VhdlVhpiObjectKind::Package;
         }
-        if (declaration.form == Form::generic_constant
-            || declaration.form == Form::generic_type
-            || declaration.form == Form::generic_function
-            || declaration.form == Form::generic_procedure
-            || declaration.form == Form::generic_package) {
+        if (semantic::vhdl::is_generic_formal(declaration.form)) {
             return runtime::VhdlVhpiObjectKind::Generic;
         }
         switch (declaration.object_class) {
@@ -395,9 +391,7 @@ namespace {
     [[nodiscard]] const semantic::vhdl::Declaration* declaration_for(
         const semantic::vhdl::Hir& hir, const semantic::DeclarationId id)
     {
-        const auto found = std::ranges::find(hir.declarations(), id,
-            &semantic::vhdl::Declaration::id);
-        return found == hir.declarations().end() ? nullptr : &*found;
+        return hir.find_declaration(id);
     }
 
     [[nodiscard]] const semantic::vhdl::TypeDefinition* type_for(
@@ -407,9 +401,7 @@ namespace {
         if (!declaration.declared_type) {
             return nullptr;
         }
-        const auto found = std::ranges::find(hir.types(), *declaration.declared_type,
-            &semantic::vhdl::TypeDefinition::id);
-        return found == hir.types().end() ? nullptr : &*found;
+        return hir.find_type(*declaration.declared_type);
     }
 
     [[nodiscard]] const semantic::vhdl::Process* vhdl_process_for(

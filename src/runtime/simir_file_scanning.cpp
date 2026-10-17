@@ -14,50 +14,6 @@
 namespace fsim::runtime::simir {
 namespace {
 
-    constexpr std::string_view vhdl_textio_read_marker
-        = "\x1f" "fsim-vhdl-textio-read";
-    constexpr std::string_view vhdl_textio_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-read-2008";
-    constexpr std::string_view vhdl_textio_radix_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
-    constexpr std::string_view vhdl_textio_sread_marker
-        = "\x1f" "fsim-vhdl-textio-sread";
-
-    [[nodiscard]] bool vhdl_textio_read(
-        const FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && (operation.conversions.front().prefix
-                    == vhdl_textio_read_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_radix_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_sread_marker);
-    }
-
-    [[nodiscard]] bool vhdl_textio_read_2008(
-        const FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && (operation.conversions.front().prefix
-                    == vhdl_textio_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_radix_read_2008_marker);
-    }
-
-    [[nodiscard]] bool vhdl_textio_sread(
-        const FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && operation.conversions.front().prefix
-                == vhdl_textio_sread_marker;
-    }
-
     [[nodiscard]] bool space(const std::int32_t character) noexcept
     {
         return character >= 0
@@ -1112,11 +1068,7 @@ InputScanResult scan_formatted_input_impl(
     Scanner scanner { read, unread };
     const bool vhdl_textio_line = vhdl_textio_read(operation);
     const bool vhdl_textio_2008 = vhdl_textio_read_2008(operation);
-    const bool vhdl_textio_radix_read_2008
-        = operation.string_source && operation.consume_string_source
-        && operation.conversions.size() == 1U
-        && operation.conversions.front().prefix
-            == vhdl_textio_radix_read_2008_marker;
+    const bool radix_read_2008 = vhdl_textio_radix_read_2008(operation);
     const bool is_vhdl_textio_sread = vhdl_textio_sread(operation);
     InputScanResult result;
     result.values.resize(operation.conversions.size());
@@ -1134,7 +1086,7 @@ InputScanResult scan_formatted_input_impl(
         auto [text, complete, eof] = read_conversion_text(
             scanner, conversion, operation.hierarchy_path,
             vhdl_textio_line, vhdl_textio_2008,
-            vhdl_textio_radix_read_2008, is_vhdl_textio_sread);
+            radix_read_2008, is_vhdl_textio_sread);
         const bool empty_string_read = vhdl_textio_line
             && conversion.format == InputScanFormat::string
             && conversion.maximum_characters == 0U && complete;
@@ -1189,7 +1141,7 @@ InputScanResult scan_formatted_input_impl(
         } else {
             const bool valid_textio_number
                 = !vhdl_textio_line
-                || vhdl_textio_radix_read_2008
+                || radix_read_2008
                 || (conversion.format == InputScanFormat::real
                         ? valid_vhdl_real_literal(text)
                         : ((conversion.format != InputScanFormat::decimal
@@ -1204,7 +1156,7 @@ InputScanResult scan_formatted_input_impl(
                     : std::nullopt;
             } else {
                 value = valid_textio_number
-                    ? (vhdl_textio_radix_read_2008
+                    ? (radix_read_2008
                         ? packed_vhdl_radix_digits(
                               text, conversion.format, conversion.target)
                         : packed_digits(std::move(text), conversion.format,
@@ -1279,6 +1231,52 @@ InputScanResult scan_formatted_string(
             --offset;
     };
     return scan_formatted_input(operation, read, unread, time_format);
+}
+
+bool size_vhdl_textio_string_reads(FileScan& operation,
+    const std::function<std::optional<std::size_t>(const InputScanTarget&)>&
+        string_length)
+{
+    if (!vhdl_textio_read(operation) || vhdl_textio_sread(operation)) {
+        return true;
+    }
+    for (auto& conversion : operation.conversions) {
+        if (conversion.maximum_characters != 0U
+            || conversion.format != InputScanFormat::string) {
+            continue;
+        }
+        const auto length = string_length(conversion.target);
+        if (!length) {
+            continue;
+        }
+        if (*length > std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+        conversion.maximum_characters = static_cast<std::uint32_t>(*length);
+    }
+    return true;
+}
+
+void consume_scanned_source(const FileScan& operation, std::string& source,
+    const InputScanResult& scanned)
+{
+    if (operation.consume_string_source) {
+        source.erase(0, std::min(source.size(), scanned.consumed));
+    }
+}
+
+bool file_scan_complete(
+    const FileScan& operation, const InputScanResult& scanned) noexcept
+{
+    if (vhdl_textio_sread(operation)) {
+        return scanned.values.size() == 1U
+            && scanned.values.front().has_value();
+    }
+    const auto expected = std::ranges::count_if(operation.conversions,
+        [](const InputScanConversion& conversion) {
+            return !conversion.suppress;
+        });
+    return scanned.assignments == static_cast<std::int32_t>(expected);
 }
 
 } // namespace fsim::runtime::simir

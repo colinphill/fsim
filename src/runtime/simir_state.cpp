@@ -1326,31 +1326,25 @@ void Interpreter::Impl::compact_dynamic_fanout(const SignalId signal)
         && dynamic_fanout_active_counts[signal] != 0U;
 }
 
-void Interpreter::Impl::write_process_register(
-    Interpreter::Impl::ProcessState& process,
-    const RegisterId destination,
-    const PackedLogic4& value)
+template <typename Id, typename Value>
+bool Interpreter::Impl::update_callable_register_context(
+    ProcessState& process, const Id destination,
+    std::vector<Id> ProcessState::CallableFrameState::*const ids,
+    std::vector<Value> ProcessState::CallableFrameState::*const values,
+    const Value& value)
 {
-    const auto converted = coerce_value_kind(
-        value, register_value_kind(process, destination));
     const auto update_context = [&](
         ProcessState::CallableFrameState& context) {
-        const auto found = std::ranges::find(
-            context.packed_ids, destination);
-        if (found == context.packed_ids.end()) {
+        const auto& context_ids = context.*ids;
+        const auto found = std::ranges::find(context_ids, destination);
+        if (found == context_ids.end()) {
             return false;
         }
-        const auto index = static_cast<std::size_t>(
-            std::distance(context.packed_ids.begin(), found));
-        context.packed[index] = converted;
+        (context.*values)[static_cast<std::size_t>(
+            std::distance(context_ids.begin(), found))] = value;
         return true;
     };
-    if (process.cold().callable_registers_suspended) {
-        if (process.cold().suspended_callable_context
-            && update_context(
-                *process.cold().suspended_callable_context)) {
-            return;
-        }
+    const auto update_escaping_contexts = [&] {
         for (auto context
             = process.cold().escaping_callable_contexts.rbegin();
             context != process.cold().escaping_callable_contexts.rend();
@@ -1359,38 +1353,42 @@ void Interpreter::Impl::write_process_register(
                 fail(process, "escaping automatic callable context is null");
             }
             if (update_context(**context)) {
-                return;
+                return true;
             }
         }
-    } else {
-        const auto& frames = process.cold().callable_frames;
-        const ProcessState::CallableFrameState* owner_frame { };
-        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
-            if (std::ranges::find(
-                    frame->packed_ids, destination)
-                != frame->packed_ids.end()) {
-                owner_frame = &*frame;
-                break;
+        return false;
+    };
+    if (process.cold().callable_registers_suspended) {
+        return (process.cold().suspended_callable_context
+                   && update_context(
+                       *process.cold().suspended_callable_context))
+            || update_escaping_contexts();
+    }
+    const auto& frames = process.cold().callable_frames;
+    for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+        const auto& frame_ids = (*frame).*ids;
+        if (std::ranges::find(frame_ids, destination) != frame_ids.end()) {
+            if (frame->escaping_context) {
+                (void)update_context(*frame->escaping_context);
             }
+            return false;
         }
-        if (owner_frame != nullptr) {
-            if (owner_frame->escaping_context) {
-                (void)update_context(*owner_frame->escaping_context);
-            }
-        } else {
-            for (auto context
-                = process.cold().escaping_callable_contexts.rbegin();
-                context != process.cold().escaping_callable_contexts.rend();
-                ++context) {
-                if (!*context) {
-                    fail(process,
-                        "escaping automatic callable context is null");
-                }
-                if (update_context(**context)) {
-                    break;
-                }
-            }
-        }
+    }
+    (void)update_escaping_contexts();
+    return false;
+}
+
+void Interpreter::Impl::write_process_register(
+    Interpreter::Impl::ProcessState& process,
+    const RegisterId destination,
+    const PackedLogic4& value)
+{
+    const auto converted = coerce_value_kind(
+        value, register_value_kind(process, destination));
+    if (update_callable_register_context(process, destination,
+            &ProcessState::CallableFrameState::packed_ids,
+            &ProcessState::CallableFrameState::packed, converted)) {
+        return;
     }
     if (process.executor) {
         process.executor->write_register(
@@ -1410,63 +1408,10 @@ void Interpreter::Impl::write_process_string_register(
     }
     (void)systemverilog_string_length(value);
     const std::string copied { value };
-    const auto update_context = [&] (
-        ProcessState::CallableFrameState& context) {
-        const auto found = std::ranges::find(
-            context.string_ids, destination);
-        if (found == context.string_ids.end()) {
-            return false;
-        }
-        const auto index = static_cast<std::size_t>(
-            std::distance(context.string_ids.begin(), found));
-        context.strings[index] = copied;
-        return true;
-    };
-    if (process.cold().callable_registers_suspended) {
-        if (process.cold().suspended_callable_context
-            && update_context(
-                *process.cold().suspended_callable_context)) {
-            return;
-        }
-        for (auto context
-            = process.cold().escaping_callable_contexts.rbegin();
-            context != process.cold().escaping_callable_contexts.rend();
-            ++context) {
-            if (!*context) {
-                fail(process, "escaping automatic callable context is null");
-            }
-            if (update_context(**context)) {
-                return;
-            }
-        }
-    } else {
-        const auto& frames = process.cold().callable_frames;
-        const ProcessState::CallableFrameState* owner_frame { };
-        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
-            if (std::ranges::find(frame->string_ids, destination)
-                != frame->string_ids.end()) {
-                owner_frame = &*frame;
-                break;
-            }
-        }
-        if (owner_frame != nullptr) {
-            if (owner_frame->escaping_context) {
-                (void)update_context(*owner_frame->escaping_context);
-            }
-        } else {
-            for (auto context
-                = process.cold().escaping_callable_contexts.rbegin();
-                context != process.cold().escaping_callable_contexts.rend();
-                ++context) {
-                if (!*context) {
-                    fail(process,
-                        "escaping automatic callable context is null");
-                }
-                if (update_context(**context)) {
-                    break;
-                }
-            }
-        }
+    if (update_callable_register_context(process, destination,
+            &ProcessState::CallableFrameState::string_ids,
+            &ProcessState::CallableFrameState::strings, copied)) {
+        return;
     }
     if (process.executor) {
         process.executor->write_string_register(destination, copied);

@@ -151,38 +151,6 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
-    frontend::PortDirection compiled_port_direction(
-        const semantic::sv::Declaration& declaration) noexcept
-    {
-        frontend::PortDirection direction = frontend::PortDirection::Unknown;
-        switch (declaration.direction) {
-        case semantic::sv::Direction::input:
-            direction = frontend::PortDirection::Input;
-            break;
-        case semantic::sv::Direction::output:
-            direction = frontend::PortDirection::Output;
-            break;
-        case semantic::sv::Direction::inout:
-            direction = frontend::PortDirection::Inout;
-            break;
-        case semantic::sv::Direction::ref:
-            direction = frontend::PortDirection::Ref;
-            break;
-        case semantic::sv::Direction::unknown:
-            break;
-        }
-        if (direction != frontend::PortDirection::Unknown
-            || declaration.form != semantic::sv::DeclarationForm::port) {
-            return direction;
-        }
-        const auto interface_port = !declaration.interface_type.empty()
-            || (declaration.type
-                && declaration.type->target.spelling == "interface");
-        return interface_port
-            ? frontend::PortDirection::Inout
-            : frontend::PortDirection::Unknown;
-    }
-
     std::string_view explicit_systemverilog_net_type(
         const semantic::sv::TypeReference& type) noexcept
     {
@@ -193,12 +161,7 @@ namespace {
             }
             const auto spelling
                 = std::string_view { current->target.spelling };
-            if (spelling == "wire" || spelling == "tri"
-                || spelling == "tri0" || spelling == "tri1"
-                || spelling == "wand" || spelling == "triand"
-                || spelling == "wor" || spelling == "trior"
-                || spelling == "trireg" || spelling == "uwire"
-                || spelling == "supply0" || spelling == "supply1") {
+            if (semantic::sv::is_builtin_net_kind(spelling)) {
                 return spelling;
             }
             if (current->container_element_types.size() != 1U) {
@@ -229,10 +192,10 @@ namespace {
             || !explicit_systemverilog_net_type(effective_type).empty()) {
             return false;
         }
-        return compiled_systemverilog_scalar_kind(
+        return frontend::systemverilog_scalar_kind(
                    declaration.type->target.spelling)
                 == frontend::SystemVerilogScalarKind::None
-            && compiled_systemverilog_scalar_kind(
+            && frontend::systemverilog_scalar_kind(
                    effective_type.target.spelling)
                 == frontend::SystemVerilogScalarKind::None;
     }
@@ -467,14 +430,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 std::optional<std::pair<std::int32_t, std::int32_t>>
                     driver_interval;
                 const auto element_count = [](const ContainerType& type) {
-                    return static_cast<std::uint64_t>(
-                               type.index_left >= type.index_right
-                                   ? static_cast<std::int64_t>(
-                                         type.index_left)
-                                       - type.index_right
-                                   : static_cast<std::int64_t>(
-                                         type.index_right)
-                                       - type.index_left)
+                    return index_distance(type.index_left, type.index_right)
                         + 1U;
                 };
                 const auto same_element_profile = [](
@@ -1109,14 +1065,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 const auto& actual_object
                     = design_.container_objects_[actual_container->second];
                 const auto element_count = [](const ContainerType& type) {
-                    return static_cast<std::uint64_t>(
-                               type.index_left >= type.index_right
-                                   ? static_cast<std::int64_t>(
-                                         type.index_left)
-                                       - type.index_right
-                                   : static_cast<std::int64_t>(
-                                         type.index_right)
-                                       - type.index_left)
+                    return index_distance(type.index_left, type.index_right)
                         + 1U;
                 };
                 const bool supported_array
@@ -1180,24 +1129,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 const auto is_packed_aggregate_nominal =
                     [](const std::string_view nominal_type,
                         const semantic::SpecializedHirUnit& specialization) {
-                        constexpr std::string_view identity_prefix {
-                            "@sv-type:" };
-                        if (!nominal_type.starts_with(identity_prefix)) {
-                            return false;
-                        }
-                        const auto digits
-                            = nominal_type.substr(identity_prefix.size());
-                        std::uint32_t type_index { };
-                        const auto [end, error] = std::from_chars(
-                            digits.data(), digits.data() + digits.size(),
-                            type_index);
-                        if (error != std::errc { }
-                            || end != digits.data() + digits.size()) {
-                            return false;
-                        }
-                        const auto definition
-                            = specialization.find_type(
-                                semantic::TypeId::from_index(type_index));
+                        const auto type
+                            = semantic::sv::nominal_identity_type(
+                                nominal_type);
+                        const auto definition = type
+                            ? specialization.find_type(*type)
+                            : std::nullopt;
                         if (!definition
                             || definition->systemverilog == nullptr) {
                             return false;
@@ -1451,12 +1388,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     = formal_declaration.type->target.spelling;
                 info.source_domain = domain;
                 info.systemverilog_scalar
-                    = compiled_systemverilog_scalar_kind(
+                    = frontend::systemverilog_scalar_kind(
                         effective_type.target.spelling);
                 if (info.systemverilog_scalar
                     == frontend::SystemVerilogScalarKind::None) {
                     info.systemverilog_scalar
-                        = compiled_systemverilog_scalar_kind(
+                        = frontend::systemverilog_scalar_kind(
                             formal_declaration.type
                                 ->target.spelling);
                 }
@@ -1758,12 +1695,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                                    formal_declaration.scope)
                       .value_or(*formal_declaration.type);
             auto formal_scalar
-                = compiled_systemverilog_scalar_kind(
+                = frontend::systemverilog_scalar_kind(
                     effective_type.target.spelling);
             if (formal_scalar
                 == frontend::SystemVerilogScalarKind::None) {
                 formal_scalar
-                    = compiled_systemverilog_scalar_kind(
+                    = frontend::systemverilog_scalar_kind(
                         formal_declaration.type->target.spelling);
             }
             if (interface_port) {

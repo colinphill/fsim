@@ -50,27 +50,6 @@ const char* systemverilog_parameter_diagnostic_code(
     return "FSIM-ELAB-PARAM-001";
 }
 
-frontend::SystemVerilogScalarKind compiled_systemverilog_scalar_kind(
-    const std::string_view spelling) noexcept
-{
-    if (spelling == "shortreal") {
-        return frontend::SystemVerilogScalarKind::ShortReal;
-    }
-    if (spelling == "real") {
-        return frontend::SystemVerilogScalarKind::Real;
-    }
-    if (spelling == "realtime") {
-        return frontend::SystemVerilogScalarKind::Realtime;
-    }
-    if (spelling == "time") {
-        return frontend::SystemVerilogScalarKind::Time;
-    }
-    if (spelling == "chandle") {
-        return frontend::SystemVerilogScalarKind::Chandle;
-    }
-    return frontend::SystemVerilogScalarKind::None;
-}
-
 std::string compiled_systemverilog_integral_identity(
     const semantic::sv::Declaration& declaration,
     const std::string_view display)
@@ -385,8 +364,7 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             && binding.expression && !formal_is_type_parameter
             && !formal->systemverilog->array_parameter) {
             const auto target_scalar = formal->systemverilog->type
-                ? hierarchy_sv_parameters_detail::
-                      compiled_systemverilog_scalar_kind(
+                ? frontend::systemverilog_scalar_kind(
                           formal->systemverilog->type->target.spelling)
                 : frontend::SystemVerilogScalarKind::None;
             const auto scalar_applicable = target_scalar

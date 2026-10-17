@@ -40,6 +40,9 @@ struct RegionFrontierKeyV1 {
     std::uint64_t sequence { };
     std::uint32_t process_domain { };
     std::uint32_t phase { };
+
+    friend bool operator==(
+        const RegionFrontierKeyV1&, const RegionFrontierKeyV1&) = default;
 };
 
 struct RegionFrontierSlotV1 {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 #include "application_vhdl_hir_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -10,76 +11,7 @@ namespace {
 using frontend::DesignUnit;
 namespace vh = semantic::vhdl;
 
-[[nodiscard]] const semantic::SourceSpan* semantic_source_span(
-    const semantic::Model& model,
-    const semantic::SourceSpanId source)
-{
-    if (!source.valid() || source.value() >= model.source_spans().size()) {
-        return nullptr;
-    }
-    return &model.source_spans()[source.value()];
-}
-
-[[nodiscard]] const semantic::SourceFile* semantic_source_file(
-    const semantic::Model& model,
-    const semantic::SourceSpan& span)
-{
-    if (!span.file.valid()
-        || span.file.value() >= model.source_files().size()) {
-        return nullptr;
-    }
-    return &model.source_files()[span.file.value()];
-}
-
-[[nodiscard]] bool same_physical_source(
-    const semantic::Model& model,
-    const semantic::SourceSpanId left_id,
-    const semantic::SourceSpanId right_id)
-{
-    const auto* const left = semantic_source_span(model, left_id);
-    const auto* const right = semantic_source_span(model, right_id);
-    if (left == nullptr || right == nullptr) {
-        return false;
-    }
-    if (!left->file.valid() || !right->file.valid()) {
-        return false;
-    }
-    if (left->file == right->file) {
-        return true;
-    }
-    const auto* const left_file = semantic_source_file(model, *left);
-    const auto* const right_file = semantic_source_file(model, *right);
-    return left_file != nullptr && right_file != nullptr
-        && !left_file->physical_name.empty()
-        && left_file->physical_name == right_file->physical_name;
-}
-
-[[nodiscard]] diagnostic::SourceSpan compiled_source_span(
-    const semantic::Model& model,
-    const semantic::SourceSpanId source)
-{
-    diagnostic::SourceSpan result;
-    const auto* const source_record = semantic_source_span(model, source);
-    if (source_record == nullptr) {
-        return result;
-    }
-    const auto* const file = semantic_source_file(model, *source_record);
-    if (file == nullptr) {
-        return result;
-    }
-    result.path = source_record->logical_name.empty()
-        ? file->physical_name
-        : source_record->logical_name;
-    result.begin = {
-        source_record->begin.line,
-        source_record->begin.column,
-        source_record->begin.offset };
-    result.end = {
-        source_record->end.line,
-        source_record->end.column,
-        source_record->end.offset };
-    return result;
-}
+using semantic::same_physical_source;
 
 [[nodiscard]] bool same_preceding_subprogram_specification(
     const semantic::CompiledDesign& design,
@@ -91,7 +23,7 @@ namespace vh = semantic::vhdl;
         || selected.callable->specification_lexemes.empty()) {
         return false;
     }
-    const auto* const use_span = semantic_source_span(
+    const auto* const use_span = semantic::find_source_span(
         design.semantics, use.source);
     if (use_span == nullptr) {
         return false;
@@ -115,7 +47,7 @@ namespace vh = semantic::vhdl;
                 design.semantics, declaration.source, use.source)) {
             continue;
         }
-        const auto* const declaration_span = semantic_source_span(
+        const auto* const declaration_span = semantic::find_source_span(
             design.semantics, declaration.source);
         if (declaration_span != nullptr
             && declaration_span->begin.offset < use_span->begin.offset) {
@@ -131,7 +63,7 @@ namespace vh = semantic::vhdl;
 {
     const auto contains = [&](const std::vector<std::string>& names) {
         return std::ranges::any_of(names, [&](const std::string& name) {
-            return canonical_vhdl_name(name) == canonical_name;
+            return support::canonical_vhdl_spelling(name) == canonical_name;
         });
     };
     return contains(unit.predefined_environment.declarations)
@@ -214,15 +146,8 @@ void validate_out_access_prefix_read(
         return;
     }
 
-    const auto& scopes = design.semantics.scopes();
-    const auto scope = std::ranges::find(
-        scopes, expression.scope, &semantic::Scope::id);
-    if (scope == scopes.end()) {
-        return;
-    }
-    const auto unit = design.find_unit(scope->unit);
-    if (!unit || unit->vhdl == nullptr
-        || unit->vhdl->standard >= std::string_view { "2008" }) {
+    const auto* unit = design.vhdl_scope_unit(expression.scope);
+    if (unit == nullptr || unit->standard >= std::string_view { "2008" }) {
         return;
     }
 
@@ -244,11 +169,11 @@ void validate_vhdl_source_visibility_impl(
 
     for (const auto& expression : hir.expressions()) {
         validate_out_access_prefix_read(design, expression, diagnostics);
-        const auto* const use_span = semantic_source_span(
+        const auto* const use_span = semantic::find_source_span(
             model, expression.source);
         const auto* const use_file = use_span == nullptr
             ? nullptr
-            : semantic_source_file(model, *use_span);
+            : semantic::find_source_file(model, *use_span);
         if (!expression.referenced_name || !expression.scope.valid()) {
             continue;
         }
@@ -269,7 +194,7 @@ void validate_vhdl_source_visibility_impl(
                 && selected->vhdl->callable->function
                 && same_physical_source(
                     model, selected->vhdl->source, expression.source)) {
-                const auto* const declaration_span = semantic_source_span(
+                const auto* const declaration_span = semantic::find_source_span(
                     model, selected->vhdl->source);
                 if (declaration_span != nullptr
                     && declaration_span->begin.offset
@@ -295,9 +220,8 @@ void validate_vhdl_source_visibility_impl(
             || name.selected || !name.overloads.empty()) {
             continue;
         }
-        const bool extended_identifier = name.spelling.size() >= 2U
-            && name.spelling.front() == '\\'
-            && name.spelling.back() == '\\';
+        const bool extended_identifier
+            = support::is_extended_vhdl_identifier(name.spelling);
         if (!extended_identifier
             && name.spelling.find('.') != std::string::npos) {
             continue;
@@ -319,8 +243,8 @@ void validate_vhdl_source_visibility_impl(
         if (resolution.status != semantic::CompiledResolutionStatus::not_found
             || resolver.vhdl_standard_package_member_visible(
                 name, expression.scope)
-            || compiler_predefined_name(
-                *owner->vhdl, canonical_vhdl_name(name.spelling))) {
+            || compiler_predefined_name(*owner->vhdl,
+                support::canonical_vhdl_spelling(name.spelling))) {
             continue;
         }
 
@@ -352,7 +276,8 @@ void validate_vhdl_source_visibility_impl(
             continue;
         }
 
-        const auto canonical_name = canonical_vhdl_name(name.spelling);
+        const auto canonical_name
+            = support::canonical_vhdl_spelling(name.spelling);
         std::string sibling_name;
         bool sibling_constant_exists { };
         for (const auto& sibling : declarations) {
@@ -368,7 +293,7 @@ void validate_vhdl_source_visibility_impl(
                 declarations, [&](const vh::Declaration& candidate) {
                     return candidate.form == vh::DeclarationForm::constant
                         && candidate.scope == *sibling.nested_scope
-                        && canonical_vhdl_name(candidate.name)
+                        && support::canonical_vhdl_spelling(candidate.name)
                             == canonical_name
                         && same_physical_source(
                             model, candidate.source, expression.source);
@@ -395,61 +320,12 @@ std::string library_of(const DesignUnit& unit) {
   return unit.library.empty() ? std::string{"work"} : unit.library;
 }
 
-std::vector<std::string_view> selected_name_parts(
-    const std::string_view name) {
-  std::vector<std::string_view> result;
-  std::size_t begin = 0;
-  bool in_extended_identifier { };
-  for (std::size_t index = 0; index < name.size(); ++index) {
-    if (name[index] == '\\') {
-      if (in_extended_identifier && index + 1U < name.size()
-          && name[index + 1U] == '\\') {
-        ++index;
-        continue;
-      }
-      in_extended_identifier = !in_extended_identifier;
-      continue;
-    }
-    if (name[index] != '.' || in_extended_identifier) {
-      continue;
-    }
-    if (index == begin) {
-      return { };
-    }
-    result.push_back(name.substr(begin, index - begin));
-    begin = index + 1U;
-  }
-  if (begin == name.size()) {
-    return { };
-  }
-  result.push_back(name.substr(begin));
-  return result;
-}
-
-std::string vhdl_unit_name_spelling(
-    const std::string_view name, const bool extended)
-{
-  if (!extended) {
-    return std::string { name };
-  }
-  std::string result { "\\" };
-  result.reserve(name.size() + 2U);
-  for (const auto character : name) {
-    result.push_back(character);
-    if (character == '\\') {
-      result.push_back('\\');
-    }
-  }
-  result.push_back('\\');
-  return result;
-}
-
 std::string vhdl_identifier_key(
     const std::string_view name, const bool extended)
 {
   return extended
-      ? vhdl_unit_name_spelling(name, true)
-      : canonical_vhdl_name(std::string { name });
+      ? support::encode_vhdl_identifier(name, true)
+      : support::canonical_vhdl_spelling(std::string { name });
 }
 
 std::optional<std::string> vhdl_metadata_identifier_key(
@@ -469,28 +345,17 @@ std::optional<std::string> vhdl_metadata_identifier_key(
 
 std::string context_lookup_name(const std::string_view spelling)
 {
-  const bool extended = spelling.size() >= 2U
-      && spelling.front() == '\\' && spelling.back() == '\\';
-  if (!extended) {
-    return canonical_vhdl_name(std::string { spelling });
-  }
-  std::string decoded;
-  decoded.reserve(spelling.size() - 2U);
-  for (std::size_t index = 1U; index + 1U < spelling.size(); ++index) {
-    decoded.push_back(spelling[index]);
-    if (spelling[index] == '\\' && index + 2U < spelling.size()
-        && spelling[index + 1U] == '\\') {
-      ++index;
-    }
-  }
-  return vhdl_identifier_key(decoded, true);
+  return support::is_extended_vhdl_identifier(spelling)
+      ? vhdl_identifier_key(support::decode_vhdl_identifier(spelling), true)
+      : support::canonical_vhdl_spelling(std::string { spelling });
 }
 
 std::string selected_library(
     const std::string_view requested,
     const std::string_view owner) {
-  const auto canonical = canonical_vhdl_name(std::string { requested });
-  return canonical == "work" ? std::string { owner } : canonical;
+    const auto canonical
+        = support::canonical_vhdl_spelling(std::string { requested });
+    return canonical == "work" ? std::string { owner } : canonical;
 }
 
 std::string primary_key(
@@ -626,7 +491,7 @@ class AnalysisOrderValidator {
              break;
          case semantic::vhdl::UnitKind::context:
              contexts_.insert_or_assign(
-                 primary_key(library, vhdl_unit_name_spelling(
+                 primary_key(library, support::encode_vhdl_identifier(
                      unit.name, unit.extended_name)),
                  unit.standard);
              break;
@@ -674,7 +539,7 @@ class AnalysisOrderValidator {
     const auto owner_library = library_of(unit);
     for (const auto& item : unit.vhdl_context) {
       for (const auto& selected_name : item.selected_names) {
-        const auto parts = selected_name_parts(selected_name);
+        const auto parts = support::split_vhdl_selected_name(selected_name);
         if (item.kind == frontend::VhdlContextItemKind::UseClause
             && parts.size() == 3) {
           if (parts[0] == "ieee" || parts[0] == "std") {
@@ -748,7 +613,8 @@ class AnalysisOrderValidator {
               = binding.configuration_reference_spelling.empty()
               ? binding.configuration_name
               : binding.configuration_reference_spelling;
-          const auto parts = selected_name_parts(configuration_spelling);
+          const auto parts
+              = support::split_vhdl_selected_name(configuration_spelling);
           if (parts.empty() || parts.size() > 2) {
               return;
           }
@@ -774,7 +640,7 @@ class AnalysisOrderValidator {
 
       const auto& entity_spelling = binding.entity_reference_spelling.empty()
           ? binding.entity_name : binding.entity_reference_spelling;
-      const auto parts = selected_name_parts(entity_spelling);
+      const auto parts = support::split_vhdl_selected_name(entity_spelling);
       if (parts.empty() || parts.size() > 2
           || binding.architecture_name.empty()) {
           return;
@@ -882,7 +748,8 @@ class AnalysisOrderValidator {
           }
           const auto& instance_spelling = instance.vhdl_unit_name_spelling.empty()
               ? instance.unit_name : instance.vhdl_unit_name_spelling;
-          const auto parts = selected_name_parts(instance_spelling);
+          const auto parts
+              = support::split_vhdl_selected_name(instance_spelling);
           if (parts.empty() || parts.size() > 2) {
               continue;
           }
@@ -1575,7 +1442,7 @@ void validate_vhdl_mode_view_interfaces(
   const auto visible_count = [&](const frontend::DesignUnit& unit,
                                  const std::string_view view_name)
       -> std::size_t {
-    const auto parts = selected_name_parts(view_name);
+    const auto parts = support::split_vhdl_selected_name(view_name);
     const auto owner_library = library_of(unit);
     const auto package_has_view = [&](const std::string_view library,
                                       const std::string_view package_name,
@@ -1610,7 +1477,7 @@ void validate_vhdl_mode_view_interfaces(
         continue;
       }
       for (const auto& selected : item.selected_names) {
-        const auto imported = selected_name_parts(selected);
+        const auto imported = support::split_vhdl_selected_name(selected);
         if (imported.size() == 3
             && (imported[2] == "all" || imported[2] == parts.front())
             && package_has_view(imported[0], imported[1], parts.front())) {
@@ -1803,7 +1670,7 @@ void validate_vhdl_port_association_modes(
       } else if (!instance.vhdl_configuration_instance) {
         const auto& spelling = instance.vhdl_unit_name_spelling.empty()
             ? instance.unit_name : instance.vhdl_unit_name_spelling;
-        const auto parts = selected_name_parts(spelling);
+        const auto parts = support::split_vhdl_selected_name(spelling);
         if (parts.empty()) {
           continue;
         }

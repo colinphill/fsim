@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/coverage_memory_toggle.hpp"
+#include "fsim/support/index_distance.hpp"
 
 #include "fsim/support/identity128.hpp"
 #include "fsim/support/sha256.hpp"
@@ -91,11 +92,7 @@ namespace {
         const CoverageMemoryToggleIndexRange range,
         const CoverageMemoryToggleLimits& limits) noexcept
     {
-        const auto distance = range.first >= range.last
-            ? static_cast<std::uint64_t>(range.first)
-                - static_cast<std::uint64_t>(range.last)
-            : static_cast<std::uint64_t>(range.last)
-                - static_cast<std::uint64_t>(range.first);
+        const auto distance = support::index_distance(range.first, range.last);
         if (distance == std::numeric_limits<std::uint64_t>::max()
             || distance + 1U > limits.maximum_range_span
             || distance + 1U > std::numeric_limits<std::size_t>::max()) {

@@ -14,42 +14,6 @@ namespace fsim::app::application_detail {
 
 #if defined(FSIM_HAS_LLVM)
 
-namespace {
-
-    constexpr std::string_view vhdl_textio_read_marker
-        = "\x1f" "fsim-vhdl-textio-read";
-    constexpr std::string_view vhdl_textio_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-read-2008";
-    constexpr std::string_view vhdl_textio_radix_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
-    constexpr std::string_view vhdl_textio_sread_marker
-        = "\x1f" "fsim-vhdl-textio-sread";
-
-    [[nodiscard]] bool vhdl_textio_read(
-        const runtime::simir::FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && (operation.conversions.front().prefix
-                    == vhdl_textio_read_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_radix_read_2008_marker
-                || operation.conversions.front().prefix
-                    == vhdl_textio_sread_marker);
-    }
-
-    [[nodiscard]] bool vhdl_textio_sread(
-        const runtime::simir::FileScan& operation) noexcept
-    {
-        return operation.string_source && operation.consume_string_source
-            && operation.conversions.size() == 1U
-            && operation.conversions.front().prefix
-                == vhdl_textio_sread_marker;
-    }
-
-} // namespace
 
 std::uint32_t LlvmProcessExecutor::container_operation(
     void* context,
@@ -455,46 +419,31 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             runtime::simir::InputScanResult scanned;
             const auto active_time_format
                 = state.context->systemverilog_time_format();
-            const bool vhdl_textio_line = vhdl_textio_read(*scan);
             auto effective_scan = *scan;
-            if (vhdl_textio_line && !vhdl_textio_sread(*scan)) {
-                for (auto& conversion : effective_scan.conversions) {
-                    if (conversion.maximum_characters != 0U
-                        || conversion.format
-                            != runtime::simir::InputScanFormat::string) {
-                        continue;
-                    }
-                    std::size_t length { };
-                    if (conversion.target.kind
-                        == runtime::simir::InputScanTargetKind::string_register) {
-                        length = state.executor->read_string_register(
-                            conversion.target.id).size();
-                    } else if (conversion.target.kind
-                        == runtime::simir::InputScanTargetKind::string_object) {
-                        length = state.context->read_string_object(
-                            conversion.target.id).size();
-                    } else {
-                        continue;
-                    }
-                    if (length
-                        > std::numeric_limits<std::uint32_t>::max()) {
-                        throw compiler::LlvmJitError {
-                            "VHDL TextIO STRING target exceeds scan limit"
-                        };
-                    }
-                    conversion.maximum_characters
-                        = static_cast<std::uint32_t>(length);
-                }
+            if (!runtime::simir::size_vhdl_textio_string_reads(effective_scan,
+                    [&](const runtime::simir::InputScanTarget& target)
+                        -> std::optional<std::size_t> {
+                        if (target.kind == runtime::simir::InputScanTargetKind::
+                                string_register) {
+                            return state.executor->read_string_register(
+                                target.id).size();
+                        }
+                        if (target.kind == runtime::simir::InputScanTargetKind::
+                                string_object) {
+                            return state.context->read_string_object(
+                                target.id).size();
+                        }
+                        return std::nullopt;
+                    })) {
+                throw compiler::LlvmJitError {
+                    "VHDL TextIO STRING target exceeds scan limit"
+                };
             }
-            std::string* consumed_source { };
             if (scan->string_source) {
                 auto& source = state.executor->string_registers_.at(scan->source);
                 scanned = runtime::simir::scan_formatted_string(
                     effective_scan, source, active_time_format);
-                consumed_source = &source;
-                if (scan->consume_string_source && !vhdl_textio_line) {
-                    source.erase(0, std::min(source.size(), scanned.consumed));
-                }
+                runtime::simir::consume_scanned_source(*scan, source, scanned);
             } else {
                 const auto handle = checked_file_handle(input0_aval, input0_bval);
                 const std::function<std::int32_t()> read = [&] {
@@ -510,29 +459,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 scanned = runtime::simir::scan_formatted_input(
                     effective_scan, read, unread, active_time_format);
             }
-            const auto expected = static_cast<std::int32_t>(
-                std::ranges::count_if(
-                    scan->conversions,
-                    [](const runtime::simir::InputScanConversion& conversion) {
-                        return !conversion.suppress;
-                    }));
-            const bool complete = vhdl_textio_sread(*scan)
-                ? scanned.values.size() == 1U
-                    && scanned.values.front().has_value()
-                : scanned.assignments == expected;
+            const bool complete
+                = runtime::simir::file_scan_complete(*scan, scanned);
             if (scan->success) {
                 state.executor->write_register(
                     *scan->success,
                     runtime::PackedLogic4::from_aval_bval(
                         1, complete ? 1U : 0U, 0));
-            }
-            // TextIO removes each accepted character from LINE as it forms
-            // the representation. A later conversion failure does not
-            // restore that valid prefix; an invalid next character remains.
-            if (scan->consume_string_source && vhdl_textio_line
-                && consumed_source != nullptr) {
-                consumed_source->erase(0,
-                    std::min(consumed_source->size(), scanned.consumed));
             }
             if (scan->require_assignments && !complete) {
                 throw compiler::LlvmJitError {
@@ -2152,6 +2085,20 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                           .known_signed_value();
                 const auto element_count
                     = runtime::simir::container_value_size(target);
+                // Removes the element at `at` from whichever value store
+                // the container's element kind uses.
+                const auto erase_element = [&](const std::size_t at) {
+                    const auto offset = static_cast<std::ptrdiff_t>(at);
+                    if (aggregate) {
+                        target.nested_elements.erase(
+                            target.nested_elements.begin() + offset);
+                    } else if (string_element) {
+                        target.string_elements.erase(
+                            target.string_elements.begin() + offset);
+                    } else {
+                        target.elements.erase(target.elements.begin() + offset);
+                    }
+                };
                 // An unknown, negative or out-of-range index leaves the
                 // queue unchanged (IEEE 1800-2017 7.10.2.3).
                 if (target.type.queue
@@ -2161,19 +2108,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     // Nothing to delete.
                 } else if (target.type.queue) {
                     const auto at = static_cast<std::size_t>(*requested);
-                    if (aggregate) {
-                        target.nested_elements.erase(
-                            target.nested_elements.begin()
-                                + static_cast<std::ptrdiff_t>(at));
-                    } else if (string_element) {
-                        target.string_elements.erase(
-                            target.string_elements.begin()
-                                + static_cast<std::ptrdiff_t>(at));
-                    } else {
-                        target.elements.erase(
-                            target.elements.begin()
-                                + static_cast<std::ptrdiff_t>(at));
-                    }
+                    erase_element(at);
                 } else {
                     if (erase->string_index) {
                         const auto& sought = string_key(target, *erase->index);
@@ -2183,19 +2118,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             target.string_keys.erase(
                                 target.string_keys.begin()
                                     + static_cast<std::ptrdiff_t>(at));
-                            if (aggregate) {
-                                target.nested_elements.erase(
-                                    target.nested_elements.begin()
-                                        + static_cast<std::ptrdiff_t>(at));
-                            } else if (string_element) {
-                                target.string_elements.erase(
-                                    target.string_elements.begin()
-                                        + static_cast<std::ptrdiff_t>(at));
-                            } else {
-                                target.elements.erase(
-                                    target.elements.begin()
-                                        + static_cast<std::ptrdiff_t>(at));
-                            }
+                            erase_element(at);
                         }
                         return 0;
                     }
@@ -2207,19 +2130,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         target.keys.erase(
                             target.keys.begin()
                                 + static_cast<std::ptrdiff_t>(at));
-                        if (aggregate) {
-                            target.nested_elements.erase(
-                                target.nested_elements.begin()
-                                    + static_cast<std::ptrdiff_t>(at));
-                        } else if (string_element) {
-                            target.string_elements.erase(
-                                target.string_elements.begin()
-                                    + static_cast<std::ptrdiff_t>(at));
-                        } else {
-                            target.elements.erase(
-                                target.elements.begin()
-                                    + static_cast<std::ptrdiff_t>(at));
-                        }
+                        erase_element(at);
                     }
                 }
             } else {

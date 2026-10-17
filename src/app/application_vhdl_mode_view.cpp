@@ -1,21 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 namespace fsim::app::application_detail {
 namespace {
 
 namespace vh = semantic::vhdl;
-
-[[nodiscard]] std::string canonical_vhdl_mode_view_name(std::string value)
-{
-    if (!value.empty() && value.front() != '\\' && value.front() != '\'') {
-        std::transform(value.begin(), value.end(), value.begin(), [](const char c) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c)));
-        });
-    }
-    return value;
-}
 
 class ModeViewComposer final {
 public:
@@ -175,8 +165,8 @@ private:
                 return unit.kind == vh::UnitKind::package
                     && unit.primary_name.empty()
                     && unit_library == library
-                    && canonical_vhdl_mode_view_name(unit.name)
-                        == canonical_vhdl_mode_view_name(std::string { name });
+                    && support::canonical_vhdl_spelling(unit.name)
+                    == support::canonical_vhdl_spelling(std::string { name });
             });
         return found == hir_.units().end() ? nullptr : &*found;
     }
@@ -185,14 +175,14 @@ private:
         const semantic::ScopeId scope,
         const std::string_view name) const
     {
-        const auto canonical = canonical_vhdl_mode_view_name(
+        const auto canonical = support::canonical_vhdl_spelling(
             std::string { name });
         const auto found = std::ranges::find_if(
             hir_.declarations(),
             [&](const vh::Declaration& declaration) {
                 return declaration.scope == scope
                     && declaration.mode_view
-                    && canonical_vhdl_mode_view_name(declaration.name)
+                    && support::canonical_vhdl_spelling(declaration.name)
                         == canonical;
             });
         return found == hir_.declarations().end() ? nullptr : &*found;
@@ -202,7 +192,7 @@ private:
         const semantic::ScopeId scope,
         const std::string_view name) const
     {
-        const auto canonical = canonical_vhdl_mode_view_name(
+        const auto canonical = support::canonical_vhdl_spelling(
             std::string { name });
         const auto found = std::ranges::find_if(
             hir_.types(),
@@ -225,7 +215,7 @@ private:
         if (owner == nullptr) {
             return nullptr;
         }
-        const auto canonical = canonical_vhdl_mode_view_name(
+        const auto canonical = support::canonical_vhdl_spelling(
             std::string { spelling });
         auto lexical_scope = declaration.scope;
         std::vector<semantic::ScopeId> visited;
@@ -556,7 +546,7 @@ private:
                 const auto member = std::ranges::find_if(
                     record->record_elements,
                     [&](const vh::RecordElement& candidate) {
-                        return canonical_vhdl_mode_view_name(candidate.name)
+                        return support::canonical_vhdl_spelling(candidate.name)
                             == element.element.canonical;
                     });
                 if (member == record->record_elements.end()) {

@@ -1665,20 +1665,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             if (kind == TokenKind::EndOfFile
                 || (kind == TokenKind::Semicolon
                     && square_depth == 0)
-                || ((kind == TokenKind::Assign
-                        || kind == TokenKind::LessEqual
-                        || kind == TokenKind::PlusAssign
-                        || kind == TokenKind::MinusAssign
-                        || kind == TokenKind::StarAssign
-                        || kind == TokenKind::SlashAssign
-                        || kind == TokenKind::PercentAssign
-                        || kind == TokenKind::AmpersandAssign
-                        || kind == TokenKind::PipeAssign
-                        || kind == TokenKind::CaretAssign
-                        || kind == TokenKind::ShiftLeftAssign
-                        || kind == TokenKind::ShiftRightAssign
-                        || kind == TokenKind::ArithmeticShiftLeftAssign
-                        || kind == TokenKind::ArithmeticShiftRightAssign)
+                || ((kind == TokenKind::LessEqual
+                        || is_blocking_assignment_operator(kind))
                     && square_depth == 0)
                 || (kind == TokenKind::LeftParen
                     && square_depth == 0)) {
@@ -1779,25 +1767,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         }
         const auto contains_top_level_assignment = [&](const std::size_t start_index) {
             const auto is_assignment_operator = [](const TokenKind kind) {
-                switch (kind) {
-                case TokenKind::Assign:
-                case TokenKind::LessEqual:
-                case TokenKind::PlusAssign:
-                case TokenKind::MinusAssign:
-                case TokenKind::StarAssign:
-                case TokenKind::SlashAssign:
-                case TokenKind::PercentAssign:
-                case TokenKind::AmpersandAssign:
-                case TokenKind::PipeAssign:
-                case TokenKind::CaretAssign:
-                case TokenKind::ShiftLeftAssign:
-                case TokenKind::ShiftRightAssign:
-                case TokenKind::ArithmeticShiftLeftAssign:
-                case TokenKind::ArithmeticShiftRightAssign:
-                    return true;
-                default:
-                    return false;
-                }
+                return kind == TokenKind::LessEqual
+                    || is_blocking_assignment_operator(kind);
             };
 
             std::size_t parenthesis_depth { };
@@ -1980,20 +1951,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 if (kind == TokenKind::Semicolon) {
                     return saw_call;
                 }
-                if (kind == TokenKind::Assign
-                    || kind == TokenKind::LessEqual
-                    || kind == TokenKind::PlusAssign
-                    || kind == TokenKind::MinusAssign
-                    || kind == TokenKind::StarAssign
-                    || kind == TokenKind::SlashAssign
-                    || kind == TokenKind::PercentAssign
-                    || kind == TokenKind::AmpersandAssign
-                    || kind == TokenKind::PipeAssign
-                    || kind == TokenKind::CaretAssign
-                    || kind == TokenKind::ShiftLeftAssign
-                    || kind == TokenKind::ShiftRightAssign
-                    || kind == TokenKind::ArithmeticShiftLeftAssign
-                    || kind == TokenKind::ArithmeticShiftRightAssign) {
+                if (kind == TokenKind::LessEqual
+                    || is_blocking_assignment_operator(kind)) {
                     return false;
                 }
                 if (kind == TokenKind::LeftParen) {
@@ -2178,38 +2137,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         } else if (match(TokenKind::Assign)) {
             assignment_kind = AssignmentKind::Blocking;
         } else {
-            const auto compound_operation =
-                [](const TokenKind kind)
-                -> std::optional<std::string_view> {
-                switch (kind) {
-                case TokenKind::PlusAssign:
-                    return "+";
-                case TokenKind::MinusAssign:
-                    return "-";
-                case TokenKind::StarAssign:
-                    return "*";
-                case TokenKind::SlashAssign:
-                    return "/";
-                case TokenKind::PercentAssign:
-                    return "%";
-                case TokenKind::AmpersandAssign:
-                    return "&";
-                case TokenKind::PipeAssign:
-                    return "|";
-                case TokenKind::CaretAssign:
-                    return "^";
-                case TokenKind::ShiftLeftAssign:
-                    return "<<";
-                case TokenKind::ShiftRightAssign:
-                    return ">>";
-                case TokenKind::ArithmeticShiftLeftAssign:
-                    return "<<<";
-                case TokenKind::ArithmeticShiftRightAssign:
-                    return ">>>";
-                default:
-                    return std::nullopt;
-                }
-            }(current().kind);
+            const auto compound_text
+                = compound_assignment_operator(current().kind);
+            const auto compound_operation = compound_text.empty()
+                ? std::optional<std::string_view> { }
+                : std::optional { compound_text };
             if (compound_operation) {
                 require_sv2005("a compound assignment", current());
                 update_operation = *compound_operation;

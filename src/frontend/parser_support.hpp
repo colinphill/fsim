@@ -3,6 +3,7 @@
 
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/token.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <cstddef>
 #include <cstdint>

@@ -4,9 +4,8 @@
 
 namespace fsim::frontend {
 
-namespace {
-
-[[nodiscard]] std::optional<StandardRevision> structural_word_standard(
+// The first standard revision that reserves a structural keyword.
+std::optional<StandardRevision> structural_word_standard(
     const std::string_view word) {
   if (word == "config" || word == "generate" || word == "genvar") {
     return StandardRevision::Verilog2001;
@@ -27,6 +26,8 @@ namespace {
   }
   return std::nullopt;
 }
+
+namespace {
 
 [[nodiscard]] bool profile_has(
     const std::string_view profile,

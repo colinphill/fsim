@@ -12,20 +12,9 @@ using namespace runtime::simir;
 
 namespace {
 
-std::string float_canonical_name(std::string_view name)
-{
-    const auto separator = name.find_last_of('.');
-    if (separator != std::string_view::npos) {
-        name.remove_prefix(separator + 1U);
-    }
-    std::string result { name };
-    lowercase_ascii(result);
-    return result;
-}
-
 bool float_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
 {
-    const auto name = float_canonical_name(subtype.type_mark.spelling);
+    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
     return name == "float" || name == "unresolved_float"
         || name == "u_float" || name == "float32"
         || name == "unresolved_float32" || name == "u_float32";
@@ -73,14 +62,12 @@ bool Lowerer::is_hir_vhdl_float_function(
         return false;
     }
     const auto& source = *expression->vhdl;
-    const auto name = float_canonical_name(source.text);
+    const auto name = lowercase_vhdl_simple_name(source.text);
     if (!float_result_name(name) && !boolean_result_name(name)
         && !packed_result_name(name) && name != "to_integer") {
         return false;
     }
-    if (!semantic::CompiledDesignResolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        }.vhdl_standard_package_member_visible(
+    if (!hir_resolver().vhdl_standard_package_member_visible(
             *source.referenced_name, source.scope)) {
         return false;
     }
@@ -108,7 +95,7 @@ Lowerer::hir_vhdl_float_function_profile(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    const auto name = float_canonical_name(expression->vhdl->text);
+    const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
     if (float_result_name(name)) {
         return HirVhdlIntrinsicProfile {
             32U, frontend::ValueDomain::Logic9, false };
@@ -138,7 +125,7 @@ bool Lowerer::validate_hir_vhdl_float_context(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    const auto name = float_canonical_name(expression->vhdl->text);
+    const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
     if (!float_result_name(name)) {
         return true;
     }
@@ -175,7 +162,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     const auto& source = *expression->vhdl;
-    const auto root_name = float_canonical_name(source.text);
+    const auto root_name = lowercase_vhdl_simple_name(source.text);
     const auto span = hir_source_span(source.source);
 
     const auto valid_dimensions = [&](const semantic::vhdl::Expression& call) {
@@ -200,7 +187,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
             return std::nullopt;
         }
         const auto& call = *candidate->vhdl;
-        const auto name = float_canonical_name(call.text);
+        const auto name = lowercase_vhdl_simple_name(call.text);
         if (name == "zerofp" || name == "neg_zerofp"
             || name == "nanfp" || name == "qnanfp"
             || name == "pos_inffp" || name == "neg_inffp") {
@@ -345,13 +332,8 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
                 span);
             return { true, std::nullopt };
         }
-        const auto result = allocate_register(
+        const auto result = load_integer(static_cast<std::int64_t>(rounded),
             integer_width, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(LoadConstant {
-            result,
-            integer_value(
-                static_cast<std::int64_t>(rounded), integer_width),
-        });
         return { true, result };
     }
 
@@ -381,10 +363,9 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         : root_name == "le"                        ? left <= right
         : root_name == "gt"                        ? left > right
                                                     : left >= right;
-    const auto result = allocate_register(
-        1U, frontend::ValueDomain::Boolean);
-    process_.operations.emplace_back(LoadConstant {
-        result, unsigned_value(result_value ? 1U : 0U, 1U) });
+    const auto result
+        = load_constant(unsigned_value(result_value ? 1U : 0U, 1U),
+            frontend::ValueDomain::Boolean);
     return { true, result };
 }
 

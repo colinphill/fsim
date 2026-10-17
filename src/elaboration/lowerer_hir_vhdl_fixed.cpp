@@ -10,20 +10,9 @@ using namespace runtime::simir;
 
 namespace {
 
-std::string fixed_canonical_name(std::string_view name)
-{
-    const auto separator = name.find_last_of('.');
-    if (separator != std::string_view::npos) {
-        name.remove_prefix(separator + 1U);
-    }
-    std::string result { name };
-    lowercase_ascii(result);
-    return result;
-}
-
 bool fixed_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
 {
-    const auto name = fixed_canonical_name(subtype.type_mark.spelling);
+    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
     return name == "ufixed" || name == "sfixed"
         || name == "unresolved_ufixed" || name == "unresolved_sfixed";
 }
@@ -31,7 +20,7 @@ bool fixed_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
 bool signed_fixed_subtype(
     const semantic::vhdl::SubtypeIndication& subtype)
 {
-    const auto name = fixed_canonical_name(subtype.type_mark.spelling);
+    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
     return subtype.signed_value || name == "sfixed"
         || name == "unresolved_sfixed";
 }
@@ -124,7 +113,7 @@ bool Lowerer::is_hir_vhdl_fixed_function(
         return false;
     }
     const auto& source = *expression->vhdl;
-    const auto name = fixed_canonical_name(source.text);
+    const auto name = lowercase_vhdl_simple_name(source.text);
     if (name != "to_ufixed" && name != "to_sfixed"
         && name != "resize") {
         return false;
@@ -137,9 +126,7 @@ bool Lowerer::is_hir_vhdl_fixed_function(
             return false;
         }
     }
-    return semantic::CompiledDesignResolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    }.vhdl_standard_package_member_visible(
+    return hir_resolver().vhdl_standard_package_member_visible(
         *source.referenced_name, source.scope);
 }
 
@@ -166,7 +153,7 @@ Lowerer::hir_vhdl_fixed_function_profile(
         || distance >= std::numeric_limits<std::size_t>::max()) {
         return std::nullopt;
     }
-    const auto name = fixed_canonical_name(source.text);
+    const auto name = lowercase_vhdl_simple_name(source.text);
     auto signed_value = name == "to_sfixed";
     if (name == "resize") {
         const auto subtype = hir_vhdl_expression_subtype(
@@ -234,7 +221,7 @@ bool Lowerer::validate_hir_vhdl_fixed_context(
     }
     report(
         "FSIM-ELAB-VHFIX-004",
-        fixed_canonical_name(source.text)
+        lowercase_vhdl_simple_name(source.text)
             + " bounds do not match the contextual fixed-point range",
         hir_source_span(source.source));
     return false;
@@ -257,7 +244,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
             ? hir_source_span(record->vhdl->source)
             : span;
     };
-    const auto name = fixed_canonical_name(source.text);
+    const auto name = lowercase_vhdl_simple_name(source.text);
     const auto conversion = name == "to_ufixed" || name == "to_sfixed";
     if (source.operands.size() != 3U) {
         report(
@@ -409,13 +396,9 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
             return { true, std::nullopt };
         }
         if (amount > source_width) {
-            const auto zero = allocate_register(
-                result_width, frontend::ValueDomain::Logic9);
-            process_.operations.emplace_back(LoadConstant {
-                zero,
-                PackedLogic4(result_width, Logic4::zero)
-                    .promoted_to_logic9(),
-            });
+            const auto zero = load_constant(
+                PackedLogic4(result_width, Logic4::zero).promoted_to_logic9(),
+                frontend::ValueDomain::Logic9);
             return { true, zero };
         }
         if (source_width == std::numeric_limits<std::uint32_t>::max()) {
@@ -436,10 +419,8 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
             work_width, frontend::ValueDomain::Logic9);
         process_.operations.emplace_back(Binary {
             BinaryOperator::add_unsigned, rounded, *lowered_source, half });
-        const auto count = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            count, unsigned_value(amount, 32U) });
+        const auto count = load_constant(
+            unsigned_value(amount, 32U), frontend::ValueDomain::Bit2);
         const auto shifted = allocate_register(
             work_width, frontend::ValueDomain::Logic9);
         process_.operations.emplace_back(Shift {
@@ -464,19 +445,13 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
         lowered_source = resize_register(
             *lowered_source, work_width, signed_source);
         if (amount >= work_width) {
-            const auto zero = allocate_register(
-                work_width, frontend::ValueDomain::Logic9);
-            process_.operations.emplace_back(LoadConstant {
-                zero,
-                PackedLogic4(work_width, Logic4::zero)
-                    .promoted_to_logic9(),
-            });
+            const auto zero = load_constant(
+                PackedLogic4(work_width, Logic4::zero).promoted_to_logic9(),
+                frontend::ValueDomain::Logic9);
             lowered_source = zero;
         } else {
-            const auto count = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                count, unsigned_value(amount, 32U) });
+            const auto count = load_constant(
+                unsigned_value(amount, 32U), frontend::ValueDomain::Bit2);
             const auto shifted = allocate_register(
                 work_width, frontend::ValueDomain::Logic9);
             process_.operations.emplace_back(Shift {

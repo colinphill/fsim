@@ -1249,8 +1249,8 @@ void Interpreter::Impl::handle_boundary(
                 "selected SimIR event range was not registered");
         }
         const auto stamp = selected->last_event;
-        const auto active = stamp && stamp->first == scheduler.now()
-            && stamp->second == scheduler.delta();
+        const auto active
+            = signal_attribute_detail::in_current_delta(*this, stamp);
         write_process_register(
             process, event->destination,
             PackedLogic4(1U, active ? Logic4::one : Logic4::zero));
@@ -1266,10 +1266,8 @@ void Interpreter::Impl::handle_boundary(
             fail(process,
                 "selected SimIR last-event range was not registered");
         }
-        const auto elapsed = selected->last_event
-            ? scheduler.now() - selected->last_event->first
-            : static_cast<SimulationTick>(
-                  std::numeric_limits<std::int64_t>::max());
+        const auto elapsed = signal_attribute_detail::elapsed_since(
+            *this, selected->last_event);
         write_process_register(
             process, last_event->destination,
             PackedLogic4::from_aval_bval(64U, elapsed, 0U));
@@ -1286,9 +1284,8 @@ void Interpreter::Impl::handle_boundary(
                 "selected SimIR active range was not registered");
         }
         const auto stamp = selected->last_transaction;
-        const auto in_current_delta = stamp
-            && stamp->first == scheduler.now()
-            && stamp->second == scheduler.delta();
+        const auto in_current_delta
+            = signal_attribute_detail::in_current_delta(*this, stamp);
         write_process_register(
             process, active->destination,
             PackedLogic4(1U,
@@ -1305,10 +1302,8 @@ void Interpreter::Impl::handle_boundary(
             fail(process,
                 "selected SimIR last-active range was not registered");
         }
-        const auto elapsed = selected->last_transaction
-            ? scheduler.now() - selected->last_transaction->first
-            : static_cast<SimulationTick>(
-                  std::numeric_limits<std::int64_t>::max());
+        const auto elapsed = signal_attribute_detail::elapsed_since(
+            *this, selected->last_transaction);
         write_process_register(
             process, last_active->destination,
             PackedLogic4::from_aval_bval(64U, elapsed, 0U));
@@ -2018,7 +2013,7 @@ void Interpreter::Impl::handle_boundary(
         return;
     }
     if (const auto* class_allocate = fsim::runtime::simir::operation_get_if<ClassAllocate>(&operation)) {
-        if (!class_allocate_hook && !class_allocate_context_hook) {
+        if (!class_allocate_context_hook) {
             fail(process, "class allocation service is unavailable");
         }
         std::vector<PackedLogic4> actuals;
@@ -2037,17 +2032,8 @@ void Interpreter::Impl::handle_boundary(
                     ? process.executor->read_string_register(actual)
                     : std::string { });
         }
-        const auto handle = class_allocate_context_hook
-            ? class_allocate_context_hook(
+        const auto handle = class_allocate_context_hook(
                   process.id,
-                  process.cold().design_process,
-                  process.program().name(),
-                  class_allocate->specialization_identity,
-                  class_allocate->declared_type,
-                  actuals,
-                  string_actuals,
-                  class_allocate->constructor_actual_names)
-            : class_allocate_hook(
                   process.cold().design_process,
                   process.program().name(),
                   class_allocate->specialization_identity,
@@ -2129,7 +2115,7 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassMethodCall>(
             &operation)) {
-        if (!class_method_call_hook && !class_method_call_context_hook) {
+        if (!class_method_call_context_hook) {
             fail(process, "class method service is unavailable");
         }
         std::vector<PackedLogic4> actuals;
@@ -2155,18 +2141,8 @@ void Interpreter::Impl::handle_boundary(
             process,
             method->destination,
             resize_class_value(
-                class_method_call_context_hook
-                    ? class_method_call_context_hook(
+                class_method_call_context_hook(
                           process.id,
-                          handle,
-                          method->method_identity,
-                          actuals,
-                          string_actuals,
-                          method->actual_names,
-                          method->actual_directions,
-                          method->inline_constraints,
-                          method->virtual_dispatch)
-                    : class_method_call_hook(
                           handle,
                           method->method_identity,
                           actuals,
@@ -2219,8 +2195,7 @@ void Interpreter::Impl::handle_boundary(
         const auto dpi = std::string_view { method->method_identity }
             .starts_with(systemverilog_dpi_function_prefix);
         if ((dpi && !dpi_function_call_hook)
-            || (!dpi && !class_static_method_call_hook
-                && !class_static_method_call_context_hook)) {
+            || (!dpi && !class_static_method_call_context_hook)) {
             fail(process, dpi
                 ? "SystemVerilog DPI function service is unavailable"
                 : "class static method service is unavailable");
@@ -2255,15 +2230,8 @@ void Interpreter::Impl::handle_boundary(
                           string_actuals,
                           method->actual_names,
                           method->actual_directions)
-                    : class_static_method_call_context_hook
-                    ? class_static_method_call_context_hook(
+                    : class_static_method_call_context_hook(
                           process.id,
-                          identity,
-                          actuals,
-                          string_actuals,
-                          method->actual_names,
-                          method->actual_directions)
-                    : class_static_method_call_hook(
                           identity,
                           actuals,
                           string_actuals,

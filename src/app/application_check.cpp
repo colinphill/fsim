@@ -304,17 +304,7 @@ bool validate_vhdl_type_mark_visibility(
       if (!source_id.valid()) {
         source_id = declaration->source;
       }
-      diagnostic::SourceSpan source;
-      if (source_id.valid()
-          && source_id.value() < checked.semantics.source_spans().size()) {
-        const auto& semantic_source
-            = checked.semantics.source_spans()[source_id.value()];
-        source.path = semantic_source.logical_name;
-        source.begin = { semantic_source.begin.line,
-            semantic_source.begin.column, semantic_source.begin.offset };
-        source.end = { semantic_source.end.line,
-            semantic_source.end.column, semantic_source.end.offset };
-      }
+      auto source = compiled_source_span(checked.semantics, source_id);
       diagnostics.error("FSIM-ELAB-VHTYPE-006",
           "VHDL type mark '" + std::string { spelling } + "'" + reason,
           std::move(source));

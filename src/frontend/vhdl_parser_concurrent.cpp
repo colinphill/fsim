@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <unordered_map>
 
@@ -906,16 +907,16 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       const auto first = expect_identifier("entity name");
       instance.unit_name = vhdl_name(first.text);
       instance.vhdl_unit_name_spelling = first.text;
-      instance.vhdl_extended_unit_name = first.text.size() >= 2U
-          && first.text.front() == '\\' && first.text.back() == '\\';
+      instance.vhdl_extended_unit_name
+          = support::is_extended_vhdl_identifier(first.text);
       if (match(TokenKind::Dot)) {
           const auto unit = expect_identifier("entity name after library");
           instance.unit_name += '.';
           instance.unit_name += vhdl_name(unit.text);
           instance.vhdl_unit_name_spelling += '.';
           instance.vhdl_unit_name_spelling += unit.text;
-          instance.vhdl_extended_unit_name = unit.text.size() >= 2U
-              && unit.text.front() == '\\' && unit.text.back() == '\\';
+          instance.vhdl_extended_unit_name
+              = support::is_extended_vhdl_identifier(unit.text);
       }
     if (match(TokenKind::LeftParen)) {
       const auto architecture =
@@ -925,9 +926,7 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       instance.unit_name += ')';
       instance.vhdl_architecture_name_spelling = architecture.text;
       instance.vhdl_extended_architecture_name
-          = architecture.text.size() >= 2U
-              && architecture.text.front() == '\\'
-              && architecture.text.back() == '\\';
+          = support::is_extended_vhdl_identifier(architecture.text);
       expect(TokenKind::RightParen, "')' after architecture name",
              "FSIM-VHDL-PARSE-036");
     }
@@ -940,16 +939,16 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       const auto first = expect_identifier("configuration name");
       instance.unit_name = vhdl_name(first.text);
       instance.vhdl_unit_name_spelling = first.text;
-      instance.vhdl_extended_unit_name = first.text.size() >= 2U
-          && first.text.front() == '\\' && first.text.back() == '\\';
+      instance.vhdl_extended_unit_name
+          = support::is_extended_vhdl_identifier(first.text);
       if (match(TokenKind::Dot)) {
           const auto unit = expect_identifier("configuration name after library");
           instance.unit_name += '.';
           instance.unit_name += vhdl_name(unit.text);
           instance.vhdl_unit_name_spelling += '.';
           instance.vhdl_unit_name_spelling += unit.text;
-          instance.vhdl_extended_unit_name = unit.text.size() >= 2U
-              && unit.text.front() == '\\' && unit.text.back() == '\\';
+          instance.vhdl_extended_unit_name
+              = support::is_extended_vhdl_identifier(unit.text);
       }
     instance.vhdl_configuration_instance = true;
   } else {
@@ -964,8 +963,8 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
     instance.vhdl_unit_name_spelling = component.text;
-    instance.vhdl_extended_unit_name = component.text.size() >= 2U
-        && component.text.front() == '\\' && component.text.back() == '\\';
+    instance.vhdl_extended_unit_name
+        = support::is_extended_vhdl_identifier(component.text);
     while (match(TokenKind::Dot)) {
       const auto selected = expect_identifier(
           "selected component name after package");
@@ -973,8 +972,8 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       instance.unit_name += vhdl_name(selected.text);
       instance.vhdl_unit_name_spelling += '.';
       instance.vhdl_unit_name_spelling += selected.text;
-      instance.vhdl_extended_unit_name = selected.text.size() >= 2U
-          && selected.text.front() == '\\' && selected.text.back() == '\\';
+      instance.vhdl_extended_unit_name
+          = support::is_extended_vhdl_identifier(selected.text);
     }
     instance.vhdl_component_instance = true;
   }
@@ -1149,67 +1148,12 @@ void VhdlParser::parse_vhdl_generic_map(
       TokenKind::LeftParen,
       "'(' after generic map",
       "FSIM-VHDL-PARSE-038");
-  bool saw_named = false;
-  const auto begins_unambiguous_subtype_indication = [&]() {
-    if (!at(TokenKind::Identifier)) {
-      return false;
-    }
-    std::size_t lookahead = 1;
-    while (at(TokenKind::Dot, lookahead)
-           && at(TokenKind::Identifier, lookahead + 1)) {
-      lookahead += 2;
-    }
-    return keyword("range", lookahead, true);
-  };
-  while (!at_end() && !at(TokenKind::RightParen)) {
-    const auto association_start = current();
-    ParameterOverride actual;
-    if (at(TokenKind::Identifier)
-        && at(TokenKind::Arrow, 1)) {
-      saw_named = true;
-      const auto name = advance();
-      advance();
-      actual.name = vhdl_name(name.text);
-      if (std::any_of(
-              instance.parameter_overrides.begin(),
-              instance.parameter_overrides.end(),
-              [&](const ParameterOverride& existing) {
-                return existing.name == actual.name;
-              })) {
-        error(
-            name,
-            "FSIM-VHDL-SEM-015",
-            "duplicate named generic actual '"
-                + *actual.name + "'");
-      }
-    } else if (saw_named) {
-      error(
-          current(),
-          "FSIM-VHDL-SEM-016",
-          "a positional generic actual cannot follow a named actual");
-    }
-    if (match_keyword("open", true)) {
-      actual.default_box = true;
-    } else if (match(TokenKind::Less)) {
-      expect(
-          TokenKind::Greater,
-          "'>' in default generic association '<>'",
-          "FSIM-VHDL-PARSE-230");
-      actual.default_box = true;
-    } else {
-      if (begins_unambiguous_subtype_indication()) {
-        actual.type_value = parse_vhdl_type(true, true);
-      } else {
-        actual.value = parse_expression();
-      }
-    }
-    actual.span =
-        cover(association_start.span, previous().span);
-    instance.parameter_overrides.push_back(std::move(actual));
-    if (!match(TokenKind::Comma)) {
-      break;
-    }
-  }
+  parse_vhdl_generic_associations(instance.parameter_overrides, {
+      "FSIM-VHDL-SEM-015", "duplicate named generic actual",
+      "FSIM-VHDL-SEM-016",
+      "a positional generic actual cannot follow a named actual",
+      "'>' in default generic association '<>'",
+      "FSIM-VHDL-PARSE-230", true });
   expect(
       TokenKind::RightParen,
       "')' after generic map",

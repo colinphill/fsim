@@ -43,16 +43,16 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "7c443e90b95d18459f63267fb9a490887a86737b17d9a48d0a9f66440129faf1")
+  "edaf082a733dbe9be2cde7920693630fb3c2b0fbff1b5f4e24dfdd5f016d9e7b")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable stale-schema contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 35)
+if(NOT FSIM_ROW_COUNT EQUAL 34)
   message(FATAL_ERROR
-    "portable stale-schema contract requires SPDX, header and 33 rows")
+    "portable stale-schema contract requires SPDX, header and 32 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -61,13 +61,10 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
      "family\tboundary\tcurrent_identity\trejection_and_containment")
   message(FATAL_ERROR "portable stale-schema header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 34)
+foreach(FSIM_INDEX RANGE 2 33)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
-  # Count TSV delimiters directly. Some identity cells contain semicolons to
-  # distinguish current and bounded legacy identities.
-  string(REGEX MATCHALL "\t" FSIM_TABS "${FSIM_ROW}")
-  list(LENGTH FSIM_TABS FSIM_TAB_COUNT)
-  math(EXPR FSIM_FIELD_COUNT "${FSIM_TAB_COUNT} + 1")
+  string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
+  list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
   if(NOT FSIM_FIELD_COUNT EQUAL 4)
     message(FATAL_ERROR
       "portable stale-schema row ${FSIM_INDEX} requires four fields")
@@ -103,8 +100,6 @@ fsim_require_portable_policy_tokens("${FSIM_OBJECT_CODEC}"
   "metadata.portable_schema != library::kPortableSchemaVersion"
   "metadata.compiled_hir_schema"
   "!= library::kCompiledHirSchemaVersion"
-  "constexpr std::uint32_t kPreviousObjectFormatVersion = 8;"
-  "constexpr std::uint32_t kPreviousPortableSchemaVersion = 15;"
   "validate_metadata("
   "invalid object metadata supplied for publication")
 fsim_forbid_portable_policy_tokens("${FSIM_OBJECT_CODEC}"
@@ -120,69 +115,12 @@ endif()
 string(SUBSTRING "${FSIM_OBJECT_TEXT}" ${FSIM_OBJECT_HEADER_OFFSET} -1
   FSIM_OBJECT_DECODER_TEXT)
 string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "const bool current_identity" FSIM_OBJECT_CURRENT_IDENTITY_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "metadata.format == kObjectFormatVersion" FSIM_OBJECT_CURRENT_FORMAT_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "metadata.portable_schema == library::kPortableSchemaVersion"
-  FSIM_OBJECT_CURRENT_SCHEMA_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "const bool legacy_identity" FSIM_OBJECT_LEGACY_IDENTITY_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "metadata.format == kPreviousObjectFormatVersion"
-  FSIM_OBJECT_LEGACY_FORMAT_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "metadata.portable_schema == kPreviousPortableSchemaVersion"
-  FSIM_OBJECT_LEGACY_SCHEMA_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "if ((!current_identity && !legacy_identity)" FSIM_OBJECT_REJECT_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "!= library::kCompiledHirSchemaVersion" FSIM_OBJECT_HIR_REJECT_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "return std::nullopt;" FSIM_OBJECT_EARLY_RETURN_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "auto read_compiled_hir_artifact = canonical.path()"
-  FSIM_OBJECT_PAYLOAD_OFFSET)
-string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
-  "auto read_compiled_hir_checksum = canonical.string()"
-  FSIM_OBJECT_CHECKSUM_OFFSET)
+  "metadata.format != kObjectFormatVersion" FSIM_OBJECT_REJECT_OFFSET)
 string(FIND "${FSIM_OBJECT_DECODER_TEXT}"
   "const auto read_string" FSIM_OBJECT_ROOT_OFFSET)
-if(FSIM_OBJECT_CURRENT_IDENTITY_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_CURRENT_FORMAT_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_CURRENT_SCHEMA_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_LEGACY_IDENTITY_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_LEGACY_FORMAT_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_LEGACY_SCHEMA_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_REJECT_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_HIR_REJECT_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_EARLY_RETURN_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_PAYLOAD_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_CHECKSUM_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_ROOT_OFFSET EQUAL -1 OR
-   FSIM_OBJECT_CURRENT_IDENTITY_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_CURRENT_FORMAT_OFFSET OR
-   FSIM_OBJECT_CURRENT_FORMAT_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_CURRENT_SCHEMA_OFFSET OR
-   FSIM_OBJECT_CURRENT_SCHEMA_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_LEGACY_IDENTITY_OFFSET OR
-   FSIM_OBJECT_LEGACY_IDENTITY_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_LEGACY_FORMAT_OFFSET OR
-   FSIM_OBJECT_LEGACY_FORMAT_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_LEGACY_SCHEMA_OFFSET OR
-   FSIM_OBJECT_LEGACY_SCHEMA_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_REJECT_OFFSET OR
-   FSIM_OBJECT_REJECT_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_HIR_REJECT_OFFSET OR
-   FSIM_OBJECT_HIR_REJECT_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_EARLY_RETURN_OFFSET OR
-   FSIM_OBJECT_EARLY_RETURN_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_PAYLOAD_OFFSET OR
-   FSIM_OBJECT_PAYLOAD_OFFSET GREATER_EQUAL
-       FSIM_OBJECT_CHECKSUM_OFFSET OR
-   FSIM_OBJECT_CHECKSUM_OFFSET GREATER_EQUAL FSIM_OBJECT_ROOT_OFFSET)
-  message(FATAL_ERROR
-    "object identity guard must admit only current or exact bounded legacy identity, require current compiled HIR, return before payload decoding, and precede root decoding")
+if(FSIM_OBJECT_REJECT_OFFSET EQUAL -1 OR FSIM_OBJECT_ROOT_OFFSET EQUAL -1 OR
+   FSIM_OBJECT_REJECT_OFFSET GREATER_EQUAL FSIM_OBJECT_ROOT_OFFSET)
+  message(FATAL_ERROR "object schema rejection must precede root decoding")
 endif()
 
 fsim_require_portable_policy_tokens("${FSIM_DESIGN_CODEC}"
@@ -267,4 +205,4 @@ fsim_require_portable_policy_tokens("${FSIM_TEST_BUILD}"
   "CheckPortableStaleSchemaPolicy.cmake")
 
 message(STATUS
-  "portable stale-schema policy passed: rows=33 digest=${FSIM_CONTRACT_DIGEST}")
+  "portable stale-schema policy passed: rows=32 digest=${FSIM_CONTRACT_DIGEST}")

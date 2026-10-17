@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
@@ -2099,11 +2100,8 @@ void VerilogParser::parse_gate_primitive(
             "gate-instance array bounds must be decimal locally static "
             "integers in this bounded slice");
       } else {
-        const auto distance = *left_value >= *right_value
-            ? static_cast<std::uint64_t>(*left_value)
-                - static_cast<std::uint64_t>(*right_value)
-            : static_cast<std::uint64_t>(*right_value)
-                - static_cast<std::uint64_t>(*left_value);
+        const auto distance
+            = support::index_distance(*left_value, *right_value);
         if (distance >= maximum_instance_array_elements) {
           error(
               range_start,

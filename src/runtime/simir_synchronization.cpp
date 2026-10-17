@@ -180,21 +180,32 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     } else {
       string_value = read_string_register(put->string_source);
     }
-    const auto deliver_packed = [&](const PackedLogic4& delivered) {
+    // Hand a put value to the waiting readers in order; a get consumes it,
+    // a peek leaves it for the next reader or the mailbox queue.
+    const auto deliver = [&](const auto& delivered, auto& entries,
+                             const bool string) {
       bool consumed{};
       while (!mailbox.readers.empty()) {
         const auto reader = mailbox.readers.front();
         mailbox.readers.pop_front();
         auto& target = get_process(reader.process);
-        if (target.halted) {
-          if (target.cold().pending_mailbox_result == reader.destination) {
-            target.cold().pending_mailbox_result.reset();
+        auto& pending = string ? target.cold().pending_mailbox_string_result
+                               : target.cold().pending_mailbox_result;
+        const auto destination
+            = string ? reader.string_destination : reader.destination;
+        if (!target.halted) {
+          if constexpr (std::is_same_v<std::decay_t<decltype(delivered)>,
+                            std::string>) {
+            write_process_string_register(target, destination, delivered);
+          } else {
+            write_process_register(target, destination, delivered);
           }
-          continue;
         }
-        write_process_register(target, reader.destination, delivered);
-        if (target.cold().pending_mailbox_result == reader.destination) {
-          target.cold().pending_mailbox_result.reset();
+        if (pending == destination) {
+          pending.reset();
+        }
+        if (target.halted) {
+          continue;
         }
         (void)wake(reader.process);
         if (!reader.peek) {
@@ -202,34 +213,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
           break;
         }
       }
-      if (!consumed) mailbox.entries.push_back(delivered);
-    };
-    const auto deliver_string = [&](const std::string& delivered) {
-      bool consumed{};
-      while (!mailbox.readers.empty()) {
-        const auto reader = mailbox.readers.front();
-        mailbox.readers.pop_front();
-        auto& target = get_process(reader.process);
-        if (target.halted) {
-          if (target.cold().pending_mailbox_string_result
-              == reader.string_destination) {
-            target.cold().pending_mailbox_string_result.reset();
-          }
-          continue;
-        }
-        write_process_string_register(
-            target, reader.string_destination, delivered);
-        if (target.cold().pending_mailbox_string_result
-            == reader.string_destination) {
-          target.cold().pending_mailbox_string_result.reset();
-        }
-        (void)wake(reader.process);
-        if (!reader.peek) {
-          consumed = true;
-          break;
-        }
-      }
-      if (!consumed) mailbox.string_entries.push_back(delivered);
+      if (!consumed) entries.push_back(delivered);
     };
     const auto entry_count = mailbox.element_kind == MailboxElementKind::string
         ? mailbox.string_entries.size()
@@ -239,9 +223,9 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
             || entry_count < mailbox.capacity);
     if (available) {
       if (mailbox.element_kind == MailboxElementKind::string) {
-        deliver_string(string_value);
+        deliver(string_value, mailbox.string_entries, true);
       } else {
-        deliver_packed(packed_value);
+        deliver(packed_value, mailbox.entries, false);
       }
       if (put->result) write_bool(*put->result, true);
       process.status = ProcessStatus::running;

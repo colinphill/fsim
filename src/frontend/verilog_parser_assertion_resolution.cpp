@@ -629,21 +629,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         continue;
                     const auto assignment = std::ranges::find_if(
                         item, [](const Token& token) {
-                            return token.kind == TokenKind::Assign
-                                || token.kind == TokenKind::PlusAssign
-                                || token.kind == TokenKind::MinusAssign
-                                || token.kind == TokenKind::StarAssign
-                                || token.kind == TokenKind::SlashAssign
-                                || token.kind == TokenKind::PercentAssign
-                                || token.kind == TokenKind::AmpersandAssign
-                                || token.kind == TokenKind::PipeAssign
-                                || token.kind == TokenKind::CaretAssign
-                                || token.kind == TokenKind::ShiftLeftAssign
-                                || token.kind == TokenKind::ShiftRightAssign
-                                || token.kind
-                                == TokenKind::ArithmeticShiftLeftAssign
-                                || token.kind
-                                == TokenKind::ArithmeticShiftRightAssign;
+                            return is_blocking_assignment_operator(token.kind);
                         });
                     const auto increment = item.size() == 2U
                         && ((item.front().kind == TokenKind::Identifier
@@ -700,36 +686,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                                 sequence_match_actions.clear();
                                 break;
                             }
-                            const auto operation = [&]() -> std::string_view {
-                                switch (assignment->kind) {
-                                case TokenKind::PlusAssign:
-                                    return "+";
-                                case TokenKind::MinusAssign:
-                                    return "-";
-                                case TokenKind::StarAssign:
-                                    return "*";
-                                case TokenKind::SlashAssign:
-                                    return "/";
-                                case TokenKind::PercentAssign:
-                                    return "%";
-                                case TokenKind::AmpersandAssign:
-                                    return "&";
-                                case TokenKind::PipeAssign:
-                                    return "|";
-                                case TokenKind::CaretAssign:
-                                    return "^";
-                                case TokenKind::ShiftLeftAssign:
-                                    return "<<";
-                                case TokenKind::ShiftRightAssign:
-                                    return ">>";
-                                case TokenKind::ArithmeticShiftLeftAssign:
-                                    return "<<<";
-                                case TokenKind::ArithmeticShiftRightAssign:
-                                    return ">>>";
-                                default:
-                                    return { };
-                                }
-                            }();
+                            const auto operation
+                                = compound_assignment_operator(
+                                    assignment->kind);
                             statement.value = operation.empty()
                                 ? std::move(*value)
                                 : Expression {

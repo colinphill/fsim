@@ -888,6 +888,51 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
         return signal;
     };
 
+    // The output signal a write operation updates, if it is a region
+    // output candidate. The first pass, which finds internal writers,
+    // accepts a generic slice write only at offset zero and considers any
+    // boundary slice.
+    const auto written_output_signal = [&](const auto& operation,
+                                           const bool first_pass)
+        -> std::optional<SignalId> {
+        if (const auto* blocking
+            = operation_get_if<WriteBlocking>(&operation)) {
+            return !generic_update && systemverilog_active
+                ? normalized_output_signal(blocking->signal, 0U,
+                    blocking->signal < signals_.size()
+                        ? signals_[blocking->signal].descriptor.width
+                        : 0U, false)
+                : std::nullopt;
+        }
+        if (const auto* write = operation_get_if<WriteUpdate>(&operation)) {
+            return generic_update
+                ? generic_output_signal(write->signal, 0U,
+                    signals_[write->signal].descriptor.width)
+                : normalized_output_signal(write->signal, 0U,
+                    signals_[write->signal].descriptor.width, false);
+        }
+        if (const auto* projected
+            = operation_get_if<WriteProjected>(&operation)) {
+            return normalized_output_signal(projected->signal, 0U,
+                signals_[projected->signal].descriptor.width, false);
+        }
+        if (const auto* slice_write
+            = operation_get_if<WriteUpdateSlice>(&operation)) {
+            if (generic_update) {
+                return !first_pass || slice_write->offset == 0U
+                    ? generic_slice_signal(
+                          slice_write->signal, slice_write->offset)
+                    : std::nullopt;
+            }
+            return first_pass
+                ? slice_output_candidate(
+                      slice_write->signal, slice_write->offset)
+                : systemverilog_slice_candidate(
+                      slice_write->signal, slice_write->offset);
+        }
+        return std::nullopt;
+    };
+
     std::map<SignalId, std::pair<ProcessId, InstructionIndex>> internal_writers;
     for (const auto process : ordered_members) {
         const auto& source = *programs[process];
@@ -897,36 +942,8 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
                 continue;
             }
             const auto operation = source.operations.expanded(index);
-            std::optional<SignalId> output_signal;
-            if (const auto* blocking
-                = operation_get_if<WriteBlocking>(&operation)) {
-                output_signal = !generic_update && systemverilog_active
-                    ? normalized_output_signal(blocking->signal, 0U,
-                        blocking->signal < signals_.size()
-                            ? signals_[blocking->signal].descriptor.width
-                            : 0U, false)
-                    : std::nullopt;
-            } else if (const auto* write
-                = operation_get_if<WriteUpdate>(&operation)) {
-                output_signal = generic_update
-                    ? generic_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width)
-                    : normalized_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width, false);
-            } else if (const auto* projected
-                = operation_get_if<WriteProjected>(&operation)) {
-                output_signal = normalized_output_signal(projected->signal, 0U,
-                    signals_[projected->signal].descriptor.width, false);
-            } else if (const auto* slice_write
-                = operation_get_if<WriteUpdateSlice>(&operation)) {
-                output_signal = generic_update
-                    ? (slice_write->offset == 0U
-                            ? generic_slice_signal(slice_write->signal,
-                                slice_write->offset)
-                            : std::nullopt)
-                    : slice_output_candidate(
-                        slice_write->signal, slice_write->offset);
-            }
+            const auto output_signal = written_output_signal(
+                operation, true);
             if (output_signal && internal_signals.contains(*output_signal)) {
                 if (index > std::numeric_limits<InstructionIndex>::max()
                     || !internal_writers.emplace(*output_signal,
@@ -1016,34 +1033,8 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
                 continue;
             }
             const auto operation = source.operations.expanded(index);
-            std::optional<SignalId> output_signal;
-            if (const auto* blocking
-                = operation_get_if<WriteBlocking>(&operation)) {
-                output_signal = !generic_update && systemverilog_active
-                    ? normalized_output_signal(blocking->signal, 0U,
-                        blocking->signal < signals_.size()
-                            ? signals_[blocking->signal].descriptor.width
-                            : 0U, false)
-                    : std::nullopt;
-            } else if (const auto* write
-                = operation_get_if<WriteUpdate>(&operation)) {
-                output_signal = generic_update
-                    ? generic_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width)
-                    : normalized_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width, false);
-            } else if (const auto* projected
-                = operation_get_if<WriteProjected>(&operation)) {
-                output_signal = normalized_output_signal(projected->signal, 0U,
-                    signals_[projected->signal].descriptor.width, false);
-            } else if (const auto* slice_write
-                = operation_get_if<WriteUpdateSlice>(&operation)) {
-                output_signal = generic_update
-                    ? generic_slice_signal(slice_write->signal,
-                        slice_write->offset)
-                    : systemverilog_slice_candidate(
-                        slice_write->signal, slice_write->offset);
-            }
+            const auto output_signal = written_output_signal(
+                operation, false);
             if (!output_signal || internal_signals.contains(*output_signal)) {
                 continue;
             }
@@ -1154,34 +1145,8 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
                 continue;
             }
             const auto operation = source.operations.expanded(index);
-            std::optional<SignalId> output_signal;
-            if (const auto* blocking
-                = operation_get_if<WriteBlocking>(&operation)) {
-                output_signal = !generic_update && systemverilog_active
-                    ? normalized_output_signal(blocking->signal, 0U,
-                        blocking->signal < signals_.size()
-                            ? signals_[blocking->signal].descriptor.width
-                            : 0U, false)
-                    : std::nullopt;
-            } else if (const auto* write
-                = operation_get_if<WriteUpdate>(&operation)) {
-                output_signal = generic_update
-                    ? generic_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width)
-                    : normalized_output_signal(write->signal, 0U,
-                        signals_[write->signal].descriptor.width, false);
-            } else if (const auto* projected
-                = operation_get_if<WriteProjected>(&operation)) {
-                output_signal = normalized_output_signal(projected->signal, 0U,
-                    signals_[projected->signal].descriptor.width, false);
-            } else if (const auto* slice_write
-                = operation_get_if<WriteUpdateSlice>(&operation)) {
-                output_signal = generic_update
-                    ? generic_slice_signal(slice_write->signal,
-                        slice_write->offset)
-                    : systemverilog_slice_candidate(
-                        slice_write->signal, slice_write->offset);
-            }
+            const auto output_signal = written_output_signal(
+                operation, false);
             if (output_signal && !internal_signals.contains(*output_signal)) {
                 settled_program.register_value_kinds.push_back(
                     signals_[*output_signal].descriptor.value_kind);

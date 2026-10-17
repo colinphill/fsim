@@ -565,71 +565,13 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
             return false;
         }
         if (!selected_library.empty()) {
-            if (!library_equal(
-                    effective_library(
-                        selected_library, architecture.library),
-                    package.library)) {
-                return false;
-            }
-            if (name_equal(selected_library, "work")) {
-                return true;
-            }
-            std::unordered_set<std::uint32_t> visited_contexts;
-            const auto visit = [&](const auto& self,
-                                   const semantic::vhdl::Unit& owner) -> bool {
-                for (const auto& item : owner.context) {
-                    if (item.kind
-                        == semantic::vhdl::ContextKind::library_clause) {
-                        for (const auto& selected : item.selected_names) {
-                            const auto parts = vhdl_configuration_detail::
-                                configuration_name_parts(
-                                    selected.canonical.empty()
-                                        ? std::string_view { selected.spelling }
-                                        : std::string_view { selected.canonical });
-                            if (!parts.empty()
-                                && name_equal(parts.back(), selected_library)) {
-                                return true;
-                            }
-                        }
-                        continue;
-                    }
-                    if (item.kind
-                        != semantic::vhdl::ContextKind::context_reference) {
-                        continue;
-                    }
-                    for (const auto& selected : item.selected_names) {
-                        const auto parts = vhdl_configuration_detail::
-                            configuration_name_parts(
-                                selected.canonical.empty()
-                                    ? std::string_view { selected.spelling }
-                                    : std::string_view { selected.canonical });
-                        if (parts.empty()) {
-                            continue;
-                        }
-                        const auto context_library = parts.size() >= 2U
-                            ? effective_library(
-                                  parts[parts.size() - 2U], owner.library)
-                            : std::string_view { owner.library };
-                        for (const auto& candidate : compiled_->vhdl_units()) {
-                            if (candidate.kind
-                                    != semantic::vhdl::UnitKind::context
-                                || !library_equal(
-                                    candidate.library, context_library)
-                                || !name_equal(
-                                    candidate.name, parts.back())
-                                || !visited_contexts.insert(
-                                    candidate.id.value()).second) {
-                                continue;
-                            }
-                            if (self(self, candidate)) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                return false;
-            };
-            return visit(visit, architecture);
+            // `lib.pkg.component` needs `lib` visible as a library name.
+            return library_equal(effective_library(
+                                     selected_library, architecture.library),
+                       package.library)
+                && semantic::CompiledDesignResolver { *compiled_,
+                       architecture.id, &working_specialization }
+                       .vhdl_library_name_visible(selected_library, { });
         }
 
         std::unordered_set<std::uint32_t> visited_contexts;
@@ -640,9 +582,7 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
                     for (const auto& selected : item.selected_names) {
                         const auto parts = vhdl_configuration_detail::
                             configuration_name_parts(
-                                selected.canonical.empty()
-                                    ? std::string_view { selected.spelling }
-                                    : std::string_view { selected.canonical });
+                                selected.text());
                         if (parts.empty() || parts.size() > 2U) {
                             continue;
                         }
@@ -664,9 +604,7 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
                 for (const auto& selected : item.selected_names) {
                     const auto parts = vhdl_configuration_detail::
                         configuration_name_parts(
-                            selected.canonical.empty()
-                                ? std::string_view { selected.spelling }
-                                : std::string_view { selected.canonical });
+                            selected.text());
                     if (parts.empty()) {
                         continue;
                     }

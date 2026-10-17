@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "hir_output_conversion.hpp"
 
 
 #include "fsim/frontend/input_format.hpp"
@@ -8,14 +9,10 @@
 namespace fsim::elaboration {
 namespace {
 
-    constexpr std::string_view vhdl_textio_read_marker
-        = "\x1f" "fsim-vhdl-textio-read";
-    constexpr std::string_view vhdl_textio_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-read-2008";
-    constexpr std::string_view vhdl_textio_radix_read_2008_marker
-        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
-    constexpr std::string_view vhdl_textio_sread_marker
-        = "\x1f" "fsim-vhdl-textio-sread";
+    using runtime::simir::vhdl_textio_radix_read_2008_marker;
+    using runtime::simir::vhdl_textio_read_2008_marker;
+    using runtime::simir::vhdl_textio_read_marker;
+    using runtime::simir::vhdl_textio_sread_marker;
 
 [[nodiscard]] bool hir_file_call_name(const std::string_view name) noexcept
 {
@@ -95,103 +92,6 @@ namespace {
     return format == frontend::InputScanFormat::String
         || format == frontend::InputScanFormat::Character
         || format == frontend::InputScanFormat::Hierarchy;
-}
-
-[[nodiscard]] frontend::SystemVerilogScalarKind scalar_kind(
-    const std::string_view spelling) noexcept
-{
-    if (spelling == "shortreal") {
-        return frontend::SystemVerilogScalarKind::ShortReal;
-    }
-    if (spelling == "real") {
-        return frontend::SystemVerilogScalarKind::Real;
-    }
-    if (spelling == "realtime") {
-        return frontend::SystemVerilogScalarKind::Realtime;
-    }
-    if (spelling == "time") {
-        return frontend::SystemVerilogScalarKind::Time;
-    }
-    if (spelling == "chandle") {
-        return frontend::SystemVerilogScalarKind::Chandle;
-    }
-    return frontend::SystemVerilogScalarKind::None;
-}
-
-[[nodiscard]] runtime::simir::OutputFormat runtime_output_format(
-    const semantic::sv::OutputFormat format) noexcept
-{
-    using Source = semantic::sv::OutputFormat;
-    using Target = runtime::simir::OutputFormat;
-    switch (format) {
-    case Source::binary:
-        return Target::binary;
-    case Source::hexadecimal:
-        return Target::hexadecimal;
-    case Source::octal:
-        return Target::octal;
-    case Source::decimal:
-        return Target::decimal;
-    case Source::character:
-        return Target::character;
-    case Source::string:
-    case Source::hierarchy:
-        return Target::string;
-    case Source::real_scientific:
-        return Target::real_scientific;
-    case Source::real_fixed:
-        return Target::real_fixed;
-    case Source::real_general:
-        return Target::real_general;
-    case Source::time:
-        return Target::time;
-    case Source::unformatted2:
-        return Target::unformatted2;
-    case Source::unformatted4:
-        return Target::unformatted4;
-    case Source::pattern:
-    case Source::strength:
-        return Target::decimal;
-    }
-    return Target::decimal;
-}
-
-[[nodiscard]] runtime::simir::OutputFormat runtime_output_format(
-    const frontend::OutputFormat format)
-{
-    using Source = frontend::OutputFormat;
-    using Target = runtime::simir::OutputFormat;
-    switch (format) {
-    case Source::Binary:
-        return Target::binary;
-    case Source::Hexadecimal:
-        return Target::hexadecimal;
-    case Source::Octal:
-        return Target::octal;
-    case Source::Decimal:
-        return Target::decimal;
-    case Source::Character:
-        return Target::character;
-    case Source::String:
-        return Target::string;
-    case Source::RealScientific:
-        return Target::real_scientific;
-    case Source::RealFixed:
-        return Target::real_fixed;
-    case Source::RealGeneral:
-        return Target::real_general;
-    case Source::Unformatted2:
-        return Target::unformatted2;
-    case Source::Unformatted4:
-        return Target::unformatted4;
-    case Source::Pattern:
-    case Source::Strength:
-        return Target::decimal;
-    case Source::Hierarchy:
-    case Source::Time:
-        break;
-    }
-    throw std::logic_error { "invalid runtime string format" };
 }
 
 [[nodiscard]] bool output_conversion_consumes_value(
@@ -274,9 +174,7 @@ Lowerer::hir_systemverilog_scan_value_kind(
         return width && *width != 0U ? Kind::real : Kind::unsupported;
     }
 
-    const semantic::CompiledDesignResolver resolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    };
+    const auto resolver = hir_resolver();
     auto resolved = resolver.effective_systemverilog_type(
         *declared, source.scope).value_or(*declared);
     std::unordered_set<std::uint32_t> visited;
@@ -352,6 +250,39 @@ Lowerer::hir_systemverilog_scan_value_kind(
     return Kind::packed_integral;
 }
 
+bool Lowerer::set_hir_string_scan_target(
+    InputScanTarget& target, const HirStringBinding& binding) const
+{
+    if (binding.kind == HirStringBindingKind::local && binding.local) {
+        target = { InputScanTargetKind::string_register, *binding.local, 1U,
+            false };
+        return true;
+    }
+    if (binding.object
+        && !read_only_string_objects_.contains(*binding.object)) {
+        target = { InputScanTargetKind::string_object, *binding.object, 1U,
+            false };
+        return true;
+    }
+    return false;
+}
+
+bool Lowerer::set_hir_packed_scan_target(
+    InputScanTarget& target, const HirRuntimeBinding& binding) const
+{
+    if (binding.kind == HirRuntimeBindingKind::local && binding.local) {
+        target.kind = InputScanTargetKind::packed_register;
+        target.id = *binding.local;
+        return true;
+    }
+    if (binding.signal && !read_only_signals_.contains(*binding.signal)) {
+        target.kind = InputScanTargetKind::packed_signal;
+        target.id = *binding.signal;
+        return true;
+    }
+    return false;
+}
+
 bool Lowerer::is_hir_systemverilog_file_call(
     const semantic::ExpressionId expression_id) const
 {
@@ -376,11 +307,7 @@ bool Lowerer::is_hir_vhdl_file_call(
         expression_id);
     const auto name = expression && expression->vhdl != nullptr
             && expression->vhdl->referenced_name
-        ? expression->vhdl->referenced_name->canonical.empty()
-            ? std::string_view {
-                  expression->vhdl->referenced_name->spelling }
-            : std::string_view {
-                  expression->vhdl->referenced_name->canonical }
+        ? expression->vhdl->referenced_name->text()
         : expression && expression->vhdl != nullptr
         ? std::string_view { expression->vhdl->text }
         : std::string_view { };
@@ -516,11 +443,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_call(
         : std::nullopt;
     const auto name = expression && expression->vhdl != nullptr
             && expression->vhdl->referenced_name
-        ? expression->vhdl->referenced_name->canonical.empty()
-            ? std::string_view {
-                  expression->vhdl->referenced_name->spelling }
-            : std::string_view {
-                  expression->vhdl->referenced_name->canonical }
+        ? expression->vhdl->referenced_name->text()
         : expression && expression->vhdl != nullptr
         ? std::string_view { expression->vhdl->text }
         : std::string_view { };
@@ -583,9 +506,7 @@ bool Lowerer::is_hir_vhdl_file_statement(
         return false;
     }
     const auto name = vhdl_simple_name(
-        statement->vhdl->procedure.canonical.empty()
-            ? std::string_view { statement->vhdl->procedure.spelling }
-            : std::string_view { statement->vhdl->procedure.canonical });
+        statement->vhdl->procedure.text());
     // READ, WRITE, TEE and FLUSH are file operations only when their first
     // actual is a file object or line; other procedures share these names.
     if (name != "read" && name != "write" && name != "swrite"
@@ -844,10 +765,8 @@ Lowerer::lower_hir_formatted_string(
             scalar = frontend::SystemVerilogScalarKind::None;
             value_width = register_width(*lowered);
         }
-        const auto width_register = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            width_register, unsigned_value(value_width, 32U) });
+        const auto width_register = load_constant(
+            unsigned_value(value_width, 32U), frontend::ValueDomain::Bit2);
         operation.operation = StringMethodOperator::format_packed;
         operation.first = *lowered;
         operation.second = width_register;
@@ -1229,15 +1148,12 @@ bool Lowerer::lower_hir_string_format_task(
     }
     const auto length = allocate_register(32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(StringLength { length, *result });
-    auto packed = allocate_register(*width, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(
-        LoadConstant { packed, unsigned_value(0U, *width) });
+    auto packed = load_constant(
+        unsigned_value(0U, *width), frontend::ValueDomain::Bit2);
     const auto bytes = (*width + 7U) / 8U;
     for (std::size_t byte = 0; byte < bytes; ++byte) {
-        const auto distance = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            distance, unsigned_value(byte + 1U, 32U) });
+        const auto distance = load_constant(
+            unsigned_value(byte + 1U, 32U), frontend::ValueDomain::Bit2);
         const auto index = allocate_register(
             32U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(Binary {
@@ -1301,7 +1217,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 : std::nullopt;
             return declaration && declaration->systemverilog != nullptr
                     && declaration->systemverilog->type
-                ? scalar_kind(
+                ? frontend::systemverilog_scalar_kind(
                       declaration->systemverilog->type->target.spelling)
                 : frontend::SystemVerilogScalarKind::None;
         };
@@ -1609,24 +1525,17 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                         = declaration->systemverilog->direction;
                                     const auto& target_type
                                         = declaration->systemverilog->type;
-                                    const bool net_typed_port
-                                        = form
-                                                == semantic::sv::DeclarationForm::port
+                                    const bool net_typed_port = form
+                                            == semantic::sv::DeclarationForm::
+                                                port
                                         && target_type
-                                        && (!target_type->systemverilog_net_type.empty()
-                                            || target_type->target.spelling == "wire"
-                                            || target_type->target.spelling == "tri"
-                                            || target_type->target.spelling == "tri0"
-                                            || target_type->target.spelling == "tri1"
-                                            || target_type->target.spelling == "wand"
-                                            || target_type->target.spelling == "triand"
-                                            || target_type->target.spelling == "wor"
-                                            || target_type->target.spelling == "trior"
-                                            || target_type->target.spelling == "trireg"
-                                            || target_type->target.spelling == "uwire"
-                                            || target_type->target.spelling == "supply0"
-                                            || target_type->target.spelling == "supply1"
-                                            || target_type->target.spelling == "interconnect");
+                                        && (!target_type->systemverilog_net_type
+                                                .empty()
+                                            || semantic::sv::
+                                                is_builtin_net_kind(target_type
+                                                        ->target.spelling)
+                                            || target_type->target.spelling
+                                                == "interconnect");
                                     const bool writable_port_direction
                                         = direction
                                                 == semantic::sv::Direction::output
@@ -2193,7 +2102,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             || !declaration->systemverilog->type) {
             return frontend::SystemVerilogScalarKind::None;
         }
-        return scalar_kind(
+        return frontend::systemverilog_scalar_kind(
             declaration->systemverilog->type->target.spelling);
     };
     struct TextTarget {
@@ -2342,20 +2251,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                     "$value$plusargs numeric conversion requires a packed "
                     "target");
             }
-            if (string_binding->kind == HirStringBindingKind::local
-                && string_binding->local) {
-                conversion.target = {
-                    InputScanTargetKind::string_register,
-                    *string_binding->local, 1U, false,
-                };
-            } else if (string_binding->object
-                && !read_only_string_objects_.contains(
-                    *string_binding->object)) {
-                conversion.target = {
-                    InputScanTargetKind::string_object,
-                    *string_binding->object, 1U, false,
-                };
-            } else {
+            if (!set_hir_string_scan_target(
+                    conversion.target, *string_binding)) {
                 return fail("FSIM-ELAB-SVCLI-003",
                     "$value$plusargs string target is read-only");
             }
@@ -2401,16 +2298,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             conversion.target.two_state
                 = kind != frontend::SystemVerilogScalarKind::None
                 || binding->domain == frontend::ValueDomain::Bit2;
-            if (binding->kind == HirRuntimeBindingKind::local
-                && binding->local) {
-                conversion.target.kind
-                    = InputScanTargetKind::packed_register;
-                conversion.target.id = *binding->local;
-            } else if (binding->signal
-                && !read_only_signals_.contains(*binding->signal)) {
-                conversion.target.kind = InputScanTargetKind::packed_signal;
-                conversion.target.id = *binding->signal;
-            } else {
+            if (!set_hir_packed_scan_target(
+                    conversion.target, *binding)) {
                 return fail("FSIM-ELAB-SVCLI-003",
                     "$value$plusargs target is read-only");
             }
@@ -2631,11 +2520,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         if (unknown_integral_format) {
             // IEEE 1800-2017 21.3.4.3 requires EOF for an unknown bit in
             // the format; no scan target is assigned.
-            const auto destination = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                destination, unsigned_value(
-                    std::numeric_limits<std::uint32_t>::max(), 32U) });
+            const auto destination = load_constant(
+                unsigned_value(std::numeric_limits<std::uint32_t>::max(), 32U),
+                frontend::ValueDomain::Bit2);
             return finish(destination);
         }
         const auto parsed = frontend::parse_input_format(
@@ -2644,10 +2531,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         // is 0 (IEEE 1800-2017 21.3.4.3).
         if ((string_source || parsed.trailing_text.empty()) && parsed.valid
             && parsed.conversions.empty() && call.operands.size() == 2U) {
-            const auto destination = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                destination, unsigned_value(0U, 32U) });
+            const auto destination = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
             return finish(destination);
         }
         const auto required = static_cast<std::size_t>(std::ranges::count_if(
@@ -2699,15 +2584,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                         source = allocate_string_register();
                         process_.operations.emplace_back(
                             LoadStringConstant { *source, std::string { } });
-                        StringMethod format_packed;
-                        format_packed.operation = StringMethodOperator::format_packed;
-                        format_packed.source = *source;
-                        format_packed.first = *packed;
-                        format_packed.second = allocate_register(
-                            32U, frontend::ValueDomain::Bit2);
-                        process_.operations.emplace_back(LoadConstant {
-                            format_packed.second, unsigned_value(*width, 32U) });
-                        format_packed.format = OutputFormat::string;
+                        auto format_packed = hir_format_packed(
+                            *source, *packed, *width, OutputFormat::string);
                         format_packed.suppress_leading_zero = true;
                         process_.operations.emplace_back(format_packed);
                     }
@@ -2753,20 +2631,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                     return fail("FSIM-ELAB-SVFILE-012",
                         "numeric scan conversions require a packed target");
                 }
-                if (string_binding->kind == HirStringBindingKind::local
-                    && string_binding->local) {
-                    conversion.target = {
-                        InputScanTargetKind::string_register,
-                        *string_binding->local, 1U, false,
-                    };
-                } else if (string_binding->object
-                    && !read_only_string_objects_.contains(
-                        *string_binding->object)) {
-                    conversion.target = {
-                        InputScanTargetKind::string_object,
-                        *string_binding->object, 1U, false,
-                    };
-                } else {
+                if (!set_hir_string_scan_target(
+                        conversion.target, *string_binding)) {
                     return fail("FSIM-ELAB-SVFILE-012",
                         "scan string target is read-only");
                 }
@@ -2818,17 +2684,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                     = conversion.target.scalar_kind
                         != frontend::SystemVerilogScalarKind::None
                     || binding->domain == frontend::ValueDomain::Bit2;
-                if (binding->kind == HirRuntimeBindingKind::local
-                    && binding->local) {
-                    conversion.target.kind
-                        = InputScanTargetKind::packed_register;
-                    conversion.target.id = *binding->local;
-                } else if (binding->signal
-                    && !read_only_signals_.contains(*binding->signal)) {
-                    conversion.target.kind
-                        = InputScanTargetKind::packed_signal;
-                    conversion.target.id = *binding->signal;
-                } else {
+                if (!set_hir_packed_scan_target(
+                        conversion.target, *binding)) {
                     return fail("FSIM-ELAB-SVFILE-012",
                         "scan target is read-only");
                 }
@@ -2954,9 +2811,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     }
     const auto& call = *statement->vhdl;
     const auto called = vhdl_simple_name(
-        call.procedure.canonical.empty()
-            ? std::string_view { call.procedure.spelling }
-            : std::string_view { call.procedure.canonical });
+        call.procedure.text());
     if (!vhdl_file_procedure_name(called)) {
         return false;
     }
@@ -2990,10 +2845,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         std::size_t positional { };
         for (const auto& association : call.procedure_arguments) {
             if (association.formal) {
-                const auto& formal_name
-                    = association.formal->canonical.empty()
-                    ? association.formal->spelling
-                    : association.formal->canonical;
+                const auto formal_name = association.formal->text();
                 if (vhdl_simple_name(formal_name) == formal) {
                     return association.actual;
                 }
@@ -3105,9 +2957,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return false;
         }
         const auto& referenced = *expression->vhdl->referenced_name;
-        const auto spelling = referenced.canonical.empty()
-            ? referenced.spelling
-            : referenced.canonical;
+        const auto spelling = referenced.text();
         return vhdl_simple_name(spelling) == "output";
     };
     enum class TextioScalarClass : std::uint8_t {
@@ -3216,10 +3066,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     };
 
     const auto output_handle = [&] {
-        const auto handle = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant { handle, unsigned_value(1U, 32U) });
+        const auto handle = load_constant(
+            unsigned_value(1U, 32U), frontend::ValueDomain::Bit2);
         return handle;
     };
     // VHDL-2008 FLUSH (5.5.2) writes out buffered data of an open file.
@@ -3654,11 +3502,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     VhdlAssertApiKind::record_read_failure,
                     std::nullopt, std::nullopt, std::nullopt,
                     std::nullopt, std::nullopt, std::nullopt,
-                    SourceLocation {
-                        span.source_name.str(),
-                        static_cast<std::uint32_t>(span.begin.line),
-                        static_cast<std::uint32_t>(span.begin.column),
-                    },
+                    runtime_source_location(span),
                 });
             }
             return true;
@@ -3673,7 +3517,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 return std::string { };
             }
             auto name = std::string_view { subtype->type_mark.spelling };
-            name.remove_prefix(name.find_last_of(".:") + 1U);
+            name = simple_name_of(name);
             return std::string { name };
         }();
         const bool real_value = value_type_name == "real"
@@ -3770,16 +3614,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             const auto formatted = allocate_string_register();
             process_.operations.emplace_back(
                 LoadStringConstant { formatted, std::string { } });
-            StringMethod format_operation;
-            format_operation.operation = StringMethodOperator::format_packed;
-            format_operation.source = formatted;
-            format_operation.first = value_register;
-            format_operation.second = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                format_operation.second,
-                unsigned_value(value_width, 32U) });
-            format_operation.format = format;
+            auto format_operation = hir_format_packed(
+                formatted, value_register, value_width, format);
             process_.operations.emplace_back(format_operation);
 
             // TextIO TO_HSTRING and TO_OSTRING use uppercase digits. The
@@ -3876,9 +3712,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 if (normalized_time_unit) {
                     const auto& referenced
                         = *vhdl_expression->referenced_name;
-                    const auto text = referenced.canonical.empty()
-                        ? std::string_view { referenced.spelling }
-                        : std::string_view { referenced.canonical };
+                    const auto text = referenced.text();
                     unit_name = std::string { text };
                 } else {
                     auto text = expression && expression->vhdl != nullptr
@@ -4185,7 +4019,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 return declaration
                         && declaration->systemverilog != nullptr
                         && declaration->systemverilog->type
-                    ? scalar_kind(
+                    ? frontend::systemverilog_scalar_kind(
                           declaration->systemverilog->type
                               ->target.spelling)
                     : frontend::SystemVerilogScalarKind::None;

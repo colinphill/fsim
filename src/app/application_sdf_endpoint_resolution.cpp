@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/app/sdf_endpoint_resolution.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "sdf_diagnostic.hpp"
 #include "sdf_resolution_helpers.hpp"
 
@@ -99,9 +100,7 @@ namespace {
             : parse_index(body.substr(colon + 1U));
         if (!left || !right)
             return false;
-        const auto distance = *left >= *right
-            ? static_cast<std::uint64_t>(*left - *right)
-            : static_cast<std::uint64_t>(*right - *left);
+        const auto distance = support::index_distance(*left, *right);
         if (distance >= std::numeric_limits<std::size_t>::max())
             return false;
         select = SdfEndpointSelect { *left, *right,

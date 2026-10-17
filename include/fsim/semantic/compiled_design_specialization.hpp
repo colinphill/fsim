@@ -533,6 +533,10 @@ public:
     vhdl_instances() const noexcept;
 
 private:
+    // This unit with another overlay and the same replacement records.
+    [[nodiscard]] SpecializedHirUnit with_overlay(
+        SpecializedHirOverlay overlay) const;
+
     struct GenerateInstances {
         DeclarationId declaration;
         std::vector<InstanceId> instances;

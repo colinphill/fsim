@@ -260,12 +260,7 @@ std::optional<SystemVerilogScalarConstant> evaluate(
       return operand;
     }
     const auto name = std::string_view{expression.text}.substr(9);
-    const auto target = name == "shortreal" ? SystemVerilogScalarKind::ShortReal
-        : name == "real" ? SystemVerilogScalarKind::Real
-        : name == "realtime" ? SystemVerilogScalarKind::Realtime
-        : name == "time" ? SystemVerilogScalarKind::Time
-        : name == "chandle" ? SystemVerilogScalarKind::Chandle
-        : SystemVerilogScalarKind::None;
+    const auto target = systemverilog_scalar_kind(name);
     return convert_systemverilog_scalar_constant(*operand, target, error);
   }
   if (expression.kind != ExpressionKind::Binary
@@ -572,13 +567,7 @@ bool propagate_systemverilog_scalar_types(
           = value_operand->systemverilog_scalar_kind;
     } else {
       const auto name = std::string_view{expression.text}.substr(9);
-      expression.systemverilog_scalar_kind = name == "shortreal"
-          ? SystemVerilogScalarKind::ShortReal
-          : name == "real" ? SystemVerilogScalarKind::Real
-          : name == "realtime" ? SystemVerilogScalarKind::Realtime
-          : name == "time" ? SystemVerilogScalarKind::Time
-          : name == "chandle" ? SystemVerilogScalarKind::Chandle
-          : SystemVerilogScalarKind::None;
+      expression.systemverilog_scalar_kind = systemverilog_scalar_kind(name);
     }
   }
   return true;

@@ -19,6 +19,59 @@ using namespace runtime::simir;
 using namespace elaboration_detail;
 using namespace hierarchy_sv_parameters_detail;
 
+namespace {
+
+// The type-parameter formal a type reference names: the one formal whose
+// declared type is the reference's target among the specialization's
+// actuals, else the type parameter its spelling resolves to in `scope`.
+// Empty when none is found or the target matches several formals.
+// `name_only_without_target` limits the name lookup to an unresolved target.
+std::optional<semantic::DeclarationId> specialized_type_parameter_formal(
+    const semantic::SpecializedHirUnit& working_specialization,
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::sv::TypeReference& reference,
+    const semantic::ScopeId scope, const bool name_only_without_target)
+{
+    std::optional<semantic::DeclarationId> formal_id;
+    if (reference.target.target.valid()) {
+        for (const auto& actual :
+            working_specialization.specialization().actual_identities) {
+            const auto formal = working_specialization.find_declaration(
+                actual.declaration);
+            if (!formal || formal->systemverilog == nullptr
+                || formal->systemverilog->form
+                    != semantic::sv::DeclarationForm::type_parameter
+                || !formal->systemverilog->declared_type
+                || *formal->systemverilog->declared_type
+                    != reference.target.target) {
+                continue;
+            }
+            if (formal_id && *formal_id != actual.declaration) {
+                return std::nullopt;
+            }
+            formal_id = actual.declaration;
+        }
+    }
+    if (formal_id || reference.target.spelling.empty()
+        || (name_only_without_target && reference.target.target.valid())) {
+        return formal_id;
+    }
+    const auto named = resolver
+        .resolve_systemverilog_named_type(
+            reference.target.spelling, scope, false)
+        .unique();
+    const auto formal = named
+        ? working_specialization.find_declaration(*named)
+        : std::nullopt;
+    return formal && formal->systemverilog != nullptr
+            && formal->systemverilog->form
+                == semantic::sv::DeclarationForm::type_parameter
+        ? named
+        : std::nullopt;
+}
+
+} // namespace
+
 std::optional<std::size_t> systemverilog_declaration_width(
     const semantic::SpecializedHirUnit& working_specialization,
     const semantic::sv::Declaration& declaration)
@@ -54,40 +107,9 @@ std::optional<std::size_t> systemverilog_declaration_width(
             return std::nullopt;
         }
 
-        std::optional<semantic::DeclarationId> formal_id;
-        if (reference.target.target.valid()) {
-            for (const auto& actual :
-                working_specialization.specialization().actual_identities) {
-                const auto formal = working_specialization.find_declaration(
-                    actual.declaration);
-                if (!formal || formal->systemverilog == nullptr
-                    || formal->systemverilog->form
-                        != semantic::sv::DeclarationForm::type_parameter
-                    || !formal->systemverilog->declared_type
-                    || *formal->systemverilog->declared_type
-                        != reference.target.target) {
-                    continue;
-                }
-                if (formal_id && *formal_id != actual.declaration) {
-                    return std::nullopt;
-                }
-                formal_id = actual.declaration;
-            }
-        }
-        if (!formal_id && !reference.target.spelling.empty()) {
-            const auto named = type_resolver
-                .resolve_systemverilog_named_type(
-                    reference.target.spelling, declaration.scope, false)
-                .unique();
-            const auto formal = named
-                ? working_specialization.find_declaration(*named)
-                : std::nullopt;
-            if (formal && formal->systemverilog != nullptr
-                && formal->systemverilog->form
-                    == semantic::sv::DeclarationForm::type_parameter) {
-                formal_id = *named;
-            }
-        }
+        const auto formal_id = specialized_type_parameter_formal(
+            working_specialization, type_resolver, reference,
+            declaration.scope, false);
         if (!formal_id) {
             return std::nullopt;
         }
@@ -298,21 +320,11 @@ std::optional<ContainerType> systemverilog_container_type(
         }
         const auto definition = working_specialization.find_type(
             type.target.target);
-        if (!definition || definition->systemverilog == nullptr) {
-            return std::string { };
-        }
-        using Form = semantic::sv::TypeForm;
-        const auto form = definition->systemverilog->form;
-        if (form != Form::enumeration
-            && form != Form::packed_structure
-            && form != Form::packed_union
-            && form != Form::unpacked_structure
-            && form != Form::unpacked_union
-            && form != Form::tagged_union) {
-            return std::string { };
-        }
-        return std::string { "@sv-type:" }
-        + std::to_string(type.target.target.value());
+        return definition && definition->systemverilog != nullptr
+                && semantic::sv::has_nominal_type_identity(
+                    definition->systemverilog->form)
+            ? semantic::sv::nominal_type_identity(type.target.target)
+            : std::string { };
     };
     const auto boundary = [&](const std::optional<std::int64_t> value,
                               const std::optional<semantic::ExpressionId> expression) {
@@ -346,48 +358,12 @@ std::optional<ContainerType> systemverilog_container_type(
                     || !leaf.unpacked_dimensions.empty()) {
                     return std::nullopt;
                 }
-                std::optional<semantic::DeclarationId> formal_id;
-                if (leaf.target.target.valid()) {
-                    for (const auto& actual :
-                        working_specialization.specialization()
-                            .actual_identities) {
-                        const auto formal
-                            = working_specialization.find_declaration(
-                                actual.declaration);
-                        if (!formal || formal->systemverilog == nullptr
-                            || formal->systemverilog->form
-                                != semantic::sv::DeclarationForm::
-                                    type_parameter
-                            || !formal->systemverilog->declared_type
-                            || *formal->systemverilog->declared_type
-                                != leaf.target.target) {
-                            continue;
-                        }
-                        if (formal_id && *formal_id != actual.declaration) {
-                            return std::nullopt;
-                        }
-                        formal_id = actual.declaration;
-                    }
-                }
                 const semantic::CompiledDesignResolver resolver {
                     working_specialization
                 };
-                if (!formal_id && !leaf.target.target.valid()
-                    && !leaf.target.spelling.empty()) {
-                    const auto named = resolver
-                        .resolve_systemverilog_named_type(
-                            leaf.target.spelling,
-                            working_specialization.scope(), false)
-                        .unique();
-                    const auto formal = named
-                        ? working_specialization.find_declaration(*named)
-                        : std::nullopt;
-                    if (formal && formal->systemverilog != nullptr
-                        && formal->systemverilog->form
-                            == semantic::sv::DeclarationForm::type_parameter) {
-                        formal_id = *named;
-                    }
-                }
+                const auto formal_id = specialized_type_parameter_formal(
+                    working_specialization, resolver, leaf,
+                    working_specialization.scope(), true);
                 if (!formal_id) {
                     return std::nullopt;
                 }
@@ -721,7 +697,7 @@ std::optional<ContainerType> systemverilog_container_type(
                     > std::numeric_limits<std::uint32_t>::max()) {
                 return std::nullopt;
             }
-            result.scalar_kind = compiled_systemverilog_scalar_kind(
+            result.scalar_kind = frontend::systemverilog_scalar_kind(
                 candidate.target.spelling);
             result.element_kind
                 = result.scalar_kind

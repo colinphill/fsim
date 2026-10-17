@@ -50,10 +50,9 @@ struct ObjectMetadata {
 [[nodiscard]] std::string compute_object_compilation_digest(
     const ObjectMetadata& metadata);
 
-// Canonical little-endian metadata codec for the current format. A valid
-// legacy v8/15 value is upgraded with unknown VHDL identifier forms and a
-// recomputed v9 digest. Invalid legacy or unsupported format/schema identities
-// throw std::invalid_argument. Owning payload bytes are independently indexed
+// Canonical little-endian metadata codec for the current format.
+// Unsupported format/schema identities throw std::invalid_argument. Owning
+// payload bytes are independently indexed
 // and checksummed; primitive and class entries are metadata-only inventories
 // validated against the compiled-HIR bundle.
 [[nodiscard]] std::string serialize_object_metadata(

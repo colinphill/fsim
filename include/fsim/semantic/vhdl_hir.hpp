@@ -2,7 +2,9 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -282,6 +284,13 @@ struct Name {
     std::optional<DeclarationId> selected;
     std::vector<DeclarationId> overloads;
 
+    /// The canonical text, or the source spelling when there is none.
+    [[nodiscard]] std::string_view text() const noexcept
+    {
+        return canonical.empty() ? std::string_view { spelling }
+                                 : std::string_view { canonical };
+    }
+
     bool operator==(const Name&) const = default;
 };
 
@@ -298,6 +307,61 @@ enum class BuiltinTypeIdentity : std::uint8_t {
     std_standard_real_vector,
     std_standard_time_vector,
 };
+
+/// The simple name of a predefined array type, or empty for none.
+[[nodiscard]] constexpr std::string_view builtin_type_name(
+    const BuiltinTypeIdentity identity) noexcept
+{
+    switch (identity) {
+    case BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector:
+        return "std_logic_vector";
+    case BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector:
+        return "std_ulogic_vector";
+    case BuiltinTypeIdentity::std_standard_string: return "string";
+    case BuiltinTypeIdentity::std_standard_bit_vector: return "bit_vector";
+    case BuiltinTypeIdentity::std_standard_boolean_vector:
+        return "boolean_vector";
+    case BuiltinTypeIdentity::std_standard_integer_vector:
+        return "integer_vector";
+    case BuiltinTypeIdentity::std_standard_real_vector: return "real_vector";
+    case BuiltinTypeIdentity::std_standard_time_vector: return "time_vector";
+    case BuiltinTypeIdentity::none: break;
+    }
+    return { };
+}
+
+/// Whether a predefined array type is declared in STD.STANDARD.
+[[nodiscard]] constexpr bool is_standard_array_builtin(
+    const BuiltinTypeIdentity identity) noexcept
+{
+    return identity >= BuiltinTypeIdentity::std_standard_string
+        && identity <= BuiltinTypeIdentity::std_standard_time_vector;
+}
+
+/// The STD.STANDARD scalar element type of an integer, boolean, time, or
+/// real vector, or empty for other types.
+[[nodiscard]] constexpr std::string_view builtin_vector_element_name(
+    const BuiltinTypeIdentity identity) noexcept
+{
+    switch (identity) {
+    case BuiltinTypeIdentity::std_standard_integer_vector: return "integer";
+    case BuiltinTypeIdentity::std_standard_boolean_vector: return "boolean";
+    case BuiltinTypeIdentity::std_standard_time_vector: return "time";
+    case BuiltinTypeIdentity::std_standard_real_vector: return "real";
+    default: return { };
+    }
+}
+
+/// The `library.package` declaring a predefined array type, or empty.
+[[nodiscard]] constexpr std::string_view builtin_type_package(
+    const BuiltinTypeIdentity identity) noexcept
+{
+    if (is_standard_array_builtin(identity)) {
+        return "std.standard";
+    }
+    return identity == BuiltinTypeIdentity::none ? std::string_view { }
+                                                 : "ieee.std_logic_1164";
+}
 
 /// Operator overload families with compiler-owned IEEE std_logic_1164
 /// provenance. User declarations continue to use Name::selected/overloads.
@@ -334,6 +398,12 @@ struct AggregateAssociation {
     std::string choice_spelling;
     ExpressionId value;
     SourceSpanId source;
+
+    /// A positional element association has no choices.
+    [[nodiscard]] bool positional() const noexcept
+    {
+        return choices.empty() && choice_spelling.empty();
+    }
 };
 
 struct Expression {
@@ -497,6 +567,17 @@ struct SubtypeIndication {
     std::vector<ElementConstraint> element_constraints;
 
     bool operator==(const SubtypeIndication&) const = default;
+
+    /// Whether any part of the subtype is still an unspecified generic
+    /// (anonymous type) placeholder.
+    [[nodiscard]] bool has_unspecified_parts() const noexcept
+    {
+        return unspecified_class != UnspecifiedTypeClass::none
+            || !unspecified_component_classes.empty()
+            || !unspecified_component_type_marks.empty()
+            || unspecified_array_index_count != 0U
+            || !unspecified_inference_identity.empty();
+    }
 };
 
 // Applies `owner`'s element constraints addressed to `step` ("" for its
@@ -890,20 +971,7 @@ standard_array_builtin_type_identity(
     }
     const auto same_identifier = [](const std::string_view left,
                                     const std::string_view right) {
-        if (left.size() != right.size()) {
-            return false;
-        }
-        for (std::size_t index { }; index < left.size(); ++index) {
-            const auto lower = [](const char value) {
-                return value >= 'A' && value <= 'Z'
-                    ? static_cast<char>(value - 'A' + 'a')
-                    : value;
-            };
-            if (lower(left[index]) != lower(right[index])) {
-                return false;
-            }
-        }
-        return true;
+        return support::equal_ignoring_ascii_case(left, right);
     };
     const auto listed = [&](const std::span<const std::string> names,
                             const std::string_view name) {
@@ -991,6 +1059,131 @@ struct Unit {
     bool profile_compatible { true };
 };
 
+/// Whether an aggregate has element associations that are all positional.
+// A constant-class `in` interface object, whose value a call cannot
+// change (IEEE 1076-2008 6.5.2).
+[[nodiscard]] constexpr bool is_constant_input(
+    const Declaration& declaration) noexcept
+{
+    return declaration.object_class == ObjectClass::constant
+        && declaration.direction == Direction::input;
+}
+
+// A subprogram formal declared as a constant-class `in` port.
+[[nodiscard]] constexpr bool is_constant_input_port(
+    const Declaration& declaration) noexcept
+{
+    return declaration.form == DeclarationForm::port
+        && is_constant_input(declaration);
+}
+
+// A signal, variable, constant, generic constant or port: a value object
+// named directly by a simple name (IEEE 1076-2008 6.4.2).
+[[nodiscard]] constexpr bool is_value_object_form(
+    const DeclarationForm form) noexcept
+{
+    return form == DeclarationForm::signal
+        || form == DeclarationForm::variable
+        || form == DeclarationForm::constant
+        || form == DeclarationForm::generic_constant
+        || form == DeclarationForm::port;
+}
+
+// A generic constant, type, function, procedure or package: an interface
+// declaration of a generic clause (IEEE 1076-2008 6.5.6.2).
+[[nodiscard]] constexpr bool is_generic_formal(
+    const DeclarationForm form) noexcept
+{
+    return form == DeclarationForm::generic_constant
+        || form == DeclarationForm::generic_type
+        || form == DeclarationForm::generic_function
+        || form == DeclarationForm::generic_procedure
+        || form == DeclarationForm::generic_package;
+}
+
+[[nodiscard]] inline bool positional_aggregate(
+    const Expression& aggregate) noexcept
+{
+    return !aggregate.associations.empty()
+        && std::ranges::all_of(aggregate.associations,
+            &AggregateAssociation::positional);
+}
+
+/// Spelling prefix of a compiler-supplied (built-in) declaration name.
+inline constexpr std::string_view builtin_prefix = "@builtin:";
+
+/// Call text prefix of a qualified expression `T'(e)`; the call's single
+/// operand is `e` and the text after the prefix names `T`.
+inline constexpr std::string_view qualified_expression_prefix
+    = "@vhdl-qualified:";
+
+/// `spelling` without a leading builtin_prefix.
+[[nodiscard]] constexpr std::string_view without_builtin_prefix(
+    const std::string_view spelling) noexcept
+{
+    return spelling.starts_with(builtin_prefix)
+        ? spelling.substr(builtin_prefix.size())
+        : spelling;
+}
+
+/// Whether `unit` is a unit of the VHDL package `library.name` (basic
+/// identifiers): the declaration or its body.
+/// Whether an attribute designator is 'LEFT, 'RIGHT, 'LOW or 'HIGH.
+[[nodiscard]] constexpr bool is_scalar_bound_attribute(
+    const std::string_view attribute) noexcept
+{
+    return attribute == "'left" || attribute == "'right"
+        || attribute == "'low" || attribute == "'high";
+}
+
+[[nodiscard]] inline bool is_package(const Unit* unit,
+    const std::string_view library, const std::string_view name) noexcept
+{
+    return unit != nullptr && unit->kind == UnitKind::package
+        && support::equal_ignoring_ascii_case(unit->library, library)
+        && support::equal_ignoring_ascii_case(unit->name, name);
+}
+
+/// Whether a use-clause selected name of `part_count` parts starts with a
+/// library: a three-part name always does; the first of two parts does when
+/// it is WORK, STD, or a library named by one of the unit's library clauses
+/// (IEEE 1076-2019 12.4).
+[[nodiscard]] inline bool use_name_has_library_prefix(const Unit& unit,
+    const std::size_t part_count, const std::string_view first)
+{
+    if (part_count >= 3U) {
+        return true;
+    }
+    if (part_count != 2U) {
+        return false;
+    }
+    if (support::same_vhdl_identifier(first, "work")
+        || support::same_vhdl_identifier(first, "std")) {
+        return true;
+    }
+    for (const auto& item : unit.context) {
+        if (item.kind != ContextKind::library_clause) {
+            continue;
+        }
+        for (const auto& name : item.selected_names) {
+            if (support::same_vhdl_identifier(
+                    name.canonical.empty() ? name.spelling : name.canonical,
+                    first)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Whether `spelling` (possibly an \extended\ identifier) names this unit.
+[[nodiscard]] inline bool unit_name_matches(
+    const Unit& unit, const std::string_view spelling)
+{
+    return support::vhdl_name_matches_spelling(
+        unit.name, unit.extended_name, spelling);
+}
+
 /// Owning VHDL semantic HIR. It contains no frontend nodes, pointers, or
 /// string views; every cross-record relationship uses a shared semantic ID.
 class Hir final {
@@ -1006,6 +1199,10 @@ public:
     [[nodiscard]] const std::vector<Unit>& units() const noexcept;
     [[nodiscard]] const std::vector<Declaration>& declarations() const noexcept;
     [[nodiscard]] const std::vector<TypeDefinition>& types() const noexcept;
+    /// The declaration or type with `id`, or nullptr.
+    [[nodiscard]] const Declaration* find_declaration(
+        DeclarationId id) const noexcept;
+    [[nodiscard]] const TypeDefinition* find_type(TypeId id) const noexcept;
     [[nodiscard]] const std::vector<OverloadSet>& overload_sets() const noexcept;
     [[nodiscard]] const std::vector<Expression>& expressions() const noexcept;
     [[nodiscard]] const std::vector<Statement>& statements() const noexcept;

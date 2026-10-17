@@ -162,35 +162,11 @@ int main()
             position = first;
         }
     }
-    auto legacy_expected = expected;
-    legacy_expected.format = 6U;
-    legacy_expected.portable_schema = 15U;
-    for (auto& unit : legacy_expected.units) {
-        unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
-        unit.primary_name_form = fsim::library::VhdlIdentifierForm::unknown;
-    }
     fsim::diagnostic::Engine legacy_parse_diagnostics;
-    const auto legacy_parsed = fsim::library::parse_metadata(
-        legacy_text, "legacy-v6.fsimlib", legacy_parse_diagnostics);
-    assert(legacy_parsed == std::optional { legacy_expected });
-    assert(!legacy_parse_diagnostics.has_error());
-    const auto upgraded_legacy_text
-        = fsim::library::serialize_metadata(*legacy_parsed);
-    assert(upgraded_legacy_text.starts_with("format = 7\n"));
-    assert(upgraded_legacy_text.find("portable_schema = 16\n")
-        != std::string::npos);
-    assert(upgraded_legacy_text.find("name_form = \"unknown\"")
-        != std::string::npos);
-    auto upgraded_legacy_expected = legacy_expected;
-    upgraded_legacy_expected.format = fsim::library::kFormatVersion;
-    upgraded_legacy_expected.portable_schema
-        = fsim::library::kPortableSchemaVersion;
-    fsim::diagnostic::Engine upgraded_legacy_diagnostics;
-    const auto upgraded_legacy = fsim::library::parse_metadata(
-        upgraded_legacy_text, "upgraded-legacy.fsimlib",
-        upgraded_legacy_diagnostics);
-    assert(upgraded_legacy == std::optional { upgraded_legacy_expected });
-    assert(!upgraded_legacy_diagnostics.has_error());
+    assert(!fsim::library::parse_metadata(
+        legacy_text, "legacy-v6.fsimlib", legacy_parse_diagnostics));
+    assert(has_identity_diagnostic(legacy_parse_diagnostics, ".fsimlib",
+        "format 6", "format 7", ".fsimlib"));
     for (const auto [format, schema] : {
              std::pair { 7U, 15U }, std::pair { 6U, 16U } }) {
         auto mismatched_text = serialized;
@@ -438,11 +414,11 @@ int main()
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));
     assert(has_identity_diagnostic(
-        schema_diagnostics, ".fsimlib", "format 99", "format 7 or 6",
+        schema_diagnostics, ".fsimlib", "format 99", "format 7",
         ".fsimlib"));
 
     for (std::uint32_t format = 0;
-        format < fsim::library::kFormatVersion - 1U; ++format) {
+        format < fsim::library::kFormatVersion; ++format) {
         auto stale_text = serialized;
         stale_text.replace(
             stale_text.find("format = 7"),
@@ -453,11 +429,11 @@ int main()
             stale_text, "stale.toml", stale_schema_diagnostics));
         assert(has_identity_diagnostic(
             stale_schema_diagnostics, ".fsimlib",
-            "format " + std::to_string(format), "format 7 or 6", ".fsimlib"));
+            "format " + std::to_string(format), "format 7", ".fsimlib"));
     }
 
     for (std::uint32_t schema = 0;
-        schema < fsim::library::kPortableSchemaVersion - 1U; ++schema) {
+        schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto stale_portable_text = serialized;
         stale_portable_text.replace(
             stale_portable_text.find("portable_schema = 16"),
@@ -470,7 +446,7 @@ int main()
         assert(has_identity_diagnostic(
             stale_portable_diagnostics, ".fsimlib",
             "portable-unit schema " + std::to_string(schema),
-            "portable-unit schema 16 or 15", ".fsimlib"));
+            "portable-unit schema 16", ".fsimlib"));
     }
     auto v2_library_text = serialized;
     v2_library_text.replace(
@@ -484,7 +460,7 @@ int main()
             v2_library_text, source, v2_library_diagnostics));
         assert(has_identity_diagnostic(
             v2_library_diagnostics, ".fsimlib", "portable-unit schema 10",
-            "portable-unit schema 16 or 15", ".fsimlib"));
+            "portable-unit schema 16", ".fsimlib"));
     }
 
     auto future_portable_text = serialized;
@@ -498,7 +474,7 @@ int main()
         future_portable_diagnostics));
     assert(has_identity_diagnostic(
         future_portable_diagnostics, ".fsimlib",
-        "portable-unit schema 17", "portable-unit schema 16 or 15", ".fsimlib"));
+        "portable-unit schema 17", "portable-unit schema 16", ".fsimlib"));
 
     for (const std::uint32_t schema : { 0U, 1U, 2U, 4U }) {
         auto incompatible_compiled_hir_text = serialized;

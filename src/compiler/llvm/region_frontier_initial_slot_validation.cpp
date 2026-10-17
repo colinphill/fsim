@@ -17,18 +17,6 @@ using runtime::simir::RegionFrontierPendingWriteFlagsV2;
 using runtime::simir::RegionFrontierPendingWriteV2;
 using runtime::simir::RegionFrontierSlotV2;
 
-[[nodiscard]] bool keys_equal(const RegionFrontierKeyV2& left,
-    const RegionFrontierKeyV2& right) noexcept
-{
-    return left.time == right.time
-        && left.delta == right.delta
-        && left.systemverilog_round == right.systemverilog_round
-        && left.stable_order == right.stable_order
-        && left.sequence == right.sequence
-        && left.process_domain == right.process_domain
-        && left.phase == right.phase;
-}
-
 [[nodiscard]] bool key_matches_slot(const RegionFrontierKeyV2& key,
     const RegionFrontierSlotV2& slot,
     const bool allow_pending_next_round) noexcept
@@ -132,7 +120,7 @@ extern "C" std::uint32_t fsim_region_frontier_validate_initial_slots_v1(
         }
 
         const auto& member = frame->members[expected.member_index];
-        if (!keys_equal(pending.origin, member.activation_origin)
+        if (pending.origin != member.activation_origin
             || pending.origin.process_domain
                 != runtime::simir::kRegionFrontierSystemVerilogDomainV2
             || pending.origin.phase

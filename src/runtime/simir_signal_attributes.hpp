@@ -3,18 +3,30 @@
 
 namespace fsim::runtime::simir::signal_attribute_detail {
 
+/// The time since a (tick, delta) stamp, or TIME'HIGH when it never
+/// happened (IEEE 1076-2008 16.2.4).
+template <typename Owner, typename Stamp>
+[[nodiscard]] SimulationTick elapsed_since(
+    const Owner& owner, const Stamp& stamp) {
+    return stamp ? owner.scheduler.now() - stamp->first
+                 : static_cast<SimulationTick>(
+                       std::numeric_limits<std::int64_t>::max());
+}
+
+/// Whether a (tick, delta) stamp is in the current simulation cycle.
+template <typename Owner, typename Stamp>
+[[nodiscard]] bool in_current_delta(const Owner& owner, const Stamp& stamp) {
+    return stamp && stamp->first == owner.scheduler.now()
+        && stamp->second == owner.scheduler.delta();
+}
+
 template <typename Owner>
 [[nodiscard]] SimulationTick last_active(
     Owner& owner, const SignalId signal) {
     if (signal >= owner.signals.size()) {
         throw std::out_of_range("invalid SimIR signal ID");
     }
-    const auto& transaction = owner.signal_transactions[signal];
-    return transaction
-        ? owner.scheduler.now() - transaction->first
-        // Never active: TIME'HIGH (IEEE 1076-2008 16.2.4).
-        : static_cast<SimulationTick>(
-              std::numeric_limits<std::int64_t>::max());
+    return elapsed_since(owner, owner.signal_transactions[signal]);
 }
 
 template <typename Owner>

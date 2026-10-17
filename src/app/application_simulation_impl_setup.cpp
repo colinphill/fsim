@@ -17,6 +17,18 @@ namespace fsim::app {
 
 namespace {
 
+// A package object's runtime storage index as its storage id type, when it
+// fits.
+template <typename Id, typename Index>
+[[nodiscard]] std::optional<Id> narrow_runtime_index(
+    const std::optional<Index> index)
+{
+    if (!index || *index > std::numeric_limits<Id>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<Id>(*index);
+}
+
 using PackageClassHandleInitializer = std::pair<
     runtime::simir::SignalId, semantic::ExpressionId>;
 
@@ -75,10 +87,9 @@ compiled_systemverilog_package_class_handle_initializers(
             continue;
         }
         for (const auto declaration_id : unit.declarations) {
-            const auto declaration = std::ranges::find(
-                built.systemverilog_hir.declarations(), declaration_id,
-                &semantic::sv::Declaration::id);
-            if (declaration == built.systemverilog_hir.declarations().end()
+            const auto* declaration
+                = built.systemverilog_hir.find_declaration(declaration_id);
+            if (declaration == nullptr
                 || declaration->scope != unit.scope
                 || declaration->form
                     != semantic::sv::DeclarationForm::variable
@@ -178,15 +189,14 @@ void validate_package_class_startup_initializers(
         const auto unit = std::ranges::find(
             built.systemverilog_hir.units(), row.unit,
             &semantic::sv::Unit::id);
-        const auto declaration = std::ranges::find(
-            built.systemverilog_hir.declarations(), row.declaration,
-            &semantic::sv::Declaration::id);
+        const auto* declaration
+            = built.systemverilog_hir.find_declaration(row.declaration);
         const auto initializer = std::ranges::find(
             built.systemverilog_hir.expressions(), row.initializer,
             &semantic::sv::Expression::id);
         if (unit == built.systemverilog_hir.units().end()
             || unit->kind != semantic::sv::UnitKind::package
-            || declaration == built.systemverilog_hir.declarations().end()
+            || declaration == nullptr
             || declaration->scope != unit->scope
             || declaration->form != semantic::sv::DeclarationForm::variable
             || declaration->initializer != row.initializer
@@ -577,8 +587,10 @@ Simulation::Impl::Impl(
     const SimulationEngine engine,
     const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : built(std::move(project))
-    , package_class_handle_initializers(
-          compiled_systemverilog_package_class_handle_initializers(built))
+    , package_class_handle_initializers(built.trusted_artifact
+              ? std::vector<PackageClassHandleInitializer> { }
+              : compiled_systemverilog_package_class_handle_initializers(
+                  built))
     , package_class_startup_initializers(
           copy_package_class_startup_initializers(built))
     , package_static_class_startup_initializers(
@@ -672,9 +684,14 @@ Simulation::Impl::Impl(
           class_heap)
     , interpreter(create_simulation_interpreter(built, max_deltas))
 {
-    validate_package_class_startup_initializers(built,
-        package_class_handle_initializers, package_class_startup_initializers,
-        package_static_class_startup_initializers);
+    // A trusted artifact's startup metadata is not re-derived from HIR;
+    // FSIM_VERIFY_ARTIFACT=1 keeps the check.
+    if (!built.trusted_artifact) {
+        validate_package_class_startup_initializers(built,
+            package_class_handle_initializers,
+            package_class_startup_initializers,
+            package_static_class_startup_initializers);
+    }
     uvm_components.set_post_destroy_hook(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
             class_owner_parameter_values.erase(object.object);
@@ -719,18 +736,14 @@ Simulation::Impl::Impl(
                         "class owner process context is stale"
                     };
                 }
-                const auto specialization_id = owner_occurrence->specialization;
-                const auto& specializations = built.design_ir.specializations();
-                if (!specialization_id.valid()
-                    || specialization_id.value() >= specializations.size()
-                    || specializations[specialization_id.value()].id
-                        != specialization_id) {
+                const auto* exact = exact_specialization(
+                    built.design_ir, owner_occurrence->specialization);
+                if (exact == nullptr) {
                     throw std::logic_error {
                         "class owner process has no exact specialization"
                     };
                 }
-                const auto& owner_specialization
-                    = specializations[specialization_id.value()];
+                const auto& owner_specialization = *exact;
                 if (owner_specialization.language
                         == semantic::Language::system_verilog
                     && owner_specialization.unit.valid()
@@ -920,13 +933,12 @@ Simulation::Impl::Impl(
                 return std::nullopt;
             }
         });
-    const auto package_variable = [this](
-        const semantic::DeclarationId declaration_id)
+    const auto package_variable
+        = [this](const semantic::DeclarationId declaration_id)
         -> const semantic::sv::Declaration* {
-        const auto found = std::ranges::find(
-            built.systemverilog_hir.declarations(), declaration_id,
-            &semantic::sv::Declaration::id);
-        if (found == built.systemverilog_hir.declarations().end()
+        const auto* found
+            = built.systemverilog_hir.find_declaration(declaration_id);
+        if (found == nullptr
             || (found->form != semantic::sv::DeclarationForm::variable
                 && found->form != semantic::sv::DeclarationForm::net)) {
             return nullptr;
@@ -966,81 +978,72 @@ Simulation::Impl::Impl(
     class_hir_execution.set_package_global_services(
         [this, package_runtime_object](const semantic::DeclarationId id)
             -> std::optional<runtime::PackedLogic4> {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::signal);
-            if (!index
-                || *index > std::numeric_limits<runtime::simir::SignalId>::max()) {
+            const auto index = narrow_runtime_index<runtime::simir::SignalId>(
+                package_runtime_object(
+                    id, semantic::design::ObjectKind::signal));
+            if (!index) {
                 return std::nullopt;
             }
-            return interpreter->signal_value_snapshot(
-                static_cast<runtime::simir::SignalId>(*index));
+            return interpreter->signal_value_snapshot(*index);
         },
-        [this, package_runtime_object](
-            const semantic::DeclarationId id,
+        [this, package_runtime_object](const semantic::DeclarationId id,
             const runtime::PackedLogic4& value) {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::signal);
-            if (!index
-                || *index > std::numeric_limits<runtime::simir::SignalId>::max()) {
+            const auto index = narrow_runtime_index<runtime::simir::SignalId>(
+                package_runtime_object(
+                    id, semantic::design::ObjectKind::signal));
+            if (!index) {
                 return false;
             }
-            const auto signal = static_cast<runtime::simir::SignalId>(*index);
-            const auto current = interpreter->signal_value_snapshot(signal);
-            interpreter->deposit_signal(signal,
+            const auto current = interpreter->signal_value_snapshot(*index);
+            interpreter->deposit_signal(*index,
                 application_detail::SystemVerilogClassExecution::resize_packed(
                     value, current.width()));
             return true;
         },
-        [this, package_runtime_object](const semantic::DeclarationId id)
-            -> std::optional<std::string> {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::string);
-            if (!index
-                || *index
-                    > std::numeric_limits<runtime::simir::StringObjectId>::max()) {
+        [this, package_runtime_object](
+            const semantic::DeclarationId id) -> std::optional<std::string> {
+            const auto index
+                = narrow_runtime_index<runtime::simir::StringObjectId>(
+                    package_runtime_object(
+                        id, semantic::design::ObjectKind::string));
+            if (!index) {
                 return std::nullopt;
             }
-            return interpreter->string_object_value(
-                static_cast<runtime::simir::StringObjectId>(*index));
+            return interpreter->string_object_value(*index);
         },
         [this, package_runtime_object](
             const semantic::DeclarationId id, const std::string_view value) {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::string);
-            if (!index
-                || *index
-                    > std::numeric_limits<runtime::simir::StringObjectId>::max()) {
+            const auto index
+                = narrow_runtime_index<runtime::simir::StringObjectId>(
+                    package_runtime_object(
+                        id, semantic::design::ObjectKind::string));
+            if (!index) {
                 return false;
             }
-            interpreter->deposit_string_object(
-                static_cast<runtime::simir::StringObjectId>(*index), value);
+            interpreter->deposit_string_object(*index, value);
             return true;
         },
         [this, package_runtime_object](const semantic::DeclarationId id)
             -> std::optional<runtime::simir::ContainerValue> {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::container);
-            if (!index
-                || *index > std::numeric_limits<
-                    runtime::simir::ContainerObjectId>::max()) {
+            const auto index
+                = narrow_runtime_index<runtime::simir::ContainerObjectId>(
+                    package_runtime_object(
+                        id, semantic::design::ObjectKind::container));
+            if (!index) {
                 return std::nullopt;
             }
-            return interpreter->container_object_value_snapshot(
-                static_cast<runtime::simir::ContainerObjectId>(*index));
+            return interpreter->container_object_value_snapshot(*index);
         },
-        [this, package_runtime_object](
-            const semantic::DeclarationId id,
+        [this, package_runtime_object](const semantic::DeclarationId id,
             runtime::simir::ContainerValue value) {
-            const auto index = package_runtime_object(
-                id, semantic::design::ObjectKind::container);
-            if (!index
-                || *index > std::numeric_limits<
-                    runtime::simir::ContainerObjectId>::max()) {
+            const auto index
+                = narrow_runtime_index<runtime::simir::ContainerObjectId>(
+                    package_runtime_object(
+                        id, semantic::design::ObjectKind::container));
+            if (!index) {
                 return false;
             }
-            interpreter->deposit_container_object(
-                static_cast<runtime::simir::ContainerObjectId>(*index),
-                std::move(value));
+            interpreter->deposit_container_object(*index, std::move(value));
             return true;
         });
     const auto resolution = application_detail::magnitude_and_unit(

@@ -275,30 +275,7 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
             {}});
       }
     }
-    if (match_keyword("severity", true)) {
-      if (at(TokenKind::Semicolon)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-262",
-            "a VHDL severity clause requires an expression");
-      } else {
-        statement.vhdl_severity_expression = parse_expression();
-      }
-      const auto& severity = statement.vhdl_severity_expression;
-      if (severity.kind == ExpressionKind::Identifier
-          && severity.text == "note") {
-        statement.assertion_severity = AssertionSeverity::Note;
-      } else if (severity.kind == ExpressionKind::Identifier
-                 && severity.text == "warning") {
-        statement.assertion_severity = AssertionSeverity::Warning;
-      } else if (severity.kind == ExpressionKind::Identifier
-                 && severity.text == "error") {
-        statement.assertion_severity = AssertionSeverity::Error;
-      } else if (severity.kind == ExpressionKind::Identifier
-                 && severity.text == "failure") {
-        statement.assertion_severity = AssertionSeverity::Failure;
-      }
-    }
+    parse_vhdl_severity_clause(statement);
     expect(
         TokenKind::Semicolon,
         "';' after report statement",
@@ -837,6 +814,35 @@ VhdlParser::parse_vhdl_procedure_call() {
   return statement;
 }
 
+// An optional `severity expression` clause of a report or assertion; a
+// literal severity level also sets the statement's static severity.
+void VhdlParser::parse_vhdl_severity_clause(Statement& statement) {
+  if (!match_keyword("severity", true)) {
+    return;
+  }
+  if (at(TokenKind::Semicolon)) {
+    error(
+        current(),
+        "FSIM-VHDL-PARSE-262",
+        "a VHDL severity clause requires an expression");
+  } else {
+    statement.vhdl_severity_expression = parse_expression();
+  }
+  const auto& severity = statement.vhdl_severity_expression;
+  if (severity.kind != ExpressionKind::Identifier) {
+    return;
+  }
+  if (severity.text == "note") {
+    statement.assertion_severity = AssertionSeverity::Note;
+  } else if (severity.text == "warning") {
+    statement.assertion_severity = AssertionSeverity::Warning;
+  } else if (severity.text == "error") {
+    statement.assertion_severity = AssertionSeverity::Error;
+  } else if (severity.text == "failure") {
+    statement.assertion_severity = AssertionSeverity::Failure;
+  }
+}
+
 Statement VhdlParser::parse_vhdl_assertion(const Token& start) {
   Statement statement;
   statement.kind = StatementKind::Assert;
@@ -860,30 +866,7 @@ Statement VhdlParser::parse_vhdl_assertion(const Token& start) {
       }
     }
   }
-  if (match_keyword("severity", true)) {
-    if (at(TokenKind::Semicolon)) {
-      error(
-          current(),
-          "FSIM-VHDL-PARSE-262",
-          "a VHDL severity clause requires an expression");
-    } else {
-      statement.vhdl_severity_expression = parse_expression();
-    }
-    const auto& severity = statement.vhdl_severity_expression;
-    if (severity.kind == ExpressionKind::Identifier
-        && severity.text == "note") {
-      statement.assertion_severity = AssertionSeverity::Note;
-    } else if (severity.kind == ExpressionKind::Identifier
-               && severity.text == "warning") {
-      statement.assertion_severity = AssertionSeverity::Warning;
-    } else if (severity.kind == ExpressionKind::Identifier
-               && severity.text == "error") {
-      statement.assertion_severity = AssertionSeverity::Error;
-    } else if (severity.kind == ExpressionKind::Identifier
-               && severity.text == "failure") {
-      statement.assertion_severity = AssertionSeverity::Failure;
-    }
-  }
+  parse_vhdl_severity_clause(statement);
   expect(TokenKind::Semicolon, "';' after assertion",
          "FSIM-VHDL-PARSE-046");
   statement.span = span_from(start, previous());

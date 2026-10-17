@@ -73,7 +73,7 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
         return 1;
     }
     auto selected_config = config;
-    if (!resolve_workspace_tops(selected_config, store, *catalogs, diagnostics)) {
+    if (!resolve_workspace_tops(selected_config, *catalogs, diagnostics)) {
         return 1;
     }
     auto selection = [&] {

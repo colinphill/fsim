@@ -4,23 +4,6 @@
 namespace fsim::elaboration {
 namespace {
 
-bool same_vhdl_name(
-    const std::string_view left,
-    const std::string_view right)
-{
-    return equal_ignoring_ascii_case(left, right);
-}
-
-SourceLocation hir_vhdl_source_location(
-    const frontend::SourceSpan& span)
-{
-    return SourceLocation {
-        span.source_name.str(),
-        static_cast<std::uint32_t>(span.begin.line),
-        static_cast<std::uint32_t>(span.begin.column),
-    };
-}
-
 bool declared_textio_line_type(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::TypeDefinition& type)
@@ -33,19 +16,8 @@ bool declared_textio_line_type(
         || !declaration->vhdl->scope.valid()) {
         return false;
     }
-    const auto& scopes = unit.design().semantics.scopes();
-    const auto scope = std::ranges::find(
-        scopes, declaration->vhdl->scope, &semantic::Scope::id);
-    if (scope == scopes.end()) {
-        return false;
-    }
-    const auto owner = unit.design().find_unit(scope->unit);
-    return owner && owner->identity != nullptr
-        && owner->vhdl != nullptr
-        && owner->identity->kind == semantic::UnitKind::vhdl_package
-        && owner->vhdl->kind == semantic::vhdl::UnitKind::package
-        && same_vhdl_name(owner->identity->library, "std")
-        && same_vhdl_name(owner->identity->name, "textio");
+    return unit.design().vhdl_scope_in_package(
+        declaration->vhdl->scope, "std", "textio");
 }
 
 bool compiler_owned_textio_line_type(
@@ -55,16 +27,13 @@ bool compiler_owned_textio_line_type(
     const semantic::vhdl::TypeDefinition* type)
 {
     auto spelling = std::string_view { subtype.type_mark.spelling };
-    if (const auto separator = spelling.find_last_of(".:");
-        separator != std::string_view::npos) {
-        spelling.remove_prefix(separator + 1U);
-    }
-    if (!same_vhdl_name(spelling, "line")) {
+    spelling = simple_name_of(spelling);
+    if (!equal_ignoring_ascii_case(spelling, "line")) {
         return false;
     }
     if (type != nullptr) {
         if (type->form != semantic::vhdl::TypeForm::access
-            || !same_vhdl_name(type->name, "line")) {
+            || !equal_ignoring_ascii_case(type->name, "line")) {
             return false;
         }
         if (type->declaration.valid()) {
@@ -88,10 +57,7 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_named_type(
 {
     const auto named_type = [&](std::string_view spelling)
         -> const semantic::vhdl::TypeDefinition* {
-        if (const auto separator = spelling.find_last_of(".:");
-            separator != std::string_view::npos) {
-            spelling.remove_prefix(separator + 1U);
-        }
+        spelling = simple_name_of(spelling);
         if (spelling.empty()) {
             return nullptr;
         }
@@ -99,7 +65,8 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_named_type(
         for (const auto& stored : unit.design().vhdl_hir.types()) {
             const auto candidate = unit.find_type(stored.id);
             if (!candidate || candidate->vhdl == nullptr
-                || !same_vhdl_name(candidate->vhdl->name, spelling)) {
+                || !equal_ignoring_ascii_case(
+                    candidate->vhdl->name, spelling)) {
                 continue;
             }
             if (selected != nullptr
@@ -150,60 +117,11 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_array_type(
     const semantic::SpecializedHirUnit& unit,
     semantic::TypeId type_id)
 {
-    std::unordered_set<std::uint32_t> visited;
-    while (type_id.valid() && visited.insert(type_id.value()).second) {
-        const auto type = unit.find_type(type_id);
-        if (!type || type->vhdl == nullptr) {
-            return nullptr;
-        }
-        const auto& definition = *type->vhdl;
-        if (definition.form == semantic::vhdl::TypeForm::array) {
-            return &definition;
-        }
-        if (definition.form != semantic::vhdl::TypeForm::subtype
-            && definition.form != semantic::vhdl::TypeForm::alias) {
-            return nullptr;
-        }
-        type_id = definition.base.type_mark.target;
-    }
-    return nullptr;
-}
-
-std::optional<std::size_t> hir_vhdl_subtype_width(
-    const semantic::vhdl::SubtypeIndication& subtype)
-{
-    if (subtype.executable_width && *subtype.executable_width != 0U
-        && *subtype.executable_width
-            <= std::numeric_limits<std::size_t>::max()) {
-        return static_cast<std::size_t>(*subtype.executable_width);
-    }
-    if (subtype.domain == semantic::vhdl::ValueDomain::integer
-        && subtype.integer_storage_width != 0U) {
-        return subtype.integer_storage_width;
-    }
-    return std::nullopt;
-}
-
-frontend::ValueDomain hir_vhdl_domain(
-    const semantic::vhdl::ValueDomain domain)
-{
-    switch (domain) {
-    case semantic::vhdl::ValueDomain::bit2:
-        return frontend::ValueDomain::Bit2;
-    case semantic::vhdl::ValueDomain::logic4:
-        return frontend::ValueDomain::Logic4;
-    case semantic::vhdl::ValueDomain::logic9:
-        return frontend::ValueDomain::Logic9;
-    case semantic::vhdl::ValueDomain::boolean:
-        return frontend::ValueDomain::Boolean;
-    case semantic::vhdl::ValueDomain::integer:
-        return frontend::ValueDomain::Integer;
-    case semantic::vhdl::ValueDomain::string:
-        return frontend::ValueDomain::String;
-    case semantic::vhdl::ValueDomain::unknown:
-        break;
-    }
-    return frontend::ValueDomain::Unknown;
+    const auto* definition = semantic::vhdl_base_type_definition(unit, type_id);
+    return definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::array
+        ? definition
+        : nullptr;
 }
 
 } // namespace
@@ -217,6 +135,73 @@ Lowerer::hir_vhdl_access_type_definition(
         : hir_vhdl_named_type(
               *specialized_hir_unit_, subtype,
               semantic::vhdl::TypeForm::access);
+}
+
+RegisterId Lowerer::issue_hir_vhdl_access_handle(
+    const HirVhdlAccessHeap& heap, const frontend::SourceSpan& span,
+    const std::function<void(RegisterId)>& store)
+{
+    const auto issued_size = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize {
+        issued_size, heap.issued_handles });
+    const auto live_size = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize {
+        live_size, heap.objects });
+    const auto maximum
+        = load_constant(unsigned_value(heap.maximum_live_objects, 32U),
+            frontend::ValueDomain::Bit2);
+    const auto within_limit = allocate_register(
+        1U, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, within_limit, live_size, maximum });
+    process_.operations.emplace_back(Assert {
+        within_limit,
+        "VHDL access allocation exceeded its owning-storage limit",
+        AssertionSeverity::failure,
+        runtime_source_location(span),
+    });
+    // Handles are never reused: the next one is one past every handle
+    // issued so far, so a stale handle stays detectable.
+    const auto one
+        = load_constant(unsigned_value(1U, 32U), frontend::ValueDomain::Bit2);
+    const auto handle = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, handle, issued_size, one });
+    store(handle);
+    const auto token
+        = load_constant(unsigned_value(1U, 1U), frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(PushContainer {
+        heap.issued_handles, token, false, std::nullopt });
+    return handle;
+}
+
+void Lowerer::emit_hir_vhdl_access_live_check(const HirVhdlAccessHeap& heap,
+    const RegisterId handle, const frontend::SourceSpan& span)
+{
+    const auto live_result = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerExists {
+        live_result, heap.objects, handle, false });
+    const auto live = resize_register(live_result, 1U, false);
+    process_.operations.emplace_back(Assert {
+        live,
+        "VHDL access dereference used a null, stale, or foreign handle",
+        AssertionSeverity::failure,
+        runtime_source_location(span),
+    });
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_designated_subtype(
+    const semantic::vhdl::SubtypeIndication& access_subtype) const
+{
+    const auto* type = hir_vhdl_access_type_definition(access_subtype);
+    return type != nullptr && type->designated_subtype
+        ? hir_effective_vhdl_subtype(*type->designated_subtype)
+        : std::nullopt;
 }
 
 bool Lowerer::is_hir_vhdl_access_expression(
@@ -344,7 +329,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             ? hir_effective_vhdl_subtype(*array->element_subtype)
             : std::nullopt;
         const auto element_width = element
-            ? hir_vhdl_subtype_width(*element)
+            ? vhdl_subtype_width(*element)
             : std::nullopt;
         const auto* nested_array = element
                 && element->type_mark.target.valid()
@@ -408,7 +393,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
                 fixed_multidimensional_ranges.push_back(*range);
             }
         }
-        const auto designated_width = hir_vhdl_subtype_width(designated);
+        const auto designated_width = vhdl_subtype_width(designated);
         if (fixed_shape && designated_width
             && element_count
                 <= std::numeric_limits<std::uint64_t>::max()
@@ -550,7 +535,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
                     || inference_source->vhdl->kind
                         != semantic::vhdl::ExpressionKind::call
                     || !inference_source->vhdl->text.starts_with(
-                        "@vhdl-qualified:")
+                        semantic::vhdl::qualified_expression_prefix)
                     || inference_source->vhdl->operands.size() != 1U) {
                     break;
                 }
@@ -671,7 +656,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         return nullptr;
     }
 
-    std::optional<std::size_t> width = hir_vhdl_subtype_width(designated);
+    std::optional<std::size_t> width = vhdl_subtype_width(designated);
     const bool predefined_bit_vector
         = !designated.type_mark.target.valid()
         && designated.builtin_type
@@ -727,7 +712,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         const auto element = hir_effective_vhdl_subtype(
             *array->element_subtype);
         const auto element_width = element
-            ? hir_vhdl_subtype_width(*element)
+            ? vhdl_subtype_width(*element)
             : std::nullopt;
         const auto distance = index_distance(
             *object_range->left, *object_range->right);
@@ -801,7 +786,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             }
         }
         const auto existing_width
-            = hir_vhdl_subtype_width(found->second.designated_subtype);
+            = vhdl_subtype_width(found->second.designated_subtype);
         if (!string_payload && width && existing_width
             && *width != *existing_width) {
             report(
@@ -819,7 +804,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     objects_type.element_width = string_payload
         ? 1U : static_cast<std::uint32_t>(*width);
     objects_type.two_state = string_payload
-        || is_two_state_domain(hir_vhdl_domain(designated.domain));
+        || is_two_state_domain(vhdl_value_domain(designated.domain));
     objects_type.signed_elements = designated.signed_value;
     objects_type.associative = true;
     objects_type.index_width = 32U;
@@ -862,23 +847,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_object(
             == semantic::vhdl::ValueDomain::string) {
         return std::nullopt;
     }
-    const auto width = hir_vhdl_subtype_width(heap->designated_subtype);
+    const auto width = vhdl_subtype_width(heap->designated_subtype);
     if (!width || *width == 0U) {
         return std::nullopt;
     }
-    const auto live_result = allocate_register(
-        32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ContainerExists {
-        live_result, heap->objects, handle, false });
-    const auto live = resize_register(live_result, 1U, false);
-    process_.operations.emplace_back(Assert {
-        live,
-        "VHDL access dereference used a null, stale, or foreign handle",
-        AssertionSeverity::failure,
-        hir_vhdl_source_location(span),
-    });
+    emit_hir_vhdl_access_live_check(
+        *heap, handle, span);
     const auto result = allocate_register(
-        *width, hir_vhdl_domain(heap->designated_subtype.domain));
+        *width, vhdl_value_domain(heap->designated_subtype.domain));
     process_.operations.emplace_back(ContainerRead {
         result, heap->objects, handle, false });
     return result;
@@ -921,17 +897,8 @@ Lowerer::lower_hir_vhdl_access_string_object(
             != semantic::vhdl::ValueDomain::string) {
         return std::nullopt;
     }
-    const auto live_result = allocate_register(
-        32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ContainerExists {
-        live_result, heap->objects, *handle, false });
-    const auto live = resize_register(live_result, 1U, false);
-    process_.operations.emplace_back(Assert {
-        live,
-        "VHDL access dereference used a null, stale, or foreign handle",
-        AssertionSeverity::failure,
-        hir_vhdl_source_location(span),
-    });
+    emit_hir_vhdl_access_live_check(
+        *heap, *handle, span);
     const auto result = allocate_string_register();
     process_.operations.emplace_back(ContainerStringRead {
         result, heap->objects, *handle, false, false, false, { } });
@@ -977,9 +944,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         const auto designated_name = std::string_view {
             subtype_expression->vhdl->text
         }.substr(prefix.size());
-        const semantic::CompiledDesignResolver resolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        };
+        const auto resolver = hir_resolver();
         using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
         using ScalarType = semantic::CompiledVhdlStandardScalarIdentity;
         struct NominalTypeIdentity {
@@ -1217,10 +1182,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 span);
             return std::nullopt;
         }
-        const auto result = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant { result, unsigned_value(0U, 32U) });
+        const auto result = load_constant(
+            unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
         return result;
     }
     if (source.text == "@vhdl-new"
@@ -1339,10 +1302,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 32U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(
                 StringLength { actual_length, *text });
-            const auto required_length = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                required_length, unsigned_value(extent, 32U) });
+            const auto required_length = load_constant(
+                unsigned_value(extent, 32U), frontend::ValueDomain::Bit2);
             const auto correct_length = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
@@ -1355,53 +1316,16 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 correct_length,
                 "VHDL STRING allocator value does not satisfy its designated range",
                 AssertionSeverity::failure,
-                hir_vhdl_source_location(span),
+                runtime_source_location(span),
             });
-            const auto issued_size = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(ContainerSize {
-                issued_size, heap->issued_handles });
-            const auto live_size = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(ContainerSize {
-                live_size, heap->objects });
-            const auto maximum = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                maximum,
-                unsigned_value(heap->maximum_live_objects, 32U) });
-            const auto within_limit = allocate_register(
-                1U, frontend::ValueDomain::Boolean);
-            process_.operations.emplace_back(Binary {
-                BinaryOperator::less_unsigned,
-                within_limit,
-                live_size,
-                maximum });
-            process_.operations.emplace_back(Assert {
-                within_limit,
-                "VHDL access allocation exceeded its owning-storage limit",
-                AssertionSeverity::failure,
-                hir_vhdl_source_location(span),
-            });
-            const auto one = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(
-                LoadConstant { one, unsigned_value(1U, 32U) });
-            const auto handle = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(Binary {
-                BinaryOperator::add_unsigned, handle, issued_size, one });
-            process_.operations.emplace_back(ContainerStringWrite {
-                heap->objects, handle, *text, false, false, false, { } });
-            const auto token = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(
-                LoadConstant { token, unsigned_value(1U, 1U) });
-            process_.operations.emplace_back(PushContainer {
-                heap->issued_handles, token, false, std::nullopt });
-            return handle;
+            return issue_hir_vhdl_access_handle(
+                *heap, span, [&](const RegisterId handle) {
+                    process_.operations.emplace_back(ContainerStringWrite {
+                        heap->objects, handle, *text, false, false, false,
+                        { } });
+                });
         }
-        const auto width = hir_vhdl_subtype_width(
+        const auto width = vhdl_subtype_width(
             heap->designated_subtype);
         if (!width || *width == 0U) {
             return std::nullopt;
@@ -1422,7 +1346,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             && source.operands.size() == 1U) {
             value = allocate_register(
                 *width,
-                hir_vhdl_domain(heap->designated_subtype.domain));
+                vhdl_value_domain(heap->designated_subtype.domain));
             process_.operations.emplace_back(LoadConstant {
                 *value, unsigned_value(0U, *width) });
         }
@@ -1433,7 +1357,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 span);
             return std::nullopt;
         }
-        const auto designated_domain = hir_vhdl_domain(
+        const auto designated_domain = vhdl_value_domain(
             heap->designated_subtype.domain);
         if (register_domain(*value) != designated_domain) {
             if (is_two_state_domain(designated_domain)
@@ -1447,49 +1371,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 value = converted;
             }
         }
-        const auto issued_size = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(ContainerSize {
-            issued_size, heap->issued_handles });
-        const auto live_size = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(ContainerSize {
-            live_size, heap->objects });
-        const auto maximum = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            maximum,
-            unsigned_value(heap->maximum_live_objects, 32U) });
-        const auto within_limit = allocate_register(
-            1U, frontend::ValueDomain::Boolean);
-        process_.operations.emplace_back(Binary {
-            BinaryOperator::less_unsigned,
-            within_limit,
-            live_size,
-            maximum });
-        process_.operations.emplace_back(Assert {
-            within_limit,
-            "VHDL access allocation exceeded its owning-storage limit",
-            AssertionSeverity::failure,
-            hir_vhdl_source_location(span),
-        });
-        const auto one = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant { one, unsigned_value(1U, 32U) });
-        const auto handle = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(Binary {
-            BinaryOperator::add_unsigned, handle, issued_size, one });
-        process_.operations.emplace_back(ContainerWrite {
-            heap->objects, handle, *value, false });
-        const auto token = allocate_register(
-            1U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(
-            LoadConstant { token, unsigned_value(1U, 1U) });
-        process_.operations.emplace_back(PushContainer {
-            heap->issued_handles, token, false, std::nullopt });
-        return handle;
+        return issue_hir_vhdl_access_handle(
+            *heap, span, [&](const RegisterId handle) {
+                process_.operations.emplace_back(ContainerWrite {
+                    heap->objects, handle, *value, false });
+            });
     }
     if (implicit_dereference) {
         const auto subtype = expected_access_subtype != nullptr
@@ -1519,27 +1405,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
     if (heap == nullptr || !handle) {
         return std::nullopt;
     }
-    const auto live_result = allocate_register(
-        32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ContainerExists {
-        live_result, heap->objects, *handle, false });
-    const auto live = resize_register(live_result, 1U, false);
-    process_.operations.emplace_back(Assert {
-        live,
-        "VHDL access dereference used a null, stale, or foreign handle",
-        AssertionSeverity::failure,
-        hir_vhdl_source_location(span),
-    });
+    emit_hir_vhdl_access_live_check(
+        *heap, *handle, span);
     if (heap->designated_subtype.domain
         == semantic::vhdl::ValueDomain::string) {
         return std::nullopt;
     }
-    const auto width = hir_vhdl_subtype_width(heap->designated_subtype);
+    const auto width = vhdl_subtype_width(heap->designated_subtype);
     if (!width || *width == 0U) {
         return std::nullopt;
     }
     const auto result = allocate_register(
-        *width, hir_vhdl_domain(heap->designated_subtype.domain));
+        *width, vhdl_value_domain(heap->designated_subtype.domain));
     process_.operations.emplace_back(ContainerRead {
         result, heap->objects, *handle, false });
     return result;
@@ -1553,10 +1430,8 @@ void Lowerer::emit_hir_vhdl_access_reclamation(
     if (!type.reclaim_when_unreachable) {
         return;
     }
-    const auto zero = allocate_register(
-        32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(
-        LoadConstant { zero, unsigned_value(0U, 32U) });
+    const auto zero
+        = load_constant(unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
     auto reachable = allocate_register(
         1U, frontend::ValueDomain::Boolean);
     process_.operations.emplace_back(Binary {
@@ -1609,7 +1484,7 @@ bool Lowerer::is_hir_vhdl_access_deallocation(
     return statement && statement->vhdl != nullptr
         && statement->vhdl->kind
             == semantic::vhdl::StatementKind::procedure_call
-        && same_vhdl_name(
+        && equal_ignoring_ascii_case(
             statement->vhdl->procedure.canonical.empty()
                 ? statement->vhdl->procedure.spelling
                 : statement->vhdl->procedure.canonical,
@@ -1925,7 +1800,7 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         subtype ? &*subtype : nullptr);
     const auto designated = hir_effective_vhdl_subtype(
         *type->designated_subtype).value_or(*type->designated_subtype);
-    const auto width = hir_vhdl_subtype_width(designated);
+    const auto width = vhdl_subtype_width(designated);
     const auto assignment_width = member
         ? std::optional { member->width }
         : width;
@@ -1990,7 +1865,7 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
     }
     const auto assignment_domain = member
         ? member->domain
-        : hir_vhdl_domain(designated.domain);
+        : vhdl_value_domain(designated.domain);
     if (register_domain(*value) != assignment_domain) {
         if (is_two_state_domain(assignment_domain)
             && !is_two_state_domain(register_domain(*value))) {
@@ -2003,17 +1878,8 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
             value = converted;
         }
     }
-    const auto live_result = allocate_register(
-        32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ContainerExists {
-        live_result, heap->objects, *handle, false });
-    const auto live = resize_register(live_result, 1U, false);
-    process_.operations.emplace_back(Assert {
-        live,
-        "VHDL access dereference used a null, stale, or foreign handle",
-        AssertionSeverity::failure,
-        hir_vhdl_source_location(hir_source_span(target->vhdl->source)),
-    });
+    emit_hir_vhdl_access_live_check(
+        *heap, *handle, hir_source_span(target->vhdl->source));
     if (member) {
         if (member->offset > *width
             || member->width > *width - member->offset
@@ -2022,11 +1888,11 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
             return false;
         }
         const auto current = allocate_register(
-            *width, hir_vhdl_domain(designated.domain));
+            *width, vhdl_value_domain(designated.domain));
         process_.operations.emplace_back(ContainerRead {
             current, heap->objects, *handle, false });
         const auto updated = allocate_register(
-            *width, hir_vhdl_domain(designated.domain));
+            *width, vhdl_value_domain(designated.domain));
         process_.operations.emplace_back(Insert {
             updated,
             current,
@@ -2126,9 +1992,7 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
     if (!source_scope.valid()) {
         return std::nullopt;
     }
-    const auto resolver = semantic::CompiledDesignResolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    };
+    const auto resolver = hir_resolver();
     semantic::vhdl::Name name;
     name.spelling = std::string { unit_name };
     name.canonical = name.spelling;
@@ -2147,7 +2011,7 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
                             type->vhdl->physical_units,
                             [&](const semantic::vhdl::PhysicalUnit& unit) {
                                 return unit.declaration == candidate.vhdl->id
-                                    && same_vhdl_name(
+                                    && equal_ignoring_ascii_case(
                                         unit.name, unit_name);
                             });
             });
@@ -2207,14 +2071,14 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
                 != semantic::vhdl::TypeForm::physical) {
             continue;
         }
-        const auto width = hir_vhdl_subtype_width(type->vhdl->base);
+        const auto width = vhdl_subtype_width(type->vhdl->base);
         if (expected_width != 0U && width && *width != expected_width) {
             continue;
         }
         const auto unit = std::ranges::find_if(
             type->vhdl->physical_units,
             [&](const semantic::vhdl::PhysicalUnit& candidate) {
-                return same_vhdl_name(candidate.name, unit_name);
+                return equal_ignoring_ascii_case(candidate.name, unit_name);
             });
         if (unit == type->vhdl->physical_units.end()) {
             continue;
@@ -2376,12 +2240,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
             hir_source_span(expression->vhdl->source));
         return std::nullopt;
     }
-    const auto result = allocate_register(
-        width, frontend::ValueDomain::Integer);
-    process_.operations.emplace_back(LoadConstant {
-        result,
+    const auto result = load_constant(
         unsigned_value(static_cast<std::uint64_t>(*value), width),
-    });
+        frontend::ValueDomain::Integer);
     return result;
 }
 

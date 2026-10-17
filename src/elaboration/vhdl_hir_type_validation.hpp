@@ -24,6 +24,12 @@ resolve_vhdl_user_attribute_subtype(
     std::string_view nominal_type,
     semantic::ScopeId use_scope);
 
+/// Whether a VHDL expression is locally static (IEEE 1076-2019 9.4.2). The
+/// type validator owns this rule; other elaboration checks defer to it.
+[[nodiscard]] bool vhdl_locally_static_expression(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression);
+
 [[nodiscard]] std::vector<VhdlHirTypeValidationIssue>
 validate_vhdl_hir_types(
     const semantic::SpecializedHirUnit& specialization,

@@ -275,6 +275,10 @@ struct BuiltProject {
     /// Validated file inputs awaiting the design digest assigned at publication.
     std::vector<std::shared_ptr<const SdfSessionPublication>>
         sdf_session_publications { };
+    /// Restored from a trusted design artifact (checksummed, from a matching
+    /// build): derived state it carries is not re-derived and cross-checked.
+    /// FSIM_VERIFY_ARTIFACT=1 keeps the checks.
+    bool trusted_artifact { };
 };
 
 [[nodiscard]] bool code_coverage_enabled(

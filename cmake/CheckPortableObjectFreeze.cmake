@@ -48,7 +48,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "e5b59bbddce876e7bc019f17c4e6f3d2799117a452508b4f9d0565b35c705034")
+  "f93ba2c1c0409f22bafdd4d2c4660ecf8614f56e129a8b80a3a049feeff13d7e")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable object contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -105,7 +105,6 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
   "writer.u32(library::kCompiledHirSchemaVersion)"
-  "fsim-object-compilation-v8-compiled-hir"
   "fsim-object-compilation-v9-compiled-hir"
   "unsupported_artifact_identity("
   "\".fsimobj\""
@@ -147,8 +146,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "expect_direct_serializer_identity_rejection"
   "current_format_old_schema"
   "old_format_current_schema"
-  "stale_compiled_hir_identity"
-  "legacy_stale_compiled_hir_identity")
+  "stale_compiled_hir_identity")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_TEST}"
   "units/stage.fsimir"
   "units/invert.fsimudp"

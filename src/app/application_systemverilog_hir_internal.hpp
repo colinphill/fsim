@@ -27,9 +27,8 @@ inline void inherit_named_systemverilog_type_shape(
     while (target.valid()
         && std::ranges::find(visited, target) == visited.end()) {
         visited.push_back(target);
-        const auto definition = std::ranges::find(
-            hir.types(), target, &sv::TypeDefinition::id);
-        if (definition == hir.types().end())
+        const auto* definition = hir.find_type(target);
+        if (definition == nullptr)
             return;
 
         const auto& base = definition->base;
@@ -78,6 +77,111 @@ inline void inherit_named_systemverilog_type_shape(
     }
 }
 
+// The HIR type form a frontend type spells.
+[[nodiscard]] inline sv::TypeForm systemverilog_type_form(
+    const frontend::Type& input) noexcept
+{
+    if (input.systemverilog_container) {
+        switch (input.systemverilog_container->kind) {
+        case frontend::SystemVerilogContainerKind::DynamicArray:
+            return sv::TypeForm::dynamic_array;
+        case frontend::SystemVerilogContainerKind::Queue:
+            return sv::TypeForm::queue;
+        case frontend::SystemVerilogContainerKind::AssociativeArray:
+            return sv::TypeForm::associative_array;
+        case frontend::SystemVerilogContainerKind::StaticArray:
+            return sv::TypeForm::static_array;
+        }
+    }
+    switch (input.packed_aggregate) {
+    case frontend::PackedAggregateKind::Struct:
+        return sv::TypeForm::packed_structure;
+    case frontend::PackedAggregateKind::Union:
+        return sv::TypeForm::packed_union;
+    case frontend::PackedAggregateKind::TaggedUnion:
+        return sv::TypeForm::tagged_union;
+    case frontend::PackedAggregateKind::UnpackedStruct:
+        return sv::TypeForm::unpacked_structure;
+    case frontend::PackedAggregateKind::UnpackedUnion:
+        return sv::TypeForm::unpacked_union;
+    case frontend::PackedAggregateKind::None:
+        break;
+    }
+    if (!input.enumeration_literals.empty()) {
+        return sv::TypeForm::enumeration;
+    }
+    if (input.domain == frontend::ValueDomain::String) {
+        return sv::TypeForm::string;
+    }
+    return sv::TypeForm::packed_integral;
+}
+
+// Records the class member a class-operation call (@sv-new:, @sv-method:,
+// ...) names, and the member's class when the expression has none.
+inline void bind_systemverilog_class_operation(
+    sv::Expression& output, const std::string_view text)
+{
+    for (const std::string_view prefix : { "@sv-new:", "@sv-dollar-cast:",
+             "@sv-property:", "@sv-static-property:", "@sv-base-method:",
+             "@sv-method:", "@sv-static-method:" }) {
+        if (!text.starts_with(prefix)) {
+            continue;
+        }
+        const auto payload = text.substr(prefix.size());
+        output.class_member_identity = std::string { payload };
+        if (output.class_identity.empty()) {
+            output.class_identity
+                = std::string { payload.substr(0, payload.rfind("::")) };
+        }
+        return;
+    }
+    output.class_member_identity.clear();
+}
+
+[[nodiscard]] inline std::optional<sv::DecimalLiteral>
+systemverilog_decimal_literal(
+    const std::optional<frontend::SystemVerilogDecimalLiteral>& literal)
+{
+    if (!literal) {
+        return std::nullopt;
+    }
+    return sv::DecimalLiteral {
+        literal->kind == frontend::SystemVerilogDecimalLiteralKind::Time
+            ? sv::DecimalLiteralKind::time
+            : sv::DecimalLiteralKind::real,
+        literal->digits,
+        literal->decimal_exponent,
+        literal->time_unit,
+    };
+}
+
+// The class parameter actuals of a type, projected with the builder's
+// `source(span)`, `type(type, span)` and `expression(expression)`.
+template <typename Source, typename Type, typename Expression>
+[[nodiscard]] std::vector<sv::ActualAssociation>
+systemverilog_class_parameter_actuals(const frontend::Type& input,
+    const Source& source, const Type& type, const Expression& expression)
+{
+    std::vector<sv::ActualAssociation> result;
+    for (const auto& input_actual :
+        input.systemverilog_class_parameter_actuals) {
+        sv::ActualAssociation actual;
+        actual.formal = input_actual.name;
+        actual.source = source(input_actual.span);
+        if (input_actual.type_actual) {
+            actual.kind = sv::ActualKind::type;
+            actual.type = type(*input_actual.type_actual, input_actual.span);
+        } else if (input_actual.value.kind
+            == frontend::ExpressionKind::Invalid) {
+            actual.kind = sv::ActualKind::default_value;
+        } else {
+            actual.expression = expression(input_actual.value);
+        }
+        result.push_back(std::move(actual));
+    }
+    return result;
+}
+
 [[nodiscard]] sv::UnitKind unit_kind(frontend::UnitKind kind) noexcept;
 [[nodiscard]] sv::Direction direction(frontend::PortDirection value) noexcept;
 [[nodiscard]] sv::EdgeKind edge_kind(frontend::EdgeKind value) noexcept;
@@ -119,17 +223,15 @@ inline std::vector<bool> omit_systemverilog_call_arguments(
             })) {
         return omitted;
     }
-    const auto callable = std::ranges::find(hir.declarations(),
-        referenced_name->overloads.front(),
-        &semantic::sv::Declaration::id);
-    if (callable == hir.declarations().end() || !callable->callable) {
+    const auto* callable
+        = hir.find_declaration(referenced_name->overloads.front());
+    if (callable == nullptr || !callable->callable) {
         return omitted;
     }
     std::vector<std::string> formal_names;
     for (const auto formal : callable->callable->formals) {
-        const auto record = std::ranges::find(
-            hir.declarations(), formal, &semantic::sv::Declaration::id);
-        if (record == hir.declarations().end()) {
+        const auto* record = hir.find_declaration(formal);
+        if (record == nullptr) {
             return omitted;
         }
         formal_names.push_back(record->name);
@@ -328,8 +430,6 @@ private:
         const sv::TypeReference& type,
         semantic::SourceSpanId span,
         semantic::OriginId declaration_origin);
-    [[nodiscard]] sv::TypeForm type_form(
-        const frontend::Type& input) const noexcept;
     [[nodiscard]] semantic::DeclarationId add_type_declaration(
         const frontend::TypeAliasDeclaration& input,
         semantic::ScopeId scope,

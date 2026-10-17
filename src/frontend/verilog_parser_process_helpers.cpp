@@ -528,21 +528,9 @@ Statement VerilogParser::parse_procedural_for_statement_body(
     // assignment or increment run after each iteration (12.7.1).
     const auto compound_operator = [](const TokenKind kind)
         -> std::optional<std::string> {
-        switch (kind) {
-        case TokenKind::PlusAssign: return "+";
-        case TokenKind::MinusAssign: return "-";
-        case TokenKind::StarAssign: return "*";
-        case TokenKind::SlashAssign: return "/";
-        case TokenKind::PercentAssign: return "%";
-        case TokenKind::AmpersandAssign: return "&";
-        case TokenKind::PipeAssign: return "|";
-        case TokenKind::CaretAssign: return "^";
-        case TokenKind::ShiftLeftAssign: return "<<";
-        case TokenKind::ShiftRightAssign: return ">>";
-        case TokenKind::ArithmeticShiftLeftAssign: return "<<<";
-        case TokenKind::ArithmeticShiftRightAssign: return ">>>";
-        default: return std::nullopt;
-        }
+        const auto text = compound_assignment_operator(kind);
+        return text.empty() ? std::nullopt
+                            : std::optional { std::string { text } };
     };
     const auto parse_general_update = [&] {
         const auto update_start = current();

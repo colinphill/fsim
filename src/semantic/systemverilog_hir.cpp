@@ -357,22 +357,6 @@ const Statement* statement_for(
     return found == statements.end() ? nullptr : &*found;
 }
 
-bool scope_within(
-    const Model& semantics, ScopeId scope, const ScopeId owner)
-{
-    std::set<ScopeId> visited;
-    while (scope.valid() && scope.value() < semantics.scopes().size()
-        && visited.insert(scope).second) {
-        if (scope == owner)
-            return true;
-        const auto parent = semantics.scopes()[scope.value()].parent;
-        if (!parent)
-            return false;
-        scope = *parent;
-    }
-    return false;
-}
-
 bool valid_source_origin(const Model& semantics, const SourceSpanId source,
     const OriginId origin)
 {
@@ -1102,6 +1086,18 @@ const std::vector<Declaration>& Hir::declarations() const noexcept {
     return declarations_;
 }
 const std::vector<TypeDefinition>& Hir::types() const noexcept { return types_; }
+
+const Declaration* Hir::find_declaration(const DeclarationId id) const noexcept
+{
+    const auto found = std::ranges::find(declarations_, id, &Declaration::id);
+    return found != declarations_.end() ? &*found : nullptr;
+}
+
+const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
+{
+    const auto found = std::ranges::find(types_, id, &TypeDefinition::id);
+    return found != types_.end() ? &*found : nullptr;
+}
 const std::vector<Expression>& Hir::expressions() const noexcept {
     return expressions_;
 }

@@ -19,24 +19,6 @@ namespace {
 
     using CompiledObject = WorkspaceCompiledObject;
 
-    std::string vhdl_identifier_spelling(
-        const std::string_view name, const bool extended)
-    {
-        if (!extended) {
-            return std::string { name };
-        }
-        std::string result { "\\" };
-        result.reserve(name.size() + 2U);
-        for (const auto character : name) {
-            result.push_back(character);
-            if (character == '\\') {
-                result.push_back('\\');
-            }
-        }
-        result.push_back('\\');
-        return result;
-    }
-
     bool compatible_compile_unit(const library::UnitIndexEntry& unit,
         const project::SourceSet& sources)
     {
@@ -460,9 +442,9 @@ namespace {
                 ? std::string_view { "work" }
                 : std::string_view { unit.library };
             const auto top = "vhdl:" + std::string { library } + "."
-                + vhdl_identifier_spelling(
+                + support::encode_vhdl_identifier(
                     unit.primary_name, unit.extended_primary_name)
-                + "(" + vhdl_identifier_spelling(
+                + "(" + support::encode_vhdl_identifier(
                     unit.name, unit.extended_name) + ")";
             const auto elaborated = elaboration::elaborate(checked, top);
             if (std::ranges::any_of(elaborated.diagnostics, [&](const auto& input) {
@@ -653,12 +635,8 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     auto& target = catalogs->front();
     replace_catalog_sources(target, replaced_sources, records);
     for (std::size_t index = 0; index < records.size(); ++index) {
-        auto dependencies = workspace_dependencies(store, checked,
-            (*groups)[index].units, *catalogs, diagnostics);
-        if (!dependencies) {
-            return 1;
-        }
-        records[index].dependencies = std::move(*dependencies);
+        records[index].dependencies = workspace_dependencies(checked,
+            (*groups)[index].units, *catalogs);
         std::erase_if(records[index].dependencies, [&](const auto& dependency) {
             return dependency.library == sources.library
                 && std::ranges::any_of(records[index].units, [&](const auto& unit) {

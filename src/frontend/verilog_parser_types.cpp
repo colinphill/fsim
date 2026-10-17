@@ -6,7 +6,7 @@
 
 namespace fsim::frontend {
 
-Type VerilogParser::parse_systemverilog_aggregate_type()
+Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
 {
     const bool is_union = match_keyword("union");
     if (!is_union) {
@@ -39,6 +39,9 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
             "'{' before aggregate members",
             "FSIM-SV-PARSE-086");
         skip_to_semicolon();
+        if (complete != nullptr) {
+            *complete = false;
+        }
         return type;
     }
     (void)advance();
@@ -51,15 +54,29 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
     std::unordered_set<std::string> member_names;
     std::optional<std::uint64_t> ordinary_union_width;
     while (!at_end() && !at(TokenKind::RightBrace)) {
+        const auto member_progress = position();
+        // Members of an unpacked structure may be random variables
+        // (IEEE 1800-2017 7.2.1, 18.4).
+        if (!packed) {
+            (void)(match_keyword("rand") || match_keyword("randc"));
+        }
         const auto member_start = current();
         Type member_type;
-        if (keyword("struct") || keyword("union")) {
+        if (tagged && keyword("void")) {
+            // A void member of a tagged union carries no value (IEEE
+            // 1800-2017 7.3.2); it is held as one unused bit.
+            (void)advance();
+            member_type = Type { ValueDomain::Bit2, "bit",
+                PackedRange { 0, 0, true }, false };
+        } else if (keyword("struct") || keyword("union")) {
             member_type = parse_systemverilog_aggregate_type();
-        } else if (
-            keyword("logic") || keyword("reg") || keyword("bit")
-            || keyword("byte") || keyword("shortint")
-            || keyword("int") || keyword("longint")
-            || keyword("integer") || keyword("time")) {
+        } else if (!packed) {
+            member_type = parse_parameter_type();
+        } else if (keyword("logic") || keyword("reg")
+            || keyword("bit") || keyword("byte")
+            || keyword("shortint") || keyword("int")
+            || keyword("longint") || keyword("integer")
+            || keyword("time")) {
             member_type = parse_parameter_type();
         } else if (is_named_type_reference_start()) {
             member_type = parse_named_type();
@@ -70,10 +87,7 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
                 "bounded aggregate members require an executable integral, "
                 "nested aggregate, or visible named type");
             skip_to_semicolon();
-            if (match(TokenKind::Semicolon)) {
-                continue;
-            }
-            break;
+            continue;
         }
         if (packed
             && (member_type.packed_aggregate
@@ -83,7 +97,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
             error(
                 member_start,
                 "FSIM-SV-UNSUPPORTED-028",
-                "a packed aggregate cannot contain an unpacked aggregate member");
+                "a packed aggregate cannot contain an unpacked aggregate "
+                "member");
         }
         for (;;) {
             const auto member = expect_identifier("aggregate member name");
@@ -145,8 +160,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
                             error(
                                 member,
                                 "FSIM-SV-SEM-242",
-                                "all members of an ordinary packed union must "
-                                "have the same width");
+                                "all members of an ordinary packed union "
+                                "must have the same width");
                         } else {
                             ordinary_union_width = *width;
                         }
@@ -167,6 +182,12 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
             TokenKind::Semicolon,
             "';' after aggregate member declaration",
             "FSIM-SV-PARSE-088");
+        if (position() == member_progress) {
+            skip_to_semicolon();
+            if (position() == member_progress) {
+                (void)advance();
+            }
+        }
     }
     expect(
         TokenKind::RightBrace,
@@ -499,236 +520,10 @@ void VerilogParser::parse_typedef(
         return;
     }
     if (keyword("struct") || keyword("union")) {
-        const bool is_union = match_keyword("union");
-        if (!is_union) {
-            (void)match_keyword("struct");
-        }
-        bool tagged = is_union && match_keyword("tagged");
-        const bool packed = match_keyword("packed");
-        if (is_union && !tagged && match_keyword("tagged")) {
-            tagged = true;
-        }
-        type.spelling = tagged ? "union tagged packed"
-            : is_union         ? packed ? "union packed" : "union"
-            : packed           ? "struct packed"
-                               : "struct";
-        type.packed_aggregate = tagged
-            ? PackedAggregateKind::TaggedUnion
-            : is_union
-            ? packed ? PackedAggregateKind::Union
-                     : PackedAggregateKind::UnpackedUnion
-            : packed ? PackedAggregateKind::Struct
-                     : PackedAggregateKind::UnpackedStruct;
-        type.domain = ValueDomain::Bit2;
-        if (packed) {
-            parse_optional_signedness(type);
-        }
-        if (!at(TokenKind::LeftBrace)) {
-            (void)expect(
-                TokenKind::LeftBrace,
-                "'{' before aggregate members",
-                "FSIM-SV-PARSE-086");
-            skip_to_semicolon();
+        bool complete = true;
+        type = parse_systemverilog_aggregate_type(&complete);
+        if (!complete) {
             return;
-        }
-        (void)advance();
-        if (at(TokenKind::RightBrace)) {
-            error(
-                current(),
-                "FSIM-SV-PARSE-089",
-                "bounded packed aggregates require at least one member");
-        }
-        std::unordered_set<std::string> member_names;
-        std::optional<std::uint64_t> ordinary_union_width;
-        while (!at_end() && !at(TokenKind::RightBrace)) {
-            const auto member_progress = position();
-            // Members of an unpacked structure may be random variables
-            // (IEEE 1800-2017 7.2.1, 18.4).
-            if (!packed) {
-                (void)(match_keyword("rand") || match_keyword("randc"));
-            }
-            const auto member_start = current();
-            Type member_type;
-            if (tagged && keyword("void")) {
-                // A void member of a tagged union carries no value (IEEE
-                // 1800-2017 7.3.2); it is held as one unused bit.
-                (void)advance();
-                member_type = Type{ValueDomain::Bit2, "bit", PackedRange{0, 0, true}, false};
-            } else if (keyword("struct") || keyword("union")) {
-                member_type = parse_systemverilog_aggregate_type();
-            } else if (!packed) {
-                member_type = parse_parameter_type();
-            } else if (keyword("logic") || keyword("reg")
-                || keyword("bit") || keyword("byte")
-                || keyword("shortint") || keyword("int")
-                || keyword("longint") || keyword("integer")
-                || keyword("time")) {
-                member_type = parse_parameter_type();
-            } else if (is_named_type_reference_start()) {
-                member_type = parse_named_type();
-            } else {
-                error(
-                    current(),
-                    "FSIM-SV-UNSUPPORTED-028",
-                    "bounded aggregate members require an executable built-in or "
-                    "visible named type");
-                skip_to_semicolon();
-                continue;
-            }
-            if (packed
-                && (member_type.packed_aggregate
-                        == PackedAggregateKind::UnpackedStruct
-                    || member_type.packed_aggregate
-                        == PackedAggregateKind::UnpackedUnion)) {
-                error(
-                    member_start,
-                    "FSIM-SV-UNSUPPORTED-028",
-                    "a packed aggregate cannot contain an unpacked aggregate "
-                    "member");
-            }
-            for (;;) {
-                const auto member = expect_identifier("packed aggregate member name");
-                auto declarator_type = member_type;
-                if (at(TokenKind::LeftBracket)) {
-                    if (packed) {
-                        error(
-                            current(),
-                            "FSIM-SV-UNSUPPORTED-029",
-                            "packed aggregate members cannot have unpacked dimensions");
-                        skip_balanced(
-                            TokenKind::LeftBracket,
-                            TokenKind::RightBracket);
-                    } else {
-                        (void)parse_optional_container_dimension(declarator_type);
-                    }
-                }
-                std::optional<Expression> member_initializer;
-                if (match(TokenKind::Assign)) {
-                    // Only unpacked structure members take defaults (7.2.2).
-                    if (packed) {
-                        error(previous(), "FSIM-SV-SEM-401",
-                            "a packed structure member cannot have a default value");
-                    }
-                    member_initializer = parse_expression();
-                }
-                if (!member_names.insert(member.text).second) {
-                    error(
-                        member,
-                        "FSIM-SV-SEM-025",
-                        "duplicate packed aggregate member '"
-                            + member.text + "'");
-                } else {
-                    auto packed_member = PackedMember {
-                        member.text,
-                        declarator_type.domain,
-                        declarator_type.spelling,
-                        declarator_type.packed_range,
-                        declarator_type.is_signed,
-                        declarator_type.packed_range_expression,
-                        0,
-                        cover(member_start.span, previous().span),
-                        { },
-                        std::move(member_initializer)
-                    };
-                    if (!packed || !declarator_type.named_type.empty()
-                        || declarator_type.packed_aggregate
-                            != PackedAggregateKind::None
-                            // `bit [2:0][3:0] y`: a multidimensional packed member keeps
-                            // its dimensions (IEEE 1800-2017 7.4.1).
-                            || declarator_type.systemverilog_packed_dimensions.size() > 1U) {
-                        packed_member.nested_types.push_back(declarator_type);
-                    }
-                    type.packed_members.push_back(std::move(packed_member));
-                    if (packed && is_union && !tagged) {
-                        const auto width = type.packed_members.back().width();
-                        if (width && *width != 0U) {
-                            if (ordinary_union_width
-                                && *ordinary_union_width != *width) {
-                                error(
-                                    member,
-                                    "FSIM-SV-SEM-242",
-                                    "all members of an ordinary packed union "
-                                    "must have the same width");
-                            } else {
-                                ordinary_union_width = *width;
-                            }
-                        }
-                    }
-                    if (declarator_type.domain == ValueDomain::Logic9) {
-                        type.domain = ValueDomain::Logic9;
-                    } else if (declarator_type.domain == ValueDomain::Logic4
-                        && type.domain != ValueDomain::Logic9) {
-                        type.domain = ValueDomain::Logic4;
-                    }
-                }
-                if (!match(TokenKind::Comma)) {
-                    break;
-                }
-            }
-            expect(
-                TokenKind::Semicolon,
-                "';' after packed aggregate member declaration",
-                "FSIM-SV-PARSE-088");
-            if (position() == member_progress) {
-                skip_to_semicolon();
-                if (position() == member_progress) {
-                    (void)advance();
-                }
-            }
-        }
-        expect(
-            TokenKind::RightBrace,
-            "'}' after packed aggregate members",
-            "FSIM-SV-PARSE-087");
-        std::uint64_t total_width = 0;
-        std::optional<std::uint64_t> union_width;
-        bool concrete = !type.packed_members.empty();
-        for (const auto& member : type.packed_members) {
-            const auto width = member.width();
-            if (!width || *width == 0) {
-                concrete = false;
-                break;
-            }
-            if (is_union) {
-                union_width = std::max(union_width.value_or(0), *width);
-                total_width = *union_width;
-            } else {
-                if (*width
-                    > std::numeric_limits<std::uint64_t>::max()
-                        - total_width) {
-                    concrete = false;
-                    break;
-                }
-                total_width += *width;
-            }
-        }
-        const auto tag_width = tagged && !type.packed_members.empty()
-            ? std::max<std::uint64_t>(
-                  1U,
-                  static_cast<std::uint64_t>(
-                      std::bit_width(type.packed_members.size() - 1U)))
-            : 0U;
-        if (concrete
-            && tag_width
-                <= static_cast<std::uint64_t>(
-                       std::numeric_limits<std::int64_t>::max())
-                    - (total_width - 1U)
-            && total_width + tag_width - 1U
-                <= static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int64_t>::max())) {
-            if (!is_union) {
-                auto offset = total_width;
-                for (auto& member : type.packed_members) {
-                    offset -= *member.width();
-                    member.lsb_offset = offset;
-                }
-            }
-            type.packed_range = PackedRange {
-                static_cast<std::int64_t>(
-                    total_width + tag_width - 1U),
-                0,
-                true
-            };
         }
     } else if (keyword("enum")) {
         type = parse_systemverilog_enum_type(&enum_literals);

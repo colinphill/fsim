@@ -84,7 +84,10 @@ Lowerer::lower_hir_container_expression_graph(
         }
         return std::nullopt;
     };
-    const auto contains_iterator = [&](const semantic::ExpressionId candidate) {
+    // Whether an expression in the operand DAG rooted at `candidate`
+    // satisfies `predicate`.
+    const auto any_expression = [&](const semantic::ExpressionId candidate,
+                                    const auto& predicate) {
         std::vector<semantic::ExpressionId> pending { candidate };
         std::unordered_set<std::uint32_t> visited;
         while (!pending.empty()) {
@@ -99,71 +102,43 @@ Lowerer::lower_hir_container_expression_graph(
                 continue;
             }
             const auto& source = *expression->systemverilog;
-            if (source.kind == semantic::sv::ExpressionKind::name
-                && (source.text == iterator_name
-                    || source.text.starts_with(
-                        std::string { iterator_name } + "."))) {
+            if (predicate(source)) {
                 return true;
             }
             pending.insert(
                 pending.end(), source.operands.begin(), source.operands.end());
         }
         return false;
+    };
+    const auto index_name = std::string { iterator_name } + ".index";
+    const auto contains_iterator = [&](const semantic::ExpressionId candidate) {
+        return any_expression(
+            candidate, [&](const semantic::sv::Expression& source) {
+                return source.kind == semantic::sv::ExpressionKind::name
+                    && (source.text == iterator_name
+                        || source.text.starts_with(
+                            std::string { iterator_name } + "."));
+            });
     };
     const auto contains_iterator_index
         = [&](const semantic::ExpressionId candidate) {
-        std::vector<semantic::ExpressionId> pending { candidate };
-        std::unordered_set<std::uint32_t> visited;
-        const auto index_name
-            = std::string { iterator_name } + ".index";
-        while (!pending.empty()) {
-            const auto current = pending.back();
-            pending.pop_back();
-            if (!visited.insert(current.value()).second) {
-                continue;
-            }
-            const auto expression
-                = specialized_hir_unit_->find_expression(current);
-            if (!expression || expression->systemverilog == nullptr) {
-                continue;
-            }
-            const auto& source = *expression->systemverilog;
-            if ((source.kind == semantic::sv::ExpressionKind::name
-                    && (source.text == index_name
-                        || source.text.starts_with(index_name + ".")))
-                || (source.kind == semantic::sv::ExpressionKind::call
-                    && source.text == ".index")) {
-                return true;
-            }
-            pending.insert(
-                pending.end(), source.operands.begin(), source.operands.end());
-        }
-        return false;
+        return any_expression(
+            candidate, [&](const semantic::sv::Expression& source) {
+                return (source.kind == semantic::sv::ExpressionKind::name
+                           && (source.text == index_name
+                               || source.text.starts_with(index_name + ".")))
+                    || (source.kind == semantic::sv::ExpressionKind::call
+                        && source.text == ".index");
+            });
     };
-    const auto contains_unknown_index = [&](const semantic::ExpressionId candidate) {
-        std::vector<semantic::ExpressionId> pending { candidate };
-        std::unordered_set<std::uint32_t> visited;
-        while (!pending.empty()) {
-            const auto current = pending.back();
-            pending.pop_back();
-            if (!visited.insert(current.value()).second) {
-                continue;
-            }
-            const auto expression
-                = specialized_hir_unit_->find_expression(current);
-            if (!expression || expression->systemverilog == nullptr) {
-                continue;
-            }
-            const auto& source = *expression->systemverilog;
-            if (source.kind == semantic::sv::ExpressionKind::name
-                && source.text.find(".index") != std::string::npos
-                && source.text != std::string { iterator_name } + ".index") {
-                return true;
-            }
-            pending.insert(
-                pending.end(), source.operands.begin(), source.operands.end());
-        }
-        return false;
+    const auto contains_unknown_index
+        = [&](const semantic::ExpressionId candidate) {
+        return any_expression(
+            candidate, [&](const semantic::sv::Expression& source) {
+                return source.kind == semantic::sv::ExpressionKind::name
+                    && source.text.find(".index") != std::string::npos
+                    && source.text != index_name;
+            });
     };
     const auto report_reference = [&](const semantic::sv::Expression& source,
                                       const std::string_view reason) {
@@ -424,10 +399,8 @@ Lowerer::lower_hir_systemverilog_container_expression(
     const auto span = hir_source_span(call.source);
     const auto invalid_result = [&]() {
         const auto width = expected_width == 0U ? 32U : expected_width;
-        const auto destination = allocate_register(
-            width, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant {
-            destination, unsigned_value(0U, width) });
+        const auto destination = load_constant(
+            unsigned_value(0U, width), frontend::ValueDomain::Bit2);
         return std::optional<RegisterId> { destination };
     };
     const bool reduction = is_container_reduction(call.text);
@@ -937,9 +910,7 @@ Lowerer::hir_systemverilog_value_type(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    const semantic::CompiledDesignResolver resolver {
-        *specialized_hir_unit_, hir_generic_binding_frames_
-    };
+    const auto resolver = hir_resolver();
     if (source.kind == semantic::sv::ExpressionKind::index
         && source.operands.size() == 2U && source.text == "index") {
         auto element = hir_systemverilog_value_type(source.operands.front());
@@ -1121,9 +1092,7 @@ Lowerer::hir_systemverilog_enumeration_method(
                               || candidate.systemverilog->form
                                   == semantic::sv::DeclarationForm::port);
                   };
-            declaration_id = semantic::CompiledDesignResolver {
-                *specialized_hir_unit_, hir_generic_binding_frames_
-            }.resolve_systemverilog(
+            declaration_id = hir_resolver().resolve_systemverilog(
                  std::string_view { source.text }.substr(0U, separator),
                  source.scope, object, false)
                                  .unique();
@@ -1176,9 +1145,7 @@ Lowerer::hir_systemverilog_enumeration_type_profile(
     const semantic::ScopeId scope) const
 {
     if (!type.target.target.valid()) {
-        type = semantic::CompiledDesignResolver {
-            *specialized_hir_unit_, hir_generic_binding_frames_
-        }.effective_systemverilog_type(type, scope)
+        type = hir_resolver().effective_systemverilog_type(type, scope)
                    .value_or(type);
     }
     if (!type.target.target.valid()) {
@@ -1295,10 +1262,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
     // num() is an int; first() and last() are the declared extremes
     // (IEEE 1800-2017 6.19.5.1, 6.19.5.2, 6.19.5.5).
     if (method->method == "num") {
-        const auto destination = allocate_register(
-            32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(LoadConstant { destination,
-            unsigned_value(method->values.size(), 32U) });
+        const auto destination
+            = load_constant(unsigned_value(method->values.size(), 32U),
+                frontend::ValueDomain::Bit2);
         return finish(destination);
     }
     if (method->method == "first" || method->method == "last") {
@@ -1339,11 +1305,10 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
         method->four_state ? PackedLogic4(method->width, Logic4::x)
                            : unsigned_value(0U, method->width) });
     for (std::int64_t index { }; index < count; ++index) {
-        const auto literal = allocate_register(
-            method->width, register_domain(*receiver));
-        process_.operations.emplace_back(LoadConstant { literal,
-            unsigned_value(method->values[static_cast<std::size_t>(index)],
-                method->width) });
+        const auto literal = load_constant(
+            unsigned_value(
+                method->values[static_cast<std::size_t>(index)], method->width),
+            register_domain(*receiver));
         const auto matches = allocate_register(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(Binary {
@@ -1411,10 +1376,9 @@ Lowerer::lower_hir_systemverilog_enumeration_name(
         LoadStringConstant { destination, std::string { } });
     std::vector<std::size_t> exits;
     for (std::size_t index { }; index < method->values.size(); ++index) {
-        const auto literal = allocate_register(
-            method->width, register_domain(*receiver));
-        process_.operations.emplace_back(LoadConstant { literal,
-            unsigned_value(method->values[index], method->width) });
+        const auto literal = load_constant(
+            unsigned_value(method->values[index], method->width),
+            register_domain(*receiver));
         const auto matches = allocate_register(
             1U, frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(Binary {

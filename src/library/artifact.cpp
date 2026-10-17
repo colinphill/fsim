@@ -25,8 +25,6 @@ constexpr std::string_view kSchemaCode = "FSIM-LIB-0002";
 constexpr std::string_view kValueCode = "FSIM-LIB-0003";
 constexpr std::string_view kIoCode = "FSIM-LIB-0004";
 constexpr std::string_view kPublishCode = "FSIM-LIB-0005";
-constexpr std::uint32_t kPreviousFormatVersion = 6;
-constexpr std::uint32_t kPreviousPortableSchemaVersion = 15;
 
 enum class Section {
   root,
@@ -766,60 +764,24 @@ std::optional<Metadata> parse_metadata(
     }
   }
 
-  if (metadata.format == kPreviousFormatVersion
-      && metadata.portable_schema == kPreviousPortableSchemaVersion) {
-    // The v6/15 schema did not define identifier-form fields. Ignore any
-    // similarly named extension rather than treating it as authoritative.
-    for (auto& unit : metadata.units) {
-      unit.name_form = VhdlIdentifierForm::unknown;
-      unit.primary_name_form = VhdlIdentifierForm::unknown;
-    }
-  }
-
   const auto document_line = std::max<std::uint32_t>(line_number, 1);
-  const bool current_format
-      = metadata.format == kFormatVersion
-          && metadata.portable_schema == kPortableSchemaVersion;
-  const bool legacy_format
-      = metadata.format == kPreviousFormatVersion
-          && metadata.portable_schema == kPreviousPortableSchemaVersion;
-  if (!current_format && !legacy_format) {
-    if (metadata.format != kFormatVersion
-        && metadata.format != kPreviousFormatVersion) {
+  if (metadata.format != kFormatVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
               ".fsimlib", "format " + std::to_string(metadata.format),
-            "format " + std::to_string(kFormatVersion) + " or "
-                + std::to_string(kPreviousFormatVersion), ".fsimlib"),
+              "format " + std::to_string(kFormatVersion), ".fsimlib"),
           source_name, document_line);
-    }
-    if (metadata.portable_schema != kPortableSchemaVersion
-        && metadata.portable_schema != kPreviousPortableSchemaVersion) {
+  }
+  if (metadata.portable_schema != kPortableSchemaVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
               ".fsimlib", "portable-unit schema " + std::to_string(metadata.portable_schema),
               "portable-unit schema "
-                  + std::to_string(kPortableSchemaVersion) + " or "
-                  + std::to_string(kPreviousPortableSchemaVersion),
+                  + std::to_string(kPortableSchemaVersion),
               ".fsimlib"),
           source_name, document_line);
-    }
-    if (metadata.format == kFormatVersion
-        && metadata.portable_schema != kPortableSchemaVersion) {
-      error(
-          diagnostics, kSchemaCode,
-          "format 7 requires portable-unit schema 16",
-          source_name, document_line);
-    }
-    if (metadata.format == kPreviousFormatVersion
-        && metadata.portable_schema != kPreviousPortableSchemaVersion) {
-      error(
-          diagnostics, kSchemaCode,
-          "format 6 requires portable-unit schema 15",
-          source_name, document_line);
-    }
   }
   if (metadata.compiled_hir_schema != kCompiledHirSchemaVersion) {
     error(

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fsim/app/application.hpp"
+#include "application_compiled_source.hpp"
 #include "application_direct_read_map_cache.hpp"
 #include "../runtime/simir_process_program.hpp"
 #include "../runtime/simir_builtin_process_executor_capability.hpp"

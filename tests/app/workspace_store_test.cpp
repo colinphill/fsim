@@ -374,7 +374,7 @@ void test_source_replacement_and_group_selection()
     assert(!fs::exists(catalog->location.directory / second.path));
 }
 
-void test_vhdl_identifier_form_round_trip_and_v1_migration()
+void test_vhdl_identifier_form_round_trip_and_v1_rejection()
 {
     TemporaryWorkspace temporary;
     workspace::Store store { temporary.root };
@@ -428,34 +428,19 @@ void test_vhdl_identifier_form_round_trip_and_v1_migration()
     assert(fs::remove(old_database));
     write_v1_database(old_database, old_location, original);
 
-    auto legacy_catalog = legacy_store.read_library("work", error);
-    assert(legacy_catalog && error.empty());
-    assert(legacy_catalog->artifacts.front().units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-    assert(legacy_catalog->artifacts.front().units.front().unit.primary_name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
-
-    legacy_transaction = legacy_store.begin_library("work", error);
-    assert(legacy_transaction && error.empty());
-    auto next = unit("next");
-    next.language = "vhdl";
-    next.kind = "context";
-    next.standard = "2008";
-    next.compatibility_profile = "ieee-1076-standard:2008:fsim-v3";
-    next.name_form = fsim::library::VhdlIdentifierForm::basic;
-    auto replacement = artifact(*legacy_transaction, { "next.vhd" },
-        { { next, "next.vhd" } });
-    assert(legacy_transaction->commit(std::move(replacement), error));
-    legacy_transaction.reset();
-    legacy_catalog = legacy_store.read_library("work", error);
-    assert(legacy_catalog && error.empty() && legacy_catalog->artifacts.size() == 2U);
-    const auto retained_legacy = std::ranges::find_if(
-        legacy_catalog->artifacts, [](const auto& record) {
-            return !record.units.empty() && record.units.front().unit.name == "ctx";
-        });
-    assert(retained_legacy != legacy_catalog->artifacts.end());
-    assert(retained_legacy->units.front().unit.name_form
-        == fsim::library::VhdlIdentifierForm::unknown);
+    // A catalog written with the previous table schema is not migrated.
+    const auto file_bytes = [](const fs::path& path) {
+        std::ifstream input { path, std::ios::binary };
+        return std::string { std::istreambuf_iterator<char> { input }, { } };
+    };
+    const auto old_bytes = file_bytes(old_database);
+    error.clear();
+    assert(!legacy_store.read_library("work", error));
+    assert(error.find("unsupported schema") != std::string::npos);
+    error.clear();
+    assert(!legacy_store.begin_library("work", error));
+    assert(error.find("unsupported schema") != std::string::npos);
+    assert(file_bytes(old_database) == old_bytes);
 }
 
 void test_collision_failure_and_sql_rollback()
@@ -696,7 +681,7 @@ int main(int argc, char** argv)
     }
     assert(argc == 1);
     test_source_replacement_and_group_selection();
-    test_vhdl_identifier_form_round_trip_and_v1_migration();
+    test_vhdl_identifier_form_round_trip_and_v1_rejection();
     test_collision_failure_and_sql_rollback();
     test_native_invalidation_and_delete();
     test_mapping_and_corrupt_metadata();

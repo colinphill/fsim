@@ -119,64 +119,13 @@ void VhdlParser::parse_vhdl_subprogram_generic_map(
     return;
   }
 
-  bool saw_named = false;
-  const auto begins_unambiguous_subtype_indication = [&]() {
-    if (!at(TokenKind::Identifier)) {
-      return false;
-    }
-    std::size_t lookahead = 1;
-    while (at(TokenKind::Dot, lookahead)
-           && at(TokenKind::Identifier, lookahead + 1)) {
-      lookahead += 2;
-    }
-    return keyword("range", lookahead, true);
-  };
-  while (!at_end() && !at(TokenKind::RightParen)) {
-    const auto association_start = current();
-    ParameterOverride actual;
-    if (at(TokenKind::Identifier)
-        && at(TokenKind::Arrow, 1)) {
-      saw_named = true;
-      const auto name = advance();
-      advance();
-      actual.name = vhdl_name(name.text);
-      if (std::ranges::any_of(
-              associations,
-              [&](const ParameterOverride& existing) {
-                return existing.name == actual.name;
-              })) {
-        error(
-            name,
-            "FSIM-VHDL-SEM-060",
-            "duplicate generic subprogram association '"
-                + *actual.name + "'");
-      }
-    } else if (saw_named) {
-      error(
-          current(),
-          "FSIM-VHDL-SEM-061",
-          "a positional generic subprogram association cannot follow a "
-          "named association");
-    }
-
-    if (match(TokenKind::Less)) {
-      expect(
-          TokenKind::Greater,
-          "'>' in default generic subprogram association",
-          "FSIM-VHDL-PARSE-200");
-      actual.default_box = true;
-    } else if (begins_unambiguous_subtype_indication()) {
-      actual.type_value = parse_vhdl_type(true, true);
-    } else {
-      actual.value = parse_expression();
-    }
-    actual.span =
-        cover(association_start.span, previous().span);
-    associations.push_back(std::move(actual));
-    if (!match(TokenKind::Comma)) {
-      break;
-    }
-  }
+  parse_vhdl_generic_associations(associations, {
+      "FSIM-VHDL-SEM-060", "duplicate generic subprogram association",
+      "FSIM-VHDL-SEM-061",
+      "a positional generic subprogram association cannot follow a named "
+      "association",
+      "'>' in default generic subprogram association",
+      "FSIM-VHDL-PARSE-200", false });
   expect(
       TokenKind::RightParen,
       "')' after generic subprogram associations",
