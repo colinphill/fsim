@@ -581,6 +581,14 @@ private:
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The smallest and largest choices of a named array aggregate without
+    // `others` (IEEE 1076-2008 9.3.3.3), as an ascending range; `index`
+    // evaluates one index choice (integer constants by default).
+    [[nodiscard]] std::optional<HirPackedRange>
+    hir_vhdl_named_aggregate_bounds(
+        const semantic::vhdl::Expression& aggregate,
+        const std::function<std::optional<std::int64_t>(
+            semantic::ExpressionId)>& index = { }) const;
     [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
     hir_vhdl_function_result_shape(
         semantic::ExpressionId expression,
@@ -996,9 +1004,11 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_systemverilog_size_cast_operand_is_integral(
         semantic::ExpressionId expression) const;
+    // The type of `T'(x)`; with `containers`, also an unpacked array or
+    // queue type (a bit-stream cast, 6.24.3).
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
     hir_systemverilog_cast_type(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression, bool containers = false) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_systemverilog_packed_pattern_operand(
         semantic::ExpressionId expression,
@@ -1454,6 +1464,10 @@ private:
     // operand extends without sign, and an operator propagates that to its
     // own operands.
     bool hir_unsigned_extension_ = false;
+    // Set while lowering an aggregate whose context is not one that fixes
+    // its direction (a relational operand): a named aggregate then takes
+    // its direction from the index subtype (IEEE 1076-2008 9.3.3.3).
+    bool hir_vhdl_aggregate_free_direction_ { };
     bool hir_unsigned_operation_ = false;
     struct HirSynchronizationAttempt {
         bool handled { };
@@ -2071,6 +2085,86 @@ private:
         runtime::simir::ContainerRegisterId value { };
         runtime::simir::ContainerType type;
     };
+    // A SystemVerilog unpacked value path (IEEE 1800-2017 7.2, 7.4): a
+    // container object, then index and member steps. `type` is the selected
+    // value's profile; a leaf is a packed or scalar element or member.
+    struct HirSvValuePath {
+        struct Step {
+            std::optional<std::uint32_t> member;
+            std::vector<semantic::ExpressionId> indices;
+            // The container an index step selects from.
+            runtime::simir::ContainerType container;
+        };
+        HirContainerObjectBinding root;
+        std::vector<Step> steps;
+        runtime::simir::ContainerType type;
+        bool leaf { };
+        bool string_leaf { };
+        // A member of a packed leaf (`s.pt.b`): bits of the leaf value.
+        struct PackedTail {
+            std::size_t offset { };
+            std::size_t width { };
+            bool signed_value { };
+        };
+        std::optional<PackedTail> packed_tail;
+    };
+    struct HirSvValuePathCursor {
+        struct Level {
+            runtime::simir::ContainerRegisterId container { };
+            RegisterId index { };
+            bool signed_index { true };
+            std::vector<std::uint32_t> members;
+            runtime::simir::ContainerType type;
+        };
+        runtime::simir::ContainerRegisterId root { };
+        runtime::simir::ContainerRegisterId container { };
+        std::vector<Level> levels;
+    };
+    [[nodiscard]] std::optional<HirSvValuePath> hir_sv_value_path(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_index(
+        const HirSvValuePath& path, const HirSvValuePath::Step& step);
+    [[nodiscard]] std::optional<HirSvValuePathCursor>
+    lower_hir_sv_value_path_descend(const HirSvValuePath& path);
+    void publish_hir_sv_value_path(
+        const HirSvValuePath& path, const HirSvValuePathCursor& cursor);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_read(
+        const HirSvValuePath& path);
+    // The selected value, including a packed member tail.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_value(
+        const HirSvValuePath& path);
+    [[nodiscard]] std::optional<HirStaticContainerValue>
+    lower_hir_sv_value_path_container_read(const HirSvValuePath& path);
+    struct HirAggregateLeaf {
+        std::vector<std::uint32_t> members;
+        std::size_t width { };
+        bool two_state { };
+    };
+    [[nodiscard]] std::optional<std::vector<HirAggregateLeaf>>
+    hir_aggregate_packed_leaves(
+        const runtime::simir::ContainerType& type) const;
+    [[nodiscard]] std::optional<RegisterId> pack_hir_aggregate_value(
+        runtime::simir::ContainerRegisterId value,
+        const runtime::simir::ContainerType& type);
+    [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
+    unpack_hir_aggregate_value(
+        RegisterId packed, const runtime::simir::ContainerType& type);
+    [[nodiscard]] bool lower_hir_sv_value_path_write(
+        const HirSvValuePath& path,
+        std::optional<RegisterId> packed_value,
+        std::optional<runtime::simir::ContainerRegisterId> container_value);
+    [[nodiscard]] bool hir_sv_container_stream(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
+    lower_hir_sv_bitstream(semantic::ExpressionId expression);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_sv_bitstream_value(
+        semantic::ExpressionId expression, std::size_t width,
+        frontend::ValueDomain domain);
+    [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
+    lower_hir_sv_bitstream_container(semantic::ExpressionId expression,
+        const runtime::simir::ContainerType& type);
+    [[nodiscard]] bool lower_hir_sv_value_path_nonblocking_write(
+        const HirSvValuePath& path, RegisterId value);
     struct HirStaticContainerSelection {
         HirContainerObjectBinding base;
         runtime::simir::ContainerType selected_type;
@@ -2649,6 +2743,13 @@ private:
     std::unordered_map<std::uint32_t, RegisterId> hir_captured_update_indices_;
     // Whether every side effect of the current update target is captured.
     bool hir_update_indices_captured_ { };
+    // The declaration an assignment or initializer writes, so that `new`
+    // allocates that declaration's class specialization (IEEE 1800-2017
+    // 8.25, 8.7).
+    std::optional<semantic::DeclarationId> hir_allocation_target_;
+    [[nodiscard]] std::optional<std::string>
+    hir_allocation_target_specialization(
+        std::string_view class_identity);
     [[nodiscard]] bool hir_update_expression_pure(
         semantic::ExpressionId expression, std::size_t depth = 0U) const;
     // Evaluate the impure indices of an update target once; false when a
@@ -2868,6 +2969,7 @@ private:
         bool snapshot_complete { };
         bool function { true };
     };
+    void inherit_enclosing_hir_frame_facts(HirCallableFrame& frame) const;
     [[nodiscard]] bool allocate_hir_static_callable_declarations(
         std::size_t frame_index);
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_resolution_call(

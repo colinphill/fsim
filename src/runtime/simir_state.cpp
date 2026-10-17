@@ -2184,7 +2184,8 @@ void Interpreter::Impl::notify_static_value_change(
     }
 }
 
-void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
+void Interpreter::Impl::queue_at(
+    ProcessId id, SimulationTick time, const bool initial)
 {
     if (auto* const compact = processes.compact_constant(id)) {
         if (compact->halted || compact->queued) {
@@ -2218,7 +2219,13 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
             scheduler.schedule_internal_systemverilog_at(
                 time, phase, id, task);
         } else {
-            scheduler.schedule_internal_at(time, phase, id, task);
+            // A postponed process makes its initialization run with the
+            // others (IEEE 1076-2008 14.7.5.2).
+            scheduler.schedule_internal_at(time,
+                initial && phase == SchedulerPhase::postponed
+                    ? SchedulerPhase::active
+                    : phase,
+                id, task);
         }
         return;
     }
@@ -2254,7 +2261,11 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
         scheduler.schedule_internal_systemverilog_at(
             time, phase, id, task);
     } else {
-        scheduler.schedule_internal_at(time, phase, id, task);
+        scheduler.schedule_internal_at(time,
+            initial && phase == SchedulerPhase::postponed
+                ? SchedulerPhase::active
+                : phase,
+            id, task);
     }
 }
 

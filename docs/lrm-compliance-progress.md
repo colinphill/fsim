@@ -253,6 +253,162 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 64: unified architecture (value paths, bit streams, aggregate shapes), class value parameters
+
+Four read-only triage lanes (sv-tests, Verilator, nvc, VESTs and compliance)
+extended the index (`.local-artifacts/lrm-closure/triage/b64-INDEX.md`).
+
+SystemVerilog and Verilog:
+
+- Class value parameters (8.25): a declaration `C #(7) h` selects its
+  specialization, `new` allocates it, and methods that read a class value
+  parameter read the object's specialization instead of being inlined with the
+  default. A class-body type parameter is a type alias (8.25).
+- `$urandom(seed)` seeds the calling process's generator and then draws
+  (18.13.1). `x inside {array}` matches the elements of a fixed, dynamic or
+  queue array, also of strings (11.4.13).
+- Packed arrays of named types: `pkg::t [3:0] v`, `enum_t [3:0]`,
+  `struct packed {...} [15:0]` (also with parameter-dependent member widths),
+  `if0.rq_t [1:0]` and `foo_t [1:0]` as a type-parameter default (7.4.1). A
+  packed array with parameter-dependent dimensions flattens to a range
+  expression folded at elaboration, so `x[i].m` works on it.
+- An anonymous enumeration as a structure member declares its literals in the
+  enclosing scope (7.2, 6.19).
+- `$bits(v)'(x)`: a constant function call as a casting size (6.24.1).
+- A string literal or packed value converted to `string` drops `"\0"`
+  characters (6.16); `string'(x)` no longer shows them as spaces.
+- A packed range bound is a self-determined constant expression: sized
+  operands keep their widths (`[4'b1111 + 4'b0001 >> 1:0]` is one bit,
+  11.6.1). An index of a multidimensional packed array in a folded constant
+  condition selects an element, not a bit (7.4.5).
+- A parameter whose value calls a function with a defaulted argument that
+  reads a variable is not a constant (13.5.3, 6.20.2).
+- An element of a real array in another instance (`u.r[2]`) is real.
+- SDF: `$sdf_annotate` from a nested module annotates below that instance
+  (IEEE 1800-2017 32.4); an empty `()` delay keeps the transition's delay
+  (IEEE 1497-2001 5.4.1); a process that assigns one region in several places
+  owns it once.
+- Unrolled loops no longer elaborate in quadratic time (region-graph width
+  tracking), which brought `t_randcase` from over 60 s to about 1 s.
+
+VHDL:
+
+- `S'STABLE` and `S'QUIET` without a time argument wake a waiting process when
+  they return to TRUE one delta after the event (16.2.3).
+- A component declared in a package can be instantiated without maps
+  (`u1 : comp1;`); scalar generics of a component left unassociated take the
+  component's default when a binding indication's generic map names them.
+- Earlier in the batch: `elsif`/alternative labels in generate statements,
+  `file_close` of an unopened file, `rising_edge` from `U`, signed
+  `'delayed`, a `wait for` beyond the time range never wakes, implicit `??` in
+  VHDL-2008, entity-declared attributes in architectures, `use pkg."+"`.
+
+Unified architecture (owner direction): six read-only triage lanes collected
+the deferred large fixes into one plan of five shared mechanisms
+(`.local-artifacts/lrm-closure/ARCH-PLAN-b64.md`, index
+`.local-artifacts/lrm-closure/triage/b65-INDEX.md`), with an audit of which
+earlier one-off fixes each mechanism replaces. Phases 0 to 2 are in this batch;
+phases 3 and 4 (package instances and nested packages, activation frames and
+change notification, protected types as regions, class methods in SimIR)
+continue in the next batches.
+
+Phase 0, corrections and independent fixes:
+
+- The Batch 64 removal of the PKG-001 check for `use lib.unit` was wrong; it
+  is restored (tc1658 stays open: the elaborated object selection does not yet
+  follow a use clause to an entity).
+- SystemVerilog: an untyped parameter with a string default takes the type of
+  an override (6.20.2); `localparam type` is not a positional formal (23.10.1);
+  real to wider-than-64-bit integral conversion (6.12.2); a recursive module
+  instance is keyed by its actuals, with a depth limit (23.3.1); unpacked
+  dimensions after a virtual interface name and interface types in typedefs;
+  a checker used before its declaration in the same module; specify paths of
+  UDP outputs.
+- VHDL: postponed processes run at the end of the time slot (14.7.5.3), also
+  for postponed concurrent statements; the units of STD TIME are recognised by
+  declaration, not by name (tc285, tc286).
+
+Phase 1, VHDL array shapes and lengths:
+
+- A named array aggregate without `others` takes its bounds from its smallest
+  and largest choices; only the direction comes from a context that fixes it,
+  and a relational operand is not such a context (9.3.3.3). One choice-bounds
+  helper serves the lowering, the comparison widths and the validator; a
+  choice must lie in the context range only with `others`. The earlier
+  descending `count-1 downto 0` materialisation and the single `'range` choice
+  special case are gone.
+- Port association and component/entity port conformance compare lengths, not
+  bounds or direction (6.5.7.1, 7.3.3); BIND-031 now reports only a length or
+  rank mismatch. Tests that required equal bounds were flipped.
+- An aggregate operand of `&` has the type of the other operand, of the
+  concatenation, or of the formal or result it is passed to (9.2.5).
+- A sole non-static range choice (`(i*8+7 downto i*8 => '1')`) fills the
+  context, with a run-time length check.
+- Nested aggregate assignment targets `((a, b), c) := r` and aggregate targets
+  of selected assignments (10.5.2.1); unassociated composite generics take
+  their default as the actual; deferred constants resolve to their package
+  body value; a nested subprogram sees its enclosing subprogram's parameter
+  values; null-array record elements; `'last_event`/`'last_active` of slices;
+  an open unconstrained block port takes its bounds from its default (6.5.6.3).
+
+Phase 2, structured references and bit streams (SystemVerilog):
+
+- Unpacked values are addressed by a value path built from the HIR structure:
+  a container object, then index and member steps, then optionally a packed
+  member (`str.el[1].val.next`, `buffer[i]`, `s.pt.b`). One reader and one
+  writer walk any path; nonblocking writes of packed members are published in
+  the NBA region (10.4.2). Element reads through an unknown or out-of-range
+  index give the element default (7.4.6).
+- An unpacked structure held by a class property converts to and from a
+  module variable of the same type (7.2).
+- Assignment patterns with string members, array members and nested container
+  elements (`'{'{1, 2}, '{3}}`, 10.9).
+- Streaming over unpacked arrays, queues and structures (11.4.14), as source,
+  as target (several targets consumed in order) and through bit-stream casts
+  to array types (6.24.3); `$bits` of a fixed unpacked array counts all
+  elements (20.6.2). The FSIM-ELAB-SVEXPR-003 restriction is removed. These
+  run in the interpreter; the native code generator leaves such modules
+  interpreted.
+- Interface array ports connected to a slice `a[l:r]`, `a[b+:w]` and to
+  `a[i].modport` (23.3.3.5, 25.5).
+- Tagged unions whose members are unpacked structures, and
+  `casez`/`casex ... matches` (12.6.1); FSIM-SV-PARSE-188 is retired.
+- VHDL external names: assignment and force targets, absolute `.`, up-level
+  `^.` and literal generate-index paths, relative paths from the enclosing
+  instance; a process that uses an external name is elaborated after the
+  instances it can name (8.7, 14.5).
+- VHDL generics: an operator `is <>` default denotes the predefined operator
+  when no user declaration matches (6.5.6.2).
+
+Measurement: all six suites were run in full on frozen `b64d` (the full
+checkpoint due by Batch 65) and compared with the Batch 63 results; the
+pre-architecture binary `b64a` was also run in full as the baseline for the
+plan's phases. Against Batch 63: **101 new passes, zero regressions**. One
+of them, sv-tests 11.4.14.3 `unpack_stream_pad-sim`, already passed before
+this batch; its Batch 63 record was stale. tc1658 (VESTs) passed on `b64a`
+only through the wrong PKG-001 removal and fails again, as in Batch 63.
+Excluded counts are unchanged.
+
+| Suite | Batch63 passes / in scope | Batch64 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2487 / 2630 | 2502 / 2630 | 196 |
+| sv-tests | 1426 / 1497 | 1434 / 1497 | 0 |
+| verilator | 1472 / 2218 | 1516 / 2218 | 197 |
+| vests | 3547 / 3646 | 3556 / 3646 | 2 |
+| nvc | 813 / 1262 | 837 / 1262 | 220 |
+| vhdl-compliance | 38 / 72 | 39 / 72 | 0 |
+
+The labelled ctest run (`vhdl|systemverilog|compliance`) ends with the same
+27 known failures as Batch 63. Tests that encoded behaviour the LRM does not
+require were changed to the LRM rule: port and component-port bounds
+(vhdl_array_application), named-aggregate length checks (aggregate choice and
+type tests now expect FSIM-ELAB-VHARRAYAGG-006), a queue streamed into a
+packed target (elaborator_selection), `casez ... matches` (frontend
+statements), an absolute external-name path, case-generate labels, implicit
+`??` in VHDL-2008 conditions, `$urandom(seed)` and `inside` over arrays.
+The diagnostic catalog drops FSIM-ELAB-SVEXPR-003 and FSIM-SV-PARSE-188
+(2972 codes).
+
 ### Batch 63: VHDL femtosecond resolution, update targets and specify values
 
 Four new read-only triage lanes (Verilator lowering and run-time failures,

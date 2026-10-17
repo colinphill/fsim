@@ -1274,6 +1274,10 @@ struct ParameterDeclaration {
     // Its full declaration must appear in the corresponding package body.
     bool vhdl_deferred { };
     std::optional<SourceSpan> vhdl_completion_span;
+    // A SystemVerilog parameter without a data type whose string-literal
+    // default made it a string: an override's final value retypes it
+    // (IEEE 1800-2017 6.20.2).
+    bool systemverilog_inferred_string { };
     ParameterDeclaration() = default;
 
     ParameterDeclaration(std::string parameter_name, Type parameter_type,
@@ -1774,6 +1778,9 @@ struct Statement {
     // Ordered alternatives and matching policy of a Verilog/SystemVerilog case
     // statement. VHDL sequential case retains the exact default.
     CaseMatchKind case_match_kind { CaseMatchKind::Exact };
+    // `casez`/`casex ... matches`: how constant patterns compare (IEEE
+    // 1800-2017 12.6.1).
+    CaseMatchKind case_matches_wildcard { CaseMatchKind::Exact };
     CaseQualifier case_qualifier { CaseQualifier::None };
     support::RareVector<CaseAlternative> case_alternatives;
     // Declarations directly owned by a procedural block. VHDL-2019

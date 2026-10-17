@@ -154,7 +154,7 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
-    "diagnostic catalog covers 2974 production codes"
+    "diagnostic catalog covers 2972 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)

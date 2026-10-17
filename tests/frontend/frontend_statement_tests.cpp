@@ -526,8 +526,16 @@ endmodule
 )",
         Language::SystemVerilog2017);
     require(!invalid_matches.ok(), "deferred case patterns must fail");
+    // `casez (...) matches` is legal (IEEE 1800-2017 12.6.1); the second
+    // statement's malformed patterns still fail.
+    require(
+        std::ranges::none_of(
+            invalid_matches.diagnostics,
+            [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-188";
+            }),
+        "casez matches is accepted");
     for (const auto code : {
-             std::string_view { "FSIM-SV-PARSE-188" },
              std::string_view { "FSIM-SV-PARSE-189" },
              std::string_view { "FSIM-SV-PARSE-190" } }) {
         require(

@@ -514,6 +514,9 @@ struct VerilogDefparamDeclaration {
     SourceSpan span;
 };
 
+struct SystemVerilogAssertionDeclaration;
+struct SystemVerilogConcurrentAssertion;
+
 struct GenerateBody {
     // Locally static VHDL constants and SystemVerilog parameters/localparams.
     // These are evaluated in declaration order during generate expansion and
@@ -543,6 +546,12 @@ struct GenerateBody {
     std::vector<Instance> instances;
     std::vector<VerilogDefparamDeclaration> verilog_defparams;
     std::vector<GenerateRegion> generate_regions;
+    // Concurrent assertions of a SystemVerilog generate block (IEEE
+    // 1800-2017 27.3, 16.14), resolved into processes of the block.
+    std::vector<SystemVerilogAssertionDeclaration>
+        systemverilog_assertion_declarations;
+    std::vector<SystemVerilogConcurrentAssertion>
+        systemverilog_concurrent_assertions;
 };
 
 struct GenerateChoice {

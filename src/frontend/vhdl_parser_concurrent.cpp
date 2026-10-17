@@ -12,33 +12,70 @@ GenerateRegion VhdlParser::parse_vhdl_conditional_generate(
   GenerateRegion result;
   result.then_scope = vhdl_name(label.text);
   result.else_scope = result.then_scope;
+  // `[alternative_label :] condition generate ... [end [alternative_label];]`
+  // (IEEE 1076-2008 11.8): each branch may have its own label and end.
+  const auto alternative_label = [&]() {
+    if (at(TokenKind::Identifier) && at(TokenKind::Colon, 1)) {
+      (void)require_vhdl_standard(
+          current(),
+          VhdlStandard::Vhdl2008,
+          "if-generate alternative labels",
+          "remove the alternative label");
+      advance();
+      advance();
+    }
+  };
+  const auto parse_branch = [&](GenerateBody& body) {
+    const bool declarations = parse_vhdl_generate_declarations(
+        body, VhdlComponentDeclarationRegion::Generate);
+    if (declarations) {
+      expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+    } else {
+      (void)match_keyword("begin", true);
+    }
+    parse_vhdl_generate_branch(body);
+    // A branch body may close with `end [alternative_label];`.
+    if (keyword("end", 0, true) && !keyword("generate", 1, true)) {
+      advance();
+      if (at(TokenKind::Identifier)) {
+        advance();
+      }
+      expect(TokenKind::Semicolon, "';' after generate alternative",
+          "FSIM-VHDL-PARSE-061");
+    }
+  };
+  alternative_label();
   result.condition = parse_expression();
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-056");
-  const bool then_declarations = parse_vhdl_generate_declarations(
-      result.then_body,
-      VhdlComponentDeclarationRegion::Generate);
-  if (then_declarations) {
-    expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
-  } else {
-    (void)match_keyword("begin", true);
+  parse_branch(result.then_body);
+  // `elsif` continues as a conditional region in the else branch.
+  GenerateRegion* tail = &result;
+  while (match_keyword("elsif", true)) {
+    (void)require_vhdl_standard(
+        previous(),
+        VhdlStandard::Vhdl2008,
+        "if-generate alternatives",
+        "use separate VHDL-93 if-generate statements");
+    GenerateRegion alternative;
+    alternative.then_scope = result.then_scope;
+    alternative.else_scope = result.then_scope;
+    alternative_label();
+    alternative.condition = parse_expression();
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
+    parse_branch(alternative.then_body);
+    alternative.span = span_from(start, previous());
+    tail->else_body.generate_regions.push_back(std::move(alternative));
+    tail = &tail->else_body.generate_regions.back();
   }
-  parse_vhdl_generate_branch(result.then_body);
   if (match_keyword("else", true)) {
-      (void)require_vhdl_standard(
-          previous(),
-          VhdlStandard::Vhdl2008,
-          "if-generate alternatives",
-          "use separate VHDL-93 if-generate statements");
-      expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
-      const bool else_declarations = parse_vhdl_generate_declarations(
-          result.else_body,
-          VhdlComponentDeclarationRegion::Generate);
-      if (else_declarations) {
-          expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
-      } else {
-          (void)match_keyword("begin", true);
-      }
-    parse_vhdl_generate_branch(result.else_body);
+    (void)require_vhdl_standard(
+        previous(),
+        VhdlStandard::Vhdl2008,
+        "if-generate alternatives",
+        "use separate VHDL-93 if-generate statements");
+    alternative_label();
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
+    parse_branch(tail->else_body);
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-058");
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-059");
@@ -172,22 +209,34 @@ GenerateRegion VhdlParser::parse_vhdl_selection_generate(
           "FSIM-VHDL-SEM-018",
           "an others case-generate alternative must be last");
     }
-    if (!(at(TokenKind::Identifier)
-          && at(TokenKind::Colon, 1)
-          && keyword("when", 2, true))) {
-      error(
-          current(),
-          "FSIM-VHDL-PARSE-070",
-          "a case-generate alternative must have a stable label");
+    // `when [alternative_label :] choices =>` (IEEE 1076-2008 11.8); the
+    // `alternative_label : when` order is also accepted. Without a label
+    // the alternative is named by the generate label.
+    if (match_keyword("when", true)) {
+      if (at(TokenKind::Identifier) && at(TokenKind::Colon, 1)) {
+        alternative.scope = vhdl_name(advance().text);
+        advance();
+      } else {
+        alternative.scope = vhdl_name(label.text);
+      }
+    } else {
+      if (!(at(TokenKind::Identifier)
+            && at(TokenKind::Colon, 1)
+            && keyword("when", 2, true))) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-070",
+            "a case-generate alternative must start with 'when'");
+      }
+      const auto alternative_label =
+          expect_identifier("case-generate alternative label");
+      alternative.scope = vhdl_name(alternative_label.text);
+      expect(
+          TokenKind::Colon,
+          "':' after case-generate alternative label",
+          "FSIM-VHDL-PARSE-071");
+      expect_keyword("when", true, "FSIM-VHDL-PARSE-071");
     }
-    const auto alternative_label =
-        expect_identifier("case-generate alternative label");
-    alternative.scope = vhdl_name(alternative_label.text);
-    expect(
-        TokenKind::Colon,
-        "':' after case-generate alternative label",
-        "FSIM-VHDL-PARSE-071");
-    expect_keyword("when", true, "FSIM-VHDL-PARSE-071");
     if (match_keyword("others", true)) {
       alternative.is_default = true;
       if (saw_default) {
@@ -236,6 +285,15 @@ GenerateRegion VhdlParser::parse_vhdl_selection_generate(
     parse_vhdl_generate_branch(
         alternative.body,
         true);
+    // An alternative body may close with `end [alternative_label];`.
+    if (keyword("end", 0, true) && !keyword("generate", 1, true)) {
+      advance();
+      if (at(TokenKind::Identifier)) {
+        advance();
+      }
+      expect(TokenKind::Semicolon, "';' after case-generate alternative",
+          "FSIM-VHDL-PARSE-073");
+    }
     alternative.span =
         span_from(alternative_start, previous());
     result.alternatives.push_back(std::move(alternative));
@@ -764,11 +822,13 @@ void VhdlParser::parse_vhdl_generate_branch(
     GenerateBody& body,
     const bool stop_at_case_alternative) {
   while (!at_end() && !keyword("else", 0, true)
+         && !keyword("elsif", 0, true)
          && !keyword("end", 0, true)
          && !(stop_at_case_alternative
-              && at(TokenKind::Identifier)
-              && at(TokenKind::Colon, 1)
-              && keyword("when", 2, true))) {
+              && (keyword("when", 0, true)
+                  || (at(TokenKind::Identifier)
+                      && at(TokenKind::Colon, 1)
+                      && keyword("when", 2, true))))) {
     std::optional<Token> label;
     if (at(TokenKind::Identifier)
         && at(TokenKind::Colon, 1)) {

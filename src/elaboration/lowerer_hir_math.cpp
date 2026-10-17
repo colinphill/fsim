@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include <bit>
 #include <charconv>
 #include <limits>
 
@@ -406,19 +407,95 @@ RegisterId Lowerer::convert_hir_integral_to_real(const RegisterId value,
 RegisterId Lowerer::convert_hir_real_to_integral(const RegisterId value,
     const frontend::SystemVerilogScalarKind source, const std::size_t width)
 {
-    // The runtime conversion is 64 bits wide; a wider target is extended.
-    static_cast<void>(width);
-    const auto integral = allocate_register(64U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(SystemVerilogScalarBinary {
-        runtime::SystemVerilogScalarBinaryOperator::Convert,
-        integral,
-        value,
-        value,
-        source,
-        source,
-        frontend::SystemVerilogScalarKind::None,
+    using ScalarKind = frontend::SystemVerilogScalarKind;
+    using Operator = runtime::SystemVerilogScalarBinaryOperator;
+    const auto convert64 = [&](const RegisterId real, const ScalarKind kind) {
+        const auto integral
+            = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            Operator::Convert, integral, real, real, kind, kind,
+            ScalarKind::None });
+        return integral;
+    };
+    if (width <= 64U) {
+        return convert64(value, source);
+    }
+    // A target wider than 64 bits takes the whole rounded value (IEEE
+    // 1800-2017 6.12.2). Below 2**63 in magnitude the 64-bit conversion is
+    // exact and sign-extends; beyond it a double is an exact integer that
+    // splits into a high part (floor(r / 2**64)) and a low 64-bit word.
+    auto real = value;
+    if (source != ScalarKind::Real && source != ScalarKind::Realtime) {
+        real = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            Operator::Convert, real, value, value, source, source,
+            ScalarKind::Real });
+    }
+    const auto real_constant = [&](const double number) {
+        return load_constant(
+            unsigned_value(std::bit_cast<std::uint64_t>(number), 64U),
+            frontend::ValueDomain::Bit2);
+    };
+    const auto real_binary = [&](const Operator operation,
+                                 const RegisterId left, const RegisterId right,
+                                 const ScalarKind result) {
+        const auto destination = allocate_register(
+            result == ScalarKind::None ? 1U : 64U,
+            frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            operation, destination, left, right, ScalarKind::Real,
+            ScalarKind::Real, result });
+        return destination;
+    };
+    const auto result = allocate_register(width, frontend::ValueDomain::Bit2);
+    const auto narrow = resize_register(
+        convert64(real, ScalarKind::Real), width, true);
+    const auto above = real_binary(Operator::GreaterEqual, real,
+        real_constant(9223372036854775808.0), ScalarKind::None);
+    const auto below = real_binary(Operator::LessEqual, real,
+        real_constant(-9223372036854775808.0), ScalarKind::None);
+    const auto wide = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        Binary { BinaryOperator::bit_or, wide, above, below });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { wide, 0U, 0U });
+    process_.operations.emplace_back(CopyRegister { result, narrow });
+    const auto skip = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Jump { 0U });
+    const auto split = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto two64 = real_constant(18446744073709551616.0);
+    const auto quotient
+        = real_binary(Operator::Divide, real, two64, ScalarKind::Real);
+    const auto high_real = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogMath {
+        .function = runtime::SystemVerilogMathFunction::Floor,
+        .destination = high_real,
+        .first = quotient,
+        .first_width = 64U,
+        .first_kind = ScalarKind::Real,
     });
-    return integral;
+    const auto high_scaled
+        = real_binary(Operator::Multiply, high_real, two64, ScalarKind::Real);
+    const auto low_real = real_binary(
+        Operator::Subtract, real, high_scaled, ScalarKind::Real);
+    const auto low = convert64(low_real, ScalarKind::Real);
+    const auto high = convert_hir_real_to_integral(
+        high_real, ScalarKind::Real, width - 64U);
+    const auto high_sized = register_width(high) == width - 64U
+        ? high
+        : resize_register(high, width - 64U, true);
+    const auto joined = allocate_register(width, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Concatenate {
+        joined, { high_sized, low }, static_cast<std::uint32_t>(width) });
+    process_.operations.emplace_back(CopyRegister { result, joined });
+    process_.operations[branch] = Branch { wide, split,
+        static_cast<InstructionIndex>(branch + 1U) };
+    process_.operations[skip]
+        = Jump { static_cast<InstructionIndex>(process_.operations.size()) };
+    return result;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_scalar_converted_value(

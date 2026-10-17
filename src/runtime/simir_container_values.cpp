@@ -283,6 +283,19 @@ void validate_container_value(const ContainerValue& value) {
   }
 }
 
+std::optional<ContainerType>
+nested_element_container_type(const ContainerType& type) {
+  if (type.element_kind == ContainerElementKind::Container
+      && type.element_types.size() == 1U) {
+    return type.element_types.front();
+  }
+  if (type.element_kind == ContainerElementKind::Aggregate
+      && !type.aggregate_value) {
+    return aggregate_element_type(type);
+  }
+  return std::nullopt;
+}
+
 ContainerValue default_container_value(const ContainerType& type) {
   ContainerValue result;
   result.type = type;

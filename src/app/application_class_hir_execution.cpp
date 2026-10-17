@@ -4101,6 +4101,30 @@ SystemVerilogClassHirExecution::evaluate_packed(
             ? *context_signed : signed_value;
         return resize_expression_operand(packed, result_width, extend_signed);
     };
+    // A value parameter of the object's class takes the value of the
+    // object's specialization (IEEE 1800-2017 8.25), not its default.
+    if (handle != 0U && read_owner_parameter_
+        && value->kind == semantic::sv::ExpressionKind::name
+        && value->referenced_name && value->referenced_name->selected) {
+        const auto selected = *value->referenced_name->selected;
+        const bool class_parameter = std::ranges::any_of(hir_.classes(),
+            [&](const auto& candidate) {
+                return std::ranges::any_of(candidate.parameters,
+                    [&](const auto& parameter) {
+                        return !parameter.type_parameter
+                            && parameter.declaration == selected;
+                    });
+            });
+        if (class_parameter) {
+            const auto binding = read_owner_parameter_(handle, selected);
+            if (binding.found && binding.value) {
+                const auto* declared = declaration(selected);
+                return apply_context(*binding.value,
+                    declared != nullptr && declared->type
+                        && declared->type->signed_value);
+            }
+        }
+    }
     if (auto aggregate = evaluate_bound_call_value(id, handle, environment)) {
         if (aggregate->kind == CallValue::Kind::packed && aggregate->packed) {
             return apply_context(

@@ -882,13 +882,33 @@ Expression VhdlParser::parse_primary()
             }
         }
 
-        (void)match(TokenKind::Dot);
+        // An absolute pathname starts with `.`, a relative one may go up
+        // with `^.`; a generate statement label takes its literal index
+        // (IEEE 1076-2008 8.7).
+        std::string target;
+        if (match(TokenKind::Dot)) {
+            target = ".";
+        }
+        while (at(TokenKind::Caret) && at(TokenKind::Dot, 1U)) {
+            advance();
+            advance();
+            target += "^.";
+        }
         const auto first = expect_identifier("external signal path");
-        std::string target = vhdl_name(first.text);
+        const auto path_element = [&](const Token& part) {
+            target += vhdl_name(part.text);
+            if (at(TokenKind::LeftParen) && at(TokenKind::Number, 1U)
+                && at(TokenKind::RightParen, 2U)) {
+                advance();
+                target += "(" + advance().text + ")";
+                advance();
+            }
+        };
+        path_element(first);
         while (match(TokenKind::Dot)) {
             const auto part = expect_identifier("external signal path element");
             target += '.';
-            target += vhdl_name(part.text);
+            path_element(part);
         }
         if (at(TokenKind::LeftParen) || at(TokenKind::Caret)) {
             error(current(), "FSIM-VHDL-PARSE-277",

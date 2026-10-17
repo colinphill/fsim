@@ -19,3 +19,6 @@
 *.dll
 *.dylib
 compile_commands.json
+/fsim-compliance*/
+/agentwork/
+

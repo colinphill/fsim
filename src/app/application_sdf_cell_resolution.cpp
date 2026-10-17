@@ -419,6 +419,15 @@ SdfCellResolutionResult resolve_sdf_cells(
     const elaboration::ElaboratedDesign& elaborated,
     const SdfCellResolutionLimits limits)
 {
+    return resolve_sdf_cells(std::move(scope), elaborated, { }, limits);
+}
+
+SdfCellResolutionResult resolve_sdf_cells(
+    std::shared_ptr<const SdfAnnotationScope> scope,
+    const elaboration::ElaboratedDesign& elaborated,
+    const std::span<const std::string> scope_path,
+    const SdfCellResolutionLimits limits)
+{
     SdfCellResolutionResult result;
     if (!scope || !scope->normalized_ir() || scope->roots().empty()) {
         diagnose(result.diagnostics, "FSIM-SDF-RESOLVE-001",
@@ -430,6 +439,29 @@ SdfCellResolutionResult resolve_sdf_cells(
     if (frontend::has_errors(result.diagnostics)
         || !build_segments(candidates, *scope, result.diagnostics)) {
         return result;
+    }
+    if (!scope_path.empty()) {
+        // Re-root at the named instance: it becomes the first segment, and
+        // instances outside it are not annotation targets.
+        std::erase_if(candidates, [&](const Candidate& candidate) {
+            if (candidate.segments.size() <= scope_path.size())
+                return true;
+            for (std::size_t index = 0U; index < scope_path.size(); ++index) {
+                if (!equal_under_case_policy(candidate.segments[index + 1U],
+                        scope_path[index],
+                        candidate.segment_policies[index + 1U]))
+                    return true;
+            }
+            return false;
+        });
+        for (auto& candidate : candidates) {
+            const auto removed = static_cast<std::ptrdiff_t>(scope_path.size());
+            candidate.segments.erase(candidate.segments.begin(),
+                candidate.segments.begin() + removed);
+            candidate.segment_policies.erase(
+                candidate.segment_policies.begin(),
+                candidate.segment_policies.begin() + removed);
+        }
     }
 
     std::vector<SdfResolvedCell> cells;

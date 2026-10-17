@@ -1052,15 +1052,9 @@ begin
 end architecture;
 )",
       Language::Vhdl2008);
-  require(
-      !unlabeled_vhdl_alternative.ok()
-          && std::any_of(
-              unlabeled_vhdl_alternative.diagnostics.begin(),
-              unlabeled_vhdl_alternative.diagnostics.end(),
-              [](const auto& diagnostic) {
-                return diagnostic.code == "FSIM-VHDL-PARSE-070";
-              }),
-      "unlabeled VHDL case-generate alternative is targeted");
+  // A case-generate alternative label is optional (IEEE 1076-2008 11.8).
+  require(unlabeled_vhdl_alternative.ok(),
+      "unlabeled VHDL case-generate alternative is accepted");
 
   const auto nonfinal_vhdl_others = parse_text(
       "nonfinal_case_generate_others.vhd",

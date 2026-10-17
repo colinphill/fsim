@@ -721,6 +721,26 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         : static_cast<std::int64_t>(sought)
                             - target.type.index_left);
             };
+        // A read through an unknown or out-of-range index yields the element
+        // type's default (IEEE 1800-2017 7.4.6).
+        const auto read_index_misses =
+            [&](const runtime::simir::ContainerValue& target,
+                const std::uint64_t aval,
+                const std::uint64_t bval,
+                const bool check_range) {
+                if (bval != 0) {
+                    return true;
+                }
+                if (!check_range || !target.type.fixed) {
+                    return false;
+                }
+                const auto sought = static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(aval));
+                return sought < std::min(
+                           target.type.index_left, target.type.index_right)
+                    || sought > std::max(
+                           target.type.index_left, target.type.index_right);
+            };
         const auto packed_fixed_offset =
             [&](const runtime::simir::ContainerValue& target,
                 const runtime::simir::RegisterId index_register,
@@ -1686,43 +1706,63 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* element_read = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerElementRead>(&operation)) {
             const auto& source = read_container(element_read->source);
-            if (source.type.element_kind
-                    != runtime::simir::ContainerElementKind::Container
-                || source.type.element_types.size() != 1) {
-                throw runtime::simir::InterpreterError {
-                    process, instruction,
-                    "nested element read requires a nested container"
-                };
-            }
+            const bool box = source.type.element_kind
+                    == runtime::simir::ContainerElementKind::Aggregate
+                && source.type.aggregate_value;
             const runtime::simir::ContainerValue* selected = nullptr;
             std::optional<runtime::simir::ContainerValue> missing;
-            if (source.type.associative) {
-                const auto sought = container_operation_key(
-                    source, element_read->index,
-                    input0_aval, input0_bval);
-                const auto at = lower_key(source, sought);
-                if (at < source.keys.size()
-                    && key_equal(source.keys[at], sought)) {
-                    selected = &source.nested_elements[at];
-                } else {
-                    missing = runtime::simir::default_container_value(
-                        source.type.element_types.front());
-                    selected = &*missing;
-                }
+            if (box) {
+                selected = &source;
             } else {
-                const auto at = source.type.fixed
-                    ? fixed_offset(source, input0_aval, input0_bval)
-                    : container_index(
-                          element_read->index,
-                          input0_aval, input0_bval,
-                          element_read->signed_index, "container index");
-                if (at >= source.nested_elements.size()) {
+                const auto element_type
+                    = runtime::simir::nested_element_container_type(
+                        source.type);
+                if (!element_type) {
                     throw runtime::simir::InterpreterError {
                         process, instruction,
-                        "nested container index is out of range"
+                        "nested element read requires a nested container"
                     };
                 }
-                selected = &source.nested_elements[at];
+                if (source.type.associative) {
+                    const auto sought = container_operation_key(
+                        source, element_read->index,
+                        input0_aval, input0_bval);
+                    const auto at = lower_key(source, sought);
+                    if (at < source.keys.size()
+                        && key_equal(source.keys[at], sought)) {
+                        selected = &source.nested_elements[at];
+                    }
+                } else if (!read_index_misses(
+                               source, input0_aval, input0_bval, true)) {
+                    const auto at = source.type.fixed
+                        ? fixed_offset(source, input0_aval, input0_bval)
+                        : container_index(
+                              element_read->index,
+                              input0_aval, input0_bval,
+                              element_read->signed_index, "container index");
+                    if (at < source.nested_elements.size()) {
+                        selected = &source.nested_elements[at];
+                    }
+                }
+                if (selected == nullptr) {
+                    // An unknown, absent or out-of-range index reads the
+                    // element type's default (IEEE 1800-2017 7.4.6).
+                    missing = runtime::simir::default_container_value(
+                        *element_type);
+                    selected = &*missing;
+                }
+            }
+            for (const auto member : element_read->members) {
+                if (!(selected->type.element_kind
+                            == runtime::simir::ContainerElementKind::Aggregate
+                        && selected->type.aggregate_value)
+                    || member >= selected->nested_elements.size()) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "aggregate member path is invalid"
+                    };
+                }
+                selected = &selected->nested_elements[member];
             }
             auto& destination = mutable_container(element_read->destination);
             if (destination.type != selected->type) {
@@ -1736,55 +1776,96 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        runtime::simir::ContainerElementWrite>(&operation)) {
             auto& target = mutable_container(element_write->target);
             const auto& source = read_container(element_write->source);
-            if (target.type.element_kind
-                    != runtime::simir::ContainerElementKind::Container
-                || target.type.element_types.size() != 1
-                || target.type.element_types.front() != source.type) {
-                throw runtime::simir::InterpreterError {
-                    process, instruction,
-                    "nested element write profile mismatch"
-                };
-            }
-            std::size_t at { };
-            if (target.type.associative) {
-                const auto sought = container_operation_key(
-                    target, element_write->index,
-                    input0_aval, input0_bval);
-                at = lower_key(target, sought);
-                if (at >= target.keys.size()
-                    || !key_equal(target.keys[at], sought)) {
-                    if (target.keys.size()
-                        >= runtime::simir::maximum_container_elements(target.type)) {
-                        throw runtime::simir::InterpreterError {
-                            process, instruction,
-                            "associative nested container exceeds its owning-storage "
-                            "budget"
-                        };
-                    }
-                    target.keys.insert(
-                        target.keys.begin() + static_cast<std::ptrdiff_t>(at),
-                        sought);
-                    target.nested_elements.insert(
-                        target.nested_elements.begin()
-                            + static_cast<std::ptrdiff_t>(at),
-                        runtime::simir::default_container_value(
-                            target.type.element_types.front()));
-                }
+            const bool box = target.type.element_kind
+                    == runtime::simir::ContainerElementKind::Aggregate
+                && target.type.aggregate_value;
+            runtime::simir::ContainerValue* selected = nullptr;
+            bool skipped = false;
+            if (box) {
+                selected = &target;
             } else {
-                at = target.type.fixed
-                    ? fixed_offset(target, input0_aval, input0_bval)
-                    : container_index(
-                          element_write->index,
-                          input0_aval, input0_bval,
-                          element_write->signed_index, "container index");
-                if (at >= target.nested_elements.size()) {
+                const auto element_type
+                    = runtime::simir::nested_element_container_type(
+                        target.type);
+                if (!element_type) {
                     throw runtime::simir::InterpreterError {
                         process, instruction,
-                        "nested container index is out of range"
+                        "nested element write profile mismatch"
                     };
                 }
+                std::size_t at { };
+                if (target.type.associative) {
+                    const auto sought = container_operation_key(
+                        target, element_write->index,
+                        input0_aval, input0_bval);
+                    at = lower_key(target, sought);
+                    if (at >= target.keys.size()
+                        || !key_equal(target.keys[at], sought)) {
+                        if (target.keys.size()
+                            >= runtime::simir::maximum_container_elements(
+                                target.type)) {
+                            throw runtime::simir::InterpreterError {
+                                process, instruction,
+                                "associative nested container exceeds its "
+                                "owning-storage budget"
+                            };
+                        }
+                        target.keys.insert(
+                            target.keys.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            sought);
+                        target.nested_elements.insert(
+                            target.nested_elements.begin()
+                                + static_cast<std::ptrdiff_t>(at),
+                            runtime::simir::default_container_value(
+                                *element_type));
+                    }
+                } else if (target.type.fixed
+                    && read_index_misses(
+                        target, input0_aval, input0_bval, true)) {
+                    // A write through an unknown or out-of-range index
+                    // writes nothing (IEEE 1800-2017 7.4.6).
+                    skipped = true;
+                } else {
+                    at = target.type.fixed
+                        ? fixed_offset(target, input0_aval, input0_bval)
+                        : container_index(
+                              element_write->index,
+                              input0_aval, input0_bval,
+                              element_write->signed_index,
+                              "container index");
+                    if (at >= target.nested_elements.size()) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            "nested container index is out of range"
+                        };
+                    }
+                }
+                if (!skipped) {
+                    selected = &target.nested_elements[at];
+                }
             }
-            target.nested_elements[at] = source;
+            if (!skipped) {
+                for (const auto member : element_write->members) {
+                    if (!(selected->type.element_kind
+                                == runtime::simir::ContainerElementKind::Aggregate
+                            && selected->type.aggregate_value)
+                        || member >= selected->nested_elements.size()) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            "aggregate member path is invalid"
+                        };
+                    }
+                    selected = &selected->nested_elements[member];
+                }
+                if (selected->type != source.type) {
+                    throw runtime::simir::InterpreterError {
+                        process, instruction,
+                        "nested element write profile mismatch"
+                    };
+                }
+                *selected = source;
+            }
         } else if (const auto* aggregate_read = fsim::runtime::simir::operation_get_if<
                        runtime::simir::ContainerAggregateRead>(&operation)) {
             const auto& source = read_container(aggregate_read->source);
@@ -1816,6 +1897,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         aggregate_element_type(source.type));
                     selected = &*missing;
                 }
+            } else if (read_index_misses(source, input0_aval, input0_bval,
+                           !aggregate_read->linear_index)) {
+                missing = runtime::simir::default_container_value(
+                    aggregate_element_type(source.type));
+                selected = &*missing;
             } else {
                 const auto at = source.type.fixed
                     ? aggregate_read->linear_index

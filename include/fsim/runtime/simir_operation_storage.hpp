@@ -69,7 +69,8 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     PushContainer, AppendContainer, PopContainer,
     ContainerStringRead, ContainerStringWrite, FormatContainerPattern,
     ContainerElementRead, ContainerElementWrite,
-    VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate>;
+    VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate,
+    ContainerBitstream>;
 
 using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
     FileWriteString, FileReadLine, FileEndOfFile,
@@ -329,7 +330,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 196);
+    == 197);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

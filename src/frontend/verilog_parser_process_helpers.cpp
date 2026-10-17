@@ -52,10 +52,7 @@ Statement VerilogParser::parse_case_statement(
             error(previous(), "FSIM-SV-PARSE-187",
                 "case matches pattern matching requires SystemVerilog");
         }
-        if (match_kind != CaseMatchKind::Exact) {
-            error(previous(), "FSIM-SV-PARSE-188",
-                "bounded case matches cannot be combined with casez or casex");
-        }
+        statement.case_matches_wildcard = match_kind;
         statement.case_match_kind = CaseMatchKind::Matches;
     }
 

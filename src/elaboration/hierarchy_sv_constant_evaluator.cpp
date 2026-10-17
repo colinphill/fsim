@@ -342,6 +342,59 @@ void convert_to_two_state(Value& value)
     const semantic::SpecializedHirUnit* const specialization,
     std::unordered_set<std::uint32_t>& visiting)
 {
+    // A fixed-size unpacked array has the bits of all its elements; other
+    // unpacked containers have no fixed width (IEEE 1800-2017 20.6.2).
+    if (!type.unpacked_dimensions.empty()) {
+        if (type.container_form
+            && *type.container_form != semantic::sv::TypeForm::static_array) {
+            return std::nullopt;
+        }
+        // A named type whose definition carries these dimensions would
+        // resolve back to them; its element is reached through the
+        // definition instead.
+        if (type.target.target.valid()
+            && !visiting.insert(type.target.target.value()).second) {
+            return std::nullopt;
+        }
+        struct Release {
+            std::unordered_set<std::uint32_t>& visiting;
+            semantic::TypeId target;
+            ~Release()
+            {
+                if (target.valid()) {
+                    visiting.erase(target.value());
+                }
+            }
+        } release { visiting, type.target.target };
+        auto element = type;
+        element.unpacked_dimensions.clear();
+        element.container_form.reset();
+        auto width = resolved_type_width(element, specialization, visiting);
+        for (const auto& dimension : type.unpacked_dimensions) {
+            auto left = dimension.left;
+            auto right = dimension.right;
+            if (specialization != nullptr) {
+                if (!left && dimension.left_expression) {
+                    left = specialization->evaluate_integral_expression(
+                        *dimension.left_expression);
+                }
+                if (!right && dimension.right_expression) {
+                    right = specialization->evaluate_integral_expression(
+                        *dimension.right_expression);
+                }
+            }
+            if (!width || !left || !right) {
+                return std::nullopt;
+            }
+            const auto count = support::index_distance(*left, *right) + 1U;
+            if (count == 0U
+                || *width > std::numeric_limits<std::uint64_t>::max() / count) {
+                return std::nullopt;
+            }
+            *width *= count;
+        }
+        return width;
+    }
     if (type.packed_range) {
         auto left = type.packed_range->left;
         auto right = type.packed_range->right;
@@ -2407,6 +2460,20 @@ private:
             }
             if (!error_.empty()) {
                 return std::nullopt;
+            }
+            // An index of a multidimensional packed array selects an element
+            // (IEEE 1800-2017 7.4.5), not the bit this fold produces.
+            if (base_view && base_view->systemverilog != nullptr
+                && base_view->systemverilog->kind == ExpressionKind::name
+                && base_view->systemverilog->referenced_name
+                && base_view->systemverilog->referenced_name->selected) {
+                if (const auto type = declaration_type(
+                        *base_view->systemverilog->referenced_name->selected);
+                    type && type->packed_dimensions.size() > 1U) {
+                    error_ = "an element of a multidimensional packed array "
+                             "is not folded";
+                    return std::nullopt;
+                }
             }
             const auto base = evaluate(record.operands.front());
             const auto index = base
@@ -4611,6 +4678,15 @@ private:
         const auto declaration = systemverilog_constant_name_declaration(
             specialization_, record);
         if (!declaration) {
+            // A genvar holds its current generate iteration value, an
+            // integer (IEEE 1800-2017 27.4).
+            std::string integral_error;
+            if (const auto integral = evaluate_hir_systemverilog_constant(
+                    specialization_, record.id, integral_error)) {
+                if (const auto value = integral->integer_value()) {
+                    return scalar_integer(*value);
+                }
+            }
             error_ = "unknown scalar constant '" + record.text + "'";
             return std::nullopt;
         }

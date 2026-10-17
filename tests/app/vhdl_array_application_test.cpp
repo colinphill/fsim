@@ -768,6 +768,17 @@ void expect_build_failure(
       }));
 }
 
+void expect_build_success(const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+}
+
 fsim::project::Config make_failure_config(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
@@ -1945,13 +1956,14 @@ end architecture;
 )";
     assert(output.good());
   }
-  expect_build_failure(
+  // Port association converts by length per dimension; bounds and
+  // direction may differ (IEEE 1076-2008 6.5.7.1, 14.3.5).
+  expect_build_success(
       make_failure_config(
           directory.path,
           boundary_shape_failure_source,
           "vhdl-boundary-shape-failure",
-          "vhdl:work.boundary_shape_top(rtl)"),
-      "FSIM-ELAB-BIND-031");
+          "vhdl:work.boundary_shape_top(rtl)"));
 
   {
     std::ofstream output{boundary_bounds_failure_source};
@@ -1984,13 +1996,14 @@ end architecture;
 )";
     assert(output.good());
   }
-  expect_build_failure(
+  // Port association converts by length per dimension; bounds and
+  // direction may differ (IEEE 1076-2008 6.5.7.1, 14.3.5).
+  expect_build_success(
       make_failure_config(
           directory.path,
           boundary_bounds_failure_source,
           "vhdl-boundary-bounds-failure",
-          "vhdl:work.boundary_bounds_top(rtl)"),
-      "FSIM-ELAB-BIND-031");
+          "vhdl:work.boundary_bounds_top(rtl)"));
 
   {
     std::ofstream output{component_shape_failure_source};
@@ -2025,13 +2038,14 @@ end architecture;
 )";
     assert(output.good());
   }
-  expect_build_failure(
+  // Default binding needs the same port type; the component and entity
+  // port subtypes only need equal lengths (IEEE 1076-2008 7.3.3, 6.5.7.1).
+  expect_build_success(
       make_failure_config(
           directory.path,
           component_shape_failure_source,
           "vhdl-component-shape-failure",
-          "vhdl:work.component_shape_top(rtl)"),
-      "FSIM-ELAB-VHCOMP-007");
+          "vhdl:work.component_shape_top(rtl)"));
 
   {
     std::ofstream output{callable_shape_failure_source};

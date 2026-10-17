@@ -2024,11 +2024,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         && effective_type.packed_range) {
         const auto& range = *effective_type.packed_range;
         const auto left = range.left_expression
-            ? working_specialization.evaluate_integral_expression(
+            ? hierarchy_sv_type_layout_detail::sized_range_bound(
+                  working_specialization,
                   *range.left_expression)
             : range.left;
         const auto right = range.right_expression
-            ? working_specialization.evaluate_integral_expression(
+            ? hierarchy_sv_type_layout_detail::sized_range_bound(
+                  working_specialization,
                   *range.right_expression)
             : range.right;
         if (left && right) {

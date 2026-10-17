@@ -135,8 +135,14 @@ Lowerer::lower_hir_container_assignment_pattern(
         == ContainerElementKind::Aggregate;
     const bool string_elements = target.type->element_kind
         == ContainerElementKind::String;
+    // Elements that are themselves arrays or queues take their own
+    // pattern or array value (IEEE 1800-2017 10.9.1, 10.10).
+    const bool container_elements = target.type->element_kind
+            == ContainerElementKind::Container
+        && target.type->element_types.size() == 1U
+        && !(target.type->fixed && target.type->dimensions.size() > 1U);
     if (!scalar_elements && !aggregate_elements && !string_elements
-        && !target.type->fixed) {
+        && !container_elements && !target.type->fixed) {
         const auto has_key = std::ranges::any_of(
             root_pattern.associations, keyed_association);
         const auto has_position = std::ranges::any_of(
@@ -159,7 +165,8 @@ Lowerer::lower_hir_container_assignment_pattern(
         }
         return std::nullopt;
     }
-    if (!scalar_elements && !aggregate_elements && !string_elements) {
+    if (!scalar_elements && !aggregate_elements && !string_elements
+        && !container_elements) {
         return std::nullopt;
     }
     const auto element_type = hir_container_leaf_type(
@@ -392,6 +399,45 @@ Lowerer::lower_hir_container_assignment_pattern(
                 }
                 continue;
             }
+            // A string member (IEEE 1800-2017 10.9.2).
+            if (member_type.element_kind == ContainerElementKind::String
+                && !member_type.queue && !member_type.associative
+                && (member_type.dimensions.empty()
+                    || (member_type.dimensions.size() == 1U
+                        && member_type.dimensions.front().first
+                            == member_type.dimensions.front().second))) {
+                const auto value = lower_hir_string_expression(
+                    *values[member]);
+                if (!value) {
+                    return false;
+                }
+                process_.operations.emplace_back(ContainerStringWrite {
+                    output, index, *value, signed_index, linear_index,
+                    false, std::move(member_path) });
+                continue;
+            }
+            // An array member takes its pattern or array value whole.
+            if ((member_type.fixed || member_type.queue
+                    || member_type.associative
+                    || member_type.element_kind
+                        == ContainerElementKind::Container
+                    || member_type.element_kind
+                        == ContainerElementKind::String)
+                && !linear_index
+                && !(member_type.element_kind
+                        == ContainerElementKind::Packed
+                    || member_type.element_kind
+                        == ContainerElementKind::Scalar)) {
+                const auto value = lower_hir_static_container_actual(
+                    *values[member], member_type, target.declaration);
+                if (!value) {
+                    return false;
+                }
+                process_.operations.emplace_back(ContainerElementWrite {
+                    output, index, *value, signed_index,
+                    std::move(member_path) });
+                continue;
+            }
             if ((member_type.element_kind != ContainerElementKind::Packed
                     && member_type.element_kind
                         != ContainerElementKind::Scalar)
@@ -475,6 +521,24 @@ Lowerer::lower_hir_container_assignment_pattern(
                     ? target.type->signed_indices
                     : true,
                 target.type->fixed && dimensions.size() > 1U);
+        }
+        if (container_elements) {
+            const auto value = lower_hir_static_container_actual(
+                value_id, target.type->element_types.front(),
+                target.declaration);
+            if (!value) {
+                return false;
+            }
+            process_.operations.emplace_back(ContainerElementWrite {
+                destination,
+                index,
+                *value,
+                target.type->associative
+                    ? target.type->signed_indices
+                    : target.type->fixed,
+                { },
+            });
+            return true;
         }
         if (string_elements) {
             const auto value = lower_hir_string_expression(value_id);
@@ -1041,6 +1105,36 @@ bool Lowerer::lower_hir_force_release(
         const auto span = hir_source_span(
             selected.source.valid() ? selected.source : source);
         using Kind = semantic::vhdl::ExpressionKind;
+        // An external signal name forces the signal it denotes (IEEE
+        // 1076-2008 8.7, 10.5.2.1).
+        if (selected.kind == Kind::call && selected.text == "@vhdl-external") {
+            const auto signal = hir_vhdl_external_signal(target);
+            if (!signal) {
+                return true;
+            }
+            const auto width = design_.signal_info_[*signal].width;
+            if (!force) {
+                process_.operations.emplace_back(ReleaseSignalSlice {
+                    *signal, 0U, static_cast<std::uint32_t>(width),
+                    std::nullopt, vhdl_driving_value });
+                return true;
+            }
+            auto force_value = lowered_value;
+            if (!force_value && value) {
+                force_value = lower_hir_expression(*value, width);
+            }
+            if (!force_value) {
+                return false;
+            }
+            if (register_width(*force_value) != width) {
+                force_value = resize_register(*force_value, width,
+                    value && hir_expression_signed(*value));
+            }
+            process_.operations.emplace_back(ForceSignalSlice {
+                *signal, *force_value, 0U, std::nullopt,
+                vhdl_driving_value });
+            return true;
+        }
         const bool name = selected.kind == Kind::name;
         const bool index = selected.kind == Kind::index;
         const bool slice = selected.kind == Kind::slice;
@@ -3705,6 +3799,116 @@ bool Lowerer::lower_hir_statement_unsuspended(
             selection->subtype.executable_width = selected_width;
             return selection;
         }();
+        // A stream target with unpacked array, queue or structure operands
+        // takes the bits of the value in order; a source wider than the
+        // targets keeps its leftmost bits (IEEE 1800-2017 11.4.14.3).
+        if (statement->systemverilog != nullptr
+            && target_expression->systemverilog != nullptr
+            && (hir_sv_container_stream(*target)
+                || (hir_static_container_expression_type(*value)
+                    && target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && (target_expression->systemverilog->text
+                            == "@stream-left"
+                        || target_expression->systemverilog->text
+                            == "@stream-right")))
+            && !signal_assignment && !nonblocking
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::none
+            && !statement->systemverilog->delay) {
+            const auto& stream = *target_expression->systemverilog;
+            const auto slice = hir_constant_integer(stream.operands.front());
+            if (!slice || *slice <= 0
+                || *slice > std::numeric_limits<std::uint32_t>::max()) {
+                return assignment_rejected(__LINE__);
+            }
+            ContainerType bit_queue;
+            bit_queue.element_kind = ContainerElementKind::Packed;
+            bit_queue.element_width = 1U;
+            bit_queue.queue = true;
+            const auto bits = allocate_container_register(bit_queue);
+            ContainerBitstream clear;
+            clear.operation = ContainerBitstreamOperation::clear;
+            clear.bits = bits;
+            process_.operations.emplace_back(clear);
+            ContainerBitstream append;
+            append.bits = bits;
+            if (hir_static_container_expression_type(*value)) {
+                const auto source = lower_hir_static_container_value(*value);
+                if (!source) {
+                    return assignment_rejected(__LINE__);
+                }
+                append.operation
+                    = ContainerBitstreamOperation::append_container;
+                append.container = source->value;
+            } else {
+                const auto source_width = hir_expression_width(
+                    *value, hir_process_scope_);
+                const auto lowered = source_width && *source_width != 0U
+                    ? lower_hir_expression(*value, *source_width)
+                    : std::nullopt;
+                if (!lowered) {
+                    return assignment_rejected(__LINE__);
+                }
+                append.operation = ContainerBitstreamOperation::append_value;
+                append.value = *lowered;
+            }
+            process_.operations.emplace_back(append);
+            if (stream.text == "@stream-left") {
+                ContainerBitstream reverse;
+                reverse.operation = ContainerBitstreamOperation::reverse;
+                reverse.bits = bits;
+                reverse.slice = static_cast<std::uint32_t>(*slice);
+                process_.operations.emplace_back(reverse);
+            }
+            for (auto operand = stream.operands.begin() + 1;
+                operand != stream.operands.end(); ++operand) {
+                if (const auto destination
+                    = hir_container_object_binding(*operand)) {
+                    if (destination->type == nullptr
+                        || destination->read_only) {
+                        return assignment_rejected(__LINE__);
+                    }
+                    const auto unpacked = destination->local
+                        ? *destination->local
+                        : allocate_container_register(*destination->type);
+                    if (!destination->local) {
+                        process_.operations.emplace_back(ReadContainerObject {
+                            unpacked, destination->object });
+                    }
+                    ContainerBitstream take;
+                    take.operation
+                        = ContainerBitstreamOperation::take_container;
+                    take.bits = bits;
+                    take.container = unpacked;
+                    process_.operations.emplace_back(take);
+                    if (!destination->local) {
+                        process_.operations.emplace_back(WriteContainerObject {
+                            destination->object, unpacked, std::nullopt });
+                    }
+                    continue;
+                }
+                const auto width = hir_expression_width(
+                    *operand, hir_process_scope_);
+                if (!width || *width == 0U
+                    || *width > std::numeric_limits<std::uint32_t>::max()) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto part = allocate_register(*width,
+                    hir_expression_domain(*operand, hir_process_scope_)
+                        .value_or(frontend::ValueDomain::Logic4));
+                ContainerBitstream take;
+                take.operation = ContainerBitstreamOperation::take_value;
+                take.bits = bits;
+                take.value = part;
+                take.slice = static_cast<std::uint32_t>(*width);
+                process_.operations.emplace_back(take);
+                if (!lower_hir_packed_copy_out(*operand, part)) {
+                    return assignment_rejected(__LINE__);
+                }
+            }
+            return true;
+        }
         const auto composite_target_width = [&]()
             -> std::optional<std::size_t> {
             if (target_expression->systemverilog == nullptr) {
@@ -4643,6 +4847,46 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     nonblocking_copy });
             }
             return true;
+        }
+        // A stream, or a packed value cast to the target's array type,
+        // unpacks into a whole container (IEEE 1800-2017 6.24.3, 11.4.14).
+        if (statement->systemverilog != nullptr && container
+            && container->type != nullptr && container_value_expression
+            && container_value_expression->systemverilog != nullptr
+            && container_value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && (container_value_expression->systemverilog->text
+                    == "@stream-left"
+                || container_value_expression->systemverilog->text
+                    == "@stream-right"
+                || (container_value_expression->systemverilog->text
+                        .starts_with("@sv-cast:")
+                    && container_value_expression->systemverilog->operands
+                        .size() == 1U
+                    && !hir_static_container_expression_type(
+                        container_value_expression->systemverilog
+                            ->operands.front())))) {
+            const auto& input = *statement->systemverilog;
+            if (!signal_assignment && !nonblocking
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::blocking
+                && input.assignment_control
+                    == semantic::sv::AssignmentControl::none
+                && !input.delay && !container->read_only) {
+            const auto lowered = lower_hir_static_container_actual(
+                *value, *container->type, container->declaration);
+            if (!lowered) {
+                return assignment_rejected(__LINE__);
+            }
+            if (container->local) {
+                process_.operations.emplace_back(CopyContainerRegister {
+                    *container->local, *lowered });
+            } else {
+                process_.operations.emplace_back(WriteContainerObject {
+                    container->object, *lowered, std::nullopt });
+            }
+            return true;
+            }
         }
         const auto locator_assignment
             = statement->systemverilog != nullptr
@@ -6037,7 +6281,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     path->container,
                     *element_index,
                     *lowered,
-                    path->type->signed_indices,
+                    path->type->signed_indices, { },
                 });
                 publish_hir_container_element_path(*element, *path);
                 return true;
@@ -6629,6 +6873,29 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (auto binding = hir_direct_signal_binding(*target)) {
                 return binding;
             }
+            // An external signal name denotes its signal (IEEE 1076-2008
+            // 8.7).
+            if (const auto external = specialized_hir_unit_->find_expression(
+                    *target);
+                external && external->vhdl != nullptr
+                && external->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::call
+                && external->vhdl->text == "@vhdl-external") {
+                const auto signal = hir_vhdl_external_signal(*target);
+                if (!signal) {
+                    return std::nullopt;
+                }
+                const auto& info = design_.signal_info_[*signal];
+                HirRuntimeBinding binding;
+                binding.kind = HirRuntimeBindingKind::signal;
+                binding.name = info.name;
+                binding.width = info.width;
+                binding.domain = info.source_domain;
+                binding.signed_value = info.is_signed;
+                binding.integer_range = info.integer_range;
+                binding.signal = *signal;
+                return binding;
+            }
             if (declaration) {
                 return std::nullopt;
             }
@@ -6711,6 +6978,64 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return assignment_rejected(__LINE__);
                 }
                 return true;
+            }
+        }
+        // A nonblocking write of a packed member through unpacked
+        // structures (IEEE 1800-2017 7.2, 10.4.2).
+        if (!declaration && !direct_binding
+            && statement->systemverilog != nullptr && nonblocking
+            && statement->systemverilog->assignment_kind
+                == semantic::sv::AssignmentKind::nonblocking
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::none
+            && !statement->systemverilog->delay) {
+            if (const auto path = hir_sv_value_path(*target);
+                path && path->leaf && !path->string_leaf) {
+                const auto width = path->packed_tail
+                    ? path->packed_tail->width
+                    : path->type.element_width;
+                const auto lowered = lower_hir_expression(*value, width);
+                if (lowered
+                    && lower_hir_sv_value_path_nonblocking_write(
+                        *path, *lowered)) {
+                    return true;
+                }
+            }
+        }
+        // A blocking write through unpacked arrays and structures
+        // (IEEE 1800-2017 7.2, 7.4, 10.4.1).
+        if (!declaration && !direct_binding
+            && statement->systemverilog != nullptr && !nonblocking
+            && !signal_assignment
+            && statement->systemverilog->assignment_kind
+                == semantic::sv::AssignmentKind::blocking
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::none
+            && !statement->systemverilog->delay) {
+            if (const auto path = hir_sv_value_path(*target)) {
+                if (path->root.read_only) {
+                    report(
+                        "FSIM-ELAB-SVPORT-009",
+                        "an input container port is read-only",
+                        span);
+                    return true;
+                }
+                if (path->leaf) {
+                    auto lowered = lower_hir_expression(*value,
+                        path->packed_tail ? path->packed_tail->width
+                                          : path->type.element_width);
+                    if (lowered && lower_hir_sv_value_path_write(
+                            *path, lowered, std::nullopt)) {
+                        return true;
+                    }
+                } else if (const auto lowered
+                    = lower_hir_static_container_actual(
+                        *value, path->type)) {
+                    if (lower_hir_sv_value_path_write(
+                            *path, std::nullopt, lowered)) {
+                        return true;
+                    }
+                }
             }
         }
         if (!declaration && !direct_binding) {
@@ -8120,6 +8445,50 @@ bool Lowerer::lower_hir_statement_unsuspended(
             ? direct_binding
             : hir_runtime_binding(
                   *declaration, hir_process_scope_, true);
+        // A whole unpacked structure from its packed image, as a class
+        // property holds it (IEEE 1800-2017 7.2, 10.4.1).
+        if (!binding && statement->systemverilog != nullptr && !nonblocking
+            && !signal_assignment
+            && statement->systemverilog->assignment_kind
+                == semantic::sv::AssignmentKind::blocking
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::none
+            && !statement->systemverilog->delay) {
+            if (const auto struct_target = hir_container_object_binding(*target);
+                struct_target && struct_target->type != nullptr
+                && !struct_target->read_only
+                && !hir_static_container_expression_type(*value)) {
+                if (const auto leaves
+                    = hir_aggregate_packed_leaves(*struct_target->type)) {
+                    std::size_t width { };
+                    for (const auto& leaf : *leaves) {
+                        width += leaf.width;
+                    }
+                    const auto lowered = width != 0U
+                        && hir_expression_width(*value, hir_process_scope_)
+                            == std::optional { width }
+                        ? lower_hir_expression(*value, width)
+                        : std::nullopt;
+                    const auto unpacked = lowered
+                        ? unpack_hir_aggregate_value(
+                              *lowered, *struct_target->type)
+                        : std::nullopt;
+                    if (unpacked) {
+                        if (struct_target->local) {
+                            process_.operations.emplace_back(
+                                CopyContainerRegister {
+                                    *struct_target->local, *unpacked });
+                        } else {
+                            process_.operations.emplace_back(
+                                WriteContainerObject {
+                                    struct_target->object, *unpacked,
+                                    std::nullopt });
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
         if (!binding) {
             trace_generated("runtime-binding");
             trace_assignment_failure("runtime-binding");
@@ -10289,7 +10658,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *condition, hir_process_scope_);
             const auto vhdl_2019_logic_condition
                 = vhdl_standard_
-                      == frontend::VhdlStandard::Vhdl2019
+                      >= frontend::VhdlStandard::Vhdl2008
                 && condition_width == std::optional<std::size_t> { 1U }
                 && condition_domain
                 && (*condition_domain == frontend::ValueDomain::Bit2
@@ -10626,6 +10995,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 break;
             case semantic::sv::CaseMatchKind::matches:
                 pattern_matching = true;
+                // Constant patterns of `casez`/`casex ... matches` compare
+                // with that statement's wildcards (12.6.1).
+                if (statement->systemverilog->matches_wildcard
+                    == semantic::sv::CaseMatchKind::wildcard_z) {
+                    match_operation = BinaryOperator::casez_equal;
+                } else if (statement->systemverilog->matches_wildcard
+                    == semantic::sv::CaseMatchKind::wildcard_xz) {
+                    match_operation = BinaryOperator::casex_equal;
+                }
                 break;
             default:
                 report(
@@ -12870,7 +13248,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         || definition.form
                             == semantic::sv::TypeForm::packed_union
                         || definition.form
-                            == semantic::sv::TypeForm::tagged_union) {
+                            == semantic::sv::TypeForm::tagged_union
+                        || definition.form
+                            == semantic::sv::TypeForm::unpacked_structure) {
                         return &definition;
                     }
                     return self(self, definition.base);
@@ -12944,8 +13324,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return std::nullopt;
             }
             const auto& member = type.members[member_index];
+            // Unpacked structure members of a tagged union share its bit
+            // layout (see the declaration layout).
             const auto member_offset = hir_systemverilog_member_offset(
-                type, member_index);
+                type, member_index, true);
             auto width = hir_systemverilog_type_width(member.type);
             if (!width && member.type.executable_width
                 && *member.type.executable_width != 0U
@@ -13367,7 +13749,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         || (type->form
                                 != semantic::sv::TypeForm::packed_structure
                             && type->form
-                                != semantic::sv::TypeForm::packed_union)
+                                != semantic::sv::TypeForm::packed_union
+                            && type->form
+                                != semantic::sv::TypeForm::unpacked_structure)
                         || pattern.associations.empty()) {
                         report(
                             "FSIM-ELAB-SVMATCH-009",
@@ -14573,7 +14957,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     *condition, hir_process_scope_);
                 const auto vhdl_2019_logic_condition
                     = vhdl_standard_
-                          == frontend::VhdlStandard::Vhdl2019
+                          >= frontend::VhdlStandard::Vhdl2008
                     && condition_width
                         == std::optional<std::size_t> { 1U }
                     && condition_domain
@@ -16265,6 +16649,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && hir_update_reevaluates_target(input)
                 && capture_hir_update_target_indices(input)) {
                 hir_update_indices_captured_ = true;
+            }
+            // `h = new` allocates the target's class specialization.
+            struct AllocationTargetReset {
+                Lowerer& lowerer;
+                ~AllocationTargetReset()
+                {
+                    lowerer.hir_allocation_target_.reset();
+                }
+            } const allocation_target_reset { *this };
+            if (input.target) {
+                hir_allocation_target_ = hir_target_declaration(*input.target);
             }
             const auto lowered = lower_assignment(
                 input.assignment_kind
@@ -19862,7 +20257,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && condition_domain
             && *condition_domain == frontend::ValueDomain::Boolean;
         const auto vhdl_2019_scalar_condition
-            = vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
+            = vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008
             && condition_width == std::optional<std::size_t> { 1U }
             && condition_domain
             && (*condition_domain == frontend::ValueDomain::Bit2
@@ -19935,7 +20330,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *input.condition, hir_process_scope_);
             const auto vhdl_2019_logic_condition
                 = vhdl_standard_
-                      == frontend::VhdlStandard::Vhdl2019
+                      >= frontend::VhdlStandard::Vhdl2008
                 && condition_width == std::optional<std::size_t> { 1U }
                 && condition_domain
                 && (*condition_domain == frontend::ValueDomain::Bit2
@@ -20202,9 +20597,36 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             const auto condition_start = static_cast<InstructionIndex>(
                 process_.operations.size());
+            const auto dependency_begin = implicit_signal_dependencies_.size();
             const auto checked = lower_condition(*input.condition);
             if (!checked) {
                 return false;
+            }
+            // S'STABLE(0) and S'QUIET(0) in the condition also change one
+            // delta after the event on S; wait on their settle signals.
+            if (input.sensitivities.empty()) {
+                bool added { };
+                for (auto index = dependency_begin;
+                    index < implicit_signal_dependencies_.size(); ++index) {
+                    const auto signal
+                        = implicit_signal_dependencies_[index].signal;
+                    const auto& name = design_.signal_info_[signal].name;
+                    if ((name.ends_with("'stable_settle(0)")
+                            || name.ends_with("'quiet_settle(0)"))
+                        && std::ranges::find(waited_signals, signal)
+                            == waited_signals.end()) {
+                        waited_signals.push_back(signal);
+                        added = true;
+                    }
+                }
+                if (added) {
+                    WaitOn first_wait { waited_signals };
+                    if (input.delay) {
+                        first_wait.timeout = *timeout;
+                        first_wait.timeout_result = timed_out;
+                    }
+                    process_.operations[wait_start] = std::move(first_wait);
+                }
             }
             const auto condition_branch = static_cast<InstructionIndex>(
                 process_.operations.size());

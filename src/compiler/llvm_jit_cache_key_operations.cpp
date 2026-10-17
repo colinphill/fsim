@@ -139,6 +139,7 @@ struct OperationCacheTraits;
     X(ContainerStringWrite, "ContainerStringWrite") \
     X(ContainerElementRead, "ContainerElementRead") \
     X(ContainerElementWrite, "ContainerElementWrite") \
+    X(ContainerBitstream, "ContainerBitstream") \
     X(VhdlEnvironmentDirectory, "VhdlEnvironmentDirectory") \
     X(VhdlEnvironmentGetCallPath, "VhdlEnvironmentGetCallPath") \
     X(PlaEvaluate, "PlaEvaluate") \
@@ -276,7 +277,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 196U);
+static_assert(operation_cache_tags.size() == 197U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 

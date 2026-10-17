@@ -1629,6 +1629,24 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
             }
+            // A constant function call as a casting size
+            // (`$bits(v)'(x)`, IEEE 1800-2017 6.24.1).
+            if (language_ == Language::SystemVerilog2017
+                && at(TokenKind::Apostrophe) && at(TokenKind::LeftParen, 1)) {
+                (void)advance();
+                (void)advance();
+                auto operand = parse_expression();
+                expect(
+                    TokenKind::RightParen,
+                    "')' after SystemVerilog cast expression",
+                    "FSIM-SV-PARSE-220");
+                const auto span = cover(expression.span, previous().span);
+                return parse_postfix(Expression {
+                    ExpressionKind::Call,
+                    "@sv-size-cast:expression",
+                    { std::move(expression), std::move(operand) },
+                    span });
+            }
             return parse_postfix(std::move(expression));
         }
         if (canonical == "null") {

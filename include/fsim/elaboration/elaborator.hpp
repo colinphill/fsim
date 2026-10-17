@@ -1064,6 +1064,10 @@ private:
     std::unordered_map<
         std::string, runtime::simir::ContainerObjectId>
         container_by_name_;
+    // Construction draft: the class specialization each declaration's
+    // parameterized class type selects (`Box#(7) a;`), computed once.
+    std::optional<std::unordered_map<std::uint32_t, std::string>>
+        class_declaration_specializations_;
 };
 
 struct ElaborationResult {

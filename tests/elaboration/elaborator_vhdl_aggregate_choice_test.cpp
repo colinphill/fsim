@@ -317,9 +317,12 @@ end architecture;
   const auto rejected_short_bit_row_slice = compile_and_elaborate(
       short_bit_row_slice.design,
       "vhdl:work.short_bit_row_slice_missing_index(test)");
+  // A named aggregate without others takes its bounds from its choices
+  // (1 to 1), so it fails the length check against the two-row target
+  // (IEEE 1076-2008 9.3.3.3).
   if (rejected_short_bit_row_slice.ok()
       || !has_diagnostic(
-          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-005")) {
+          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-006")) {
     for (const auto& diagnostic : rejected_short_bit_row_slice.diagnostics) {
       std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
     }
@@ -327,7 +330,7 @@ end architecture;
   assert(
       !rejected_short_bit_row_slice.ok()
       && has_diagnostic(
-          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-005"));
+          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-006"));
 
   const auto inactive_generate = fsim::frontend::parse_text(
       "vhdl_inactive_generate_slice_validation.vhd",
@@ -886,7 +889,9 @@ begin
   Value <= (Source'range => '0');
 end architecture;
 )",
-      "FSIM-ELAB-VHARRAYAGG-003");
+      // Without others the choices give the bounds; the length then
+      // mismatches the target (IEEE 1076-2008 9.3.3.3).
+      "FSIM-ELAB-VHARRAYAGG-006");
   reject(
       "vhdl_array_attribute_choice_unconstrained.vhd",
       R"(
@@ -925,7 +930,9 @@ begin
   Value <= (3 downto 1 => '0');
 end architecture;
 )",
-      "FSIM-ELAB-VHARRAYAGG-005");
+      // Without others the choices give the bounds; the length then
+      // mismatches the target (IEEE 1076-2008 9.3.3.3).
+      "FSIM-ELAB-VHARRAYAGG-006");
   reject(
       "vhdl_array_element_nominal.vhd",
       R"(

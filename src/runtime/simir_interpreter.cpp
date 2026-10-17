@@ -3416,7 +3416,7 @@ void Interpreter::start()
             if (late) {
                 impl_->queue_next_delta(id);
             } else {
-                impl_->queue_at(id, impl_->scheduler.now());
+                impl_->queue_at(id, impl_->scheduler.now(), true);
             }
         }
     }

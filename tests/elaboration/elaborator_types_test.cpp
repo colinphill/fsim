@@ -30,9 +30,9 @@ end architecture;
     const auto rejected_vhdl_assertion = compile_and_elaborate(
         invalid_vhdl_assertion.design,
         "vhdl:work.invalid_assertion(rtl)");
-    assert(!rejected_vhdl_assertion.ok());
-    assert(has_diagnostic(
-        rejected_vhdl_assertion, "FSIM-ELAB-051"));
+    // An assertion condition takes the implicit condition operator ?? in
+    // VHDL-2008 (IEEE 1076-2008 9.2.9, 10.3).
+    assert(rejected_vhdl_assertion.ok());
 
     const auto concurrent_vhdl_assertion = fsim::frontend::parse_text(
         "concurrent_assertion.vhd",
@@ -1757,10 +1757,12 @@ end architecture;
         has_diagnostic(
             invalid_array_design,
             "FSIM-ELAB-VHARRAYAGG-004"));
+    // Missing_Aggregate has no others, so its choices give its bounds
+    // (0 to 1) and it fails the length check (IEEE 1076-2008 9.3.3.3).
     assert(
         has_diagnostic(
             invalid_array_design,
-            "FSIM-ELAB-VHARRAYAGG-005"));
+            "FSIM-ELAB-VHARRAYAGG-006"));
     // Wide_Element_Aggregate supplies a string where one scalar BIT is
     // required, so it is an exact element-type mismatch (VHARRAYAGG-009).
     // A real constrained-array-element width mismatch remains covered by
@@ -2031,19 +2033,13 @@ endmodule
 module invalid_random;
   logic [31:0] q;
   initial begin
-    q = $urandom(1);
+    // $urandom takes at most one seed (IEEE 1800-2017 18.13.1).
+    q = $urandom(1, 2);
   end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_random_source.ok());
-    const auto invalid_random_design = compile_and_elaborate(
-        invalid_random_source.design,
-        "sv:work.invalid_random");
-    assert(!invalid_random_design.ok());
-    assert(
-        has_diagnostic(
-            invalid_random_design, "FSIM-ELAB-104"));
+    assert(!invalid_random_source.ok());
 
     const auto invalid_random_arity = fsim::frontend::parse_text(
         "invalid_random_arity.sv",

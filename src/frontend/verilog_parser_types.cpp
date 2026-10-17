@@ -70,6 +70,12 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
                 PackedRange { 0, 0, true }, false };
         } else if (keyword("struct") || keyword("union")) {
             member_type = parse_systemverilog_aggregate_type();
+        } else if (keyword("enum")) {
+            // An anonymous enumeration member declares its literals in the
+            // scope of the aggregate's declaration (IEEE 1800-2017 7.2).
+            std::vector<EnumLiteralDeclaration> literals;
+            member_type = parse_systemverilog_enum_type(&literals);
+            member_enumerations_.emplace_back(member_type, std::move(literals));
         } else if (auto named_array = parse_named_packed_array_type()) {
             // A packed array of a named packed type (`inner_t [1:0] e;`,
             // IEEE 1800-2017 7.4.1).
@@ -244,6 +250,18 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
             0,
             true
         };
+    }
+    // `struct packed { ... } [d] name` is a packed array of the aggregate
+    // (IEEE 1800-2017 7.4.1).
+    if (packed && type.packed_range && at(TokenKind::LeftBracket)) {
+        return packed_array_of_type(type, current().span);
+    }
+    if (packed && !is_union && !type.packed_range
+        && at(TokenKind::LeftBracket)) {
+        auto element = type;
+        if (aggregate_width_expression(element, current().span)) {
+            return packed_array_of_type(element, current().span);
+        }
     }
     return type;
 }
@@ -420,14 +438,28 @@ Type VerilogParser::parse_systemverilog_enum_type(
 
 std::optional<Type> VerilogParser::parse_named_packed_array_type()
 {
-    if (!at(TokenKind::Identifier) || !at(TokenKind::LeftBracket, 1)) {
+    // `pkg::name [d]` names a package typedef (IEEE 1800-2017 26.3).
+    const auto qualified = at(TokenKind::Identifier)
+        && at(TokenKind::Scope, 1) && at(TokenKind::Identifier, 2)
+        && at(TokenKind::LeftBracket, 3);
+    if (!qualified
+        && (!at(TokenKind::Identifier) || !at(TokenKind::LeftBracket, 1))) {
         return std::nullopt;
     }
-    const auto found = packed_typedef_types_.find(current().text);
+    const auto found = packed_typedef_types_.find(qualified
+            ? current().text + "::" + current(2).text
+            : current().text);
     if (found == packed_typedef_types_.end()) {
         return std::nullopt;
     }
-    const auto& element = found->second;
+    // A packed array of an enumeration holds base-type elements.
+    auto element = found->second;
+    if (!element.enumeration_literals.empty() && element.named_type.empty()
+        && element.packed_members.empty()
+        && element.systemverilog_enum_base_type.empty()) {
+        element.enumeration_literals.clear();
+        element.systemverilog_enumeration_values.clear();
+    }
     if (!element.named_type.empty() || !element.enumeration_literals.empty()
         || element.systemverilog_container
         || (element.domain != ValueDomain::Logic4
@@ -436,7 +468,61 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
             && element.spelling != "bit" && element.spelling != "reg")) {
         return std::nullopt;
     }
+    if (qualified) {
+        index_ += 2U;
+    }
     const auto name = advance();
+    return packed_array_of_type(std::move(element), name.span);
+}
+
+bool VerilogParser::aggregate_width_expression(
+    Type& type, const SourceSpan& span) const
+{
+    // A packed structure whose members have parameter-dependent ranges
+    // spans [sum of member widths - 1 : 0], folded at elaboration.
+    if (type.packed_range || type.packed_range_expression
+        || type.packed_aggregate != PackedAggregateKind::Struct
+        || type.packed_members.empty()) {
+        return false;
+    }
+    const auto literal = [&](const std::uint64_t value) {
+        return Expression { ExpressionKind::IntegerLiteral,
+            std::to_string(value), { }, span };
+    };
+    const auto binary = [&](std::string op, Expression lhs, Expression rhs) {
+        return Expression { ExpressionKind::Binary, std::move(op),
+            { std::move(lhs), std::move(rhs) }, span };
+    };
+    std::optional<Expression> total;
+    for (const auto& member : type.packed_members) {
+        std::optional<Expression> width;
+        if (const auto concrete_width = member.width()) {
+            width = literal(*concrete_width);
+        } else if (member.packed_range_expression
+            && member.nested_types.empty()) {
+            const auto& range = *member.packed_range_expression;
+            width = Expression { ExpressionKind::Call, "?:",
+                { binary(">=", range.left, range.right),
+                    binary("+", binary("-", range.left, range.right),
+                        literal(1U)),
+                    binary("+", binary("-", range.right, range.left),
+                        literal(1U)) },
+                span };
+        } else {
+            return false;
+        }
+        total = total ? binary("+", std::move(*total), std::move(*width))
+                      : std::move(*width);
+    }
+    type.packed_range_expression = PackedRangeExpression {
+        binary("-", std::move(*total), literal(1U)), literal(0U), span,
+        std::nullopt };
+    return true;
+}
+
+Type VerilogParser::packed_array_of_type(
+    const Type& element, const SourceSpan& span)
+{
     Type outer;
     parse_optional_range(outer);
     std::vector<PackedRangeExpression> dimensions
@@ -453,11 +539,11 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
     } else if (element.packed_range) {
         const auto literal = [&](const std::int64_t value) {
             return Expression { ExpressionKind::IntegerLiteral,
-                std::to_string(value), { }, name.span };
+                std::to_string(value), { }, span };
         };
         dimensions.push_back(PackedRangeExpression {
             literal(element.packed_range->left),
-            literal(element.packed_range->right), name.span, std::nullopt });
+            literal(element.packed_range->right), span, std::nullopt });
     }
     auto type = element;
     type.packed_range.reset();
@@ -482,6 +568,34 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
             type.packed_range = PackedRange { *left, *right, *left >= *right };
         }
         return type;
+    }
+    if (!concrete) {
+        // Parameter-dependent bounds: the flattened range is
+        // [product of (|left - right| + 1) - 1 : 0], folded at elaboration.
+        const auto binary = [&](std::string op, Expression lhs,
+                                Expression rhs) {
+            return Expression { ExpressionKind::Binary, std::move(op),
+                { std::move(lhs), std::move(rhs) }, span };
+        };
+        const auto one = Expression { ExpressionKind::IntegerLiteral, "1",
+            { }, span };
+        std::optional<Expression> product;
+        for (const auto& dimension : dimensions) {
+            auto extent = Expression { ExpressionKind::Call, "?:",
+                { binary(">=", dimension.left, dimension.right),
+                    binary("+", binary("-", dimension.left, dimension.right),
+                        one),
+                    binary("+", binary("-", dimension.right, dimension.left),
+                        one) },
+                span };
+            product = product
+                ? binary("*", std::move(*product), std::move(extent))
+                : std::move(extent);
+        }
+        type.packed_range_expression = PackedRangeExpression {
+            binary("-", std::move(*product), one),
+            Expression { ExpressionKind::IntegerLiteral, "0", { }, span },
+            span, std::nullopt };
     }
     type.systemverilog_packed_dimensions = std::move(dimensions);
     if (concrete) {
@@ -630,6 +744,36 @@ void VerilogParser::parse_typedef(
         enum_parameters) {
         add_parameter(
             unit, std::move(parameter), parameter_name);
+    }
+    declare_member_enumerations(unit);
+}
+
+void VerilogParser::declare_member_enumerations(DesignUnit& unit)
+{
+    auto enumerations = std::exchange(member_enumerations_, { });
+    for (auto& [type, literals] : enumerations) {
+        if (literals.empty()) {
+            continue;
+        }
+        for (const auto& literal : literals) {
+            add_parameter(unit,
+                ParameterDeclaration { literal.name, type, literal.value,
+                    true, literal.span, ParameterKind::Value, std::nullopt },
+                Token { TokenKind::Identifier, literal.name, literal.span,
+                    { } });
+        }
+        // A hidden typedef gives the enumeration its methods (6.19.5).
+        const auto span = literals.front().span;
+        unit.type_aliases.push_back({
+            anonymous_enumeration_type_name(literals.front().name),
+            std::move(type),
+            span,
+            std::move(literals),
+            TypeDeclarationKind::SystemVerilogTypedef,
+            { },
+            { },
+            { },
+            false });
     }
 }
 

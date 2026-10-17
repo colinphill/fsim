@@ -353,7 +353,21 @@ void SystemVerilogConstraintSolver::add_distribution(
   distributions_.push_back({
       std::move(distribution.canonical_identity),
       distribution.variable,
-      std::move(weights)});
+      std::move(weights),
+      std::move(distribution.entries)});
+}
+
+std::vector<SystemVerilogConstraintDistributionEntry>
+SystemVerilogConstraintSolver::distribution_entries(
+    const SystemVerilogConstraintVariableId variable) const {
+  std::vector<SystemVerilogConstraintDistributionEntry> result;
+  for (const auto& distribution : distributions_) {
+    if (distribution.variable == variable) {
+      result.insert(result.end(), distribution.entries.begin(),
+          distribution.entries.end());
+    }
+  }
+  return result;
 }
 
 std::span<const std::uint64_t>

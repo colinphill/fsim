@@ -1533,15 +1533,27 @@ private:
         };
         if (!user_units_built_) {
             user_units_built_ = true;
+            // TIME is identified by its declaration in STD.STANDARD, not by
+            // its name: a design may declare its own type `time`.
+            const auto in_standard = [&](const semantic::ScopeId scope) {
+                const auto& all_scopes = compiled_.semantics.scopes();
+                if (!scope.valid() || scope.value() >= all_scopes.size()) {
+                    return false;
+                }
+                const auto unit = all_scopes[scope.value()].unit;
+                const auto& units = compiled_.semantics.units();
+                return unit.valid() && unit.value() < units.size()
+                    && lowercase(units[unit.value()].library) == "std"
+                    && lowercase(units[unit.value()].name) == "standard";
+            };
             for (const auto& type : compiled_.vhdl_hir.types()) {
-                if (type.form != semantic::vhdl::TypeForm::physical
-                    || lowercase(type.name) == "time"
-                    || lowercase(type.name) == "delay_length") {
+                if (type.form != semantic::vhdl::TypeForm::physical) {
                     continue;
                 }
                 const auto declaration
                     = compiled_.find_declaration(type.declaration);
-                if (!declaration || declaration->vhdl == nullptr) {
+                if (!declaration || declaration->vhdl == nullptr
+                    || in_standard(declaration->vhdl->scope)) {
                     continue;
                 }
                 for (const auto& physical : type.physical_units) {

@@ -84,4 +84,13 @@ struct SdfCellResolutionResult {
     const elaboration::ElaboratedDesign& elaborated,
     SdfCellResolutionLimits limits = { });
 
+/// As above, with SDF instance paths relative to the instance that
+/// `scope_path` names below the single scope root, as `$sdf_annotate` with a
+/// nested module instance requires (IEEE 1800-2017 32.4).
+[[nodiscard]] SdfCellResolutionResult resolve_sdf_cells(
+    std::shared_ptr<const SdfAnnotationScope> scope,
+    const elaboration::ElaboratedDesign& elaborated,
+    std::span<const std::string> scope_path,
+    SdfCellResolutionLimits limits = { });
+
 } // namespace fsim::app

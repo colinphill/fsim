@@ -4378,6 +4378,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const FormatContainerPattern&);
     void execute_container(ProcessState&, const ContainerElementRead&);
     void execute_container(ProcessState&, const ContainerElementWrite&);
+    void execute_container(ProcessState&, const ContainerBitstream&);
     void execute_container(ProcessState&, const ContainerAggregateRead&);
     void execute_container(ProcessState&, const ContainerAggregateWrite&);
     void execute_container(
@@ -4719,7 +4720,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void report_update_profile();
 
-    void queue_at(ProcessId id, SimulationTick time);
+    // `initial` marks the initialization run, which a VHDL postponed
+    // process makes with the other processes (IEEE 1076-2008 14.7.5.2).
+    void queue_at(ProcessId id, SimulationTick time, bool initial = false);
     // Resume a process after a timed wait. A VHDL process resumes after the
     // driver updates of that time, with the processes they wake.
     void queue_timeout(ProcessState& process, SimulationTick time);

@@ -6790,8 +6790,16 @@ private:
             return;
         }
         // IEEE 1076-2008 9.3.3.3: a named choice of a one-dimensional array
-        // aggregate is given once and lies in the contextual index range.
+        // aggregate is given once.  Only with `others` do the bounds come
+        // from the context, so only then must each choice lie in its range;
+        // otherwise the choices give the bounds and the value converts by
+        // length.
         {
+            const bool has_others = std::ranges::any_of(
+                expression.associations, [&](const auto& association) {
+                    return equal_ignoring_ascii_case(
+                        association.choice_spelling, "others");
+                });
             const auto shape = profile(context);
             if (shape.kind == ProfileKind::array && shape.dimensions.size() == 1U) {
                 const auto& range = shape.dimensions.front();
@@ -6814,7 +6822,8 @@ private:
                                 expression.source);
                             return;
                         }
-                        if (range.constrained && range.minimum && range.maximum
+                        if (has_others && range.constrained && range.minimum
+                            && range.maximum
                             && *range.minimum <= *range.maximum
                             && (*value < *range.minimum || *value > *range.maximum)) {
                             report("FSIM-ELAB-VHARRAYAGG-003",
@@ -9794,6 +9803,196 @@ private:
             dimension.constrained = true;
             context.dimensions.front() = dimension;
         }
+        struct AggregateChoiceRange {
+            std::int64_t left { };
+            std::int64_t right { };
+            bool descending { };
+            bool null { };
+        };
+        const auto range_choice = [&](const semantic::ExpressionId id)
+            -> std::optional<AggregateChoiceRange> {
+            const auto choice = specialization_.find_expression(id);
+            if (!choice || choice->vhdl == nullptr
+                || choice->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || (choice->vhdl->text != "'range"
+                    && choice->vhdl->text != "'reverse_range")
+                || choice->vhdl->operands.empty()
+                || choice->vhdl->operands.size() > 2U) {
+                return std::nullopt;
+            }
+            auto prefix = expression_subtype(
+                choice->vhdl->operands.front());
+            if (!prefix) {
+                return std::nullopt;
+            }
+            const auto prefix_profile = profile(*prefix);
+            if (prefix_profile.kind != ProfileKind::array) {
+                return std::nullopt;
+            }
+            std::int64_t dimension { 1 };
+            if (choice->vhdl->operands.size() == 2U) {
+                std::unordered_set<std::uint32_t> active;
+                const auto selected = static_integer(
+                    choice->vhdl->operands[1], active);
+                if (!selected) {
+                    return std::nullopt;
+                }
+                dimension = *selected;
+            }
+            if (dimension <= 0
+                || static_cast<std::uint64_t>(dimension)
+                    > prefix_profile.dimensions.size()) {
+                return std::nullopt;
+            }
+            const auto selected_index
+                = static_cast<std::size_t>(dimension - 1);
+            std::optional<RangeConstraint> selected_range;
+            std::size_t constrained_dimension { };
+            for (const auto& constraint : prefix->constraints) {
+                if (constraint.kind != RangeKind::array_index) {
+                    continue;
+                }
+                if (constrained_dimension++ == selected_index) {
+                    selected_range = constraint;
+                    break;
+                }
+            }
+            if (!selected_range) {
+                const auto* definition = root_definition(*prefix);
+                if (definition != nullptr
+                    && definition->form == TypeForm::array
+                    && selected_index
+                        < definition->array_dimensions.size()) {
+                    const auto& array_dimension
+                        = definition->array_dimensions[selected_index];
+                    selected_range = array_dimension.constraint;
+                }
+            }
+            if (!selected_range) {
+                return std::nullopt;
+            }
+            const auto left = bound(
+                selected_range->left,
+                selected_range->left_expression);
+            const auto right = bound(
+                selected_range->right,
+                selected_range->right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            auto selected_left = *left;
+            auto selected_right = *right;
+            auto descending = selected_range->descending;
+            const auto null = selected_range->null
+                || (descending ? *left < *right : *left > *right);
+            if (choice->vhdl->text == "'reverse_range") {
+                std::swap(selected_left, selected_right);
+                descending = !descending;
+            }
+            return AggregateChoiceRange {
+                selected_left, selected_right, descending, null };
+        };
+        // A named aggregate without `others` takes its bounds from its
+        // smallest and largest choices; only its direction comes from the
+        // context (IEEE 1076-2008 9.3.3.3).  It then converts to the
+        // contextual subtype by length (9.3.3.3, 14.7.3.4 implicit subtype
+        // conversion), so its choices are checked against its own bounds.
+        const auto named_bounds = [&]()
+            -> std::optional<std::pair<std::int64_t, std::int64_t>> {
+            std::optional<std::int64_t> low;
+            std::optional<std::int64_t> high;
+            const auto include = [&](const std::int64_t index) {
+                low = low ? std::min(*low, index) : index;
+                high = high ? std::max(*high, index) : index;
+            };
+            const auto include_choice = [&](const auto& self,
+                                            const semantic::ExpressionId id)
+                -> bool {
+                const auto choice = specialization_.find_expression(id);
+                if (!choice || choice->vhdl == nullptr) {
+                    return false;
+                }
+                const auto& value = *choice->vhdl;
+                if (value.kind == semantic::vhdl::ExpressionKind::binary
+                    && value.text == "|" && value.operands.size() == 2U) {
+                    return self(self, value.operands[0])
+                        && self(self, value.operands[1]);
+                }
+                if (value.kind == semantic::vhdl::ExpressionKind::binary
+                    && (value.text == "to" || value.text == "downto")
+                    && value.operands.size() == 2U) {
+                    const auto left = array_aggregate_index_value(
+                        array_definition, array_dimension_index,
+                        value.operands[0]);
+                    const auto right = array_aggregate_index_value(
+                        array_definition, array_dimension_index,
+                        value.operands[1]);
+                    if (!left || !right
+                        || (value.text == "to" ? *left > *right
+                                               : *left < *right)) {
+                        return false;
+                    }
+                    include(*left);
+                    include(*right);
+                    return true;
+                }
+                if (value.kind == semantic::vhdl::ExpressionKind::call
+                    && (value.text == "'range"
+                        || value.text == "'reverse_range")) {
+                    const auto bounds = range_choice(id);
+                    if (!bounds || bounds->null) {
+                        return false;
+                    }
+                    include(bounds->left);
+                    include(bounds->right);
+                    return true;
+                }
+                const auto index = array_aggregate_index_value(
+                    array_definition, array_dimension_index, id);
+                if (!index) {
+                    return false;
+                }
+                include(*index);
+                return true;
+            };
+            for (const auto& association : aggregate.associations) {
+                if (association.positional() || association.choices.empty()
+                    || choice_is_others(association)
+                    || (!association.choice_spelling.empty()
+                        && association.choice_spelling != "@array")) {
+                    return std::nullopt;
+                }
+                for (const auto choice : association.choices) {
+                    if (!include_choice(include_choice, choice)) {
+                        return std::nullopt;
+                    }
+                }
+            }
+            if (!low || !high) {
+                return std::nullopt;
+            }
+            return std::pair { *low, *high };
+        };
+        if (dimension.constrained && !dimension.null && dimension.minimum
+            && dimension.maximum) {
+            if (const auto natural = named_bounds()) {
+                const auto contextual = inclusive_extent(
+                    *dimension.minimum, *dimension.maximum);
+                const auto own = inclusive_extent(
+                    natural->first, natural->second);
+                if (contextual && own && *contextual != *own) {
+                    report(
+                        "FSIM-ELAB-VHARRAYAGG-006",
+                        "VHDL named array aggregate length does not match "
+                            "its context",
+                        aggregate.source);
+                }
+                dimension.minimum = natural->first;
+                dimension.maximum = natural->second;
+                context.dimensions.front() = dimension;
+            }
+        }
         if (!dimension.minimum || !dimension.maximum) {
             validate_array_aggregate_element_types(
                 aggregate, context, array_subtype, element,
@@ -9822,6 +10021,7 @@ private:
         std::vector<std::pair<std::int64_t, std::int64_t>> assigned_segments;
         std::uint64_t assigned_segment_count { };
         bool has_others = false;
+        bool dynamic_sole_choice = false;
         bool positional_exhausted = dimension.null;
         auto positional = dimension.descending ? maximum : minimum;
         const auto covered_by_segment = [&](const std::int64_t index) {
@@ -10196,96 +10396,6 @@ private:
                     source);
                 return false;
             };
-        struct AggregateChoiceRange {
-            std::int64_t left { };
-            std::int64_t right { };
-            bool descending { };
-            bool null { };
-        };
-        const auto range_choice = [&](const semantic::ExpressionId id)
-            -> std::optional<AggregateChoiceRange> {
-            const auto choice = specialization_.find_expression(id);
-            if (!choice || choice->vhdl == nullptr
-                || choice->vhdl->kind
-                    != semantic::vhdl::ExpressionKind::call
-                || (choice->vhdl->text != "'range"
-                    && choice->vhdl->text != "'reverse_range")
-                || choice->vhdl->operands.empty()
-                || choice->vhdl->operands.size() > 2U) {
-                return std::nullopt;
-            }
-            auto prefix = expression_subtype(
-                choice->vhdl->operands.front());
-            if (!prefix) {
-                return std::nullopt;
-            }
-            const auto prefix_profile = profile(*prefix);
-            if (prefix_profile.kind != ProfileKind::array) {
-                return std::nullopt;
-            }
-            std::int64_t dimension { 1 };
-            if (choice->vhdl->operands.size() == 2U) {
-                std::unordered_set<std::uint32_t> active;
-                const auto selected = static_integer(
-                    choice->vhdl->operands[1], active);
-                if (!selected) {
-                    return std::nullopt;
-                }
-                dimension = *selected;
-            }
-            if (dimension <= 0
-                || static_cast<std::uint64_t>(dimension)
-                    > prefix_profile.dimensions.size()) {
-                return std::nullopt;
-            }
-            const auto selected_index
-                = static_cast<std::size_t>(dimension - 1);
-            std::optional<RangeConstraint> selected_range;
-            std::size_t constrained_dimension { };
-            for (const auto& constraint : prefix->constraints) {
-                if (constraint.kind != RangeKind::array_index) {
-                    continue;
-                }
-                if (constrained_dimension++ == selected_index) {
-                    selected_range = constraint;
-                    break;
-                }
-            }
-            if (!selected_range) {
-                const auto* definition = root_definition(*prefix);
-                if (definition != nullptr
-                    && definition->form == TypeForm::array
-                    && selected_index
-                        < definition->array_dimensions.size()) {
-                    const auto& array_dimension
-                        = definition->array_dimensions[selected_index];
-                    selected_range = array_dimension.constraint;
-                }
-            }
-            if (!selected_range) {
-                return std::nullopt;
-            }
-            const auto left = bound(
-                selected_range->left,
-                selected_range->left_expression);
-            const auto right = bound(
-                selected_range->right,
-                selected_range->right_expression);
-            if (!left || !right) {
-                return std::nullopt;
-            }
-            auto selected_left = *left;
-            auto selected_right = *right;
-            auto descending = selected_range->descending;
-            const auto null = selected_range->null
-                || (descending ? *left < *right : *left > *right);
-            if (choice->vhdl->text == "'reverse_range") {
-                std::swap(selected_left, selected_right);
-                descending = !descending;
-            }
-            return AggregateChoiceRange {
-                selected_left, selected_right, descending, null };
-        };
         const auto validate_untyped_nested_segment =
             [&](const auto& self, const semantic::ExpressionId value_id)
                 -> void {
@@ -10420,6 +10530,16 @@ private:
                         array_definition, array_dimension_index,
                         value.operands[1]);
                     if (!left || !right) {
+                        // A non-static range is allowed as the only choice
+                        // of the only association (IEEE 1076-2008 9.3.3.3);
+                        // its length is checked when it is evaluated.
+                        if (aggregate.associations.size() == 1U
+                            && association.choices.size() == 1U) {
+                            dynamic_sole_choice = true;
+                            validate_value(
+                                association.value, association.source);
+                            return;
+                        }
                         report(
                             "FSIM-ELAB-DYNINDEX-002",
                             "VHDL aggregate choice requires a locally "
@@ -10569,7 +10689,7 @@ private:
                 assign_choice(assign_choice, choice_id);
             }
         }
-        if (!has_others
+        if (!has_others && !dynamic_sole_choice
             && static_cast<std::uint64_t>(assigned.size())
                     + assigned_segment_count
                 < element_count) {
@@ -12758,10 +12878,11 @@ private:
                 auto context = expression_subtype(
                     expression.operands[sibling_index]);
                 if (aggregate && aggregate->vhdl != nullptr && context) {
-                    const bool positional
-                        = semantic::vhdl::positional_aggregate(
-                            *aggregate->vhdl);
-                    if (positional) {
+                    // The sibling gives the aggregate its type but not its
+                    // bounds: relational operands may differ in length
+                    // (IEEE 1076-2008 9.2.3), and a named aggregate takes
+                    // its bounds from its choices (9.3.3.3).
+                    {
                         const auto predefined
                             = !context->type_mark.target.valid()
                             ? predefined_array_identity(
@@ -13181,11 +13302,35 @@ resolve_vhdl_user_attribute_subtype(
     const auto& units = specialization.design().semantics.units();
     const auto& declarations
         = specialization.design().vhdl_hir.declarations();
+    // Declarations of an entity are visible in its architectures (IEEE
+    // 1076-2008 12.1).
+    const auto entity_of_architecture = [&](const semantic::ScopeId inner,
+                                            const semantic::ScopeId outer) {
+        if (!inner.valid() || inner.value() >= scopes.size()
+            || !outer.valid() || outer.value() >= scopes.size()) {
+            return false;
+        }
+        const auto inner_unit = scopes[inner.value()].unit;
+        const auto outer_unit = scopes[outer.value()].unit;
+        if (!inner_unit.valid() || inner_unit.value() >= units.size()
+            || !outer_unit.valid() || outer_unit.value() >= units.size()) {
+            return false;
+        }
+        const auto& architecture = units[inner_unit.value()];
+        const auto& entity = units[outer_unit.value()];
+        return architecture.kind == semantic::UnitKind::vhdl_architecture
+            && entity.kind == semantic::UnitKind::vhdl_entity
+            && equal_ignoring_ascii_case(architecture.library, entity.library)
+            && (equal_ignoring_ascii_case(architecture.name, entity.name)
+                || equal_ignoring_ascii_case(
+                    architecture.secondary_name, entity.name));
+    };
     const auto visible_in = [&](const semantic::ScopeId inner,
                                 const semantic::ScopeId outer) {
         return semantic::scope_distance(
             specialization.design().semantics, inner, outer)
-            .has_value();
+            .has_value()
+            || entity_of_architecture(inner, outer);
     };
     const auto unit_matches_prefix = [&](const semantic::ScopeId scope) {
         if (!scope.valid() || scope.value() >= scopes.size()) {

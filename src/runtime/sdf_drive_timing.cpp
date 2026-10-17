@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace fsim::app {
@@ -192,6 +193,11 @@ namespace {
         std::set<runtime::simir::SignalId>& timed_signals,
         std::deque<runtime::simir::SignalId>& pending, BindingState& state)
     {
+        // A process that assigns one region in several places lists it once
+        // per assignment; it owns that region once.
+        std::set<std::tuple<runtime::simir::SignalId, std::uint64_t,
+            std::uint64_t>>
+            owned;
         for (const auto& region : process.driver_regions) {
             if (region.signal >= design.signals().size()
                 || (!region.whole
@@ -214,6 +220,10 @@ namespace {
             binding.resolution = design.signals()[region.signal].resolution;
             binding.strength = process.drive_strength;
             binding.role = SdfDriveTimingBindingRole::propagated_driver;
+            if (!owned.emplace(binding.signal, binding.offset, binding.width)
+                     .second) {
+                continue;
+            }
             if (!add_binding(std::move(binding), state))
                 return false;
             if (timed_signals.insert(region.signal).second)

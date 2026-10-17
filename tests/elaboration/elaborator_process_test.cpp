@@ -2094,9 +2094,9 @@ end architecture;
         compile_and_elaborate(
             invalid_vhdl_condition_wait.design,
             "vhdl:work.invalid_condition_wait(rtl)");
-    assert(!rejected_vhdl_condition_wait.ok());
-    assert(has_diagnostic(
-        rejected_vhdl_condition_wait, "FSIM-ELAB-079"));
+    // VHDL-2008 applies the condition operator ?? to a std_logic condition
+    // (IEEE 1076-2008 9.2.9), so the wait is legal.
+    assert(rejected_vhdl_condition_wait.ok());
 
     const auto unknown_wait = fsim::frontend::parse_text(
         "unknown_wait.vhd",

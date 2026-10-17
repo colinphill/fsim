@@ -1215,6 +1215,11 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         design_, path, declaration, inputs, *output, previous, initialized
     }.build());
 
+    // A module path of the enclosing module may end at this primitive's
+    // output; its delay then applies to the primitive's driver (IEEE
+    // 1364-2005 14.2). The enclosing paths were attached before the
+    // primitive existed.
+    attach_verilog_specify_drivers(0U, profile.processes);
     design_.specializations_.push_back(std::move(profile));
     return true;
 }

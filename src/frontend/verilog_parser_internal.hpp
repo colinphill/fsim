@@ -402,6 +402,8 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<Expression> assertion_expression(std::span<const Token> tokens);
   // A clocked inline property `assert property (@(e) ...)` becomes a
   // synthesized property declaration that the directive names.
+  bool parse_generate_concurrent_assertion(GenerateBody& body);
+  void resolve_generate_assertion_references(DesignUnit& unit);
   void declare_inline_property(
       SystemVerilogConcurrentAssertion& assertion,
       std::vector<SystemVerilogAssertionDeclaration>& declarations);
@@ -906,6 +908,19 @@ class VerilogParser final : private detail::ParserBase {
   // packed array of a named integral vector type (IEEE 1800-2017 7.4.1).
   std::unordered_map<std::string, Type> packed_typedef_types_;
   [[nodiscard]] std::optional<Type> parse_named_packed_array_type();
+  // Declares, in `unit`, the literals of anonymous enumerations parsed as
+  // aggregate members since the last call (IEEE 1800-2017 6.19, 7.2).
+  void declare_member_enumerations(DesignUnit& unit);
+  std::vector<std::pair<Type, std::vector<EnumLiteralDeclaration>>>
+      member_enumerations_;
+  // Parses the packed dimensions after `element` and flattens them, with
+  // the element's own range innermost.
+  [[nodiscard]] Type packed_array_of_type(
+      const Type& element, const SourceSpan& span);
+  // Gives a packed structure with parameter-dependent member ranges a
+  // range expression spanning its members; false when it cannot.
+  [[nodiscard]] bool aggregate_width_expression(
+      Type& type, const SourceSpan& span) const;
   std::unordered_set<std::string> body_port_declarations_;
   // Modport callables named before their declaration, resolved at the end
   // of the interface (IEEE 1800-2017 25.7).
@@ -1010,6 +1025,8 @@ class VerilogParser final : private detail::ParserBase {
   bool module_time_unit_declared_{};
   bool module_time_precision_declared_{};
   std::size_t next_bind_unit_ { };
+  // Checkers declared anywhere in the current module body.
+  std::unordered_set<std::string> unit_checker_names_;
   bool module_has_non_time_item_{};
   bool program_generate_context_{};
   // The last parameter type was a signing without a range (6.20.2).

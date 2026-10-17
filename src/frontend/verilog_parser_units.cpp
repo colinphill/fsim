@@ -571,6 +571,9 @@ void VerilogParser::parse_generate_region(
           parse_initial());
       continue;
     }
+    if (parse_generate_concurrent_assertion(direct_region.then_body)) {
+      continue;
+    }
     if (instance_start()) {
       auto instances = parse_instances();
       direct_region.then_body.instances.insert(
@@ -1047,6 +1050,7 @@ void VerilogParser::parse_generate_branch(
     } else if (keyword("begin")) {
         body.generate_regions.push_back(
             parse_static_generate_block());
+    } else if (parse_generate_concurrent_assertion(body)) {
     } else if (instance_start()) {
         auto instances = parse_instances();
         body.instances.insert(
@@ -1535,7 +1539,15 @@ Type VerilogParser::parse_parameter_type() {
 Type VerilogParser::parse_type_parameter_actual() {
   if (at(TokenKind::Identifier)
       && !keyword_reserved(keyword_set_, current().text)) {
-    return parse_named_type();
+    if (auto expanded = parse_named_packed_array_type()) {
+      return std::move(*expanded);
+    }
+    auto named = parse_named_type();
+    // `foo_t [1:0]`: packed dimensions of a named type (6.20.3, 7.4.1).
+    if (at(TokenKind::LeftBracket)) {
+      parse_optional_range(named);
+    }
+    return named;
   }
   if (keyword("string") || keyword("chandle")
       || keyword("process")) {
@@ -1705,6 +1717,16 @@ void VerilogParser::parse_parameter_group(
     if (match(TokenKind::Assign)) {
       if (type_parameter) {
         auto imported = import_interface_type(unit);
+        if (imported && at(TokenKind::LeftBracket)) {
+          // `if0.rq_t [1:0]`: a packed array of the interface type.
+          auto element = *imported;
+          if (element.packed_range
+              || aggregate_width_expression(element, current().span)) {
+            imported = packed_array_of_type(element, current().span);
+          } else {
+            parse_optional_range(*imported);
+          }
+        }
         if (imported && local) {
           // A local type parameter naming an interface type is a typedef of
           // it (IEEE 1800-2017 6.20.3).
@@ -1747,25 +1769,25 @@ void VerilogParser::parse_parameter_group(
                   && self(self, expression.operands[1])
                   && self(self, expression.operands[2]));
         };
-    if (implicit_value_type
-        && definitely_string(definitely_string, value)) {
+    const bool inferred_string = implicit_value_type
+        && definitely_string(definitely_string, value);
+    if (inferred_string) {
       declared_type.spelling = "string";
       declared_type.domain = ValueDomain::String;
       declared_type.is_signed = false;
     }
-    add_parameter(
-        unit,
-        ParameterDeclaration{
-            name.text,
-            std::move(declared_type),
-            std::move(value),
-            local,
-            cover(start.span, previous().span),
-            type_parameter
-                ? ParameterKind::Type
-                : ParameterKind::Value,
-            std::move(default_type)},
-        name);
+    ParameterDeclaration declaration{
+        name.text,
+        std::move(declared_type),
+        std::move(value),
+        local,
+        cover(start.span, previous().span),
+        type_parameter
+            ? ParameterKind::Type
+            : ParameterKind::Value,
+        std::move(default_type)};
+    declaration.systemverilog_inferred_string = inferred_string;
+    add_parameter(unit, std::move(declaration), name);
     if (!match(TokenKind::Comma)) {
       break;
     }
@@ -2160,6 +2182,48 @@ std::vector<Instance> VerilogParser::parse_instances() {
       TokenKind::Semicolon, "';' after module or UDP instance",
       "FSIM-SV-PARSE-038");
   return instances;
+}
+
+// A concurrent assertion item of a generate block (IEEE 1800-2017 27.3,
+// 16.14); it is resolved into a process of the block with the module's
+// assertion context.
+bool VerilogParser::parse_generate_concurrent_assertion(GenerateBody& body)
+{
+  const bool labeled = at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
+      && at(TokenKind::Identifier, 2)
+      && contains_word({ "assert", "assume", "cover", "restrict" },
+          current(2).text);
+  const bool direct = at(TokenKind::Identifier)
+      && contains_word({ "assert", "assume", "cover", "restrict" },
+          current().text);
+  if (language_ != Language::SystemVerilog2017 || (!labeled && !direct)) {
+    return false;
+  }
+  const auto directive_offset = labeled ? 3U : 1U;
+  // Only `assert property (...)` and its kin; immediate and deferred
+  // assertions stay procedural.
+  if (!keyword("property", directive_offset)
+      && !keyword("sequence", directive_offset)) {
+    return false;
+  }
+  std::optional<Token> label;
+  if (labeled) {
+    label = advance();
+    advance();
+  }
+  const auto directive = advance();
+  const auto assertion_kind = directive.text == "assert"
+      ? SystemVerilogConcurrentAssertionKind::Assert
+      : directive.text == "assume"
+      ? SystemVerilogConcurrentAssertionKind::Assume
+      : directive.text == "cover"
+      ? SystemVerilogConcurrentAssertionKind::Cover
+      : SystemVerilogConcurrentAssertionKind::Restrict;
+  auto parsed = parse_concurrent_assertion(
+      directive, assertion_kind, std::move(label));
+  declare_inline_property(parsed, body.systemverilog_assertion_declarations);
+  body.systemverilog_concurrent_assertions.push_back(std::move(parsed));
+  return true;
 }
 
 }  // namespace fsim::frontend

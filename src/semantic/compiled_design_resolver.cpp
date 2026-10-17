@@ -4355,6 +4355,22 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     vhdl::constrained_element_subtype(
                         result, element.name, element.subtype),
                     definition_scope, active_frames);
+                // A null array element has no scalar subelements and adds
+                // no bits (IEEE 1076-2008 5.3.2.1).
+                const bool null_array = effective
+                    && std::ranges::any_of(effective->constraints,
+                        [](const vhdl::RangeConstraint& range) {
+                            return range.kind == vhdl::RangeKind::array_index
+                                && (range.null
+                                    || (range.left && range.right
+                                        && (range.descending
+                                                ? *range.left < *range.right
+                                                : *range.left
+                                                    > *range.right)));
+                        });
+                if (null_array) {
+                    continue;
+                }
                 if (!effective || !effective->executable_width
                     || *effective->executable_width == 0U
                     || width > std::numeric_limits<std::uint64_t>::max()
@@ -6100,10 +6116,20 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                     }
                     const auto package_index
                         = selected_parts.size() - 2U;
+                    // `use pkg."+"` names an operator symbol, spelled
+                    // with or without its quotes (IEEE 1076-2008 12.4).
+                    const auto unquoted = [](std::string_view text) {
+                        if (text.size() >= 2U && text.front() == '"'
+                            && text.back() == '"') {
+                            text = text.substr(1U, text.size() - 2U);
+                        }
+                        return text;
+                    };
                     if (!same_vhdl_identifier(
                             selected_parts.back(), "all")
                         && !same_vhdl_identifier(
-                            selected_parts.back(), parts.back())) {
+                            unquoted(selected_parts.back()),
+                            unquoted(parts.back()))) {
                         continue;
                     }
                     if (selected_parts.size() == 2U) {

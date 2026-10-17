@@ -13,7 +13,13 @@ namespace fsim::frontend {
 
 void VerilogParser::resolve_assertion_declaration_references(DesignUnit& unit)
 {
-    const auto design_names = assertion_design_unit_names(unit);
+    auto design_names = assertion_design_unit_names(unit);
+    // Declarations of the compilation unit (`$unit`) are visible in every
+    // design element of it (IEEE 1800-2017 3.12.1).
+    if (compilation_unit_package_ && &unit != &*compilation_unit_package_) {
+        design_names.merge(
+            assertion_design_unit_names(*compilation_unit_package_));
+    }
     std::unordered_set<std::string> assertion_names;
     for (const auto& declaration :
         unit.systemverilog_assertion_declarations) {

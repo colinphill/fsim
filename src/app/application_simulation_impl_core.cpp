@@ -267,6 +267,14 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             found = std::ranges::find(
                 built.compiled_systemverilog_class_specializations, identity,
                 &semantic::sv::ClassSpecialization::declaration_identity);
+        } else if (matches > 1) {
+            // A bare class name denotes its default specialization.
+            found = std::ranges::find_if(
+                built.compiled_systemverilog_class_specializations,
+                [&](const semantic::sv::ClassSpecialization& candidate) {
+                    return candidate.declaration_identity == identity
+                        && candidate.default_specialization;
+                });
         }
     }
     if (found == built.compiled_systemverilog_class_specializations.end()) {

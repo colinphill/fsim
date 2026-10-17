@@ -285,8 +285,8 @@ NestedOutcome run_wide_nested_element_case(
                 ? key_with_bit(136U)
                 : index_one(),
         },
-        ContainerElementWrite { 0U, 0U, 2U, false },
-        ContainerElementRead { 1U, 0U, 0U, false },
+        ContainerElementWrite { 0U, 0U, 2U, false, { } },
+        ContainerElementRead { 1U, 0U, 0U, false, { } },
         WriteContainerObject { outer_object, 0U, std::nullopt },
         WriteContainerObject { observed_object, 1U, std::nullopt },
         Halt { },

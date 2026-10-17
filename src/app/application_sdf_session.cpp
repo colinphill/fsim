@@ -222,8 +222,26 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         SdfAnnotationScopeRequest scope_request;
         scope_request.selection = input.root == "*"
             ? SdfScopeSelection::All : SdfScopeSelection::Single;
+        // A nested instance scope (`top.dut`) annotates below its root.
+        std::vector<std::string> scope_path;
+        auto scope_root = input.root;
+        if (scope_request.selection == SdfScopeSelection::Single
+            && std::ranges::find(candidate->roots(), scope_root)
+                == candidate->roots().end()) {
+            std::size_t start { };
+            for (auto dot = scope_root.find('.'); dot != std::string::npos;
+                dot = scope_root.find('.', start)) {
+                scope_path.push_back(scope_root.substr(start, dot - start));
+                start = dot + 1U;
+            }
+            if (!scope_path.empty()) {
+                scope_path.push_back(scope_root.substr(start));
+                scope_root = scope_path.front();
+                scope_path.erase(scope_path.begin());
+            }
+        }
         if (scope_request.selection == SdfScopeSelection::Single)
-            scope_request.root_aliases.push_back(input.root);
+            scope_request.root_aliases.push_back(scope_root);
         scope_request.expected_project_identity = design_identity;
         scope_request.expected_design_identity = design_identity;
         const auto scope = bind_sdf_annotation_scope(parsed.file,
@@ -232,7 +250,8 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
             import_errors(diagnostics, scope.diagnostics);
             return std::nullopt;
         }
-        const auto cells = resolve_sdf_cells(scope.scope, *candidate);
+        const auto cells
+            = resolve_sdf_cells(scope.scope, *candidate, scope_path);
         if (!cells.ok()) {
             import_errors(diagnostics, cells.diagnostics);
             return std::nullopt;

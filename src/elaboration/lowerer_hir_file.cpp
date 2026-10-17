@@ -3165,8 +3165,10 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return fail("FSIM-ELAB-VHFILE-006",
                 "file_close requires exactly one file object");
         }
+        // Closing a file that is not open has no effect (IEEE 1076-2008
+        // 5.5.2).
         process_.operations.emplace_back(FileClose {
-            *file->second.local, true, false });
+            *file->second.local, true, true });
         return true;
     }
     if (name == "file_open") {

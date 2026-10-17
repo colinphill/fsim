@@ -961,10 +961,15 @@ void Interpreter::Impl::handle_boundary(
                 process.cold().current_source);
             return;
         }
+        // A wait that would end beyond the last representable time never
+        // resumes: simulation stops at TIME'HIGH (IEEE 1076-2008 14.7.5.1).
         if (delay
             > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
-            process.pc = instruction;
-            fail(process, "simulation time overflow in WaitFor");
+            process.status = ProcessStatus::waiting;
+            notify_execution_point(
+                process, instruction, ExecutionPointKind::process_suspend,
+                process.cold().current_source);
+            return;
         }
         queue_timeout(process, scheduler.now() + delay);
         process.status = ProcessStatus::waiting;

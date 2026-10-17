@@ -99,6 +99,19 @@ std::string compiled_systemverilog_integral_identity(
         + nominal_type + ":v=" + bits;
 }
 
+bool systemverilog_string_actual_incompatible(
+    const semantic::sv::Declaration& formal, const bool actual_string) noexcept
+{
+    const bool formal_string = !formal.inferred_string_type
+        && compiled_systemverilog_string_declaration(formal);
+    if (formal_string) {
+        return !actual_string;
+    }
+    const bool packed_formal = formal.type && formal.type->packed_range;
+    return actual_string && !packed_formal && !formal.inferred_string_type
+        && formal.type && formal.type->target.spelling != "implicit";
+}
+
 bool compiled_systemverilog_string_declaration(
     const semantic::sv::Declaration& declaration) noexcept
 {
@@ -300,17 +313,14 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 == semantic::SpecializedHirAssociationKind::expression
             && binding.expression) {
             const auto formal = compiled_->find_declaration(binding.formal);
-            const auto formal_string = formal
-                && formal->systemverilog != nullptr
-                && hierarchy_sv_parameters_detail::
-                    compiled_systemverilog_string_declaration(
-                        *formal->systemverilog);
             const auto actual_string
                 = working_specialization.evaluate_string_expression(
                                             *binding.expression)
                       .has_value();
-            if (formal_string != actual_string
-                && (formal_string || actual_string)) {
+            if (formal && formal->systemverilog != nullptr
+                && hierarchy_sv_parameters_detail::
+                    systemverilog_string_actual_incompatible(
+                        *formal->systemverilog, actual_string)) {
                 add_diagnostic(
                     "FSIM-ELAB-SVSTRING-002",
                     "string and integral parameter actuals are "

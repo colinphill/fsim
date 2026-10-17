@@ -1431,6 +1431,13 @@ using namespace runtime::simir;
                 }
             },
             process.operations[index]);
+        // Bit-stream container conversion runs in the interpreter.
+        if (fsim::runtime::simir::operation_get_if<
+                runtime::simir::ContainerBitstream>(
+                &process.operations[index])) {
+            record_unsupported(
+                index, "bit-stream container operations are interpreter-only");
+        }
         if (!supports_wide_register_operation(
                 process.operations[index])) {
             std::string operation_type;

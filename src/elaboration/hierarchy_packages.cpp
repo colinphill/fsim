@@ -2567,7 +2567,9 @@ namespace {
                     const auto merged = layout
                         ? merge_domain(record_domain, layout->domain)
                         : std::nullopt;
-                    if (!layout || !merged || layout->width == 0U
+                    // A null array element has no scalar subelements and
+                    // adds nothing (IEEE 1076-2008 5.3.2.1, 5.3.3).
+                    if (!layout || !merged
                         || layout->width
                             > std::numeric_limits<std::size_t>::max() - width) {
                         valid = false;
@@ -2576,7 +2578,8 @@ namespace {
                     width += layout->width;
                     record_domain = *merged;
                 }
-                if (valid && compiled_vhdl_scalar_domain(record_domain)) {
+                if (valid && width != 0U
+                    && compiled_vhdl_scalar_domain(record_domain)) {
                     result = CompiledVhdlSignalLayout {
                         width, record_domain
                     };
@@ -5756,6 +5759,25 @@ namespace {
                     domain,
                     width);
             }
+            // A deferred constant's value is its package-body completion
+            // (IEEE 1076-2008 4.8).
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->deferred
+                && declaration->vhdl->completion) {
+                const auto completion = specialization.find_declaration(
+                    *declaration->vhdl->completion);
+                if (completion && completion->vhdl != nullptr
+                    && completion->vhdl->initializer
+                    && *completion->vhdl->initializer != expression_id) {
+                    return compiled_vhdl_static_port_value(
+                        specialization,
+                        *completion->vhdl->initializer,
+                        subtype,
+                        scope,
+                        domain,
+                        width);
+                }
+            }
         }
         if (source.kind == semantic::vhdl::ExpressionKind::name) {
             const auto governed = resolve_vhdl_vital_named_constant(
@@ -5856,8 +5878,13 @@ namespace {
                     scope);
                 const auto layout = compiled_vhdl_named_signal_layout(
                     specialization, element_subtype, scope);
-                if (!layout || layout->width == 0U) {
+                if (!layout) {
                     return false;
+                }
+                // A null array element contributes no bits (5.3.2.1).
+                if (layout->width == 0U) {
+                    values[index] = std::string { };
+                    return true;
                 }
                 const auto evaluated = compiled_vhdl_static_element_value(
                     specialization, value, element_subtype, scope,
@@ -7707,12 +7734,34 @@ namespace {
             if (!formal || formal->vhdl == nullptr
                 || formal->vhdl->form
                     != semantic::vhdl::DeclarationForm::generic_constant
-                || !formal->vhdl->subtype
-                || (formal->vhdl->subtype->domain
-                        != semantic::vhdl::ValueDomain::integer
-                    && formal->vhdl->subtype->domain
-                        != semantic::vhdl::ValueDomain::boolean)) {
+                || !formal->vhdl->subtype) {
                 continue;
+            }
+            // Scalar generics only: a composite takes the entity-level path.
+            {
+                auto mark = formal->vhdl->subtype->type_mark.target;
+                bool composite { };
+                for (std::size_t depth { }; mark.valid() && depth < 16U;
+                    ++depth) {
+                    const auto type = compiled.find_type(mark);
+                    if (!type || type->vhdl == nullptr) {
+                        break;
+                    }
+                    const auto form = type->vhdl->form;
+                    if (form == semantic::vhdl::TypeForm::array
+                        || form == semantic::vhdl::TypeForm::record) {
+                        composite = true;
+                        break;
+                    }
+                    if (form != semantic::vhdl::TypeForm::subtype
+                        && form != semantic::vhdl::TypeForm::alias) {
+                        break;
+                    }
+                    mark = type->vhdl->base.type_mark.target;
+                }
+                if (composite) {
+                    continue;
+                }
             }
 
             const semantic::vhdl::Association* association
@@ -8032,10 +8081,14 @@ namespace {
                   const auto generic_procedure = form
                       == semantic::vhdl::DeclarationForm::generic_procedure;
                   if (generic_function || generic_procedure) {
+                      // A box default (`is <>`) has its actual at the
+                      // instantiation (IEEE 1076-2008 6.5.6.2).
                       if (failures != nullptr
                           && (!declaration->vhdl->callable
-                              || !declaration->vhdl->callable
-                                      ->default_callable)) {
+                              || (!declaration->vhdl->callable
+                                       ->default_callable
+                                  && !declaration->vhdl->callable
+                                          ->default_box))) {
                           failures->push_back({
                               generic_function
                                   ? "FSIM-ELAB-VHFUNC-004"
@@ -10682,6 +10735,34 @@ namespace {
                         return found;
                     }
                 }
+                // A defaulted argument of a function call is part of the
+                // constant expression (IEEE 1800-2017 13.4.3, 13.5.3).
+                if (value.kind == ExpressionKind::call
+                    && std::ranges::all_of(value.argument_names,
+                        [](const std::string& name) { return name.empty(); })
+                    && value.referenced_name
+                    && value.referenced_name->selected) {
+                    const auto callee = compiled.find_declaration(
+                        *value.referenced_name->selected);
+                    if (callee && callee->systemverilog != nullptr
+                        && callee->systemverilog->callable
+                        && callee->systemverilog->callable->function) {
+                        const auto& formals
+                            = callee->systemverilog->callable->formals;
+                        for (auto index = value.operands.size();
+                            index < formals.size(); ++index) {
+                            const auto formal
+                                = compiled.find_declaration(formals[index]);
+                            if (formal && formal->systemverilog != nullptr
+                                && formal->systemverilog->initializer) {
+                                if (const auto* found = self(self,
+                                        *formal->systemverilog->initializer)) {
+                                    return found;
+                                }
+                            }
+                        }
+                    }
+                }
                 return nullptr;
             };
             if (const auto* object = nonconstant(
@@ -11449,18 +11530,6 @@ namespace {
                         append("FSIM-ELAB-SVEXPR-002",
                             "streaming concatenation requires a positive "
                             "locally constant host-addressable slice size",
-                            expression.source);
-                    }
-                    for (std::size_t index = 1U;
-                        index < expression.operands.size(); ++index) {
-                        const auto* type = expression_type(
-                            expression.operands[index]);
-                        if (type == nullptr || !type->container_form) {
-                            continue;
-                        }
-                        append("FSIM-ELAB-SVEXPR-003",
-                            "streaming concatenation supports only fixed-width "
-                            "packed integral operands",
                             expression.source);
                     }
                 }
@@ -14432,16 +14501,25 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             compiled_source_span(*compiled_, unit.source));
         return false;
     }
+    // A module may instantiate itself through a generate construct with
+    // different parameter values (IEEE 1800-2017 23.3.2); only a repeat of
+    // the same unit with the same actuals recurses without end.
     const auto identity = unit_identity(root);
-    if (std::ranges::find(stack_, identity) != stack_.end()) {
+    auto stack_key = identity;
+    for (const auto& actual : actuals) {
+        stack_key += ";" + std::to_string(actual.declaration.value()) + "="
+            + actual.identity;
+    }
+    if (std::ranges::find(stack_, stack_key) != stack_.end()
+        || stack_.size() >= maximum_instance_depth) {
         report(
             "FSIM-ELAB-HIR-001",
             "recursive compiled-HIR hierarchy for '" + identity
-                + "' requires an unavailable specialization adapter",
+                + "' does not terminate",
             compiled_source_span(*compiled_, unit.source));
         return false;
     }
-    CompiledHierarchyStackGuard stack_guard { stack_, identity };
+    CompiledHierarchyStackGuard stack_guard { stack_, stack_key };
     register_systemverilog_resolution_functions(unit);
     std::vector<CompiledSpecializationFailure>
         specialization_failures;
@@ -20889,8 +20967,19 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                     }
                     const auto import_all
                         = compiled_vhdl_name_equal(parts[2], "all");
+                    // An operator symbol is named with or without its
+                    // quotes (`use pkg."+"`, IEEE 1076-2008 12.4).
+                    const auto unquoted_member = [&] {
+                        std::string_view member = parts[2];
+                        if (member.size() >= 2U && member.front() == '"'
+                            && member.back() == '"') {
+                            member = member.substr(1U, member.size() - 2U);
+                        }
+                        return member;
+                    }();
                     if (!import_all
-                        && !package_member(*package, parts[2])) {
+                        && !package_member(*package, parts[2])
+                        && !package_member(*package, unquoted_member)) {
                         report(
                             "FSIM-ELAB-PKG-003",
                             "VHDL package '"
@@ -24168,9 +24257,18 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
     const bool integer_array_formal = formal_type
         && formal_domain == frontend::ValueDomain::Integer
         && formal_type->vhdl_array;
+    // REAL values have no integral signedness.
+    const bool real_actual = actual_info.systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::Real
+        || actual_info.systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::Realtime
+        || (actual_hir_subtype
+            && compiled_vhdl_real_subtype(*child_interface_specialization,
+                *actual_hir_subtype,
+                actual_hir_scope.value_or(expression->vhdl->scope)));
     if (formal_width > 1U && actual_info.width > 1U
         && formal_signed != actual_info.is_signed
-        && !integer_array_formal) {
+        && !integer_array_formal && !real_actual) {
         report(
             "FSIM-ELAB-BIND-021",
             "signedness mismatch on '" + child_path
@@ -24218,7 +24316,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             incompatible_alias = true;
         }
     }
-    bool array_direction_mismatch { };
+    bool array_shape_mismatch { };
     const auto formal_subtype
         = compiled_vhdl_link_subtype(
             *child_interface_specialization,
@@ -24235,15 +24333,17 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             = semantic::CompiledDesignResolver {
                   *child_interface_specialization
               }
-                  .vhdl_array_shapes_match(formal_subtype, formal_declaration.scope, *actual_hir_subtype, actual_hir_scope.value_or(expression->vhdl->scope));
+                  // Association converts by length; bounds and direction may differ (IEEE
+                  // 1076-2008 6.5.7.1 and 14.3.5).
+                  .vhdl_array_lengths_match(formal_subtype, formal_declaration.scope, *actual_hir_subtype, actual_hir_scope.value_or(expression->vhdl->scope));
         if (array_shapes_match && !*array_shapes_match) {
             report(
                 "FSIM-ELAB-BIND-031",
-                "array shape mismatch on '"
+                "array length mismatch on '"
                     + child_path + "."
                     + formal_declaration.name + "'",
                 connection_source);
-            array_direction_mismatch = true;
+            array_shape_mismatch = true;
             incompatible_alias = true;
         }
     }
@@ -24256,7 +24356,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         ? actual_hir_type->vhdl_array
         : actual_info.vhdl_array;
     if (!array_shapes_match
-        && !array_direction_mismatch
+        && !array_shape_mismatch
         && formal_array && actual_array
         && formal_array->dimensions.size()
             != actual_array->dimensions.size()) {
@@ -24265,69 +24365,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             "array rank mismatch on '" + child_path + "."
                 + formal_declaration.name + "'",
             connection_source);
-        array_direction_mismatch = true;
-        incompatible_alias = true;
-    } else if (!array_shapes_match
-        && !array_direction_mismatch
-        && formal_array && actual_array) {
-        for (std::size_t dimension { };
-            dimension < formal_array->dimensions.size();
-            ++dimension) {
-            const auto& formal_dimension
-                = formal_array->dimensions[dimension];
-            const auto& actual_dimension
-                = actual_array->dimensions[dimension];
-            if (formal_dimension.range
-                && actual_dimension.range
-                && formal_dimension.range->descending
-                    != actual_dimension.range->descending) {
-                report(
-                    "FSIM-ELAB-BIND-031",
-                    "array direction mismatch on '"
-                        + child_path + "."
-                        + formal_declaration.name + "'",
-                    connection_source);
-                array_direction_mismatch = true;
-                incompatible_alias = true;
-                break;
-            }
-        }
-    }
-    auto formal_range = formal_type
-        ? formal_type->packed_range
-        : std::nullopt;
-    if (!formal_range
-        && !formal_declaration.subtype
-            ->constraints.empty()) {
-        const auto& constraint
-            = formal_declaration.subtype
-                  ->constraints.front();
-        const auto left = constraint.left_expression
-            ? child_interface_specialization
-                  ->evaluate_integral_expression(
-                      *constraint.left_expression)
-            : constraint.left;
-        const auto right = constraint.right_expression
-            ? child_interface_specialization
-                  ->evaluate_integral_expression(
-                      *constraint.right_expression)
-            : constraint.right;
-        if (left && right) {
-            formal_range = frontend::PackedRange {
-                *left, *right, constraint.descending
-            };
-        }
-    }
-    if (!array_shapes_match
-        && !array_direction_mismatch && formal_range
-        && actual_info.packed_range
-        && formal_range->descending
-            != actual_info.packed_range->descending) {
-        report(
-            "FSIM-ELAB-BIND-031",
-            "array direction mismatch on '" + child_path
-                + "." + formal_declaration.name + "'",
-            connection_source);
+        array_shape_mismatch = true;
         incompatible_alias = true;
     }
     if (incompatible_alias) {
@@ -24757,17 +24795,15 @@ HierarchyBuilder::prepare_compiled_vhdl_systemverilog_parameters(
             && association.expression) {
             const auto formal = compiled_->find_declaration(
                 association.formal);
-            const auto formal_string = formal
-                && formal->systemverilog != nullptr
-                && compiled_systemverilog_string_declaration(
-                    *formal->systemverilog);
             const auto actual_string
                 = working_specialization
                       .evaluate_string_expression(
                           *association.expression)
                       .has_value();
-            if (formal_string != actual_string
-                && (formal_string || actual_string)) {
+            if (formal && formal->systemverilog != nullptr
+                && hierarchy_sv_parameters_detail::
+                    systemverilog_string_actual_incompatible(
+                        *formal->systemverilog, actual_string)) {
                 report(
                     "FSIM-ELAB-SVSTRING-002",
                     "mixed-language string and integral "
@@ -25365,7 +25401,7 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
         = semantic::CompiledDesignResolver {
               working_specialization
           }
-              .vhdl_array_shapes_match(candidate_subtype, candidate.scope, entity_subtype, entity_formal.scope);
+              .vhdl_array_lengths_match(candidate_subtype, candidate.scope, entity_subtype, entity_formal.scope);
     if (candidate_predefined || entity_predefined) {
         if (!same_predefined_type) {
             return false;
@@ -26514,9 +26550,10 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
         return false;
     }
     std::size_t concurrent_order { };
+    std::vector<semantic::ProcessId> deferred_processes;
     if (!lower_compiled_vhdl_unit_processes(
             *entity, architecture, *specialized, lowerer, path,
-            specialization, concurrent_order)) {
+            specialization, concurrent_order, &deferred_processes)) {
         return false;
     }
     if (!lower_compiled_vhdl_generated_processes(
@@ -27031,6 +27068,17 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             return false;
         }
     }
+    // Processes that name objects of the child instances through external
+    // names are lowered once those instances exist.
+    if (!deferred_processes.empty()) {
+        auto deferred_order = concurrent_order;
+        if (!lower_compiled_vhdl_unit_processes(
+                *entity, architecture, *specialized, lowerer, path,
+                design_.specializations_[specialization_index],
+                deferred_order, nullptr, &deferred_processes)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -27369,10 +27417,28 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
     Lowerer& lowerer,
     const std::string_view path,
     SpecializationInfo& specialization,
-    std::size_t& concurrent_order)
+    std::size_t& concurrent_order,
+    std::vector<semantic::ProcessId>* const deferred,
+    const std::vector<semantic::ProcessId>* const only)
 {
+    // Whether the architecture names objects of other instances through
+    // external names; its processes then wait for the child instances.
+    const bool uses_external_names = deferred != nullptr
+        && std::ranges::any_of(compiled_->vhdl_hir.expressions(),
+            [&](const semantic::vhdl::Expression& expression) {
+                if (expression.kind != semantic::vhdl::ExpressionKind::call
+                    || expression.text != "@vhdl-external") {
+                    return false;
+                }
+                const auto* scope = compiled_semantic_scope(
+                    *compiled_, expression.scope);
+                return scope != nullptr && scope->unit == architecture.id;
+            });
     const auto lower_concurrent_statements
         = [&](const semantic::vhdl::Unit& owner) {
+              if (only != nullptr) {
+                  return true;
+              }
               for (const auto statement_id : owner.concurrent_statements) {
                   const auto statement
                       = specialized.find_statement(statement_id);
@@ -27423,6 +27489,14 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
           };
     const auto lower_processes = [&](const semantic::vhdl::Unit& owner) {
         for (const auto process_id : owner.processes) {
+            if (only != nullptr
+                && std::ranges::find(*only, process_id) == only->end()) {
+                continue;
+            }
+            if (uses_external_names && owner.id == architecture.id) {
+                deferred->push_back(process_id);
+                continue;
+            }
             const auto process = specialized.find_process(process_id);
             const auto process_source = process && process->vhdl != nullptr
                 ? process->vhdl->source
@@ -29935,9 +30009,87 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             local_block_ports[index] = true;
         }
     }
+    // An unconstrained port without an associated signal takes its index
+    // range from its default (IEEE 1076-2008 6.5.6.3): a string literal or
+    // positional aggregate starts at the index subtype's left bound.
+    const auto constrain_from_driver = [&](const std::size_t port_index,
+                                           const semantic::ExpressionId driver)
+        -> bool {
+        auto& stored = block_port_declarations[port_index];
+        if (!stored.subtype || !stored.subtype->constraints.empty()) {
+            return true;
+        }
+        const auto effective = semantic::CompiledDesignResolver {
+            materialization.specialization
+        }.effective_vhdl_subtype(*stored.subtype, stored.scope);
+        const auto* definition = effective && effective->type_mark.target.valid()
+            ? semantic::vhdl_base_type_definition(
+                  materialization.specialization, effective->type_mark.target)
+            : nullptr;
+        using Builtin = semantic::vhdl::BuiltinTypeIdentity;
+        const auto builtin = effective ? effective->builtin_type
+                                       : Builtin::none;
+        const bool builtin_array = definition == nullptr
+            && semantic::vhdl::is_standard_array_builtin(builtin);
+        if (!builtin_array
+            && (definition == nullptr
+                || definition->form != semantic::vhdl::TypeForm::array
+                || definition->array_dimensions.size() != 1U
+                || !definition->array_dimensions.front().unconstrained)) {
+            return true;
+        }
+        const auto value = materialization.specialization.find_expression(
+            driver);
+        std::optional<std::size_t> count;
+        if (value && value->vhdl != nullptr
+            && value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            && value->vhdl->decoded_string) {
+            count = value->vhdl->decoded_string->size();
+        } else if (value && value->vhdl != nullptr
+            && value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && semantic::vhdl::positional_aggregate(*value->vhdl)) {
+            count = value->vhdl->associations.size();
+        }
+        // Predefined vectors are indexed by NATURAL, STRING by POSITIVE.
+        const auto index_name = builtin_array
+            ? std::string_view { builtin == Builtin::std_standard_string
+                      ? "positive" : "natural" }
+            : simple_name_of(
+                  definition->array_dimensions.front().index_subtype.spelling);
+        const std::optional<std::int64_t> left
+            = compiled_vhdl_name_equal(index_name, "positive")
+            ? std::optional<std::int64_t> { 1 }
+            : compiled_vhdl_name_equal(index_name, "natural")
+            ? std::optional<std::int64_t> { 0 }
+            : std::nullopt;
+        if (!count || *count == 0U || !left) {
+            return true;
+        }
+        semantic::vhdl::RangeConstraint range;
+        range.kind = semantic::vhdl::RangeKind::array_index;
+        range.left = *left;
+        range.right = *left + static_cast<std::int64_t>(*count) - 1;
+        range.descending = false;
+        range.source = stored.source;
+        auto replacement = stored;
+        replacement.subtype->constraints.push_back(std::move(range));
+        replacement.subtype->unconstrained = false;
+        if (!materialization.specialization.replace(replacement)) {
+            return true;
+        }
+        stored = std::move(replacement);
+        block_ports[port_index] = &stored;
+        return true;
+    };
     for (std::size_t index = block_ports.size(); index-- > 0U;) {
         if (!local_block_ports[index]) {
             continue;
+        }
+        if (block_input_drivers[index]) {
+            (void)constrain_from_driver(
+                index, block_input_drivers[index]->first);
         }
         const auto* port = block_ports[index];
         if (!materialize_compiled_vhdl_declaration(

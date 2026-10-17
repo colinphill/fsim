@@ -1746,6 +1746,22 @@ Lowerer::lower_hir_static_container_value(
                 destination, when_true->type
             };
         }
+        // A packed value or stream cast to an unpacked array or queue type
+        // unpacks into its elements (6.24.3).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-cast:")
+            && source.operands.size() == 1U
+            && !hir_static_container_expression_type(
+                source.operands.front())) {
+            if (const auto type
+                = hir_static_container_expression_type(expression_id)) {
+                if (const auto value = lower_hir_sv_bitstream_container(
+                        source.operands.front(), *type)) {
+                    return HirStaticContainerValue { *value, *type };
+                }
+                return std::nullopt;
+            }
+        }
         if (source.kind == semantic::sv::ExpressionKind::call) {
             if (const auto result = lower_hir_container_function_call(
                     expression_id)) {
@@ -1753,7 +1769,52 @@ Lowerer::lower_hir_static_container_value(
             }
         }
     }
+    // One element whose value is itself a container or an unpacked
+    // aggregate (`buffer[i]` of an array of unpacked structures).
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index) {
+        if (const auto element = hir_container_element_binding(
+                expression_id);
+            element && element->selected_type != nullptr
+            && runtime::simir::nested_element_container_type(
+                *element->selected_type)
+            && (!element->selected_type->fixed
+                || element->selected_type->dimensions.size() <= 1U)) {
+            const auto path = lower_hir_container_element_path(*element);
+            if (path) {
+                HirContainerElementBinding selected_element = *element;
+                selected_element.type = path->type;
+                selected_element.selected_type = path->type;
+                selected_element.indices = path->indices;
+                const auto index = lower_hir_container_element_index(
+                    selected_element);
+                const auto element_type
+                    = runtime::simir::nested_element_container_type(
+                        *path->type);
+                if (index && element_type) {
+                    if (!element->local) {
+                        record_container_object_dependency(element->object);
+                    }
+                    const auto value
+                        = allocate_container_register(*element_type);
+                    process_.operations.emplace_back(ContainerElementRead {
+                        value, path->container, *index,
+                        path->type->signed_indices, { } });
+                    return HirStaticContainerValue { value, *element_type };
+                }
+            }
+        }
+    }
     if (!selection || selection->base.type == nullptr) {
+        // An array or structure reached through unpacked arrays and
+        // structures (IEEE 1800-2017 7.2, 7.4).
+        if (expression && expression->systemverilog != nullptr) {
+            if (const auto path = hir_sv_value_path(expression_id);
+                path && !path->leaf) {
+                return lower_hir_sv_value_path_container_read(*path);
+            }
+        }
         return std::nullopt;
     }
     const auto base = selection->base.local
@@ -1807,6 +1868,31 @@ Lowerer::lower_hir_static_container_actual(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // A streaming concatenation, or a packed value or stream cast to this
+    // array type, unpacks into its elements (IEEE 1800-2017 6.24.3,
+    // 11.4.14.4).
+    if (expression && expression->systemverilog != nullptr) {
+        const auto& source = *expression->systemverilog;
+        const bool stream = source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == "@stream-left"
+                || source.text == "@stream-right");
+        const bool cast = source.kind == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-cast:")
+            && source.operands.size() == 1U
+            && !hir_static_container_expression_type(
+                source.operands.front());
+        if (stream) {
+            return lower_hir_sv_bitstream_container(
+                expression_id, formal_type);
+        }
+        if (cast
+            && (formal_type.element_kind == ContainerElementKind::Packed
+                || formal_type.element_kind == ContainerElementKind::Scalar)
+            && !formal_type.associative) {
+            return lower_hir_sv_bitstream_container(
+                source.operands.front(), formal_type);
+        }
+    }
     if (contextual_declaration.valid() && expression
         && expression->systemverilog != nullptr
         && expression->systemverilog->kind
@@ -1970,6 +2056,22 @@ bool Lowerer::lower_hir_container_copy_out(
     const auto target_expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(target)
         : std::nullopt;
+    // An array or structure reached through unpacked arrays and structures
+    // (IEEE 1800-2017 7.2, 7.4).
+    if (!nonblocking && target_expression
+        && target_expression->systemverilog != nullptr) {
+        if (const auto path = hir_sv_value_path(target);
+            path && !path->leaf && path->type == source_type
+            && (path->steps.size() > 1U
+                || runtime::simir::nested_element_container_type(
+                    *path->root.type))) {
+            if (path->root.read_only) {
+                return write(path->root, source);
+            }
+            return lower_hir_sv_value_path_write(
+                *path, std::nullopt, source);
+        }
+    }
     const bool selection_syntax = target_expression
         && target_expression->systemverilog != nullptr
         && (target_expression->systemverilog->kind
@@ -3594,6 +3696,55 @@ bool class_method_reads_enclosing_unit_parameter(
     return false;
 }
 
+// Whether a class method reads a value parameter of a class. One inlined
+// body serves every specialization of the class, so such a method runs on
+// the runtime class interpreter, which reads the receiver specialization's
+// value (IEEE 1800-2017 8.25).
+bool class_method_reads_class_value_parameter(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId method_declaration)
+{
+    const auto method_record
+        = specialization.find_declaration(method_declaration);
+    if (!method_record || method_record->systemverilog == nullptr
+        || !method_record->systemverilog->nested_scope) {
+        return false;
+    }
+    const auto& design = specialization.design();
+    std::vector<semantic::DeclarationId> parameters;
+    for (const auto& candidate : design.systemverilog_hir.classes()) {
+        for (const auto& parameter : candidate.parameters) {
+            if (!parameter.type_parameter) {
+                parameters.push_back(parameter.declaration);
+            }
+        }
+    }
+    if (parameters.empty()) {
+        return false;
+    }
+    const auto callable_scope = *method_record->systemverilog->nested_scope;
+    for (const auto& source_expression :
+        design.systemverilog_hir.expressions()) {
+        const auto expression_record
+            = specialization.find_expression(source_expression.id);
+        if (!expression_record
+            || expression_record->systemverilog == nullptr) {
+            continue;
+        }
+        const auto& expression = *expression_record->systemverilog;
+        if (expression.referenced_name
+            && expression.referenced_name->selected
+            && std::ranges::find(parameters,
+                   *expression.referenced_name->selected)
+                != parameters.end()
+            && semantic::scope_within(
+                design.semantics, expression.scope, callable_scope)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 bool Lowerer::lower_hir_constructor_prologue(
@@ -3871,8 +4022,11 @@ Lowerer::lower_hir_class_function_call(
         || type->container || type->string != profile.string_result) {
         return std::nullopt;
     }
-    if (receiver && class_method_reads_enclosing_unit_parameter(
-            *specialized_hir_unit_, profile.declaration)) {
+    if (receiver
+        && (class_method_reads_enclosing_unit_parameter(
+                *specialized_hir_unit_, profile.declaration)
+            || class_method_reads_class_value_parameter(
+                *specialized_hir_unit_, profile.declaration))) {
         return std::nullopt;
     }
     const auto overrides = profile.virtual_dispatch && receiver
@@ -5227,6 +5381,7 @@ Lowerer::lower_hir_class_callable_invocation(
             frame.directions.push_back(direction);
         }
         frame.allocated = true;
+        inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
@@ -5608,6 +5763,44 @@ std::optional<semantic::DeclarationId> Lowerer::hir_actual_declaration(
         : std::nullopt;
 }
 
+// A subprogram reads its enclosing activation's parameters by up-level
+// reference (IEEE 1076-2008 4.2, 12.1), so the bounds and integer values
+// that activation proved stay valid in the nested call. The callee's own
+// facts come first and win.
+void Lowerer::inherit_enclosing_hir_frame_facts(HirCallableFrame& frame) const
+{
+    const auto parent = hir_enclosing_callable_frame(frame);
+    if (!parent) {
+        return;
+    }
+    const auto& caller = hir_callable_frames_[*parent];
+    const auto own_formal = [&](const std::uint32_t key) {
+        return std::ranges::any_of(frame.formals, [&](const auto formal) {
+            return formal.value() == key;
+        }) || std::ranges::any_of(frame.profile_formals,
+            [&](const auto formal) { return formal.value() == key; });
+    };
+    for (const auto& binding : caller.static_integer_bindings) {
+        if (std::ranges::none_of(frame.static_integer_bindings,
+                [&](const auto& own) { return own.first == binding.first; })
+            && !own_formal(binding.first.value())) {
+            frame.static_integer_bindings.push_back(binding);
+        }
+    }
+    for (const auto& [key, ranges] : caller.vhdl_formal_ranges) {
+        if (!own_formal(key)) {
+            frame.vhdl_formal_ranges.try_emplace(key, ranges);
+        }
+    }
+    for (const auto& [key, constraints] :
+        caller.vhdl_formal_element_constraints) {
+        if (!own_formal(key)) {
+            frame.vhdl_formal_element_constraints.try_emplace(
+                key, constraints);
+        }
+    }
+}
+
 std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
     const semantic::ExpressionId expression_id) const
 {
@@ -5675,6 +5868,34 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
             return std::nullopt;
         }
         return actual->actual_expression;
+    }
+    // An unassociated composite generic takes its default expression as
+    // the actual (IEEE 1076-2008 6.5.6.2, 6.5.7.2).  Scalar defaults are
+    // already folded by the specialization.
+    if (actual == actuals.end()) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            *selected);
+        if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_constant
+            && declaration->vhdl->initializer
+            && *declaration->vhdl->initializer != expression_id
+            && declaration->vhdl->subtype) {
+            const auto subtype = hir_effective_vhdl_subtype(
+                *declaration->vhdl->subtype);
+            const auto target = subtype ? subtype->type_mark.target
+                                        : semantic::TypeId { };
+            const auto* definition = target.valid()
+                ? semantic::vhdl_base_type_definition(
+                      *specialized_hir_unit_, target)
+                : nullptr;
+            const bool composite = definition != nullptr
+                && (definition->form == semantic::vhdl::TypeForm::array
+                    || definition->form == semantic::vhdl::TypeForm::record);
+            if (composite) {
+                return declaration->vhdl->initializer;
+            }
+        }
     }
     return std::nullopt;
 }
@@ -11564,6 +11785,25 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
             return converted;
         }
     }
+    // A concatenation actual takes the formal's array type, which an
+    // aggregate operand then shares (IEEE 1076-2008 9.2.5).
+    const bool concatenation = expression && expression->vhdl != nullptr
+        && (expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::concatenation
+            || (expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::binary
+                && expression->vhdl->text == "&"));
+    if (concatenation) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            formal);
+        const auto subtype = declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype
+            ? hir_effective_vhdl_subtype(*declaration->vhdl->subtype)
+            : std::nullopt;
+        return lower_hir_expression(actual, expected_width,
+            frontend::SystemVerilogScalarKind::None,
+            subtype ? &*subtype : nullptr);
+    }
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind
             != semantic::vhdl::ExpressionKind::aggregate) {
@@ -13028,6 +13268,7 @@ Lowerer::lower_hir_function_call_value(
             frame.directions.push_back(direction);
         }
         frame.allocated = true;
+        inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
@@ -13515,6 +13756,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
         frame.invocation_registers.push_back(frame.arguments.back());
         frame.directions.push_back(frontend::PortDirection::Input);
         frame.allocated = true;
+        inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
@@ -14275,6 +14517,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             frame.directions.push_back(direction);
         }
         frame.allocated = true;
+        inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
@@ -15391,6 +15634,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             frame.directions.push_back(direction);
         }
         frame.allocated = true;
+        inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
     }
 
@@ -15759,6 +16003,14 @@ bool Lowerer::lower_hir_callable_return(
             && result_subtype
         ? lower_hir_vhdl_aggregate(
               *value, type.width, &*result_subtype)
+        : expression && expression->vhdl != nullptr && result_subtype
+            && (expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::concatenation
+                || (expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::binary
+                    && expression->vhdl->text == "&"))
+        ? lower_hir_expression(*value, type.width,
+              frontend::SystemVerilogScalarKind::None, &*result_subtype)
         : real_to_integral
         ? lower_hir_expression(
               *value, value_kind == ScalarKind::ShortReal ? 32U : 64U,

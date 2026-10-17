@@ -696,9 +696,9 @@ end architecture;
     const auto rejected_vhdl_conditional = compile_and_elaborate(
         invalid_vhdl_conditional.design,
         "vhdl:work.invalid_vhdl_conditional(rtl)");
-    assert(!rejected_vhdl_conditional.ok());
-    assert(has_diagnostic(
-        rejected_vhdl_conditional, "FSIM-ELAB-092"));
+    // VHDL-2008 applies the condition operator ?? to a std_logic condition
+    // (IEEE 1076-2008 9.2.9), so the conditional assignment is legal.
+    assert(rejected_vhdl_conditional.ok());
 
     const auto vhdl_2019_conditional = fsim::frontend::parse_text(
         "vhdl_2019_conditional.vhd",
@@ -1785,30 +1785,37 @@ endmodule
     assert(value("sized_range") == "1");
     assert(value("signed_sized_range") == "1");
 
-    const auto reject = [](
-                            const std::string_view path,
-                            const std::string_view source,
-                            const std::string_view code) {
-        const auto candidate = fsim::frontend::parse_text(
-            path, source,
-            fsim::frontend::Language::SystemVerilog2017);
-        assert(candidate.ok());
-        const auto rejected = compile_and_elaborate(
-            candidate.design, "sv:work.membership_negative");
-        assert(!rejected.ok());
-        assert(has_diagnostic(rejected, code));
-    };
-    reject(
+    // An unpacked array member matches any of its elements (IEEE 1800-2017
+    // 11.4.13).
+    const auto container = fsim::frontend::parse_text(
         "membership_container.sv",
         R"(
-module membership_negative;
+module membership_container;
   logic [7:0] value;
   logic [7:0] values[1:0];
   logic result;
-  initial result = value inside {values};
+  initial begin
+    values[0] = 8'h11;
+    values[1] = 8'h22;
+    value = 8'h22;
+    result = value inside {values};
+  end
 endmodule
 )",
-        "FSIM-ELAB-SVMEMBER-004");
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(container.ok());
+    const auto container_result = compile_and_elaborate(
+        container.design, "sv:work.membership_container");
+    assert(container_result.ok());
+    auto container_interpreter = container_result.design->create_interpreter();
+    assert(container_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto container_signal
+        = container_result.design->find_signal("membership_container.result");
+    assert(container_signal
+        && container_interpreter->signal_value(*container_signal)
+                .to_msb_string()
+            == "1");
 }
 
 void test_systemverilog_case_inside_lowering()

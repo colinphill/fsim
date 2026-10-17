@@ -589,7 +589,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-067` | error | An iterative-generate end label does not match its opening label. |
 | `FSIM-VHDL-PARSE-068` | error | Expected `;` after an iterative generate. |
 | `FSIM-VHDL-PARSE-069` | error | Expected `generate` after a VHDL case-generate selector. |
-| `FSIM-VHDL-PARSE-070` | error | A case-generate alternative has no stable label. |
+| `FSIM-VHDL-PARSE-070` | error | A case-generate alternative does not start with `when`. |
 | `FSIM-VHDL-PARSE-071` | error | A case-generate alternative label or `when` introducer is malformed. |
 | `FSIM-VHDL-PARSE-072` | error | A case-generate alternative has no choice. |
 | `FSIM-VHDL-PARSE-073` | error | Expected `=>` after case-generate choices. |
@@ -1161,7 +1161,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-185` | error | A `unique`, `unique0`, or `priority` case qualifier is used outside SystemVerilog. |
 | `FSIM-SV-PARSE-186` | error | A case statement contains more than one qualifier. |
 | `FSIM-SV-PARSE-187` | error | A `case matches` statement is used outside SystemVerilog. |
-| `FSIM-SV-PARSE-188` | error | Bounded `matches` pattern matching is combined with `casez` or `casex`. |
 | `FSIM-SV-PARSE-189` | error | A bounded `case matches` item contains a comma-separated pattern list instead of exactly one pattern. |
 | `FSIM-SV-PARSE-190` | error | A `case matches` dot pattern is missing its wildcard or variable name. |
 | `FSIM-SV-PARSE-191` | error | Expected the inner `{` before streaming-concatenation operands. |
@@ -2573,7 +2572,6 @@ scheduler.
 | `FSIM-ELAB-SVSAMPLE-001` | error | A sampled/global-clock value function has an invalid direct packed signal, explicit scalar clock, scalar gate, or governed positive constant history depth. |
 | `FSIM-ELAB-SVEXPR-001` | error | Streaming-concatenation HIR has the wrong language, arity, or operand shape. |
 | `FSIM-ELAB-SVEXPR-002` | error | A streaming-concatenation slice size is not a positive locally constant host-addressable value. |
-| `FSIM-ELAB-SVEXPR-003` | error | A streaming concatenation has a container, aggregate, or unknown-width operand instead of a fixed-width packed integral operand. |
 | `FSIM-ELAB-SVEXPR-004` | error | A runtime-base packed part-select width is not a positive locally constant value in the SimIR execution-width representation. |
 | `FSIM-ELAB-SVEXPR-006` | error | A runtime-base packed part-select target is used with an unsupported assignment kind. |
 | `FSIM-ELAB-SVEXPR-007` | error | Update-expression HIR is not a supported SystemVerilog prefix or postfix increment/decrement of one writable operand. |

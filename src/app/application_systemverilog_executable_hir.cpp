@@ -1693,6 +1693,8 @@ namespace {
                     child, child_scope, statement_origin));
             }
             output.case_match = case_match_kind(input.case_match_kind);
+            output.matches_wildcard
+                = case_match_kind(input.case_matches_wildcard);
             output.case_qualifier = case_qualifier(input.case_qualifier);
             for (const auto& alternative : input.case_alternatives) {
                 sv::CaseAlternative converted;

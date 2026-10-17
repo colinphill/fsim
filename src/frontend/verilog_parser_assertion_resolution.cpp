@@ -9,6 +9,86 @@
 
 namespace fsim::frontend {
 
+void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
+{
+    // Each generate block's assertions resolve with the module's assertion
+    // context plus the declarations of the block and its enclosing blocks;
+    // the resulting processes belong to the block (IEEE 1800-2017 27.3).
+    std::vector<const GenerateBody*> outer;
+    std::vector<std::string> genvars;
+    const auto resolve_body = [&](GenerateBody& body) {
+        if (body.systemverilog_concurrent_assertions.empty()) {
+            return;
+        }
+        DesignUnit scratch = unit;
+        scratch.processes.clear();
+        scratch.generate_regions.clear();
+        // The enclosing loop generate variables are constants here.
+        for (const auto& genvar : genvars) {
+            ParameterDeclaration parameter;
+            parameter.name = genvar;
+            scratch.parameters.push_back(std::move(parameter));
+        }
+        const auto add_body = [&](const GenerateBody& source) {
+            scratch.signals.insert(scratch.signals.end(),
+                source.signals.begin(), source.signals.end());
+            scratch.variables.insert(scratch.variables.end(),
+                source.variables.begin(), source.variables.end());
+            scratch.systemverilog_assertion_declarations.insert(
+                scratch.systemverilog_assertion_declarations.end(),
+                source.systemverilog_assertion_declarations.begin(),
+                source.systemverilog_assertion_declarations.end());
+        };
+        for (const auto* enclosing : outer) {
+            add_body(*enclosing);
+        }
+        add_body(body);
+        scratch.systemverilog_concurrent_assertions
+            = std::move(body.systemverilog_concurrent_assertions);
+        body.systemverilog_concurrent_assertions.clear();
+        const auto signal_count = scratch.signals.size();
+        const auto variable_count = scratch.variables.size();
+        resolve_assertion_references(scratch);
+        for (auto& process : scratch.processes) {
+            body.processes.push_back(std::move(process));
+        }
+        body.signals.insert(body.signals.end(),
+            std::make_move_iterator(scratch.signals.begin()
+                + static_cast<std::ptrdiff_t>(signal_count)),
+            std::make_move_iterator(scratch.signals.end()));
+        body.variables.insert(body.variables.end(),
+            std::make_move_iterator(scratch.variables.begin()
+                + static_cast<std::ptrdiff_t>(variable_count)),
+            std::make_move_iterator(scratch.variables.end()));
+    };
+    const auto resolve_region = [&](const auto& self,
+                                    GenerateRegion& region) -> void {
+        const bool loop = !region.variable.empty();
+        if (loop) {
+            genvars.push_back(region.variable);
+        }
+        const auto visit = [&](GenerateBody& body) {
+            resolve_body(body);
+            outer.push_back(&body);
+            for (auto& nested : body.generate_regions) {
+                self(self, nested);
+            }
+            outer.pop_back();
+        };
+        visit(region.then_body);
+        visit(region.else_body);
+        for (auto& alternative : region.alternatives) {
+            visit(alternative.body);
+        }
+        if (loop) {
+            genvars.pop_back();
+        }
+    };
+    for (auto& region : unit.generate_regions) {
+        resolve_region(resolve_region, region);
+    }
+}
+
 void VerilogParser::resolve_assertion_references(DesignUnit& unit)
 {
     const auto design_names = assertion_design_unit_names(unit);

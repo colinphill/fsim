@@ -791,6 +791,9 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     std::vector<Token> header;
     std::vector<Token> parameter_names;
     bool function { };
+    // `is <>`: the subprogram of that name and profile visible where the
+    // package is instantiated (IEEE 1076-2008 6.5.6.2).
+    bool box_default { };
   };
   std::vector<Generic> generics;
   for (auto interface : interfaces) {
@@ -902,6 +905,10 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
             interface.begin() + static_cast<std::ptrdiff_t>(position + 1U),
             interface.end());
       }
+      subprogram.box_default = position + 1U < interface.size()
+          && interface[position].kind == TokenKind::Identifier
+          && detail::ascii_lower(interface[position].text) == "is"
+          && interface[position + 1U].kind == TokenKind::Less;
       subprogram.signature = std::move(signature);
       generics.push_back(std::move(subprogram));
       continue;
@@ -1014,6 +1021,11 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     const auto& value = actuals[generic] ? *actuals[generic]
                                          : formal.default_value;
     if (value.empty()) {
+      // An unassociated box default leaves the template's calls to the
+      // operation visible for the generic types.
+      if (formal.signature && formal.box_default && !actuals[generic]) {
+        continue;
+      }
       return false;
     }
     if (formal.signature) {

@@ -905,6 +905,16 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
                   + parameter.name + "'");
           continue;
         }
+        // A type parameter of the class body is a type, not a property
+        // (IEEE 1800-2017 8.25).
+        if (parameter.kind == ParameterKind::Type && parameter.default_type) {
+          TypeAliasDeclaration alias;
+          alias.name = std::move(parameter.name);
+          alias.type = std::move(*parameter.default_type);
+          alias.span = parameter.span;
+          declaration.type_aliases.push_back(std::move(alias));
+          continue;
+        }
         SystemVerilogClassProperty property;
         property.declaration = VariableDeclaration{
             std::move(parameter.name),

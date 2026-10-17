@@ -146,6 +146,9 @@ struct ClassSpecialization {
     std::vector<std::string> source_dependencies;
     std::size_t instance_bit_width { };
     std::size_t static_property_count { };
+    // Every parameter takes its default: the specialization a bare class
+    // name denotes.
+    bool default_specialization { };
     SourceSpanId source;
     OriginId origin;
 };
@@ -153,6 +156,10 @@ struct ClassSpecialization {
 struct ClassSpecializationResult {
     std::vector<ClassSpecialization> specializations;
     std::vector<ClassSpecializationError> errors;
+    // The specialization a declaration's parameterized class type selects
+    // (`Box#(7) a;`), by declaration.
+    std::vector<std::pair<DeclarationId, std::string>>
+        declaration_specializations;
 
     [[nodiscard]] bool ok() const noexcept { return errors.empty(); }
     [[nodiscard]] const ClassSpecialization* find(

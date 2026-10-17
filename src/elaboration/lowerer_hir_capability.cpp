@@ -3809,6 +3809,15 @@ bool Lowerer::hir_expression_signed(
     if (hir_systemverilog_interface_handle(expression_id)) {
         return false;
     }
+    // 'DELAYED and 'LAST_VALUE of an INTEGER signal are signed.
+    if (const auto attribute = hir_vhdl_signal_attribute_profile(
+            expression_id, hir_process_scope_);
+        attribute
+        && (attribute->kind == HirVhdlSignalAttributeKind::delayed
+            || attribute->kind == HirVhdlSignalAttributeKind::last_value)) {
+        return attribute->signal < design_.signal_info_.size()
+            && design_.signal_info_[attribute->signal].is_signed;
+    }
     if (const auto selection
         = hir_vhdl_environment_call_path_member_selection(expression_id)) {
         return selection->member == 3U;
@@ -8101,10 +8110,14 @@ Lowerer::hir_static_container_expression_type(
             ? hir_container_element_binding(expression_id)
             : std::nullopt;
         element && element->selected_type != nullptr
-        && element->selected_type->element_kind
-            == ContainerElementKind::Container
-        && element->selected_type->element_types.size() == 1U) {
-        return element->selected_type->element_types.front();
+        && runtime::simir::nested_element_container_type(
+            *element->selected_type)
+        && (!element->selected_type->fixed
+            || element->selected_type->dimensions.size() <= 1U)) {
+        // An element of an array of unpacked aggregates is an aggregate
+        // value (7.2, 7.4).
+        return runtime::simir::nested_element_container_type(
+            *element->selected_type);
     }
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
@@ -8112,7 +8125,21 @@ Lowerer::hir_static_container_expression_type(
     if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
+    if (const auto path = hir_sv_value_path(expression_id);
+        path && !path->leaf) {
+        return path->type;
+    }
     const auto& source = *expression->systemverilog;
+    // A cast to an unpacked array or queue type (6.24.3).
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text.starts_with("@sv-cast:")
+        && source.operands.size() == 1U) {
+        if (const auto type
+            = hir_systemverilog_cast_type(expression_id, true);
+            type && type->container_form) {
+            return hir_systemverilog_container_type(*type);
+        }
+    }
     // A class container property is lowered through the same typed
     // container-value path as a named object.  The type-only query must
     // recognize the synthetic property expression too, so whole-array
@@ -12105,8 +12132,12 @@ Lowerer::hir_vhdl_signal_attribute_profile(
         signal_prefix = indexed->vhdl->operands.front();
     } else if (const auto selected = specialized_hir_unit_->find_expression(
                    signal_prefix);
+               // Signal attributes of an indexed or sliced name apply to
+               // its scalar subelements (IEEE 1076-2008 16.2.4).
                (source.text == "'driving"
-                   || source.text == "'driving_value")
+                   || source.text == "'driving_value"
+                   || source.text == "'last_event"
+                   || source.text == "'last_active")
                    && selected && selected->vhdl != nullptr
                    && (selected->vhdl->kind
                            == semantic::vhdl::ExpressionKind::index
@@ -13663,6 +13694,34 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
             }
         }
     }
+    // An element of a real array of another instance (`u.r[2]`).
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && source.operands.size() == 2U) {
+        auto root = source.operands.front();
+        for (std::size_t depth { }; depth < 16U; ++depth) {
+            const auto prefix = specialized_hir_unit_->find_expression(root);
+            if (!prefix || prefix->systemverilog == nullptr
+                || prefix->systemverilog->kind
+                    != semantic::sv::ExpressionKind::index
+                || prefix->systemverilog->operands.size() != 2U) {
+                break;
+            }
+            root = prefix->systemverilog->operands.front();
+        }
+        const auto base = specialized_hir_unit_->find_expression(root);
+        if (base && base->systemverilog != nullptr
+            && base->systemverilog->kind == semantic::sv::ExpressionKind::name
+            && base->systemverilog->text.find('.') != std::string::npos
+            && !hir_referenced_declaration(root)) {
+            if (const auto container = hir_container_object_binding(root);
+                container && container->type != nullptr
+                && container->type->element_kind
+                    == runtime::simir::ContainerElementKind::Scalar
+                && container->type->scalar_kind != Kind::None) {
+                return container->type->scalar_kind;
+            }
+        }
+    }
     // A real member of an unpacked structure (7.2).
     if (source.kind == semantic::sv::ExpressionKind::name
         || source.kind == semantic::sv::ExpressionKind::index
@@ -14325,16 +14384,38 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
     const auto domain = predefined_bit_vector ? frontend::ValueDomain::Bit2
         : element ? vhdl_value_domain(element->domain)
                   : frontend::ValueDomain::Unknown;
-    const auto lhs_width = hir_expression_width(
-        source.operands[0], hir_process_scope_);
-    const auto rhs_width = hir_expression_width(
-        source.operands[1], hir_process_scope_);
-    if (!element_width || *element_width == 0U || !lhs_width || !rhs_width
-        || *lhs_width % *element_width != 0U
-        || *rhs_width % *element_width != 0U
+    if (!element_width || *element_width == 0U
         || (domain != frontend::ValueDomain::Integer
             && domain != frontend::ValueDomain::Bit2
             && domain != frontend::ValueDomain::Boolean)) {
+        return std::nullopt;
+    }
+    // An aggregate operand takes the other operand's type, not its bounds;
+    // a named aggregate's length comes from its choices (9.3.3.3).
+    const auto operand_width = [&](const std::size_t index)
+        -> std::optional<std::size_t> {
+        const auto node = specialized_hir_unit_->find_expression(
+            source.operands[index]);
+        if (is_aggregate(source.operands[index]) && node
+            && node->vhdl != nullptr) {
+            if (semantic::vhdl::positional_aggregate(*node->vhdl)) {
+                return node->vhdl->associations.size() * *element_width;
+            }
+            if (const auto bounds
+                = hir_vhdl_named_aggregate_bounds(*node->vhdl)) {
+                return static_cast<std::size_t>(
+                    index_distance(bounds->left, bounds->right)
+                        + 1U) * *element_width;
+            }
+        }
+        return hir_expression_width(
+            source.operands[index], hir_process_scope_);
+    };
+    const auto lhs_width = operand_width(0U);
+    const auto rhs_width = operand_width(1U);
+    if (!lhs_width || !rhs_width
+        || *lhs_width % *element_width != 0U
+        || *rhs_width % *element_width != 0U) {
         return std::nullopt;
     }
     semantic::vhdl::SubtypeIndication base;
@@ -16617,7 +16698,7 @@ bool Lowerer::hir_systemverilog_type_four_state(
 
 std::optional<semantic::sv::TypeReference>
 Lowerer::hir_systemverilog_cast_type(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id, const bool containers) const
 {
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
@@ -16659,7 +16740,8 @@ Lowerer::hir_systemverilog_cast_type(
                    .value_or(type);
     }
     // An unpacked array of strings or reals is not a scalar cast target.
-    if (type.container_form || !type.unpacked_dimensions.empty()) {
+    if (!containers
+        && (type.container_form || !type.unpacked_dimensions.empty())) {
         return std::nullopt;
     }
     return type;
@@ -16728,8 +16810,19 @@ Lowerer::hir_systemverilog_cast_profile(
     }
     const auto operand = *value_operand;
     if (size_operand) {
+        // A constant query such as `$bits(v)` has no executable domain but
+        // folds to an integer (IEEE 1800-2017 6.24.1, 20.6.2).
+        const auto size_view = specialized_hir_unit_->find_expression(
+            *size_operand);
+        const bool size_query = size_view
+            && size_view->systemverilog != nullptr
+            && size_view->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && size_view->systemverilog->text.starts_with("$");
         if (!hir_systemverilog_size_cast_operand_is_integral(operand)
-            || !hir_systemverilog_size_cast_operand_is_integral(*size_operand)
+            || (!size_query
+                && !hir_systemverilog_size_cast_operand_is_integral(
+                    *size_operand))
             || !hir_systemverilog_constant_expression(
                 *specialized_hir_unit_, *size_operand)) {
             return std::nullopt;

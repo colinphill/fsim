@@ -568,6 +568,12 @@ void ContainerOperationLowerer::lower(
         "container.element-write");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerBitstream&)
+{
+    throw LlvmJitUnsupportedError(
+        "bit-stream container operations are interpreter-only");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerAggregateRead& value)
 {
     invoke(

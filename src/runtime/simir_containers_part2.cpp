@@ -165,50 +165,76 @@ void Interpreter::Impl::execute_container(
     ++process.pc;
 }
 
+namespace {
+
+// Follow an aggregate member path from one aggregate value.
+template <typename Value>
+[[nodiscard]] Value* follow_container_members(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    Value* selected,
+    const std::vector<std::uint32_t>& members)
+{
+    for (const auto member : members) {
+        if (!aggregate_box(selected->type)
+            || member >= selected->nested_elements.size()) {
+            container_error(
+                process, instruction, "aggregate member path is invalid");
+        }
+        selected = &selected->nested_elements[member];
+    }
+    return selected;
+}
+
+}  // namespace
+
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerElementRead& operation)
 {
     const auto& source = read_container_register(process, operation.source);
-    if (source.type.element_kind != ContainerElementKind::Container
-        || source.type.element_types.size() != 1) {
-        container_error(
-            process.id, process.pc,
-            "nested element read requires a nested container");
-    }
     const ContainerValue* selected = nullptr;
     std::optional<ContainerValue> missing;
-    if (source.type.associative) {
-        const auto key = associative_key(
-            process.id, process.pc, source.type,
-            get_register(process, operation.index));
-        const auto at = lower_key(source, key);
-        if (at < source.keys.size()
-            && key_equal(source.keys[at], key)) {
-            selected = &source.nested_elements[at];
-        } else {
-            missing = default_container_value(source.type.element_types.front());
-            selected = &*missing;
-        }
+    if (aggregate_box(source.type)) {
+        selected = &source;
     } else {
-        const auto at = source.type.fixed
-            ? fixed_offset(
-                  process.id, process.pc, source.type,
-                  get_register(process, operation.index))
-            : known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index),
-                  operation.signed_index, "container index");
-        if (at < source.nested_elements.size()) {
-            selected = &source.nested_elements[at];
-        } else {
-            // Reading through an invalid index yields the element type's
-            // default (IEEE 1800-2017 7.4.6).
-            missing = default_container_value(
-                source.type.element_types.front());
+        const auto element_type = nested_element_container_type(source.type);
+        if (!element_type) {
+            container_error(
+                process.id, process.pc,
+                "nested element read requires a nested container");
+        }
+        const auto& index = get_register(process, operation.index);
+        if (source.type.associative) {
+            const auto key = associative_key(
+                process.id, process.pc, source.type, index);
+            const auto at = lower_key(source, key);
+            if (at < source.keys.size()
+                && key_equal(source.keys[at], key)) {
+                selected = &source.nested_elements[at];
+            }
+        } else if (source.type.fixed
+                ? fixed_index_in_range(source.type, index)
+                : std::ranges::none_of(index.bval_words(),
+                      [](const auto word) { return word != 0U; })) {
+            const auto at = source.type.fixed
+                ? fixed_offset(process.id, process.pc, source.type, index)
+                : known_index(
+                      process.id, process.pc, index,
+                      operation.signed_index, "container index");
+            if (at < source.nested_elements.size()) {
+                selected = &source.nested_elements[at];
+            }
+        }
+        if (selected == nullptr) {
+            // A read through an unknown, absent or out-of-range index yields
+            // the element type's default (IEEE 1800-2017 7.4.6).
+            missing = default_container_value(*element_type);
             selected = &*missing;
         }
     }
+    selected = follow_container_members(
+        process.id, process.pc, selected, operation.members);
     auto& destination = get_container_register(process, operation.destination);
     if (destination.type != selected->type) {
         container_error(
@@ -225,48 +251,63 @@ void Interpreter::Impl::execute_container(
 {
     auto& target = get_container_register(process, operation.target);
     const auto& source = read_container_register(process, operation.source);
-    if (target.type.element_kind != ContainerElementKind::Container
-        || target.type.element_types.size() != 1
-        || target.type.element_types.front() != source.type) {
+    ContainerValue* selected = nullptr;
+    if (aggregate_box(target.type)) {
+        selected = &target;
+    } else {
+        const auto element_type = nested_element_container_type(target.type);
+        if (!element_type) {
+            container_error(
+                process.id, process.pc,
+                "nested element write profile mismatch");
+        }
+        const auto& index = get_register(process, operation.index);
+        std::size_t at { };
+        if (target.type.associative) {
+            const auto key = associative_key(
+                process.id, process.pc, target.type, index);
+            at = lower_key(target, key);
+            if (at >= target.keys.size()
+                || !key_equal(target.keys[at], key)) {
+                if (target.keys.size()
+                    >= maximum_container_elements(target.type)) {
+                    container_error(
+                        process.id, process.pc,
+                        "associative nested container exceeds its owning-storage budget");
+                }
+                target.keys.insert(iterator_at(target.keys, at), key);
+                target.nested_elements.insert(
+                    iterator_at(target.nested_elements, at),
+                    default_container_value(*element_type));
+            }
+        } else if (target.type.fixed
+            && !fixed_index_in_range(target.type, index)) {
+            // A write through an unknown or out-of-range index writes
+            // nothing (IEEE 1800-2017 7.4.6).
+            ++process.pc;
+            return;
+        } else {
+            at = target.type.fixed
+                ? fixed_offset(process.id, process.pc, target.type, index)
+                : known_index(
+                      process.id, process.pc, index,
+                      operation.signed_index, "container index");
+            if (at >= target.nested_elements.size()) {
+                container_error(
+                    process.id, process.pc,
+                    "nested container index is out of range");
+            }
+        }
+        selected = &target.nested_elements[at];
+    }
+    selected = follow_container_members(
+        process.id, process.pc, selected, operation.members);
+    if (selected->type != source.type) {
         container_error(
             process.id, process.pc,
             "nested element write profile mismatch");
     }
-    std::size_t at { };
-    if (target.type.associative) {
-        const auto key = associative_key(
-            process.id, process.pc, target.type,
-            get_register(process, operation.index));
-        at = lower_key(target, key);
-        if (at >= target.keys.size()
-            || !key_equal(target.keys[at], key)) {
-            if (target.keys.size()
-                >= maximum_container_elements(target.type)) {
-                container_error(
-                    process.id, process.pc,
-                    "associative nested container exceeds its owning-storage budget");
-            }
-            target.keys.insert(iterator_at(target.keys, at), key);
-            target.nested_elements.insert(
-                iterator_at(target.nested_elements, at),
-                default_container_value(target.type.element_types.front()));
-        }
-    } else {
-        at = target.type.fixed
-            ? fixed_offset(
-                  process.id, process.pc, target.type,
-                  get_register(process, operation.index))
-            : known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index),
-                  operation.signed_index, "container index");
-        if (at >= target.nested_elements.size()) {
-            container_error(
-                process.id, process.pc,
-                "nested container index is out of range");
-        }
-    }
-    target.nested_elements[at] = source;
+    *selected = source;
     ++process.pc;
 }
 
@@ -298,6 +339,16 @@ void Interpreter::Impl::execute_container(
                 aggregate_element_type(source.type));
             selected = &*missing;
         }
+    } else if (const auto& index = get_register(process, operation.index);
+               std::ranges::any_of(index.bval_words(),
+                   [](const auto word) { return word != 0U; })
+               || (source.type.fixed && !operation.linear_index
+                   && !fixed_index_in_range(source.type, index))) {
+        // An unknown or out-of-range index reads the element type's default
+        // (IEEE 1800-2017 7.4.6).
+        missing = default_container_value(
+            aggregate_element_type(source.type));
+        selected = &*missing;
     } else {
         const auto at = source.type.fixed
             ? operation.linear_index
@@ -964,6 +1015,236 @@ void Interpreter::Impl::execute_container(
         target.elements.pop_back();
     }
     get_register(process, operation.destination) = std::move(value);
+    ++process.pc;
+}
+
+} // namespace fsim::runtime::simir
+
+namespace fsim::runtime::simir {
+namespace {
+
+void append_container_bits(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    std::vector<PackedLogic4>& bits,
+    const ContainerValue& value)
+{
+    const auto append_packed = [&](const PackedLogic4& element,
+                                   const std::size_t width) {
+        for (std::size_t bit = width; bit-- > 0U;) {
+            PackedLogic4 single(1U, Logic4::zero);
+            single.set(0U, bit < element.width() ? element.get(bit)
+                                                 : Logic4::zero);
+            bits.push_back(std::move(single));
+        }
+    };
+    if (aggregate_box(value.type)) {
+        for (const auto& member : value.nested_elements) {
+            append_container_bits(process, instruction, bits, member);
+        }
+        return;
+    }
+    switch (value.type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+        for (const auto& element : value.elements) {
+            append_packed(element, value.type.element_width);
+        }
+        return;
+    case ContainerElementKind::String:
+        for (const auto& text : value.string_elements) {
+            for (const auto character : text) {
+                append_packed(PackedLogic4::from_aval_bval(8U,
+                    static_cast<unsigned char>(character), 0U), 8U);
+            }
+        }
+        return;
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+        for (const auto& element : value.nested_elements) {
+            append_container_bits(process, instruction, bits, element);
+        }
+        return;
+    }
+    container_error(process, instruction, "bit-stream source is invalid");
+}
+
+// Consume bits into a container value's elements; a variable-size
+// container takes as many elements as the remaining bits fill, the last
+// one padded with zero bits (IEEE 1800-2017 11.4.14.4).
+void consume_container_bits(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const std::vector<PackedLogic4>& bits,
+    std::size_t& position,
+    ContainerValue& value,
+    const bool variable_size)
+{
+    const auto take_packed = [&](const std::size_t width) {
+        PackedLogic4 element(width, Logic4::zero);
+        for (std::size_t bit = width; bit-- > 0U;) {
+            if (position < bits.size()) {
+                element.set(bit, bits[position].get(0U));
+                ++position;
+            }
+        }
+        return element;
+    };
+    if (aggregate_box(value.type)) {
+        for (auto& member : value.nested_elements) {
+            consume_container_bits(
+                process, instruction, bits, position, member, false);
+        }
+        return;
+    }
+    const bool resize = variable_size && !value.type.fixed
+        && !value.type.associative;
+    const auto element_bits = [&]() -> std::size_t {
+        switch (value.type.element_kind) {
+        case ContainerElementKind::Packed:
+        case ContainerElementKind::Scalar:
+            return value.type.element_width;
+        case ContainerElementKind::String:
+            return 8U;
+        default:
+            return 0U;
+        }
+    }();
+    if (resize) {
+        if (element_bits == 0U) {
+            container_error(process, instruction,
+                "a variable-size bit-stream target needs packed elements");
+        }
+        const auto remaining = bits.size() - std::min(position, bits.size());
+        const auto count = (remaining + element_bits - 1U) / element_bits;
+        resize_container_value(value, count);
+    }
+    switch (value.type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+        for (auto& element : value.elements) {
+            element = take_packed(value.type.element_width);
+        }
+        return;
+    case ContainerElementKind::String:
+        for (auto& text : value.string_elements) {
+            const auto code = take_packed(8U).known_unsigned_value();
+            text.assign(1U, static_cast<char>(code.value_or(0U)));
+        }
+        return;
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+        for (auto& element : value.nested_elements) {
+            consume_container_bits(
+                process, instruction, bits, position, element, false);
+        }
+        return;
+    }
+}
+
+} // namespace
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const ContainerBitstream& operation)
+{
+    auto& bits = get_container_register(process, operation.bits);
+    switch (operation.operation) {
+    case ContainerBitstreamOperation::clear:
+        bits.elements.clear();
+        break;
+    case ContainerBitstreamOperation::append_value: {
+        const auto& value = get_register(process, operation.value);
+        for (std::size_t bit = value.width(); bit-- > 0U;) {
+            PackedLogic4 single(1U, Logic4::zero);
+            single.set(0U, value.get(bit));
+            bits.elements.push_back(std::move(single));
+        }
+        break;
+    }
+    case ContainerBitstreamOperation::append_container: {
+        const auto source
+            = read_container_register(process, operation.container);
+        append_container_bits(
+            process.id, process.pc, bits.elements, source);
+        break;
+    }
+    case ContainerBitstreamOperation::reverse: {
+        // The slices are taken from the right end of the stream, the
+        // last one possibly short (IEEE 1800-2017 11.4.14.2).
+        const std::size_t slice = std::max<std::uint32_t>(operation.slice, 1U);
+        std::vector<PackedLogic4> reordered;
+        reordered.reserve(bits.elements.size());
+        auto end = bits.elements.size();
+        while (end > 0U) {
+            const auto begin = end > slice ? end - slice : 0U;
+            for (auto bit = begin; bit < end; ++bit) {
+                reordered.push_back(bits.elements[bit]);
+            }
+            end = begin;
+        }
+        bits.elements = std::move(reordered);
+        break;
+    }
+    case ContainerBitstreamOperation::to_value: {
+        auto& destination = get_register(process, operation.value);
+        const std::size_t width = operation.slice;
+        if (bits.elements.size() > width) {
+            container_error(process.id, process.pc,
+                "a bit stream of " + std::to_string(bits.elements.size())
+                    + " bits is wider than its " + std::to_string(width)
+                    + "-bit target");
+        }
+        PackedLogic4 result(width, Logic4::zero);
+        for (std::size_t index { }; index < bits.elements.size(); ++index) {
+            result.set(width - 1U - index, bits.elements[index].get(0U));
+        }
+        destination = std::move(result);
+        break;
+    }
+    case ContainerBitstreamOperation::take_value: {
+        auto& destination = get_register(process, operation.value);
+        const std::size_t width = operation.slice;
+        if (bits.elements.size() < width) {
+            container_error(process.id, process.pc,
+                "a bit stream is smaller than its targets");
+        }
+        PackedLogic4 result(width, Logic4::zero);
+        for (std::size_t index { }; index < width; ++index) {
+            result.set(width - 1U - index, bits.elements[index].get(0U));
+        }
+        bits.elements.erase(bits.elements.begin(),
+            bits.elements.begin() + static_cast<std::ptrdiff_t>(width));
+        destination = std::move(result);
+        break;
+    }
+    case ContainerBitstreamOperation::take_container: {
+        auto& destination
+            = get_container_register(process, operation.container);
+        std::size_t position { };
+        consume_container_bits(process.id, process.pc, bits.elements,
+            position, destination, true);
+        if (position > bits.elements.size()) {
+            container_error(process.id, process.pc,
+                "a bit stream is smaller than its targets");
+        }
+        bits.elements.erase(bits.elements.begin(),
+            bits.elements.begin() + static_cast<std::ptrdiff_t>(position));
+        break;
+    }
+    case ContainerBitstreamOperation::to_container: {
+        auto& destination
+            = get_container_register(process, operation.container);
+        std::size_t position { };
+        consume_container_bits(process.id, process.pc, bits.elements,
+            position, destination, true);
+        if (position < bits.elements.size()) {
+            container_error(process.id, process.pc,
+                "a bit stream is wider than its target");
+        }
+        break;
+    }
+    }
     ++process.pc;
 }
 

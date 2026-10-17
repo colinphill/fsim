@@ -73,6 +73,59 @@ PortActualResult normalize_port_actual(
             if (base && base->systemverilog != nullptr && index) {
                 actual_name = base->systemverilog->text + "["
                     + std::to_string(*index) + "]";
+                // `ifc[i].mp` selects a modport of the element; the
+                // instance is the element (IEEE 1800-2017 25.5.3).
+                const auto& text = actual_expression.text;
+                if (text.starts_with("index.")) {
+                    actual_name += text.substr(5U);
+                }
+            }
+        }
+        // A slice of an interface instance array, `ifc[3:2]` or
+        // `ifc[b +: w]`, connects its elements in order from the left
+        // (IEEE 1800-2017 23.3.3.5, 7.4.6).
+        if (actual_name.empty() && interface_formal
+            && actual_expression.kind == semantic::sv::ExpressionKind::slice
+            && (actual_expression.text == ":"
+                || actual_expression.text == "+:"
+                || actual_expression.text == "-:")
+            && actual_expression.operands.size() == 3U) {
+            const auto base = specialization.find_expression(
+                actual_expression.operands.front());
+            const auto left = specialization.evaluate_integral_expression(
+                actual_expression.operands[1]);
+            const auto right = specialization.evaluate_integral_expression(
+                actual_expression.operands[2]);
+            if (base && base->systemverilog != nullptr
+                && base->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name
+                && left && right) {
+                actual_name = base->systemverilog->text + "["
+                    + std::to_string(*left) + actual_expression.text
+                    + std::to_string(*right) + "]";
+            }
+        }
+        // `ifc[i].mp`: a modport of an interface array element (25.5).
+        constexpr auto select_prefix = std::string_view { "@sv-select:" };
+        if (actual_name.empty() && interface_formal
+            && actual_expression.kind == semantic::sv::ExpressionKind::call
+            && actual_expression.text.starts_with(select_prefix)
+            && actual_expression.operands.size() == 1U) {
+            const auto element = specialization.find_expression(
+                actual_expression.operands.front());
+            if (element && element->systemverilog != nullptr
+                && element->systemverilog->kind
+                    == semantic::sv::ExpressionKind::index
+                && element->systemverilog->operands.size() == 2U) {
+                const auto base = specialization.find_expression(
+                    element->systemverilog->operands.front());
+                const auto index = specialization.evaluate_integral_expression(
+                    element->systemverilog->operands.back());
+                if (base && base->systemverilog != nullptr && index) {
+                    actual_name = base->systemverilog->text + "["
+                        + std::to_string(*index) + "]."
+                        + actual_expression.text.substr(select_prefix.size());
+                }
             }
         }
         if (actual_name.empty() && interface_formal) {
@@ -844,7 +897,40 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 expand(formal_suffixes, *left, *right);
             }
             // The actual's elements: an interface instance array of this
-            // unit, or an interface port array forwarded into it.
+            // unit, or an interface port array forwarded into it, or a
+            // slice `a[l:r]` of either.
+            std::optional<std::pair<std::int64_t, std::int64_t>> slice;
+            // `+:`/`-:` count from a base in the array's own direction.
+            std::optional<std::pair<std::int64_t, std::int64_t>> part_select;
+            bool part_up { };
+            if (const auto open = actual_name.rfind('[');
+                open != std::string::npos && actual_name.ends_with(']')) {
+                const auto colon = actual_name.find(':', open);
+                if (colon != std::string::npos) {
+                    const bool indexed = colon > open + 1U
+                        && (actual_name[colon - 1U] == '+'
+                            || actual_name[colon - 1U] == '-');
+                    std::int64_t left { };
+                    std::int64_t right { };
+                    const auto* const text = actual_name.data();
+                    const auto parsed_left = std::from_chars(
+                        text + open + 1U,
+                        text + colon - (indexed ? 1U : 0U), left);
+                    const auto parsed_right = std::from_chars(
+                        text + colon + 1U, text + actual_name.size() - 1U,
+                        right);
+                    if (parsed_left.ec == std::errc { }
+                        && parsed_right.ec == std::errc { }) {
+                        if (indexed) {
+                            part_select = std::pair { left, right };
+                            part_up = actual_name[colon - 1U] == '+';
+                        } else {
+                            slice = std::pair { left, right };
+                        }
+                        actual_name.resize(open);
+                    }
+                }
+            }
             std::optional<std::vector<std::string>> actual_suffixes;
             std::string actual_base;
             for (const auto instance_id : unit.instances) {
@@ -893,6 +979,48 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     break;
                 }
                 lexical.resize(lexical.rfind('.'));
+            }
+            if (part_select && actual_suffixes
+                && !actual_suffixes->empty() && part_select->second > 0) {
+                // The declared direction: whether the leftmost element has
+                // the larger index.
+                std::int64_t first { };
+                std::int64_t last { };
+                const auto parse = [](const std::string& suffix,
+                                       std::int64_t& value) {
+                    const auto* const text = suffix.data();
+                    return suffix.size() > 2U
+                        && std::from_chars(text + suffix.rfind('[') + 1U,
+                               text + suffix.size() - 1U, value)
+                            .ec == std::errc { };
+                };
+                if (parse(actual_suffixes->front(), first)
+                    && parse(actual_suffixes->back(), last)) {
+                    const bool descending = first > last;
+                    const auto width = part_select->second;
+                    const auto low = part_up ? part_select->first
+                                             : part_select->first - width + 1;
+                    const auto high = low + width - 1;
+                    slice = descending ? std::pair { high, low }
+                                       : std::pair { low, high };
+                }
+            }
+            if (slice && actual_suffixes) {
+                std::vector<std::string> selected;
+                const auto step = slice->first <= slice->second ? 1 : -1;
+                for (auto index = slice->first;; index += step) {
+                    auto suffix = "[" + std::to_string(index) + "]";
+                    if (std::ranges::find(*actual_suffixes, suffix)
+                        == actual_suffixes->end()) {
+                        selected.clear();
+                        break;
+                    }
+                    selected.push_back(std::move(suffix));
+                    if (index == slice->second) {
+                        break;
+                    }
+                }
+                actual_suffixes = std::move(selected);
             }
             if (formal_suffixes.empty() || !actual_suffixes
                 || actual_base.empty()

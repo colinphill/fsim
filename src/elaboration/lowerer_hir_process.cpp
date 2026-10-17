@@ -2633,6 +2633,9 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
         description.name = "concurrent_" + std::to_string(order);
     }
     description.statements = statements;
+    // A postponed concurrent assertion or procedure call is a postponed
+    // process (IEEE 1076-2008 11.4, 11.5).
+    description.postponed = source->vhdl != nullptr && source->vhdl->postponed;
     description.kind = language == frontend::Language::Vhdl2008
         ? frontend::ProcessKind::VhdlProcess
         : frontend::ProcessKind::SystemVerilogAlwaysComb;

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "lowerer_internal.hpp"
@@ -2184,6 +2185,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     driver.static_sensitivity.push_back({
         source,
         attribute == "transaction" || attribute == "quiet"
+                || attribute == "quiet_settle"
             ? EdgeKind::transaction
             : EdgeKind::any,
     });
@@ -2202,6 +2204,20 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         driver.operations.emplace_back(UnaryNot { 1U, 0U });
         driver.operations.emplace_back(WriteUpdate {
             derived, 1U, SignalUpdateDomain::systemverilog_active });
+    } else if (attribute == "stable_settle" || attribute == "quiet_settle") {
+        // Toggles one delta cycle after each event (or transaction) on the
+        // source, when S'STABLE(0) or S'QUIET(0) returns to TRUE.
+        driver.register_count = 2U;
+        driver.register_value_kinds.assign(2U, ValueKind::logic4);
+        driver.operations.emplace_back(ReadSignal { 0U, derived });
+        driver.operations.emplace_back(UnaryNot { 1U, 0U });
+        driver.operations.emplace_back(WriteProjected {
+            derived,
+            1U,
+            0U,
+            0U,
+            ProjectedDelayMode::transport,
+        });
     } else if (attribute == "delayed") {
         driver.register_count = 1U;
         driver.register_value_kinds.push_back(
@@ -2590,10 +2606,17 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
     if (attribute->selection && !runtime_selection) {
         return std::nullopt;
     }
+    // 'DELAYED and 'LAST_VALUE have the signal's own type, so an INTEGER
+    // value keeps its sign (IEEE 1076-2008 16.2.4).
+    const bool signed_value = (attribute->kind
+                == HirVhdlSignalAttributeKind::delayed
+            || attribute->kind == HirVhdlSignalAttributeKind::last_value)
+        && attribute->signal < design_.signal_info_.size()
+        && design_.signal_info_[attribute->signal].is_signed;
     const auto resize = [&](const RegisterId value) {
         return register_width(value) == result_width
             ? value
-            : resize_register(value, result_width, false);
+            : resize_register(value, result_width, signed_value);
     };
     const auto select_signal_value = [&](const RegisterId value)
         -> std::optional<RegisterId> {
@@ -2708,6 +2731,17 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
                     ? "stable"
                     : "quiet");
         }
+        // S'STABLE(0) and S'QUIET(0) are FALSE only in the cycle of an
+        // event or transaction on S (IEEE 1076-2008 16.2.3); a settle
+        // signal makes a waiter sensitive to their return to TRUE.
+        if (!vhdl_implicit_signal_attribute(attribute->signal,
+                attribute->kind == HirVhdlSignalAttributeKind::stable
+                    ? "stable_settle"
+                    : "quiet_settle",
+                0U, span)) {
+            return std::nullopt;
+        }
+        record_implicit_signal_dependency(attribute->signal);
         const auto changed = allocate_register(
             1U, frontend::ValueDomain::Boolean);
         if (attribute->kind == HirVhdlSignalAttributeKind::stable) {
@@ -3414,12 +3448,122 @@ std::optional<std::size_t> Lowerer::hir_vhdl_positional_aggregate_width(
     return *count * *leaf_width;
 }
 
+std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_named_aggregate_bounds(
+    const semantic::vhdl::Expression& aggregate,
+    const std::function<std::optional<std::int64_t>(semantic::ExpressionId)>&
+        index) const
+{
+    if (specialized_hir_unit_ == nullptr
+        || aggregate.kind != semantic::vhdl::ExpressionKind::aggregate
+        || aggregate.associations.empty()) {
+        return std::nullopt;
+    }
+    const auto index_value = [&](const semantic::ExpressionId id) {
+        return index ? index(id) : hir_constant_integer(id);
+    };
+    std::optional<std::int64_t> low;
+    std::optional<std::int64_t> high;
+    const auto include = [&](const std::int64_t value) {
+        low = low ? std::min(*low, value) : value;
+        high = high ? std::max(*high, value) : value;
+    };
+    const auto include_choice = [&](const auto& self,
+                                    const semantic::ExpressionId choice_id)
+        -> bool {
+        const auto choice = specialized_hir_unit_->find_expression(choice_id);
+        if (!choice || choice->vhdl == nullptr) {
+            return false;
+        }
+        const auto& source = *choice->vhdl;
+        if (source.kind == semantic::vhdl::ExpressionKind::binary
+            && source.text == "|" && source.operands.size() == 2U) {
+            return self(self, source.operands[0])
+                && self(self, source.operands[1]);
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::name
+            && same_vhdl_identifier(source.text, "others")) {
+            return false;
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::binary
+            && (source.text == "to" || source.text == "downto")) {
+            if (source.operands.size() != 2U) {
+                return false;
+            }
+            const auto left = index_value(source.operands[0]);
+            const auto right = index_value(source.operands[1]);
+            if (!left || !right
+                || (source.text == "to" ? *left > *right : *left < *right)) {
+                return false;
+            }
+            include(*left);
+            include(*right);
+            return true;
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && (source.text == "'range" || source.text == "'reverse_range")) {
+            const auto attribute = hir_vhdl_attribute_profile(
+                choice_id, hir_process_scope_);
+            if (!attribute || !attribute->discrete_range) {
+                return false;
+            }
+            const auto& range = *attribute->discrete_range;
+            if (range.descending ? range.left < range.right
+                                 : range.left > range.right) {
+                return false;
+            }
+            include(range.left);
+            include(range.right);
+            return true;
+        }
+        const auto value = index_value(choice_id);
+        if (!value) {
+            return false;
+        }
+        include(*value);
+        return true;
+    };
+    for (const auto& association : aggregate.associations) {
+        const auto spelling = normalized_vhdl_choice(
+            association.choice_spelling);
+        if (association.choices.empty() || spelling == "others"
+            || spelling == "default" || spelling == "@key") {
+            return std::nullopt;
+        }
+        if (!spelling.empty() && spelling != "@array") {
+            // A simple-name choice: an enumeration literal or constant index.
+            if (association.choices.size() != 1U) {
+                return std::nullopt;
+            }
+            const auto choice = specialized_hir_unit_->find_expression(
+                association.choices.front());
+            if (!choice || choice->vhdl == nullptr
+                || choice->vhdl->kind != semantic::vhdl::ExpressionKind::name
+                || normalized_vhdl_choice(choice->vhdl->text) != spelling) {
+                return std::nullopt;
+            }
+        }
+        for (const auto choice : association.choices) {
+            if (!include_choice(include_choice, choice)) {
+                return std::nullopt;
+            }
+        }
+    }
+    if (!low || !high) {
+        return std::nullopt;
+    }
+    return HirPackedRange { *low, *high, false };
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width,
     const semantic::vhdl::SubtypeIndication* contextual_subtype,
     const std::size_t array_dimension_offset)
 {
+    // Only this aggregate is free of a direction-fixing context; its
+    // element aggregates are not (IEEE 1076-2008 9.3.3.3).
+    const bool free_direction = std::exchange(
+        hir_vhdl_aggregate_free_direction_, false);
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
@@ -4229,13 +4373,39 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         && definition->form == semantic::vhdl::TypeForm::record) {
         const auto& elements = definition->record_elements;
         std::vector<std::optional<RegisterId>> values(elements.size());
+        // A null array element has no bits (IEEE 1076-2008 5.3.2.1).
+        std::vector<bool> null_element(elements.size());
+        std::vector<bool> null_assigned(elements.size());
+        for (std::size_t index = 0U; index < elements.size(); ++index) {
+            const auto subtype = hir_effective_vhdl_subtype(
+                semantic::vhdl::constrained_element_subtype(
+                    *effective, elements[index].name,
+                    elements[index].subtype));
+            null_element[index] = subtype
+                && std::ranges::any_of(subtype->constraints,
+                    [](const semantic::vhdl::RangeConstraint& range) {
+                        return range.kind
+                                == semantic::vhdl::RangeKind::array_index
+                            && (range.null
+                                || (range.left && range.right
+                                    && (range.descending
+                                            ? *range.left < *range.right
+                                            : *range.left > *range.right)));
+                    });
+        }
         std::optional<std::size_t> others;
         std::size_t positional { };
         bool valid = !elements.empty();
         const auto assign = [&](const std::size_t index,
                                 const semantic::ExpressionId value,
                                 const frontend::SourceSpan& span) {
-            if (index >= elements.size() || values[index]) {
+            if (index < elements.size() && null_element[index]
+                && !null_assigned[index]) {
+                null_assigned[index] = true;
+                return;
+            }
+            if (index >= elements.size() || values[index]
+                || null_assigned[index]) {
                 report(
                     "FSIM-ELAB-VHAGG-004",
                     index < elements.size()
@@ -4315,13 +4485,13 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             const auto& association = aggregate.associations[*others];
             const auto span = hir_source_span(association.source);
             for (std::size_t index = 0U; index < values.size(); ++index) {
-                if (!values[index]) {
+                if (!values[index] && !null_assigned[index]) {
                     assign(index, association.value, span);
                 }
             }
         }
         for (std::size_t index = 0U; index < values.size(); ++index) {
-            if (!values[index]) {
+            if (!values[index] && !null_assigned[index]) {
                 report(
                     "FSIM-ELAB-VHAGG-005",
                     "record aggregate is missing element '"
@@ -4343,6 +4513,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             destination, std::move(initial) });
         auto remaining = aggregate_expected_width;
         for (std::size_t index = 0U; index < values.size(); ++index) {
+            if (null_element[index]) {
+                continue;
+            }
             const auto subtype = hir_effective_vhdl_subtype(
                 semantic::vhdl::constrained_element_subtype(
                     *effective, elements[index].name,
@@ -4989,8 +5162,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     };
     const auto aggregate_shape = [&] (
                                       const semantic::vhdl::Expression& value,
-                                      const semantic::vhdl::Name& index_subtype)
+                                      const semantic::vhdl::Name* index_subtype)
         -> std::optional<StaticAggregateShape> {
+        // Without a declared index subtype (a predefined array type), choices
+        // are plain integer constants.
+        const auto choice_value = [&](const semantic::ExpressionId id) {
+            return index_subtype != nullptr
+                ? typed_index_value(*index_subtype, id)
+                : hir_constant_integer(id);
+        };
         if (value.kind == semantic::vhdl::ExpressionKind::string_literal
             && value.decoded_string) {
             return StaticAggregateShape {
@@ -5007,75 +5187,16 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             return StaticAggregateShape {
                 value.associations.size(), std::nullopt, std::nullopt };
         }
-        const auto origin = index_origin(index_subtype);
-        if (!origin) {
+        if (index_subtype != nullptr && !index_origin(*index_subtype)) {
             return std::nullopt;
         }
-        std::optional<std::int64_t> low;
-        std::optional<std::int64_t> high;
-        const auto include = [&](const std::int64_t index) {
-            low = low ? std::min(*low, index) : index;
-            high = high ? std::max(*high, index) : index;
-        };
-        const auto include_choice = [&](const auto& self,
-                                        const semantic::ExpressionId choice_id)
-            -> bool {
-            const auto choice = specialized_hir_unit_->find_expression(
-                choice_id);
-            if (!choice || choice->vhdl == nullptr) {
-                return false;
-            }
-            const auto& source = *choice->vhdl;
-            if (source.kind == semantic::vhdl::ExpressionKind::binary
-                && source.text == "|" && source.operands.size() == 2U) {
-                return self(self, source.operands[0])
-                    && self(self, source.operands[1]);
-            }
-            if (source.kind == semantic::vhdl::ExpressionKind::name
-                && same_vhdl_identifier(source.text, "others")) {
-                return false;
-            }
-            if (source.kind == semantic::vhdl::ExpressionKind::binary
-                && (source.text == "to" || source.text == "downto")) {
-                return false;
-            }
-            const auto index = typed_index_value(index_subtype, choice_id);
-            if (!index) {
-                return false;
-            }
-            include(*index);
-            return true;
-        };
-        for (const auto& association : value.associations) {
-            const auto spelling = normalized_vhdl_choice(
-                association.choice_spelling);
-            if (association.choices.empty() || spelling == "others"
-                || spelling == "default" || spelling == "@key") {
-                return std::nullopt;
-            }
-            if (!spelling.empty() && spelling != "@array") {
-                if (association.choices.size() != 1U) {
-                    return std::nullopt;
-                }
-                const auto choice = specialized_hir_unit_->find_expression(
-                    association.choices.front());
-                if (!choice || choice->vhdl == nullptr
-                    || choice->vhdl->kind
-                        != semantic::vhdl::ExpressionKind::name
-                    || normalized_vhdl_choice(choice->vhdl->text)
-                        != spelling) {
-                    return std::nullopt;
-                }
-            }
-            for (const auto choice : association.choices) {
-                if (!include_choice(include_choice, choice)) {
-                    return std::nullopt;
-                }
-            }
-        }
-        if (!low || !high) {
+        const auto bounds = hir_vhdl_named_aggregate_bounds(
+            value, choice_value);
+        if (!bounds) {
             return std::nullopt;
         }
+        const std::optional<std::int64_t> low = bounds->left;
+        const std::optional<std::int64_t> high = bounds->right;
         const auto distance = index_distance(*low, *high);
         if (distance == std::numeric_limits<std::uint64_t>::max()
             || distance + 1U > std::numeric_limits<std::size_t>::max()) {
@@ -5135,7 +5256,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 && unconstrained_dimension
                 && selected_aggregate != nullptr) {
                 const auto shape = aggregate_shape(
-                    *selected_aggregate, declared_dimension.index_subtype);
+                    *selected_aggregate, &declared_dimension.index_subtype);
                 auto count = shape
                     ? std::optional { shape->count }
                     : std::nullopt;
@@ -5236,7 +5357,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 = definition->array_dimensions[dimension_index + 1U];
             const auto& inner_index_subtype = inner_dimension.index_subtype;
             const auto first_shape = aggregate_shape(
-                *first_expression->vhdl, inner_index_subtype);
+                *first_expression->vhdl, &inner_index_subtype);
             const bool uniform_rows = first_shape
                 && std::ranges::all_of(
                     selected_aggregate->associations,
@@ -5247,7 +5368,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                             return false;
                         }
                         const auto row_shape = aggregate_shape(
-                            *row->vhdl, inner_index_subtype);
+                            *row->vhdl, &inner_index_subtype);
                         return row_shape
                             && row_shape->count == first_shape->count
                             && row_shape->low == first_shape->low
@@ -5283,6 +5404,34 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                   current_dimension->index_subtype,
                   *resolved_range->right_expression)
             : hir_constant_integer(*resolved_range->right_expression);
+    }
+    // A named aggregate without `others` takes its bounds from its smallest
+    // and largest choices; only the direction comes from the context (IEEE
+    // 1076-2008 9.3.3.3).  Its elements then convert to the contextual
+    // subtype by position.
+    if (resolved_range && resolved_range->left && resolved_range->right
+        && dimensions.size() == 1U
+        && (current_dimension != nullptr || definition == nullptr)) {
+        if (const auto shape = aggregate_shape(
+                aggregate,
+                current_dimension != nullptr
+                    ? &current_dimension->index_subtype
+                    : nullptr);
+            shape && shape->low && shape->high) {
+            if (free_direction) {
+                const auto origin = current_dimension != nullptr
+                    ? index_origin(current_dimension->index_subtype)
+                    : std::nullopt;
+                resolved_range->descending = origin && origin->second;
+            }
+            resolved_range->left = resolved_range->descending
+                ? *shape->high : *shape->low;
+            resolved_range->right = resolved_range->descending
+                ? *shape->low : *shape->high;
+            resolved_range->left_expression.reset();
+            resolved_range->right_expression.reset();
+            resolved_range->null = false;
+        }
     }
     auto* range = resolved_range ? &*resolved_range : nullptr;
     std::optional<semantic::vhdl::SubtypeIndication> element;
@@ -5471,18 +5620,112 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         && aggregate_expected_width % *element_width == 0U) {
         const auto element_count
             = aggregate_expected_width / *element_width;
-        if (element_count != 0U
+        // A predefined array type without a context range: a named
+        // aggregate takes its choices' bounds, a positional one starts at
+        // the ascending index subtype's left bound (IEEE 1076-2008 9.3.3.3).
+        // Elements are packed by position either way.
+        const auto named = hir_vhdl_named_aggregate_bounds(aggregate);
+        if (named) {
+            semantic::vhdl::RangeConstraint materialized;
+            materialized.left = named->left;
+            materialized.right = named->right;
+            resolved_range = std::move(materialized);
+            range = &*resolved_range;
+        } else if (element_count != 0U
             && element_count - 1U
                 <= static_cast<std::size_t>(
                     std::numeric_limits<std::int64_t>::max())) {
             semantic::vhdl::RangeConstraint materialized;
-            materialized.left = static_cast<std::int64_t>(
+            materialized.left = 0;
+            materialized.right = static_cast<std::int64_t>(
                 element_count - 1U);
-            materialized.right = 0;
-            materialized.descending = true;
             resolved_range = std::move(materialized);
             range = &*resolved_range;
         }
+    }
+    // One association whose sole choice is a non-static range (allowed only
+    // alone, IEEE 1076-2008 9.3.3.3) gives every element its value; the
+    // length comes from the context.
+    const auto single_dynamic_range = [&] {
+        if (aggregate.associations.size() != 1U
+            || aggregate.associations.front().choices.size() != 1U
+            || dimensions.size() > 1U) {
+            return false;
+        }
+        const auto choice = specialized_hir_unit_->find_expression(
+            aggregate.associations.front().choices.front());
+        return choice && choice->vhdl != nullptr
+            && ((choice->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::binary
+                    && (choice->vhdl->text == "to"
+                        || choice->vhdl->text == "downto"))
+                || (choice->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && (choice->vhdl->text == "'range"
+                        || choice->vhdl->text == "'reverse_range")))
+            && !hir_vhdl_named_aggregate_bounds(aggregate);
+    };
+    if (element && element_width && *element_width != 0U
+        && aggregate_expected_width % *element_width == 0U
+        && single_dynamic_range()) {
+        const auto count = aggregate_expected_width / *element_width;
+        // The choice's length must equal the context's; it is known only
+        // when the choice is evaluated (IEEE 1076-2008 9.3.3.3, 14.7.3.4).
+        const auto choice = specialized_hir_unit_->find_expression(
+            aggregate.associations.front().choices.front());
+        if (choice && choice->vhdl != nullptr
+            && choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+            && choice->vhdl->operands.size() == 2U) {
+            const auto bound = [&](const semantic::ExpressionId id)
+                -> std::optional<RegisterId> {
+                const auto width = hir_expression_width(
+                    id, hir_process_scope_).value_or(32U);
+                const auto lowered = lower_hir_expression(id, width);
+                return lowered
+                    ? std::optional { resize_register(
+                          *lowered, 64U, hir_expression_signed(id)) }
+                    : std::nullopt;
+            };
+            const auto left = bound(choice->vhdl->operands[0]);
+            const auto right = bound(choice->vhdl->operands[1]);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            const bool descending = choice->vhdl->text == "downto";
+            const auto distance = allocate_register(
+                64U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::subtract_signed, distance,
+                descending ? *left : *right, descending ? *right : *left });
+            const auto expected = load_constant(
+                unsigned_value(count - 1U, 64U),
+                frontend::ValueDomain::Integer);
+            const auto matches = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::equal, matches, distance, expected });
+            process_.operations.emplace_back(Assert {
+                matches,
+                "VHDL aggregate length does not match its context",
+                AssertionSeverity::failure,
+                runtime_source_location(aggregate_span),
+            });
+        }
+        const auto value = lower_value(
+            aggregate.associations.front().value, *element,
+            "FSIM-" "ELAB-VHARRAYAGG", aggregate_span, 0U);
+        if (!value) {
+            return std::nullopt;
+        }
+        std::vector<RegisterId> operands(count, *value);
+        const auto destination = allocate_register(
+            aggregate_expected_width, aggregate_domain);
+        process_.operations.emplace_back(Concatenate {
+            destination,
+            std::move(operands),
+            static_cast<std::uint32_t>(aggregate_expected_width),
+        });
+        return destination;
     }
     if (!element || !element_width || range == nullptr || range->null
         || !range->left || !range->right
@@ -5495,31 +5738,6 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     }
     const auto element_count
         = aggregate_expected_width / *element_width;
-    // Without a constrained context, an aggregate with one range choice
-    // (`(v'range => '0')`) takes its bounds from that choice (IEEE
-    // 1076-2008 9.3.3.3).
-    if (index_distance(*range->left, *range->right) + 1U != element_count
-        && aggregate.associations.size() == 1U
-        && aggregate.associations.front().choices.size() == 1U) {
-        const auto choice = specialized_hir_unit_->find_expression(
-            aggregate.associations.front().choices.front());
-        if (choice && choice->vhdl != nullptr
-            && choice->vhdl->kind == semantic::vhdl::ExpressionKind::call
-            && (choice->vhdl->text == "'range"
-                || choice->vhdl->text == "'reverse_range")) {
-            if (const auto attribute = hir_vhdl_attribute_profile(
-                    aggregate.associations.front().choices.front(),
-                    hir_process_scope_);
-                attribute && attribute->discrete_range) {
-                semantic::vhdl::RangeConstraint chosen;
-                chosen.left = attribute->discrete_range->left;
-                chosen.right = attribute->discrete_range->right;
-                chosen.descending = attribute->discrete_range->descending;
-                resolved_range = std::move(chosen);
-                range = &*resolved_range;
-            }
-        }
-    }
     if (index_distance(*range->left, *range->right) + 1U
         != element_count) {
         report(
@@ -6807,6 +7025,105 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
         return std::nullopt;
     }
 
+    // OR of `compare(position)` over every position of an indexed container.
+    const auto any_container_element = [&](const ContainerRegisterId container,
+                                           const auto& compare) {
+        const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ContainerSize { size, container });
+        const auto position = load_constant(
+            unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+        const auto found = load_constant(
+            PackedLogic4(1U, Logic4::zero), frontend::ValueDomain::Logic4);
+        const auto loop = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_unsigned, more, position, size });
+        const auto exit_branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch { more, 0U, 0U });
+        const RegisterId equal = compare(position);
+        const auto either = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_or, either, found, equal });
+        process_.operations.emplace_back(CopyRegister { found, either });
+        const auto next = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_unsigned,
+            next,
+            position,
+            load_constant(
+                unsigned_value(1U, 32U), frontend::ValueDomain::Bit2),
+        });
+        process_.operations.emplace_back(CopyRegister { position, next });
+        process_.operations.emplace_back(Jump { loop });
+        process_.operations[exit_branch] = Branch {
+            more,
+            static_cast<InstructionIndex>(exit_branch + 1U),
+            static_cast<InstructionIndex>(process_.operations.size()),
+        };
+        return found;
+    };
+    const auto string_container = [&](const semantic::ExpressionId item) {
+        const auto type = hir_static_container_expression_type(item);
+        return type && !type->associative
+            && type->element_kind == ContainerElementKind::String;
+    };
+    if (hir_expression_is_string(source.operands.front(), hir_process_scope_)
+        || std::ranges::any_of(source.operands | std::views::drop(1),
+            [&](const semantic::ExpressionId item) {
+                return string_container(item)
+                    || hir_expression_is_string(item, hir_process_scope_);
+            })) {
+        // String membership compares with string equality (11.4.13).
+        const auto lhs = lower_hir_string_expression(source.operands.front());
+        if (!lhs) {
+            return std::nullopt;
+        }
+        auto any = load_constant(
+            PackedLogic4(1U, Logic4::zero), frontend::ValueDomain::Logic4);
+        for (const auto item : source.operands | std::views::drop(1)) {
+            RegisterId matched { };
+            if (string_container(item)) {
+                const auto container = lower_hir_static_container_value(item);
+                if (!container) {
+                    return std::nullopt;
+                }
+                matched = any_container_element(container->value,
+                    [&](const RegisterId position) {
+                        const auto element = allocate_string_register();
+                        process_.operations.emplace_back(ContainerStringRead {
+                            element, container->value, position, false, true,
+                            false, { } });
+                        const auto equal = allocate_register(
+                            1U, frontend::ValueDomain::Logic4);
+                        process_.operations.emplace_back(CompareStrings {
+                            equal, *lhs, element, false });
+                        return equal;
+                    });
+            } else {
+                const auto value = lower_hir_string_expression(item);
+                if (!value) {
+                    report(
+                        "FSIM-ELAB-SVMEMBER-004",
+                        "string inside members must be string expressions",
+                        source_span);
+                    return std::nullopt;
+                }
+                matched = allocate_register(1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(CompareStrings {
+                    matched, *lhs, *value, false });
+            }
+            const auto combined = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(LogicalBinary {
+                LogicalBinaryOperator::logical_or, combined, any, matched });
+            any = combined;
+        }
+        return any;
+    }
+
     const auto integral_operand = [&](
                                       const semantic::ExpressionId operand,
                                       const std::string_view diagnostic_code,
@@ -7173,6 +7490,42 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
                 });
                 matched = swapped;
             }
+        } else if (const auto container_type
+                   = hir_static_container_expression_type(item_id);
+            container_type && !container_type->associative
+            && (container_type->element_kind == ContainerElementKind::Packed
+                || container_type->element_kind
+                    == ContainerElementKind::Scalar)) {
+            // An unpacked array member matches any of its elements
+            // (IEEE 1800-2017 11.4.13).
+            const auto container = lower_hir_static_container_value(item_id);
+            if (!container) {
+                return std::nullopt;
+            }
+            matched = any_container_element(container->value,
+                [&](const RegisterId position) {
+                    const auto element = allocate_register(
+                        container->type.element_width,
+                        container->type.two_state
+                            ? frontend::ValueDomain::Bit2
+                            : frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(ContainerRead {
+                        element, container->value, position, false, true,
+                        false });
+                    const auto comparison = size_integral_comparison(*lhs,
+                        InsideIntegralOperand { element,
+                            container->type.element_width,
+                            container->type.signed_elements });
+                    const auto equal = allocate_register(
+                        1U, frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::wildcard_equal,
+                        equal,
+                        comparison.lhs,
+                        comparison.rhs,
+                    });
+                    return equal;
+                });
         } else {
             const auto value = integral_operand(
                 item_id,
@@ -8021,7 +8374,7 @@ Lowerer::lower_hir_container_element_path(
             child,
             result.container,
             *index,
-            result.type->signed_indices,
+            result.type->signed_indices, { },
         });
         result.parents.push_back(HirLoweredContainerElement::Parent {
             result.container, *index, result.type->signed_indices });
@@ -8041,7 +8394,7 @@ void Lowerer::publish_hir_container_element_path(
             parent->container,
             parent->index,
             child,
-            parent->signed_index,
+            parent->signed_index, { },
         });
         child = parent->container;
     }
@@ -8522,6 +8875,18 @@ Lowerer::hir_vhdl_concat_aggregate_context(
             result_context, result_context, aggregate->vhdl->scope)) {
         return std::nullopt;
     }
+    if (semantic::vhdl::positional_aggregate(*aggregate->vhdl)) {
+        // A positional operand starts at the left bound of the index
+        // subtype (IEEE 1076-2008 9.3.3.3); the aggregate lowering derives
+        // that from the unconstrained array type.
+        auto projected = result_context;
+        std::erase_if(projected.constraints, [](const auto& constraint) {
+            return constraint.kind == semantic::vhdl::RangeKind::array_index;
+        });
+        projected.executable_width = expected_width;
+        projected.unconstrained = true;
+        return projected;
+    }
 
     std::optional<std::int64_t> minimum;
     std::optional<std::int64_t> maximum;
@@ -8944,8 +9309,48 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             return last;
         }
     }
+    const auto diagnostics_before = diagnostics_.size();
     auto result = lower_hir_expression_untraced(
         expression_id, expected_width, scalar_context, vhdl_array_context);
+    // A packed element or member reached through unpacked arrays and
+    // structures (IEEE 1800-2017 7.2, 7.4).
+    if (!result && diagnostics_.size() == diagnostics_before
+        && language_ != frontend::Language::Vhdl2008) {
+        if (const auto path = hir_sv_value_path(expression_id);
+            path && path->leaf) {
+            if (auto value = lower_hir_sv_value_path_value(*path)) {
+                if (expected_width != 0U
+                    && register_width(*value) != expected_width) {
+                    value = resize_register(*value, expected_width,
+                        path->packed_tail ? path->packed_tail->signed_value
+                                          : path->type.signed_elements);
+                }
+                result = value;
+            }
+        }
+        // An unpacked structure value in a packed context (a class property
+        // holds one as its packed image).
+        if (!result) {
+            const auto container = hir_static_container_expression_type(
+                expression_id);
+            const auto leaves = container
+                ? hir_aggregate_packed_leaves(*container)
+                : std::nullopt;
+            std::size_t width { };
+            if (leaves) {
+                for (const auto& leaf : *leaves) {
+                    width += leaf.width;
+                }
+            }
+            if (leaves && (expected_width == 0U || expected_width == width)) {
+                if (const auto value = lower_hir_static_container_value(
+                        expression_id);
+                    value && value->type == *container) {
+                    result = pack_hir_aggregate_value(value->value, *container);
+                }
+            }
+        }
+    }
     if (!result && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr
         && specialized_hir_unit_ != nullptr) {
         const auto record = specialized_hir_unit_->find_expression(
@@ -9785,11 +10190,32 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
     const auto domain_parse = std::from_chars(
         domain_text.data(), domain_text.data() + domain_text.size(),
         declared_domain);
-    const auto signal = target && target->vhdl != nullptr
-            && target->vhdl->kind
-                == semantic::vhdl::ExpressionKind::name
-        ? design_.signal_by_name_.find(target->vhdl->text)
-        : design_.signal_by_name_.end();
+    // A relative pathname starts at the innermost enclosing design entity
+    // or block; an absolute one at the root, and each `^.` goes up one
+    // level (IEEE 1076-2008 8.7).
+    auto signal = design_.signal_by_name_.end();
+    if (target && target->vhdl != nullptr
+        && target->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+        std::string_view path { target->vhdl->text };
+        std::string base { hierarchy_ };
+        bool absolute = false;
+        if (path.starts_with('.')) {
+            absolute = true;
+            path.remove_prefix(1U);
+        }
+        while (path.starts_with("^.")) {
+            path.remove_prefix(2U);
+            const auto dot = base.rfind('.');
+            base.resize(dot == std::string::npos ? 0U : dot);
+        }
+        if (!absolute && !base.empty()) {
+            signal = design_.signal_by_name_.find(
+                base + "." + std::string { path });
+        }
+        if (signal == design_.signal_by_name_.end()) {
+            signal = design_.signal_by_name_.find(std::string { path });
+        }
+    }
     const auto profile_domain
         = static_cast<frontend::ValueDomain>(declared_domain);
     const bool valid_profile = !width_text.empty()
@@ -11809,9 +12235,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const auto source = expression_leaf(*expression);
     const auto concat_operand_context = [&](
                                             const semantic::ExpressionId operand_id,
-                                            const std::size_t operand_width)
+                                            const std::size_t operand_width,
+                                            const std::optional<semantic::ExpressionId> sibling_id
+                                            = std::nullopt)
         -> std::optional<semantic::vhdl::SubtypeIndication> {
-        if (vhdl_array_context == nullptr || expression->vhdl == nullptr) {
+        if (expression->vhdl == nullptr) {
             return std::nullopt;
         }
         const auto operand
@@ -11819,17 +12247,73 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (!operand || operand->vhdl == nullptr) {
             return std::nullopt;
         }
+        // Without a context type, an aggregate operand of `&` has the array
+        // type of the other operand (IEEE 1076-2008 9.2.5).
+        std::optional<semantic::vhdl::SubtypeIndication> sibling_context;
+        if (vhdl_array_context == nullptr && sibling_id
+            && operand->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+            if (const auto composite
+                = hir_vhdl_composite_root_type(*sibling_id);
+                composite
+                && composite->first == semantic::vhdl::TypeForm::array) {
+                sibling_context = hir_vhdl_expression_subtype(*sibling_id);
+            }
+        }
+        // Next to an element, the aggregate has the concatenation's type,
+        // an array of that element; a vector of the element's logic domain
+        // has the same packed layout when the type is not retained.
+        if (vhdl_array_context == nullptr && !sibling_context
+            && operand->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+            if (const auto composite
+                = hir_vhdl_composite_root_type(expression_id);
+                composite
+                && composite->first == semantic::vhdl::TypeForm::array) {
+                sibling_context = hir_vhdl_expression_subtype(expression_id);
+            } else if (sibling_id
+                && hir_expression_width(*sibling_id, hir_process_scope_)
+                    == std::optional<std::size_t> { 1U }) {
+                const auto domain = hir_expression_domain(
+                    *sibling_id, hir_process_scope_);
+                const std::string_view vector
+                    = domain == frontend::ValueDomain::Logic9
+                    ? "std_ulogic_vector"
+                    : domain == frontend::ValueDomain::Bit2 ? "bit_vector"
+                    : domain == frontend::ValueDomain::Boolean
+                    ? "boolean_vector"
+                    : "";
+                if (!vector.empty()) {
+                    semantic::vhdl::SubtypeIndication vector_subtype;
+                    vector_subtype.type_mark.spelling = std::string { vector };
+                    vector_subtype.domain
+                        = domain == frontend::ValueDomain::Logic9
+                        ? semantic::vhdl::ValueDomain::logic9
+                        : domain == frontend::ValueDomain::Bit2
+                        ? semantic::vhdl::ValueDomain::bit2
+                        : semantic::vhdl::ValueDomain::boolean;
+                    vector_subtype.unconstrained = true;
+                    sibling_context = std::move(vector_subtype);
+                }
+            }
+        }
+        const auto* array_context = vhdl_array_context != nullptr
+            ? vhdl_array_context
+            : sibling_context ? &*sibling_context : nullptr;
+        if (array_context == nullptr) {
+            return std::nullopt;
+        }
         if (operand->vhdl->kind
             == semantic::vhdl::ExpressionKind::aggregate) {
             return hir_vhdl_concat_aggregate_context(
-                *vhdl_array_context, operand_id, operand_width);
+                *array_context, operand_id, operand_width);
         }
         if (operand->vhdl->kind
                 == semantic::vhdl::ExpressionKind::concatenation
             || (operand->vhdl->kind
                     == semantic::vhdl::ExpressionKind::binary
                 && operand->vhdl->text == "&")) {
-            return *vhdl_array_context;
+            return *array_context;
         }
         return std::nullopt;
     };
@@ -12120,6 +12604,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (source.operands.size() < 2U) {
             return std::nullopt;
         }
+        // A stream of unpacked arrays, queues or structures fills its
+        // target's width (IEEE 1800-2017 11.4.14).
+        if (hir_sv_container_stream(expression_id)) {
+            if (expected_width == 0U) {
+                return std::nullopt;
+            }
+            return lower_hir_sv_bitstream_value(expression_id,
+                expected_width,
+                hir_expression_domain(expression_id, hir_process_scope_)
+                    .value_or(frontend::ValueDomain::Logic4));
+        }
         const auto slice_size = hir_constant_integer(
             source.operands.front());
         if (!slice_size || *slice_size <= 0
@@ -12193,6 +12688,20 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 static_cast<std::uint32_t>(width),
             });
             packed = reordered;
+        }
+        // A stream narrower than its target is left-aligned in it and
+        // filled with zero bits on the right (IEEE 1800-2017 11.4.14).
+        if (expected_width > width
+            && expected_width <= std::numeric_limits<std::uint32_t>::max()) {
+            const auto fill = load_constant(
+                unsigned_value(0U, expected_width - width), *domain);
+            const auto widened = allocate_register(expected_width, *domain);
+            process_.operations.emplace_back(Concatenate {
+                widened,
+                { packed, fill },
+                static_cast<std::uint32_t>(expected_width),
+            });
+            packed = widened;
         }
         return packed;
     } else if (source.binary && source.operands.size() == 2U
@@ -13192,9 +13701,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (allocation.class_identity.empty()) {
             return std::nullopt;
         }
+        // A target of a parameterized class type (`Box#(7) a = new;`)
+        // allocates that specialization; its constructor and initializers
+        // run on the runtime class interpreter, which reads the
+        // specialization's parameter values.
+        const auto specialization
+            = hir_allocation_target_specialization(allocation.class_identity);
         // The object is allocated with its property defaults and the
         // process runs the constructor chain itself when it can (8.7).
-        const auto* const lowerable = lower_class_functions_
+        const auto* const lowerable = lower_class_functions_ && !specialization
             ? hir_lowerable_constructor_class(allocation.class_identity)
             : nullptr;
         if (lowerable != nullptr) {
@@ -13271,7 +13786,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             64U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ClassAllocate {
             destination,
-            allocation.class_identity,
+            specialization.value_or(allocation.class_identity),
             allocation.class_identity,
             std::move(actuals),
             std::move(actual_kinds),
@@ -14952,7 +15467,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto range = call.text == "$urandom_range";
         const auto valid_arguments = range
             ? !call.operands.empty() && call.operands.size() <= 2U
-            : call.operands.empty();
+            : call.operands.empty()
+                || (call.text == "$urandom" && call.operands.size() == 1U);
         if (language_ == frontend::Language::Vhdl2008
             || (call.text != "$random"
                 && language_ != frontend::Language::SystemVerilog2017)
@@ -14962,10 +15478,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 range
                     ? "$urandom_range requires one maximum and an optional "
                       "minimum argument in SystemVerilog"
-                    : call.text + " requires no arguments"
-                        + (call.text == "$urandom"
-                                ? " in SystemVerilog"
-                                : ""),
+                    : call.text == "$urandom"
+                    ? "$urandom requires SystemVerilog and an optional seed"
+                    : call.text + " requires no arguments",
                 hir_source_span(call.source));
             return std::nullopt;
         }
@@ -14992,6 +15507,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || (call.operands.size() == 2U && !minimum)) {
                 return std::nullopt;
             }
+        }
+        if (!range && call.operands.size() == 1U) {
+            // $urandom(seed) seeds the calling process's generator before
+            // drawing, so the same seed yields the same value (18.13.1).
+            auto seed = lower_hir_expression(call.operands[0], 32U);
+            if (!seed) {
+                return std::nullopt;
+            }
+            if (register_width(*seed) != 32U) {
+                seed = resize_register(
+                    *seed, 32U, hir_expression_signed(call.operands[0]));
+            }
+            const auto process = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ProcessSelf { process });
+            process_.operations.emplace_back(ProcessSrandom {
+                process, *seed });
         }
         const auto destination = allocate_register(
             32U, frontend::ValueDomain::Bit2);
@@ -17309,12 +17841,35 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             });
             return constant;
         };
-        const auto matches = [&](const RegisterId value, const bool high) {
+        // A STD_ULOGIC level is To_X01 of the value: '1' or 'H' is high
+        // and '0' or 'L' low; 'U', 'X' and the rest are neither (IEEE
+        // 1076-2008 16.7).
+        const auto exact = [&](const RegisterId value,
+                               const std::string_view spelling) {
+            const auto constant = allocate_register(1U, binding->domain);
+            process_.operations.emplace_back(LoadConstant {
+                constant, PackedLogic4::from_logic9_msb_string(spelling) });
             const auto result = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
-                logic9 ? BinaryOperator::vhdl_match_equal
-                       : BinaryOperator::case_equal,
+                BinaryOperator::case_equal, result, value, constant });
+            return result;
+        };
+        const auto matches = [&](const RegisterId value, const bool high) {
+            if (logic9) {
+                const auto strong = exact(value, high ? "1" : "0");
+                const auto weak = exact(value, high ? "H" : "L");
+                const auto result = allocate_register(
+                    1U, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(LogicalBinary {
+                    LogicalBinaryOperator::logical_or, result, strong,
+                    weak });
+                return result;
+            }
+            const auto result = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal,
                 result,
                 value,
                 level(high),
@@ -17832,6 +18387,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         }
                         result = integral;
                     }
+                } else if (initializer_expression
+                    && initializer_expression->vhdl != nullptr
+                    && initializer_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::conditional
+                    && declaration_record
+                    && declaration_record->vhdl != nullptr
+                    && declaration_record->vhdl->subtype) {
+                    // Each alternative of a conditional initializer has the
+                    // object's subtype (IEEE 1076-2019 9.2.10).
+                    result = lower_hir_expression(*initializer, width,
+                        frontend::SystemVerilogScalarKind::None,
+                        &*declaration_record->vhdl->subtype);
                 } else {
                     result = lower_hir_expression(*initializer, width);
                 }
@@ -18251,8 +18818,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     > std::numeric_limits<std::size_t>::max() - width) {
                 return std::nullopt;
             }
+            std::optional<semantic::ExpressionId> array_sibling;
+            for (const auto other : source.operands) {
+                const auto composite = other != operand_id
+                    ? hir_vhdl_composite_root_type(other)
+                    : std::nullopt;
+                if (composite
+                    && composite->first == semantic::vhdl::TypeForm::array) {
+                    array_sibling = other;
+                    break;
+                }
+                if (other != operand_id && !array_sibling) {
+                    array_sibling = other;
+                }
+            }
             const auto operand_context = concat_operand_context(
-                operand_id, *operand_width);
+                operand_id, *operand_width, array_sibling);
             const auto operand = lower_hir_expression(
                 operand_id, *operand_width,
                 frontend::SystemVerilogScalarKind::None,
@@ -18350,9 +18931,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return std::nullopt;
         }
         const auto left_context = concat_operand_context(
-            source.operands[0], *left_width);
+            source.operands[0], *left_width, source.operands[1]);
         const auto right_context = concat_operand_context(
-            source.operands[1], *right_width);
+            source.operands[1], *right_width, source.operands[0]);
         auto left = lower_hir_expression(
             source.operands[0], *left_width,
             frontend::SystemVerilogScalarKind::None,
@@ -20027,6 +20608,45 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             }
                         }
                     }
+                    if (!is_array_aggregate && node && node->vhdl != nullptr
+                        && node->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::aggregate) {
+                        // A named aggregate without `others` has the length
+                        // of its choices (IEEE 1076-2008 9.3.3.3); its
+                        // element width is the sibling array's.
+                        const auto bounds
+                            = hir_vhdl_named_aggregate_bounds(*node->vhdl);
+                        const auto sibling_expression
+                            = source.operands[1U - index];
+                        const auto sibling_range = bounds
+                            ? hir_expression_range(
+                                  sibling_expression, hir_process_scope_)
+                            : std::nullopt;
+                        auto sibling_width = sibling_range
+                            ? hir_vhdl_expression_runtime_width(
+                                  sibling_expression, hir_process_scope_)
+                            : std::nullopt;
+                        if (sibling_range && !sibling_width) {
+                            sibling_width = hir_expression_width(
+                                sibling_expression, hir_process_scope_);
+                        }
+                        if (bounds && sibling_range && sibling_width) {
+                            const auto sibling_count = index_distance(
+                                sibling_range->left, sibling_range->right)
+                                + 1U;
+                            const auto count = index_distance(
+                                bounds->left, bounds->right) + 1U;
+                            if (sibling_count != 0U && count != 0U
+                                && *sibling_width % sibling_count == 0U
+                                && count <= std::numeric_limits<
+                                       std::uint32_t>::max()) {
+                                return static_cast<std::size_t>(count)
+                                    * (*sibling_width
+                                        / static_cast<std::size_t>(
+                                            sibling_count));
+                            }
+                        }
+                    }
                     if (!is_array_aggregate) {
                         // An unconstrained array function result does not
                         // have a statically known packed width here. Its
@@ -20675,6 +21295,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             aggregate_subtype->executable_width.reset();
                         }
                     }
+                    // A relational operand is not a context that fixes an
+                    // aggregate's bounds or direction; a named aggregate
+                    // takes them from its choices and its index subtype
+                    // (IEEE 1076-2008 9.3.3.3).
+                    if (!positional && aggregate_subtype
+                        && !hir_vhdl_expression_subtype(operand)) {
+                        std::erase_if(aggregate_subtype->constraints,
+                            [](const auto& constraint) {
+                                return constraint.kind
+                                    == semantic::vhdl::RangeKind::array_index;
+                            });
+                        aggregate_subtype->executable_width.reset();
+                    }
                     if (aggregate_subtype) {
                         auto aggregate_width = width;
                         if (positional
@@ -20697,8 +21330,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 aggregate_width = *self_width;
                             }
                         }
-                        return lower_hir_vhdl_aggregate(
+                        const auto saved_free_direction
+                            = hir_vhdl_aggregate_free_direction_;
+                        hir_vhdl_aggregate_free_direction_ = !positional;
+                        auto lowered = lower_hir_vhdl_aggregate(
                             operand, aggregate_width, &*aggregate_subtype);
+                        hir_vhdl_aggregate_free_direction_
+                            = saved_free_direction;
+                        return lowered;
                     }
                 }
                 hir_unsigned_extension_ = unsigned_extension;
@@ -22158,6 +22797,30 @@ StringRegisterId Lowerer::lower_hir_packed_characters_to_string(
     return destination;
 }
 
+std::optional<std::string> Lowerer::hir_allocation_target_specialization(
+    const std::string_view class_identity)
+{
+    if (!hir_allocation_target_ || specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    auto& cache = design_.class_declaration_specializations_;
+    if (!cache) {
+        cache.emplace();
+        auto result = semantic::sv::specialize_classes(
+            specialized_hir_unit_->design());
+        for (auto& [declaration, identity] :
+            result.declaration_specializations) {
+            cache->insert_or_assign(declaration.value(), std::move(identity));
+        }
+    }
+    const auto found = cache->find(hir_allocation_target_->value());
+    if (found == cache->end()
+        || !found->second.starts_with(std::string { class_identity } + "<")) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
 std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     const semantic::ExpressionId expression_id,
     const semantic::vhdl::SubtypeIndication* const contextual_subtype)
@@ -22208,13 +22871,43 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         if (!value) {
             return std::nullopt;
         }
+        // Each byte becomes a character; zero bytes are dropped (6.16).
         const auto text = allocate_string_register();
         process_.operations.emplace_back(
             LoadStringConstant { text, std::string { } });
-        auto format = hir_format_packed(
-            text, *value, *width, OutputFormat::string);
-        format.suppress_leading_zero = true;
-        process_.operations.emplace_back(format);
+        const auto character_width = load_constant(
+            unsigned_value(8U, 32U), frontend::ValueDomain::Bit2);
+        const auto zero = load_constant(
+            unsigned_value(0U, 8U), frontend::ValueDomain::Bit2);
+        const auto byte_count = (*width + 7U) / 8U;
+        const auto padded = byte_count * 8U == *width
+            ? *value
+            : resize_register(*value, byte_count * 8U, false);
+        for (std::size_t index = 0U; index < byte_count; ++index) {
+            const auto character = allocate_register(
+                8U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Extract { character, padded,
+                static_cast<std::uint32_t>((byte_count - index - 1U) * 8U),
+                8U });
+            const auto nonzero = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::not_equal, nonzero, character, zero });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch { nonzero, 0U, 0U });
+            StringMethod append;
+            append.operation = StringMethodOperator::format_packed;
+            append.source = text;
+            append.first = character;
+            append.second = character_width;
+            append.format = OutputFormat::character;
+            process_.operations.emplace_back(append);
+            process_.operations[branch] = Branch { nonzero,
+                static_cast<InstructionIndex>(branch + 1U),
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+        }
         return text;
     }
     // A class method that returns a string.
@@ -22467,9 +23160,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             = specialized_hir_unit_->evaluate_string_expression(
                 expression_id);
         if (constant && constant->size() <= maximum_string_bytes) {
+            auto text = *constant;
+            // A SystemVerilog string holds no "\0" characters (6.16).
+            if (expression->systemverilog != nullptr) {
+                std::erase(text, '\0');
+            }
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
-                destination, *constant });
+                destination, std::move(text) });
             return destination;
         }
     }
@@ -23365,9 +24063,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 hir_source_span(source.source));
             return std::nullopt;
         }
+        // A string holds no "\0" characters; a literal's are ignored
+        // (IEEE 1800-2017 6.16).
+        auto text = *source.decoded_string;
+        std::erase(text, '\0');
         const auto destination = allocate_string_register();
         process_.operations.emplace_back(LoadStringConstant {
-            destination, *source.decoded_string });
+            destination, std::move(text) });
         return destination;
     }
     if (source.kind == semantic::sv::ExpressionKind::call

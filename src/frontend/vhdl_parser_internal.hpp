@@ -91,6 +91,7 @@ private:
   // `lookahead`, or nothing when the file ends first.
   [[nodiscard]] std::optional<std::size_t>
   skip_vhdl_parentheses(std::size_t lookahead) const;
+  Expression parse_vhdl_aggregate_target(std::vector<Expression>& leaves);
   PackageInstantiation parse_vhdl_package_instantiation(const Token &start);
   // Parses a package instantiation in a declarative region from its
   // `package` token and appends it, rejecting a duplicate name.

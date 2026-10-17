@@ -621,6 +621,10 @@ ParseResult VerilogParser::run() {
             for (const auto& alias : unit.type_aliases) {
                 types.insert(alias.name);
             }
+            // `typedef virtual I v_t;` names an interface (25.9).
+            if (unit.kind == UnitKind::SystemVerilogInterface) {
+                types.insert(unit.name);
+            }
         }
         for (const auto& forward : compilation_unit_forward_types_) {
             if (!types.contains(forward.text)) {
@@ -635,6 +639,7 @@ ParseResult VerilogParser::run() {
             for (const auto& alias : compilation_unit_package_->type_aliases) {
                 const auto& named = alias.type.named_type;
                 if (!named.empty() && named.find_first_of(":.#") == std::string::npos
+                    && !alias.type.systemverilog_virtual_interface
                     && !types.contains(named)) {
                     diagnostics_.push_back({ DiagnosticSeverity::Error, "FSIM-SV-SEM-418",
                         "type '" + named + "' is not declared", alias.span, { } });

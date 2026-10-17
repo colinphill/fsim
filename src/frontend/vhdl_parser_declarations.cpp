@@ -2107,10 +2107,12 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
   // 1076-2008 11.7.1); otherwise it is a concurrent procedure call.
   const bool component_without_maps = label_token && at(TokenKind::Identifier)
       && at(TokenKind::Semicolon, 1)
-      && std::ranges::any_of(unit.vhdl_component_declarations,
-          [&](const VhdlComponentDeclaration& component) {
-            return component.name == vhdl_name(current().text);
-          });
+      && (std::ranges::any_of(unit.vhdl_component_declarations,
+              [&](const VhdlComponentDeclaration& component) {
+                return component.name == vhdl_name(current().text);
+              })
+          // A component declared in a package analyzed earlier.
+          || vhdl_component_names_.contains(vhdl_name(current().text)));
   if (label_token &&
       (keyword("entity", 0, true) || keyword("configuration", 0, true) ||
        keyword("component", 0, true) || component_without_maps ||

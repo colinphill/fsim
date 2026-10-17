@@ -3,6 +3,7 @@
 
 #include "elaborator_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 
 #include <algorithm>
@@ -72,6 +73,56 @@ std::optional<semantic::DeclarationId> specialized_type_parameter_formal(
 
 } // namespace
 
+std::optional<std::int64_t> sized_range_bound(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression)
+{
+    // A range bound is a self-determined constant expression: sized operands
+    // keep their widths (IEEE 1800-2017 11.6.1, 11.8.1). Only a bound with a
+    // sized literal operand can wrap, so the width-aware evaluator decides
+    // just those.
+    const auto sized_literal = [&](const auto& self,
+                                   const semantic::ExpressionId id,
+                                   const std::size_t depth) -> bool {
+        const auto view = specialization.find_expression(id);
+        if (!view || view->systemverilog == nullptr || depth > 64U) {
+            return false;
+        }
+        const auto& source = *view->systemverilog;
+        const auto quote = source.text.find('\'');
+        if ((source.kind == semantic::sv::ExpressionKind::integer_literal
+                || source.kind == semantic::sv::ExpressionKind::logic_literal)
+            && quote != std::string::npos && quote != 0U) {
+            return true;
+        }
+        return std::ranges::any_of(source.operands,
+            [&](const semantic::ExpressionId operand) {
+                return self(self, operand, depth + 1U);
+            });
+    };
+    const auto width_aware = [&]() -> std::optional<std::int64_t> {
+        std::string error;
+        if (const auto value = evaluate_hir_systemverilog_constant(
+                specialization, expression, error);
+            value && !value->unbounded) {
+            return value->integer_value();
+        }
+        return std::nullopt;
+    };
+    if (sized_literal(sized_literal, expression, 0U)) {
+        if (const auto integer = width_aware()) {
+            return integer;
+        }
+    }
+    if (const auto integer
+        = specialization.evaluate_integral_expression(expression)) {
+        return integer;
+    }
+    // An operand wider than 64 bits (a wide parameter) still folds to a
+    // bound when evaluated at its own width.
+    return width_aware();
+}
+
 std::optional<std::size_t> systemverilog_declaration_width(
     const semantic::SpecializedHirUnit& working_specialization,
     const semantic::sv::Declaration& declaration)
@@ -88,8 +139,7 @@ std::optional<std::size_t> systemverilog_declaration_width(
                               const std::optional<semantic::ExpressionId>
                                   expression) {
         return expression
-            ? working_specialization
-                  .evaluate_integral_expression(*expression)
+            ? sized_range_bound(working_specialization, *expression)
             : value;
     };
     std::unordered_set<std::uint32_t> visiting;
@@ -170,6 +220,7 @@ std::optional<std::size_t> systemverilog_declaration_width(
         width *= extent;
         return width;
     };
+    std::size_t tagged_member_depth { };
     const auto resolve = [&](const auto& self,
                              const semantic::sv::TypeReference& reference)
         -> std::optional<std::size_t> {
@@ -207,13 +258,20 @@ std::optional<std::size_t> systemverilog_declaration_width(
                     reference.target.target);
                 if (definition && definition->systemverilog != nullptr) {
                     const auto& record = *definition->systemverilog;
+                    // A tagged union is laid out as tag and payload; an
+                    // unpacked structure member of one shares that bit
+                    // layout (the representation is not observable,
+                    // IEEE 1800-2017 7.3.2).
                     const bool packed_aggregate
                         = record.form
                             == semantic::sv::TypeForm::packed_structure
                         || record.form
                             == semantic::sv::TypeForm::packed_union
                         || record.form
-                            == semantic::sv::TypeForm::tagged_union;
+                            == semantic::sv::TypeForm::tagged_union
+                        || (tagged_member_depth != 0U
+                            && record.form
+                                == semantic::sv::TypeForm::unpacked_structure);
                     if (packed_aggregate && !record.members.empty()) {
                         std::size_t aggregate_width { };
                         bool valid = true;
@@ -222,6 +280,10 @@ std::optional<std::size_t> systemverilog_declaration_width(
                                 == semantic::sv::TypeForm::packed_union
                             || record.form
                                 == semantic::sv::TypeForm::tagged_union;
+                        const bool tagged
+                            = record.form
+                            == semantic::sv::TypeForm::tagged_union;
+                        tagged_member_depth += tagged ? 1U : 0U;
                         for (const auto& member : record.members) {
                             const auto member_width
                                 = self(self, member.type);
@@ -241,6 +303,7 @@ std::optional<std::size_t> systemverilog_declaration_width(
                                 aggregate_width += *member_width;
                             }
                         }
+                        tagged_member_depth -= tagged ? 1U : 0U;
                         if (valid
                             && record.form
                                 == semantic::sv::TypeForm::tagged_union) {

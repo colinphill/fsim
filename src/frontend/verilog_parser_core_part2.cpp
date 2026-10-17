@@ -760,6 +760,21 @@ DesignUnit VerilogParser::parse_module(
     DesignUnit unit;
     unit.systemverilog_assertion_declarations
         = compilation_unit_checkers_;
+    // A checker may be instantiated before its declaration in the unit
+    // (IEEE 1800-2017 17.3): note every checker the body declares.
+    unit_checker_names_.clear();
+    for (auto index = index_; index + 1U < tokens_.size(); ++index) {
+        const auto& token = tokens_[index];
+        if (token.kind == TokenKind::Identifier
+            && (token.text == "endmodule" || token.text == "endinterface"
+                || token.text == "endprogram")) {
+            break;
+        }
+        if (token.kind == TokenKind::Identifier && token.text == "checker"
+            && tokens_[index + 1U].kind == TokenKind::Identifier) {
+            unit_checker_names_.insert(tokens_[index + 1U].text);
+        }
+    }
     if (pending_systemverilog_fsm_pragma_target_position_
             && *pending_systemverilog_fsm_pragma_target_position_ + 1U
                 == position()) {
@@ -1438,13 +1453,14 @@ DesignUnit VerilogParser::parse_module(
                 parse_selection_generate(previous()));
         } else if (
             instance_start()
-            && std::ranges::any_of(
-                unit.systemverilog_assertion_declarations,
-                [&](const SystemVerilogAssertionDeclaration& declaration) {
-                    return declaration.kind
-                            == SystemVerilogAssertionDeclarationKind::Checker
-                        && declaration.name == current().text;
-                })) {
+            && (unit_checker_names_.contains(current().text)
+                || std::ranges::any_of(
+                    unit.systemverilog_assertion_declarations,
+                    [&](const SystemVerilogAssertionDeclaration& declaration) {
+                        return declaration.kind
+                                == SystemVerilogAssertionDeclarationKind::Checker
+                            && declaration.name == current().text;
+                    }))) {
             module_has_non_time_item_ = true;
             auto instances = parse_checker_instances();
             for (auto& instance : instances) {
@@ -1694,6 +1710,7 @@ DesignUnit VerilogParser::parse_module(
     resolve_implicit_nets(unit);
     instantiate_checkers(unit);
     resolve_assertion_references(unit);
+    resolve_generate_assertion_references(unit);
     resolve_dpi_declarations(
         unit.systemverilog_dpi_declarations,
         unit.functions,

@@ -120,6 +120,12 @@ void resize_container_value(
     std::size_t size,
     const ContainerValue* initializer = nullptr);
 
+/// The value profile of one element of a container whose elements are
+/// themselves values: a nested container, or an unpacked aggregate held as
+/// a boxed aggregate value. Packed, scalar and string elements have none.
+[[nodiscard]] std::optional<ContainerType>
+nested_element_container_type(const ContainerType& type);
+
 /// Construct the language-defined initial value for a container type. Fixed
 /// unpacked arrays and aggregate members are materialized densely.
 [[nodiscard]] ContainerValue

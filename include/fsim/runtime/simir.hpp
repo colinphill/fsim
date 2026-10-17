@@ -503,18 +503,55 @@ struct ContainerStringWrite {
     std::vector<std::uint32_t> members;
 };
 
+/// Read one element whose value is a container or an unpacked aggregate,
+/// then follow `members` through nested aggregate values. A source that is
+/// itself an aggregate value has no elements; the index is ignored and the
+/// path starts at the source.
 struct ContainerElementRead {
     ContainerRegisterId destination { };
     ContainerRegisterId source { };
     RegisterId index { };
     bool signed_index { true };
+    std::vector<std::uint32_t> members;
 };
 
+/// Replace the value selected as for ContainerElementRead.
 struct ContainerElementWrite {
     ContainerRegisterId target { };
     RegisterId index { };
     ContainerRegisterId source { };
     bool signed_index { true };
+    std::vector<std::uint32_t> members;
+};
+
+/// Bit-stream packing and unpacking through a queue of single-bit elements
+/// (IEEE 1800-2017 6.24.3, 11.4.14): clear the queue; append a packed value
+/// or every bit of a container, most significant bit and leftmost element
+/// first; reverse it in `slice`-bit slices taken from its right end; or
+/// extract it into a packed value (left-justified, zero-filled) or into a
+/// container's elements (resizing a dynamic array or queue). The take
+/// forms unpack into one of several stream targets in turn: they remove the
+/// bits they use from the front, and a fixed-size target needs all of them.
+enum class ContainerBitstreamOperation : std::uint8_t {
+    clear,
+    append_value,
+    append_container,
+    reverse,
+    to_value,
+    to_container,
+    take_value,
+    take_container,
+};
+struct ContainerBitstream {
+    ContainerBitstreamOperation operation {
+        ContainerBitstreamOperation::clear
+    };
+    ContainerRegisterId bits { };
+    RegisterId value { };
+    ContainerRegisterId container { };
+    // The slice size of `reverse`, or the value width of to_value and
+    // take_value.
+    std::uint32_t slice { };
 };
 
 struct ContainerAggregateRead {

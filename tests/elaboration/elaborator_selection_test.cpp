@@ -440,13 +440,13 @@ endmodule
             .to_msb_string()
         == "0000000100100011010001010110011110001001101010111100110111101111"
            "1111111011011100101110101001100001110110010101000011001000010000");
-    const auto rejected_container_stream =
+    // A queue operand streams its elements into the packed target
+    // (IEEE 1800-2017 11.4.14.1).
+    const auto container_stream =
         compile_and_elaborate(
             invalid_streams.design,
             "sv:work.container_stream");
-    assert(!rejected_container_stream.ok());
-    assert(has_diagnostic(
-        rejected_container_stream, "FSIM-ELAB-SVEXPR-003"));
+    assert(container_stream.ok());
 
     const auto narrow_dynamic_select =
         fsim::frontend::parse_text(

@@ -273,6 +273,20 @@ namespace {
                 annotation.after_percentages.push_back(*selected.selected);
                 continue;
             }
+            // An empty `()` delay leaves that transition's delay unchanged
+            // (IEEE 1497-2001 5.4.1).
+            if (node->exact_value->kind == frontend::SdfExactValueKind::Empty
+                && annotation.target_kind == SdfTimingTargetKind::SpecifyPath
+                && !descends_from_kind(ir, *node, SdfConstructKind::Retain)) {
+                const auto position = annotation.after_ticks.size();
+                const auto& before = annotation.before_ticks;
+                if (before.size() == 1U || position < before.size()) {
+                    annotation.after_ticks.push_back(
+                        before.size() == 1U ? before.front()
+                                            : before[position]);
+                    continue;
+                }
+            }
             const auto selected
                 = select_sdf_delay(*node->exact_value, *ir.timescale(), policy,
                     node->span);

@@ -2350,6 +2350,15 @@ struct Scheduler::Impl {
                 phase = SchedulerPhase::re_update;
             }
         }
+        // Postponed work runs once, after the last delta cycle of its time
+        // slot (IEEE 1800-2017 4.4.2.9, IEEE 1076-2008 14.7.5.3).
+        if (phase == SchedulerPhase::postponed) {
+            push_entry(current && time == current->time
+                    ? current->end_of_slot
+                    : future_slot_at(time).end_of_slot,
+                std::move(entry));
+            return;
+        }
         const auto index = phase_index(phase);
         if (index >= phase_count) {
             throw std::invalid_argument("invalid scheduler phase");
@@ -2372,6 +2381,12 @@ struct Scheduler::Impl {
         const SchedulerPhase phase,
         Entry entry)
     {
+        if (phase == SchedulerPhase::postponed) {
+            push_entry(current ? current->end_of_slot
+                               : future_slot_at(now).end_of_slot,
+                std::move(entry));
+            return;
+        }
         const auto index = phase_index(phase);
         if (index >= phase_count) {
             throw std::invalid_argument("invalid scheduler phase");

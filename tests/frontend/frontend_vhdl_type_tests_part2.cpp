@@ -960,8 +960,10 @@ end architecture;
               external_expression.kind == ExpressionKind::Call &&
               external_expression.text == "@vhdl-external" &&
               external_expression.operands.size() == 2 &&
+              // An absolute pathname keeps its leading `.` (IEEE
+              // 1076-2008 8.7).
               external_expression.operands[0].text ==
-                  "conditional_assignment.a" &&
+                  ".conditional_assignment.a" &&
               external_expression.operands[1].call_result_width == 4 &&
               external_expression.operands[1].call_result_domain ==
                   ValueDomain::Logic9,

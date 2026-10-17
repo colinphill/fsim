@@ -320,22 +320,54 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
             }
           }
         }
-        if (probe.distribution_count() == 0U) {
-          for (const auto index : wide) {
-            if (!referenced.contains(index)) {
-              direct_indices.insert(index);
-              continue;
-            }
-            // A constrained wide property draws from the values its hard
-            // clauses' comparisons with constants allow.
-            const auto id = probe_variables.at(object.property_names[index]);
-            auto stream = heap.random_stream(handle,
-                request.call_identity + "::" + object.property_names[index]
-                    + "::$bounded");
-            bounded.emplace(index, systemverilog_constraint_variable_domain(
-                probe.clauses(), id, probe.variables()[id].profile,
-                [&stream] { return stream.next_u64(); }));
+        for (const auto& [id, owner] : owners) {
+          if (!probe.distribution_entries(id).empty()) {
+            referenced.insert(owner);
           }
+        }
+        for (const auto index : wide) {
+          if (!referenced.contains(index)) {
+            direct_indices.insert(index);
+            continue;
+          }
+          // A constrained wide property draws from the values its hard
+          // clauses' comparisons with constants allow, and from the ranges
+          // of its distributions (IEEE 1800-2017 18.5.4).
+          const auto id = probe_variables.at(object.property_names[index]);
+          auto stream = heap.random_stream(handle,
+              request.call_identity + "::" + object.property_names[index]
+                  + "::$bounded");
+          const auto& profile = probe.variables()[id].profile;
+          auto domain = systemverilog_constraint_variable_domain(
+              probe.clauses(), id, profile,
+              [&stream] { return stream.next_u64(); });
+          for (const auto& entry : probe.distribution_entries(id)) {
+            const auto low = entry.low.low_word().aval;
+            const auto high = entry.high.low_word().aval;
+            const auto span = high - low;
+            if (span < 64U) {
+              for (std::uint64_t value = 0U; value <= span; ++value) {
+                domain.push_back(PackedLogic4::from_aval_bval(
+                    profile.width, low + value, 0U));
+              }
+            } else {
+              domain.push_back(entry.low);
+              domain.push_back(entry.high);
+              for (std::size_t sample = 0U; sample < 32U; ++sample) {
+                domain.push_back(PackedLogic4::from_aval_bval(profile.width,
+                    low + stream.next_u64() % (span + 1U), 0U));
+              }
+            }
+          }
+          // The domain lists each value once.
+          std::vector<PackedLogic4> unique;
+          unique.reserve(domain.size());
+          for (auto& value : domain) {
+            if (std::ranges::find(unique, value) == unique.end()) {
+              unique.push_back(std::move(value));
+            }
+          }
+          bounded.emplace(index, std::move(unique));
         }
       } catch (const std::exception&) {
         direct_indices.clear();

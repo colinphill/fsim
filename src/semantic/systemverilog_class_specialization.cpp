@@ -136,8 +136,45 @@ public:
                 defaults.push_back(declaration);
             }
         }
+        std::vector<std::string> default_identities;
         for (const auto* declaration : defaults) {
-            (void)specialize(*declaration, { }, declaration->source);
+            if (auto identity
+                = specialize(*declaration, { }, declaration->source)) {
+                default_identities.push_back(std::move(*identity));
+            }
+        }
+
+        // An object or handle declared with a parameterized class type
+        // (`Box#(7) a;`) uses that specialization (IEEE 1800-2017 8.25). A
+        // type whose actuals are not constant here (a parameter of an
+        // enclosing specialization) is left to its owner's specialization.
+        for (const auto& declaration : hir_.declarations()) {
+            if (!declaration.type || declaration.type->class_identity.empty()
+                || declaration.type->interface_parameter_actuals.empty()) {
+                continue;
+            }
+            const auto found = classes_.find(declaration.type->class_identity);
+            if (found == classes_.end()
+                || found->second->parameters.empty()) {
+                continue;
+            }
+            std::vector<ResolvedActual> actuals;
+            for (const auto& actual :
+                declaration.type->interface_parameter_actuals) {
+                actuals.push_back({ actual.formal, actual.kind,
+                    actual.expression, actual.type, std::nullopt,
+                    std::nullopt, actual.source });
+            }
+            const auto errors = result_.errors.size();
+            const auto specializations = result_.specializations.size();
+            if (auto identity
+                = specialize(*found->second, actuals, declaration.source)) {
+                result_.declaration_specializations.emplace_back(
+                    declaration.id, std::move(*identity));
+            } else {
+                result_.errors.resize(errors);
+                result_.specializations.resize(specializations);
+            }
         }
 
         std::vector<ClassSpecializationRequest> ordered {
@@ -167,6 +204,11 @@ public:
             (void)specialize(*found->second, actuals, request.source);
         }
 
+        for (auto& specialization : result_.specializations) {
+            specialization.default_specialization = std::ranges::find(
+                default_identities, specialization.specialization_identity)
+                != default_identities.end();
+        }
         std::ranges::sort(result_.specializations,
             {}, &ClassSpecialization::specialization_identity);
         std::ranges::sort(result_.errors, [](const auto& left,

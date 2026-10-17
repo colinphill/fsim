@@ -1067,6 +1067,12 @@ void VerilogParser::parse_virtual_interface_declaration(
   for (;;) {
     const auto name =
         expect_identifier("virtual-interface variable name");
+    // An unpacked array of virtual interfaces (IEEE 1800-2017 25.9, 7.4).
+    auto variable_type = common_type;
+    (void)parse_optional_container_dimension(variable_type);
+    if (variable_type.systemverilog_container) {
+      unit_container_names_.insert(name.text);
+    }
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       // An interface instance initializer is resolved, and an unknown one
@@ -1099,7 +1105,7 @@ void VerilogParser::parse_virtual_interface_declaration(
     } else {
       unit.variables.push_back(VariableDeclaration{
           name.text,
-          common_type,
+          std::move(variable_type),
           std::move(initializer),
           span_from(start, previous())});
     }
@@ -1360,6 +1366,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     parse_optional_signedness(spec.type);
     parse_optional_range(spec.type);
   }
+  declare_member_enumerations(unit);
   if (spec.type.named_type.empty()
       && !spec.type.systemverilog_enumeration_values.empty()) {
     for (std::size_t index = 0;

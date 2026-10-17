@@ -697,6 +697,10 @@ private:
         SpecializationInfo& specialization,
         std::size_t& concurrent_order);
 
+    // With `deferred`, architecture processes that use external names are
+    // collected there instead of lowered; with `only`, just those processes
+    // are lowered (after the child instances exist, IEEE 1076-2008 8.7,
+    // 14.5).
     bool lower_compiled_vhdl_unit_processes(
         const semantic::vhdl::Unit& entity,
         const semantic::vhdl::Unit& architecture,
@@ -704,7 +708,9 @@ private:
         Lowerer& lowerer,
         std::string_view path,
         SpecializationInfo& specialization,
-        std::size_t& concurrent_order);
+        std::size_t& concurrent_order,
+        std::vector<semantic::ProcessId>* deferred = nullptr,
+        const std::vector<semantic::ProcessId>* only = nullptr);
 
     bool validate_compiled_vhdl_generated_callables(
         std::span<const semantic::DeclarationId> declarations,
@@ -1754,6 +1760,9 @@ private:
         systemverilog_read_only_interface_member_paths_;
 
     std::vector<std::string> stack_;
+    // Bounds hierarchy depth so a recursion whose actuals change on every
+    // level still stops.
+    static constexpr std::size_t maximum_instance_depth = 1024;
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;

@@ -575,6 +575,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, FormatContainerPattern>
             || std::is_same_v<T, ContainerElementRead>
             || std::is_same_v<T, ContainerElementWrite>
+            || std::is_same_v<T, ContainerBitstream>
             || std::is_same_v<T, ContainerAggregateRead>
             || std::is_same_v<T, ContainerAggregateWrite>
             || std::is_same_v<T, CopyContainerAggregateElement>
@@ -733,8 +734,14 @@ bool ownership_matches_operations(const ProcessProgramView& process,
             }
         }
     }
+    // Flow-insensitive mode (set below) proves one agreed width per register
+    // for the whole program, so a suspension boundary forgets nothing; there
+    // a reset would also keep the fixpoint from converging.
+    bool flow_insensitive = false;
     const auto forget_widths = [&] {
-        std::ranges::fill(widths, 0U);
+        if (!flow_insensitive) {
+            std::ranges::fill(widths, 0U);
+        }
         return true;
     };
     const auto width_of = [&](RegisterId id) {
@@ -742,7 +749,6 @@ bool ownership_matches_operations(const ProcessProgramView& process,
     };
     // In flow-insensitive mode a register's width is the single width every
     // definition agrees on; a conflicting definition makes it unknown.
-    bool flow_insensitive = false;
     bool widths_changed = false;
     std::vector<std::uint8_t> width_conflicts;
     const auto assign_width = [&](RegisterId id, std::uint64_t width) {

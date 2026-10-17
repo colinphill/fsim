@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <charconv>
 #include <limits>
 
 namespace fsim::app {
@@ -711,6 +712,68 @@ Simulation::Impl::Impl(
             const semantic::DeclarationId declaration) {
             application_detail::SystemVerilogClassHirExecution::
                 OwnerParameterBinding result;
+            // A class value parameter read inside a method takes the value
+            // of the object's specialization or of the base specialization
+            // that declares it (IEEE 1800-2017 8.25).
+            if (class_heap.contains(handle)) {
+                std::string identity
+                    = class_heap.object(handle).specialization_identity;
+                for (std::size_t depth = 0U;
+                    depth < 64U && !identity.empty(); ++depth) {
+                    const auto found = std::ranges::find(
+                        built.compiled_systemverilog_class_specializations,
+                        identity,
+                        &semantic::sv::ClassSpecialization::
+                            specialization_identity);
+                    if (found
+                        == built.compiled_systemverilog_class_specializations
+                            .end()) {
+                        break;
+                    }
+                    const auto parameter = std::ranges::find(
+                        found->parameters, declaration,
+                        &semantic::sv::SpecializedClassParameter::
+                            declaration);
+                            if (parameter != found->parameters.end()) {
+                        constexpr std::string_view prefix {
+                            "value{integer:" };
+                        const std::string_view text {
+                            parameter->canonical_identity };
+                        if (!parameter->type_parameter
+                            && text.starts_with(prefix)
+                            && text.ends_with('}')) {
+                            std::int64_t value { };
+                            const auto digits = text.substr(prefix.size(),
+                                text.size() - prefix.size() - 1U);
+                            const auto parsed = std::from_chars(
+                                digits.data(), digits.data() + digits.size(),
+                                value);
+                            if (parsed.ec == std::errc { }
+                                && parsed.ptr
+                                    == digits.data() + digits.size()) {
+                                const bool narrow = value
+                                        >= std::numeric_limits<
+                                            std::int32_t>::min()
+                                    && value
+                                        <= std::numeric_limits<
+                                            std::int32_t>::max();
+                                result.context_available = true;
+                                result.found = true;
+                                result.value
+                                    = runtime::PackedLogic4::from_aval_bval(
+                                        narrow ? 32U : 64U,
+                                        static_cast<std::uint64_t>(value),
+                                        0U);
+                                return result;
+                            }
+                        }
+                        break;
+                    }
+                    identity = found->base
+                        ? found->base->specialization_identity
+                        : std::string { };
+                }
+            }
             const auto owner = class_owner_parameter_values.find(handle);
             if (owner == class_owner_parameter_values.end()) {
                 return result;

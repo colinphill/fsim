@@ -8289,6 +8289,37 @@ private:
         const auto& expression_record = *view->systemverilog;
         if (expression_record.kind == sv::ExpressionKind::index
             && expression_record.operands.size() == 2U) {
+            // An index of a multidimensional packed array selects an
+            // element, not a bit (IEEE 1800-2017 7.4.5); leave it unfolded.
+            if (const auto declaration
+                = expression_declaration(expression_record.operands.front());
+                declaration) {
+                const auto selected = unit_.find_declaration(*declaration);
+                if (selected && selected->systemverilog != nullptr
+                    && selected->systemverilog->type) {
+                    auto type = *selected->systemverilog->type;
+                    if (const auto effective
+                        = CompiledDesignResolver { unit_ }
+                              .effective_systemverilog_type(
+                                  type, selected->systemverilog->scope)) {
+                        type = *effective;
+                    }
+                    for (std::size_t depth { }; depth < 16U; ++depth) {
+                        if (type.packed_dimensions.size() > 1U) {
+                            return std::nullopt;
+                        }
+                        const auto definition = type.packed_dimensions.empty()
+                                && type.target.target.valid()
+                            ? unit_.find_type(type.target.target)
+                            : std::nullopt;
+                        if (!definition
+                            || definition->systemverilog == nullptr) {
+                            break;
+                        }
+                        type = definition->systemverilog->base;
+                    }
+                }
+            }
             const auto bits = canonical_systemverilog_bits(
                 expression_record.operands.front());
             const auto index = evaluate(
@@ -13640,7 +13671,8 @@ void append_systemverilog_formals(const CompiledDesign& design,
         }
         const auto form = declaration->systemverilog->form;
         const bool parameter = form == sv::DeclarationForm::parameter
-            || form == sv::DeclarationForm::type_parameter
+            || (form == sv::DeclarationForm::type_parameter
+                && !declaration->systemverilog->local_type_parameter)
             || (form == sv::DeclarationForm::variable
                 && declaration->systemverilog->array_parameter);
         const bool port = form == sv::DeclarationForm::port;
@@ -14897,6 +14929,27 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                 formal_view->vhdl->callable->default_callable
                     ? &*formal_view->vhdl->callable->default_callable
                     : nullptr);
+            // A box default for an operator with no visible user-declared
+            // match denotes the predefined operator of the actual types
+            // (IEEE 1076-2008 6.5.6.2, 9.2): the formal stays unbound and
+            // its calls are the predefined operation.
+            const auto operator_symbol = [](std::string_view name) {
+                if (name.size() >= 2U && name.front() == '"'
+                    && name.back() == '"') {
+                    name = name.substr(1U, name.size() - 2U);
+                }
+                return !name.empty()
+                    && std::ranges::none_of(name, [](const char c) {
+                           return std::isalnum(
+                                      static_cast<unsigned char>(c))
+                               != 0 || c == '_';
+                       });
+            };
+            if (candidates.status != CompiledResolutionStatus::unique
+                && formal_view->vhdl->callable->default_box
+                && operator_symbol(formals[index].name)) {
+                continue;
+            }
             if (candidates.status
                 != CompiledResolutionStatus::unique) {
                 AssociationActual default_actual;

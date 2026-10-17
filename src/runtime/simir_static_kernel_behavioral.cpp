@@ -472,11 +472,11 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
                 inactive_threads_.push_back(index);
             } else {
                 const auto now = kernel_now();
-                if (delay > std::numeric_limits<SimulationTick>::max() - now) {
-                    fail(member_index, pc, "simulation time overflow in WaitFor");
+                // A wait beyond the last representable time never resumes.
+                if (delay <= std::numeric_limits<SimulationTick>::max() - now) {
+                    timers_.push({ now + delay, timer_sequence_++, index,
+                        threads_[index].epoch });
                 }
-                timers_.push({ now + delay, timer_sequence_++, index,
-                    threads_[index].epoch });
             }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitOn>) {

@@ -1111,6 +1111,15 @@ void validate_prefix_operation(
                                 outer.fixed ? 32U : outer.index_width,
                                 index);
                         }
+                        // Unpacked aggregate elements and member paths run
+                        // in the interpreter.
+                        if (outer.element_kind
+                                == ContainerElementKind::Aggregate
+                            || !operation.members.empty()) {
+                            reject_unsupported(process, index,
+                                "unpacked aggregate element access is "
+                                "interpreter-only");
+                        }
                         if (outer.element_kind != ContainerElementKind::Container
                             || outer.element_types.size() != 1
                             || outer.element_types.front()

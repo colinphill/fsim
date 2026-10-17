@@ -361,6 +361,9 @@ class SystemVerilogConstraintSolver final {
   }
   [[nodiscard]] std::span<const std::uint64_t> distribution_weights(
       std::string_view canonical_identity) const;
+  // The value ranges of every distribution over `variable`.
+  [[nodiscard]] std::vector<SystemVerilogConstraintDistributionEntry>
+  distribution_entries(SystemVerilogConstraintVariableId variable) const;
   [[nodiscard]] const SystemVerilogConstraintSolverLimits& limits()
       const noexcept {
     return limits_;
@@ -375,6 +378,7 @@ class SystemVerilogConstraintSolver final {
     std::string canonical_identity;
     SystemVerilogConstraintVariableId variable{};
     std::vector<std::uint64_t> weights;
+    std::vector<SystemVerilogConstraintDistributionEntry> entries;
   };
   std::vector<RetainedDistribution> distributions_;
   std::vector<std::pair<SystemVerilogConstraintVariableId,

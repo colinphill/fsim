@@ -1017,6 +1017,7 @@ src/elaboration/lowerer_hir_math.cpp
 src/elaboration/lowerer_hir_process.cpp
 src/elaboration/lowerer_hir_statement.cpp
 src/elaboration/lowerer_hir_synchronization.cpp
+src/elaboration/lowerer_hir_value_path.cpp
 src/elaboration/lowerer_hir_vhdl_access.cpp
 src/elaboration/lowerer_hir_vhdl_fixed.cpp
 src/elaboration/lowerer_hir_vhdl_float.cpp

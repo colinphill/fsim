@@ -923,6 +923,7 @@ endif()
       src/elaboration/lowerer_hir_capability.cpp
       src/elaboration/lowerer_hir_callable.cpp
       src/elaboration/lowerer_hir_container.cpp
+      src/elaboration/lowerer_hir_value_path.cpp
       src/elaboration/lowerer_hir_expression.cpp
       src/elaboration/lowerer_hir_file.cpp
       src/elaboration/lowerer_hir_file_image.cpp

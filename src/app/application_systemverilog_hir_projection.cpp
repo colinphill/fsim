@@ -587,6 +587,8 @@ template <typename Input>
         input.span,
         parent);
     auto& output = declaration(id);
+    output.inferred_string_type = input.systemverilog_inferred_string;
+    output.local_type_parameter = type_parameter && input.local;
     // Enumeration literals stay anonymous-typed values; only objects of an
     // anonymous enumeration refer to its hidden typedef.
     suppress_hidden_anonymous_enum_typedef_ = true;

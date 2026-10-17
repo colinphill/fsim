@@ -31,11 +31,9 @@ end architecture;
         compile_and_elaborate(
             invalid_vhdl_runtime_loop.design,
             "vhdl:work.invalid_vhdl_runtime_loop(rtl)");
-    assert(!rejected_vhdl_runtime_loop.ok());
-    assert(
-        has_diagnostic(
-            rejected_vhdl_runtime_loop,
-            "FSIM-ELAB-077"));
+    // VHDL-2008 applies the condition operator ?? to a std_logic condition
+    // (IEEE 1076-2008 9.2.9), so the loop is legal.
+    assert(rejected_vhdl_runtime_loop.ok());
 
     const auto invalid_vhdl_condition =
         fsim::frontend::parse_text(
@@ -63,9 +61,8 @@ end architecture;
         compile_and_elaborate(
             invalid_vhdl_condition.design,
             "vhdl:work.invalid_condition(rtl)");
-    assert(!rejected_vhdl_condition.ok());
-    assert(has_diagnostic(
-        rejected_vhdl_condition, "FSIM-ELAB-048"));
+    // The same holds for an if condition (IEEE 1076-2008 9.2.9).
+    assert(rejected_vhdl_condition.ok());
 }
 
 } // namespace fsim::tests::elaboration

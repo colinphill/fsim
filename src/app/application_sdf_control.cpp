@@ -56,8 +56,12 @@ namespace {
     [[nodiscard]] bool matches_input(const SdfReannotationRevision& revision,
         const SdfControlInput& input) noexcept
     {
+        // A nested instance scope (`top.dut`) annotates below its root.
+        const auto nested = input.root.size() > revision.root.size()
+            && input.root.starts_with(revision.root)
+            && input.root[revision.root.size()] == '.';
         return revision.file_identity == input.source_identity
-            && (revision.root == input.root || input.root == "*")
+            && (revision.root == input.root || input.root == "*" || nested)
             && revision.cell_pattern == input.cell_pattern
             && revision.file_precedence == input.file_precedence
             && revision.cell_precedence == input.cell_precedence;

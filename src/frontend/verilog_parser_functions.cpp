@@ -319,8 +319,16 @@ FunctionDeclaration VerilogParser::parse_function(
   std::erase_if(function.variables, [&](const VariableDeclaration& variable) {
     const auto argument = std::ranges::find(
         function.arguments, variable.name, &FunctionArgument::name);
+    // `input [7:0] x; reg [7:0] x;` completes the same formal when the
+    // declared ranges agree (IEEE 1364-2005 12.3.3).
+    const bool same_range = argument != function.arguments.end()
+        && argument->type.packed_range && variable.type.packed_range
+        && argument->type.packed_range->width()
+            == variable.type.packed_range->width()
+        && (variable.type.spelling == "reg"
+            || variable.type.spelling == "logic");
     if (argument == function.arguments.end()
-        || argument->type.spelling != "implicit"
+        || (argument->type.spelling != "implicit" && !same_range)
         || variable.initializer) {
       return false;
     }
