@@ -2584,6 +2584,14 @@ private:
         semantic::DeclarationId declaration) const;
     /// The STD.ENV spelling (`std.env.stop`) of a simple procedure name
     /// that a use clause imports from STD.ENV and no declaration overloads.
+    // The STD.ENV operation an expression names, including a simple name
+    // made visible by `use std.env.all` (IEEE 1076-2019 16.5).
+    // Both operands of a VHDL `=` or `/=` are STRING; FILE_LINE takes its
+    // STRING overload beside a STRING operand (IEEE 1076-2019 16.5).
+    [[nodiscard]] bool hir_vhdl_string_comparison_operands(
+        semantic::ExpressionId left, semantic::ExpressionId right) const;
+    [[nodiscard]] frontend::VhdlSimulatorApi hir_vhdl_simulator_api(
+        const semantic::vhdl::Expression& source) const;
     [[nodiscard]] std::string hir_vhdl_std_env_procedure_spelling(
         const semantic::vhdl::Name& name,
         semantic::ScopeId use_scope) const;

@@ -1558,6 +1558,20 @@ void Resolver::retain_result_type(
     return type;
   }
 
+  // `v.rand_mode` and `c.constraint_mode` without parentheses query the
+  // mode (IEEE 1800-2017 13.5.5, 18.8, 18.9).
+  if (const auto mode_dot = expression.text.rfind('.');
+      mode_dot != std::string::npos && mode_dot != 0U
+      && (expression.text.ends_with(".rand_mode")
+          || expression.text.ends_with(".constraint_mode"))) {
+    Expression call{ExpressionKind::Call,
+        expression.text.substr(mode_dot), {}, expression.span};
+    call.operands.push_back(Expression{ExpressionKind::Identifier,
+        expression.text.substr(0, mode_dot), {}, expression.span});
+    expression = std::move(call);
+    return resolve_call(expression, scope, std::nullopt,
+        SystemVerilogScalarKind::None);
+  }
   // A class handle may be a variable in a module-instance scope
   // (`m1.c.method()`, IEEE 1800-2017 23.8). Resolve only a path rooted at an
   // exact instance declared by the current unit and require unique unit and

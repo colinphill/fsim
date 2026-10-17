@@ -2195,9 +2195,9 @@ private:
             }
         } else {
             if (right_value < 0) {
+                // Zero to a negative power is x (IEEE 1800-2017 11.4.3).
                 if (left_value == 0) {
-                    error_ = "constant zero to a negative power is undefined";
-                    return std::nullopt;
+                    return make_unknown(width, signed_value);
                 }
                 result = left_value == 1 ? 1
                     : left_value == -1

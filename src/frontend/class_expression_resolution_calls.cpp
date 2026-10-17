@@ -448,9 +448,27 @@ void Resolver::retain_task_profile(
     // `obj.rand_mode(b)` and `obj.constraint_mode(b)` set the mode of every
     // random variable or constraint of the object (IEEE 1800-2017 18.8,
     // 18.9).
+    // A dotted receiver is an object only when its last member is a class
+    // handle property; otherwise it names a property or constraint below.
+    const auto object_receiver = [&](const Expression& receiver_name) {
+      const auto& text = receiver_name.text;
+      const auto member_dot = text.rfind('.');
+      if (member_dot == std::string::npos) return true;
+      Expression prefix{ExpressionKind::Identifier,
+          text.substr(0, member_dot), {}, receiver_name.span};
+      const auto prefix_type = resolve_expression(prefix, scope);
+      const auto prefix_identity = prefix_type
+          ? class_identity(*prefix_type) : std::nullopt;
+      if (!prefix_identity) return false;
+      const auto property = find_property(
+          *prefix_identity, text.substr(member_dot + 1U));
+      return property.property
+          && class_identity(property.property->declaration.type)
+          && !property.property->declaration.type.systemverilog_container;
+    };
     if (built_in_mode && expression.operands.size() == 2U
         && expression.operands.front().kind == ExpressionKind::Identifier
-        && expression.operands.front().text.find('.') == std::string::npos) {
+        && object_receiver(expression.operands.front())) {
       auto receiver = expression.operands.front();
       const auto receiver_type = resolve_expression(receiver, scope);
       if (receiver_type && class_identity(*receiver_type)
@@ -1012,7 +1030,10 @@ std::optional<Type> Resolver::resolve_expression(
       const bool equality = expression.text == "=="
           || expression.text == "!=" || expression.text == "==="
           || expression.text == "!==";
-      if (!chandle(left) || !chandle(right) || !equality) {
+      // An operand whose type is not resolved here (a function call) may
+      // be a chandle too (IEEE 1800-2017 6.14).
+      if ((left && !chandle(left)) || (right && !chandle(right))
+          || !equality) {
         diagnose(
             diagnostics_, "FSIM-SV-SEM-175",
             "chandle only supports equality and inequality with chandle "
@@ -1102,6 +1123,14 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   // In a method, `c.constraint_mode(0);` and `v.rand_mode(0);` select a
   // member of the object itself (IEEE 1800-2017 18.8, 18.9).
   if (this_mode_member(statement.task_name, scope)) {
+    statement.task_name = "this." + statement.task_name;
+  }
+  // An unqualified `rand_mode(b);` or `constraint_mode(b);` in a method
+  // applies to the object itself.
+  if (scope.class_owner != nullptr && scope.method_body
+      && statement.task_arguments.size() == 1U
+      && (statement.task_name == "rand_mode"
+          || statement.task_name == "constraint_mode")) {
     statement.task_name = "this." + statement.task_name;
   }
   const auto dot = statement.task_name.rfind('.');

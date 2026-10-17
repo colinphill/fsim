@@ -223,7 +223,12 @@ void validate_vhdl_rejection_limits(
             statement.vhdl_waveform[index].delay
                 ? statement.vhdl_waveform[index].delay->magnitude
                 : 0;
-        if (current <= previous) {
+        const auto expression_delay = [](const auto& delay) {
+          return delay && delay->expression;
+        };
+        if (current <= previous
+            && !expression_delay(statement.vhdl_waveform[index].delay)
+            && !expression_delay(statement.vhdl_waveform[index - 1].delay)) {
           diagnostics.error(
               "FSIM-VHDL-SEM-034",
               "VHDL waveform-element delays must be strictly ascending",
@@ -2014,7 +2019,15 @@ private:
                     index < statement.waveform.size(); ++index) {
                     const auto current = delay_magnitude(
                         statement.waveform[index].delay);
-                    if (current <= previous) {
+                    // An expression delay (`n * t`) is checked when the
+                    // waveform executes.
+                    const auto expression_delay = [](const auto& delay) {
+                        return delay && delay->primary.expression;
+                    };
+                    if (current <= previous
+                        && !expression_delay(statement.waveform[index].delay)
+                        && !expression_delay(
+                            statement.waveform[index - 1U].delay)) {
                         vhdl_error(
                             "FSIM-VHDL-SEM-034",
                             "VHDL waveform-element delays must be strictly "

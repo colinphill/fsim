@@ -258,13 +258,16 @@ void diagnose(
   if (expression.text == "+") return checked_add(*left, *right);
   if (expression.text == "-") return checked_subtract(*left, *right);
   if (expression.text == "*") return checked_multiply(*left, *right);
+  // Division by zero and the overflowing minimum / -1 do not fold.
+  const bool division_overflow = *right == 0
+      || (*right == -1 && *left == std::numeric_limits<std::int64_t>::min());
   if (expression.text == "/") {
-    return *right == 0 ? std::nullopt
-                       : std::optional{*left / *right};
+    return division_overflow ? std::nullopt
+                             : std::optional{*left / *right};
   }
   if (expression.text == "%") {
-    return *right == 0 ? std::nullopt
-                       : std::optional{*left % *right};
+    return division_overflow ? std::nullopt
+                             : std::optional{*left % *right};
   }
   if (expression.text == "&&") return *left != 0 && *right != 0 ? 1 : 0;
   if (expression.text == "||") return *left != 0 || *right != 0 ? 1 : 0;

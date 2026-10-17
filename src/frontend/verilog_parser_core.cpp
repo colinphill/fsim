@@ -1167,6 +1167,11 @@ void VerilogParser::parse_directive(const bool design_element) {
   const auto tick = advance();
   const auto directive = at(TokenKind::Identifier) ? advance() : current();
   if (directive.text == "timescale") {
+    // IEEE 1800-2017 22.7: `timescale is illegal inside a design element.
+    if (design_element) {
+      error(directive, "FSIM-SV-PP-054",
+          "`timescale cannot appear inside a design element");
+    }
     parse_timescale(directive);
   } else if (directive.text == "default_nettype") {
     parse_default_nettype(tick, directive);

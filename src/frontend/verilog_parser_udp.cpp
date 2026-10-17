@@ -82,6 +82,31 @@ VerilogUdpTableRow VerilogParser::parse_udp_table_row(
   VerilogUdpTableRow row;
   while (!at_end() && !at(TokenKind::Colon)
          && !keyword("endtable")) {
+    // Level and edge symbols need no separating white space (IEEE
+    // 1800-2017 29.3.6): `10` or `1x` is one token holding two symbols.
+    if (const auto text = std::string_view{current().text};
+        text.size() > 1U
+        && !at(TokenKind::LeftParen) && !at(TokenKind::Star)
+        && text.find_first_not_of("01xXbB?rRfFpPnN") == std::string::npos) {
+      const auto symbol_start = advance();
+      for (const char character : text) {
+        VerilogUdpInputPattern pattern;
+        const auto symbol = static_cast<char>(
+            character >= 'A' && character <= 'Z' ? character + ('a' - 'A')
+                                                 : character);
+        if (symbol == 'r' || symbol == 'f' || symbol == 'p' || symbol == 'n') {
+          pattern.edge = symbol == 'r' ? VerilogUdpEdgeSymbol::Rising
+              : symbol == 'f'          ? VerilogUdpEdgeSymbol::Falling
+              : symbol == 'p'          ? VerilogUdpEdgeSymbol::Positive
+                                       : VerilogUdpEdgeSymbol::Negative;
+        } else {
+          pattern.level = *udp_level(std::string_view{&character, 1U});
+        }
+        pattern.span = symbol_start.span;
+        row.inputs.push_back(std::move(pattern));
+      }
+      continue;
+    }
     VerilogUdpInputPattern pattern;
     const auto symbol_start = current();
     if (match(TokenKind::LeftParen)) {

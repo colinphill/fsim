@@ -102,7 +102,7 @@ STAGE_ORDER = {"compile": 0, "elaborate": 1, "simulate": 2}
 # Source scanning helpers
 
 SV_MODULE_RE = re.compile(
-    r"^\s*(?:extern\s+)?(?:module|macromodule|program)\s+(?:automatic\s+|static\s+)?"
+    r"^\s*(?:\(\*.*?\*\)\s*)*(?:extern\s+)?(?:module|macromodule|program)\s+(?:automatic\s+|static\s+)?"
     r"([A-Za-z_][A-Za-z0-9_$]*|\\\S+)", re.M)
 SV_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 SV_SCAN_TRIVIA_RE = re.compile(
@@ -362,15 +362,70 @@ def verilator_shell(top_text: str, module: str = "t", shell: str = "top") -> str
                                   body=body.rstrip("\n"), module=module, shell=shell)
 
 
+def python_driver_names(source: str) -> dict[str, object]:
+    """Top-level literal assignments of a test driver (`name = "x"`,
+    `test.cycles = (A if test.benchmark else B)`), taking the non-benchmark
+    branch of a conditional."""
+    names: dict[str, object] = {}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return names
+
+    def value_of(node: ast.AST):
+        if isinstance(node, ast.IfExp):
+            return value_of(node.orelse)
+        return ast.literal_eval(node)
+
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+            continue
+        target = statement.targets[0]
+        key = ast.unparse(target)
+        try:
+            names[key] = value_of(statement.value)
+        except (ValueError, SyntaxError, TypeError):
+            continue
+    return names
+
+
 def python_literal_list(source: str, keyword: str) -> list[str] | None:
+    """A driver's flag list: literals, f-strings over top-level literal
+    names, string `+` and `str()` of such names."""
     match = re.search(keyword + r"\s*=\s*(\[[^\]]*\])", source, re.S)
     if not match:
         return None
     try:
-        value = ast.literal_eval(match.group(1))
-    except (SyntaxError, ValueError):
+        tree = ast.parse(match.group(1), mode="eval")
+    except SyntaxError:
         return None
-    return [str(v) for v in value]
+    names = python_driver_names(source)
+
+    def evaluate(node: ast.AST) -> str:
+        if isinstance(node, ast.Constant):
+            return str(node.value)
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            key = ast.unparse(node)
+            if key not in names:
+                raise ValueError(key)
+            return str(names[key])
+        if isinstance(node, ast.JoinedStr):
+            return "".join(evaluate(part) for part in node.values)
+        if isinstance(node, ast.FormattedValue):
+            return evaluate(node.value)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return evaluate(node.left) + evaluate(node.right)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "str" and len(node.args) == 1):
+            return evaluate(node.args[0])
+        raise ValueError(ast.dump(node))
+
+    if not isinstance(tree.body, ast.List):
+        return None
+    try:
+        return [evaluate(element) for element in tree.body.elts]
+    except ValueError:
+        return None
 
 
 def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
@@ -602,7 +657,20 @@ def verilator_cases(root: Path) -> list[Case]:
             for value in python_literal_list(source, keyword) or []:
                 flags += [t for t in value.split()
                           if t.startswith(("+define+", "-D", "+incdir+", "-I"))]
-        compile_args = ["compile", "-q"] + standard_args("systemverilog", "2017")
+        # `+1364-2005ext+v` selects the Verilog-2005 keywords for the test.
+        language = ("systemverilog", "2017")
+        for flag in flags:
+            for token in flag.split():
+                if token.startswith("+1364-2005ext+"):
+                    language = ("verilog", "2005")
+                elif token.startswith("+1364-2001ext+"):
+                    language = ("verilog", "2001")
+        compile_args = ["compile", "-q"] + standard_args(*language)
+        # `--timing` makes Verilator define VERILATOR_TIMING.
+        if any("--timing" in value.split()
+               for keyword in ("verilator_flags2", "verilator_flags", "v_flags2")
+               for value in python_literal_list(source, keyword) or []):
+            compile_args += ["-D", "VERILATOR_TIMING"]
         # driver.py also names the trace file a test may open with
         # $dumpfile(`STRINGIFY(`TEST_DUMPFILE)).
         compile_args += ["-I", str(tdir), "-D", "SIMULATOR", "-D", "TEST_OBJ_DIR=obj_dir",
@@ -611,8 +679,10 @@ def verilator_cases(root: Path) -> list[Case]:
         for flag in flags:
             for token in flag.split():
                 if token.startswith("+define+"):
+                    # Verilator splits on `+`; a piece that is not a macro
+                    # name (`std::process`) defines nothing usable.
                     for definition in token[len("+define+"):].split("+"):
-                        if definition:
+                        if re.fullmatch(r"[A-Za-z_]\w*(=.*)?", definition):
                             compile_args += ["-D", definition]
                 elif token.startswith("-D"):
                     compile_args += ["-D", token[2:]]

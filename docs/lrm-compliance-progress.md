@@ -253,6 +253,74 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 62: runner flags, drivers, VHDL parsing gaps and full checkpoint
+
+Five new triage lanes covered the compile- and elaboration-stage failures the
+Batch 61 lanes had not (`.local-artifacts/lrm-closure/triage/b62-INDEX.md`).
+
+Runner (no simulator change): Verilator driver flag lists are evaluated from
+f-strings, `str()` and top-level literals; non-identifier `+define+` pieces are
+dropped; `--timing` defines `VERILATOR_TIMING`; `+1364-2005ext+v` selects
+Verilog-2005; ivtest root detection accepts attribute instances before
+`module`. Eleven cases close on these alone.
+
+SystemVerilog and Verilog:
+
+- `0 ** -1` folds to x (11.4.3), and a `` `timescale `` inside a design element
+  is an error (22.7). Edge-sensitive module paths take a plain `:` data source
+  without an edge identifier (30.4.4).
+- Nested zero replications inside a replication are ignored (11.4.12.1), and
+  UDP table symbols need no separating white space (29.3.6).
+- Disjoint continuous and procedural drivers of one variable are legal (6.5),
+  as are drivers of disjoint VHDL subelements.
+- Concatenation targets in functions; a sequence or property declared in a
+  clocking block; genvars of a generate region have module scope; chandle
+  equality with a function result; posedge/negedge of a vector expression
+  takes its least significant bit (9.4.2).
+- `rand_mode`/`constraint_mode` without parentheses and unqualified inside
+  methods; object-level mode calls on class-handle properties; `Pkg::Cls h =
+  new;` at module scope.
+- `$cast(dst, src);` as a task reports an invalid cast at run time (8.16).
+
+VHDL:
+
+- Each driver of a STD_LOGIC signal starts at the signal's initial value, not
+  'U' (14.7.5.2); records whose elements are all STD_LOGIC resolve.
+- Conditional force assignments, force and release in procedures, labeled
+  concurrent assignments to indexed targets, entity-level shared variables
+  and disconnection specifications, `wait on` a record field or signal formal.
+- A later primary unit of the same name in one source file replaces the
+  earlier one (13.5); `use pkg."+"` parses.
+- Named STRING subtypes as aggregate contexts; based-literal exponents
+  (`16#E#E1`); STD.ENV simple names imported by `use std.env.all`, and the
+  STRING overload of FILE_LINE; static subelement port actuals before 2008;
+  bare-name calls of parameterless functions in constant folding.
+- Array logical operators with operands of different lengths fail when they
+  execute (9.2.2); type conversions between arrays of either direction keep
+  only the length check; waveform ordering is checked statically only for
+  literal delays.
+
+Measurement: a full six-suite run on frozen `b62a` (11,940 IDs) against the
+Batch 61 overlay showed 52 gains and 6 losses. All six losses were fixed and
+re-verified on `b62b` (a SIGFPE in class-parameter division, a missing run-time
+error for task-form `$cast`, user enumerations with lowercase character
+literals, undefined `wait on` names, and a length mismatch previously caught
+only by accident). Reverting the lowercase-character change reopened tc745,
+tc746 and nvc vests3. The 295-case fast set passed on `b62b`. Net against Batch
+61: **56 new passes, zero regressions**.
+
+| Suite | Batch61 passes / in scope | Batch62 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2450 / 2657 | 2461 / 2657 | 169 |
+| sv-tests | 1426 / 1497 | 1426 / 1497 | 0 |
+| verilator | 1441 / 2216 | 1457 / 2216 | 199 |
+| vests | 3536 / 3646 | 3545 / 3646 | 2 |
+| nvc | 788 / 1262 | 806 / 1262 | 220 |
+| vhdl-compliance | 35 / 72 | 37 / 72 | 0 |
+
+This run is the full checkpoint for Batches 61 and 62; the next is due by
+Batch 65.
+
 ### Batch 61: UVM identity, generate names, class calls and VHDL subtypes
 
 Baseline: the Batch60 full six-suite checkpoint, re-run unchanged after the

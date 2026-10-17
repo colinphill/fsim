@@ -394,7 +394,6 @@ void VerilogParser::parse_generate_region(
   GenerateRegion direct_region;
   direct_region.kind = GenerateKind::StaticBlock;
   std::vector<std::string> direct_local_names;
-  std::vector<std::string> direct_local_genvars;
   while (!at_end() && !keyword("endgenerate")) {
     if (verilog_attribute_instance_start()) {
       parse_verilog_attribute_instances();
@@ -531,10 +530,10 @@ void VerilogParser::parse_generate_region(
           declaration);
       continue;
     }
+    // A generate region is not a scope: its genvars belong to the module
+    // (IEEE 1800-2017 27.3).
     if (match_keyword("genvar")) {
-      parse_generated_genvar_declaration(
-          direct_region.then_body,
-          direct_local_genvars);
+      parse_genvar_declaration(unit);
       continue;
     }
     if (
@@ -620,14 +619,6 @@ void VerilogParser::parse_generate_region(
   }
   for (const auto& local_name : direct_local_names) {
     const auto found = current_generate_names_.find(local_name);
-    if (found != current_generate_names_.end()
-        && --found->second == 0) {
-      current_generate_names_.erase(found);
-    }
-  }
-  for (const auto& local_genvar : direct_local_genvars) {
-    declared_genvars_.erase(local_genvar);
-    const auto found = current_generate_names_.find(local_genvar);
     if (found != current_generate_names_.end()
         && --found->second == 0) {
       current_generate_names_.erase(found);

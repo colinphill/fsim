@@ -1162,7 +1162,7 @@ Lowerer::lower_hir_vhdl_environment_call_path_container_expression(
         return lower_hir_vhdl_environment_call_path_container_expression(
             source.operands.front());
     }
-    const auto api = frontend::vhdl_simulator_api(source.text);
+    const auto api = hir_vhdl_simulator_api(source);
     if (api == frontend::VhdlSimulatorApi::get_call_path) {
         if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
             || (source.kind != semantic::vhdl::ExpressionKind::name
@@ -1687,7 +1687,7 @@ Lowerer::hir_vhdl_assert_expression_api(
         && source.kind != semantic::vhdl::ExpressionKind::call) {
         return std::nullopt;
     }
-    const auto api = frontend::vhdl_simulator_api(source.text);
+    const auto api = hir_vhdl_simulator_api(source);
     if (!vhdl_assert_function_api(api)) {
         return std::nullopt;
     }
@@ -2114,7 +2114,7 @@ bool Lowerer::is_hir_vhdl_environment_expression(
     }
     const auto& source = *expression->vhdl;
     using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(source.text);
+    const auto api = hir_vhdl_simulator_api(source);
     const bool directory_function = api == Api::dir_open
         || api == Api::dir_itemexists || api == Api::dir_itemisdir
         || api == Api::dir_itemisfile || api == Api::dir_createdir
@@ -2152,7 +2152,7 @@ Lowerer::lower_hir_vhdl_environment_expression(
     const auto& source = *expression->vhdl;
     const auto span = hir_source_span(source.source);
     using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(source.text);
+    const auto api = hir_vhdl_simulator_api(source);
     if (vhdl_standard_ < frontend::vhdl_simulator_api_standard(api)) {
         report(
             "FSIM-ELAB-VHENV-003",
@@ -2555,7 +2555,7 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
         if (!value || value->vhdl == nullptr) {
             return std::nullopt;
         }
-        if (frontend::vhdl_simulator_api(value->vhdl->text)
+        if (hir_vhdl_simulator_api(*value->vhdl)
             == frontend::VhdlSimulatorApi::get_call_path) {
             return CallPathActual {
                 CallPathActual::Kind::current, unwrapped, std::nullopt };

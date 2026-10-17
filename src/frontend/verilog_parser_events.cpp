@@ -303,6 +303,30 @@ void VerilogParser::parse_clocking_block(
           "FSIM-SV-PARSE-287");
       continue;
     }
+    // A sequence or property declared in a clocking block (IEEE 1800-2017
+    // 14.3) is declared for the enclosing unit.
+    if (at(TokenKind::Identifier)
+        && (current().text == "sequence" || current().text == "property")) {
+      const auto declaration_start = advance();
+      auto declaration = parse_assertion_declaration(declaration_start,
+          declaration_start.text == "sequence"
+              ? SystemVerilogAssertionDeclarationKind::Sequence
+              : SystemVerilogAssertionDeclarationKind::Property);
+      if (std::ranges::any_of(unit.systemverilog_assertion_declarations,
+              [&](const SystemVerilogAssertionDeclaration& existing) {
+                return !declaration.name.empty()
+                    && existing.name == declaration.name;
+              })) {
+        error(
+            declaration_start,
+            "FSIM-SV-SEM-192",
+            "duplicate assertion declaration '" + declaration.name + "'");
+      } else {
+        unit.systemverilog_assertion_declarations.push_back(
+            std::move(declaration));
+      }
+      continue;
+    }
     if (!is_direction_keyword()) {
       const auto invalid = advance();
       error(

@@ -10585,7 +10585,9 @@ private:
         const SubtypeIndication& target)
     {
         const auto context = profile(target);
-        if (context.kind == ProfileKind::array) {
+        // A named subtype of STRING is an array context too.
+        if (context.kind == ProfileKind::array
+            || context.kind == ProfileKind::string) {
             auto element = array_element_subtype(target);
             if (!element) {
                 element = predefined_array_element_subtype(

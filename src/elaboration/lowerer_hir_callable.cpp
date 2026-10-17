@@ -14510,6 +14510,46 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     return destination;
 }
 
+bool Lowerer::hir_vhdl_string_comparison_operands(
+    const semantic::ExpressionId left,
+    const semantic::ExpressionId right) const
+{
+    const auto file_line = [&](const semantic::ExpressionId id) {
+        const auto record = specialized_hir_unit_->find_expression(id);
+        return record && record->vhdl != nullptr
+            && hir_vhdl_simulator_api(*record->vhdl)
+            == frontend::VhdlSimulatorApi::file_line;
+    };
+    const bool left_string = hir_expression_is_string(left, hir_process_scope_);
+    const bool right_string
+        = hir_expression_is_string(right, hir_process_scope_);
+    return (left_string && right_string)
+        || (left_string && file_line(right))
+        || (right_string && file_line(left));
+}
+
+frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(
+    const semantic::vhdl::Expression& source) const
+{
+    if (const auto api = frontend::vhdl_simulator_api(source.text);
+        api != frontend::VhdlSimulatorApi::none) {
+        return api;
+    }
+    if ((source.kind != semantic::vhdl::ExpressionKind::name
+            && source.kind != semantic::vhdl::ExpressionKind::call)
+        || source.text.empty() || source.text.starts_with('@')
+        || source.text.find_first_of(".:'") != std::string::npos) {
+        return frontend::VhdlSimulatorApi::none;
+    }
+    semantic::vhdl::Name name;
+    name.spelling = source.text;
+    name.canonical = support::ascii_lower(source.text);
+    const auto spelling
+        = hir_vhdl_std_env_procedure_spelling(name, source.scope);
+    return spelling == source.text ? frontend::VhdlSimulatorApi::none
+                                   : frontend::vhdl_simulator_api(spelling);
+}
+
 std::string Lowerer::hir_vhdl_std_env_procedure_spelling(
     const semantic::vhdl::Name& name,
     const semantic::ScopeId use_scope) const

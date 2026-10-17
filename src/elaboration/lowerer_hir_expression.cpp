@@ -5495,6 +5495,31 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     }
     const auto element_count
         = aggregate_expected_width / *element_width;
+    // Without a constrained context, an aggregate with one range choice
+    // (`(v'range => '0')`) takes its bounds from that choice (IEEE
+    // 1076-2008 9.3.3.3).
+    if (index_distance(*range->left, *range->right) + 1U != element_count
+        && aggregate.associations.size() == 1U
+        && aggregate.associations.front().choices.size() == 1U) {
+        const auto choice = specialized_hir_unit_->find_expression(
+            aggregate.associations.front().choices.front());
+        if (choice && choice->vhdl != nullptr
+            && choice->vhdl->kind == semantic::vhdl::ExpressionKind::call
+            && (choice->vhdl->text == "'range"
+                || choice->vhdl->text == "'reverse_range")) {
+            if (const auto attribute = hir_vhdl_attribute_profile(
+                    aggregate.associations.front().choices.front(),
+                    hir_process_scope_);
+                attribute && attribute->discrete_range) {
+                semantic::vhdl::RangeConstraint chosen;
+                chosen.left = attribute->discrete_range->left;
+                chosen.right = attribute->discrete_range->right;
+                chosen.descending = attribute->discrete_range->descending;
+                resolved_range = std::move(chosen);
+                range = &*resolved_range;
+            }
+        }
+    }
     if (index_distance(*range->left, *range->right) + 1U
         != element_count) {
         report(
@@ -14318,10 +14343,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->operands.size() == 2U
         && (expression->vhdl->text == "="
             || expression->vhdl->text == "/=")
-        && hir_expression_is_string(
-            expression->vhdl->operands[0], hir_process_scope_)
-        && hir_expression_is_string(
-            expression->vhdl->operands[1], hir_process_scope_)) {
+        && hir_vhdl_string_comparison_operands(
+            expression->vhdl->operands[0], expression->vhdl->operands[1])) {
         const auto lhs = lower_hir_string_expression(
             expression->vhdl->operands[0]);
         const auto rhs = lower_hir_string_expression(
@@ -16652,19 +16675,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                       *operand_constraint.right)
                                   + 1U }
                             : std::nullopt;
-                        conversion_compatible
-                            = target_constraint.descending
-                                == operand_constraint.descending
+                        // The result takes the target's bounds; only the
+                        // element count must match (IEEE 1076-2008 9.3.6).
+                        // Elements keep their left-to-right order, which is
+                        // the packed layout in either direction.
+                        conversion_compatible = conversion_compatible
                             && (!target_length || !operand_length
-                                || *target_length == *operand_length)
-                            && (!target_constraint.left
-                                || !target_constraint.right
-                                || !operand_constraint.left
-                                || !operand_constraint.right
-                                || (*target_constraint.left
-                                        == *operand_constraint.left
-                                    && *target_constraint.right
-                                        == *operand_constraint.right));
+                                || *target_length == *operand_length);
                     }
                     const auto element_root = [&](const auto& definition)
                         -> std::optional<semantic::TypeId> {
@@ -18288,6 +18305,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         std::size_t group_width { };
         for (std::size_t index = 1U;
             index < source.operands.size(); ++index) {
+            // A zero replication inside the group is ignored (IEEE
+            // 1800-2017 11.4.12.1).
+            if (const auto nested = specialized_hir_unit_->find_expression(
+                    source.operands[index]);
+                nested && nested->systemverilog != nullptr
+                && nested->systemverilog->kind
+                    == semantic::sv::ExpressionKind::replication
+                && nested->systemverilog->operands.size() >= 2U
+                && hir_constant_integer(
+                       nested->systemverilog->operands.front())
+                    == std::optional<std::int64_t> { 0 }) {
+                continue;
+            }
             const auto operand_width = hir_expression_width(
                 source.operands[index], hir_process_scope_);
             if (!operand_width || *operand_width == 0U) {
@@ -18300,6 +18330,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             group_width += register_width(*operand);
             group_operands.push_back(*operand);
+        }
+        if (group_operands.empty()) {
+            return std::nullopt;
         }
         auto block = group_operands.front();
         if (group_operands.size() != 1U) {
@@ -20586,6 +20619,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto right_self = vhdl_logical
                 ? hir_expression_width(source.operands[1], hir_process_scope_)
                 : std::nullopt;
+            // The array operands of a predefined logical operator must have
+            // the same length; the operation fails when it is evaluated
+            // (IEEE 1076-2008 9.2.2).
+            if (vhdl_logical && left_self && right_self && *left_self > 1U
+                && *right_self > 1U && *left_self != *right_self
+                && !hir_vhdl_composite_root_type(source.operands[0])
+                && !hir_vhdl_composite_root_type(source.operands[1])) {
+                const auto operand = lower_hir_expression(
+                    source.operands[0], *left_self);
+                if (!operand) {
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(Report {
+                    "operands of a VHDL logical operator differ in length",
+                    runtime::simir::AssertionSeverity::failure,
+                    runtime_source_location(
+                        hir_source_span(source.source)),
+                });
+                process_.operations.emplace_back(Halt { false });
+                return expected_width != 0U
+                        && expected_width != register_width(*operand)
+                    ? resize_register(*operand, expected_width, false)
+                    : *operand;
+            }
             const auto scalar_side = left_self && right_self
                     && ((*left_self == 1U) != (*right_self == 1U))
                     && !hir_vhdl_composite_root_type(
@@ -22296,7 +22353,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     }
     if (expression->vhdl != nullptr) {
         const auto& source = *expression->vhdl;
-        const auto api = frontend::vhdl_simulator_api(source.text);
+        const auto api = hir_vhdl_simulator_api(source);
         if (source.kind == semantic::vhdl::ExpressionKind::aggregate
             && contextual_subtype != nullptr) {
             const auto effective = hir_effective_vhdl_subtype(
@@ -22424,8 +22481,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             const auto operand = specialized_hir_unit_->find_expression(
                 source.operands.front());
             return operand && operand->vhdl != nullptr
-                    && frontend::vhdl_simulator_api(
-                        operand->vhdl->text)
+                    && hir_vhdl_simulator_api(
+                        *operand->vhdl)
                         == frontend::VhdlSimulatorApi::getenv
                 ? operand->vhdl
                 : nullptr;
@@ -22505,7 +22562,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         }
         const bool source_identity
             = api == frontend::VhdlSimulatorApi::file_name
-            || api == frontend::VhdlSimulatorApi::file_path;
+            || api == frontend::VhdlSimulatorApi::file_path
+            || api == frontend::VhdlSimulatorApi::file_line;
         if (source_identity) {
             if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
                 || (source.kind != semantic::vhdl::ExpressionKind::name

@@ -3895,12 +3895,12 @@ bool Lowerer::hir_expression_signed(
             return expression->systemverilog->text == "$signed";
         }
         if (expression->vhdl != nullptr
-            && frontend::vhdl_simulator_api(expression->vhdl->text)
+            && hir_vhdl_simulator_api(*expression->vhdl)
                 == frontend::VhdlSimulatorApi::file_line) {
             return true;
         }
         if (expression->vhdl != nullptr
-            && frontend::vhdl_simulator_api(expression->vhdl->text)
+            && hir_vhdl_simulator_api(*expression->vhdl)
                 == frontend::VhdlSimulatorApi::get_vhdl_assert_count) {
             return true;
         }
@@ -9287,7 +9287,7 @@ bool Lowerer::hir_expression_is_string(
     }
     if (expression->vhdl != nullptr) {
         const auto& source = *expression->vhdl;
-        const auto api = frontend::vhdl_simulator_api(source.text);
+        const auto api = hir_vhdl_simulator_api(source);
         const bool environment_string
             = api == frontend::VhdlSimulatorApi::getenv
             || api == frontend::VhdlSimulatorApi::vhdl_version
@@ -9309,8 +9309,8 @@ bool Lowerer::hir_expression_is_string(
                        = specialized_hir_unit_->find_expression(
                            source.operands.front());
                    return operand && operand->vhdl != nullptr
-                       && frontend::vhdl_simulator_api(
-                           operand->vhdl->text)
+                       && hir_vhdl_simulator_api(
+                           *operand->vhdl)
                            == frontend::VhdlSimulatorApi::getenv;
                }();
         const bool dereferenced_string_object
@@ -12762,8 +12762,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (is_hir_vhdl_environment_expression(expression_id)
         && expression->vhdl != nullptr) {
         using Api = frontend::VhdlSimulatorApi;
-        const auto api = frontend::vhdl_simulator_api(
-            expression->vhdl->text);
+        const auto api = hir_vhdl_simulator_api(
+            *expression->vhdl);
         if (api == Api::file_line) {
             return frontend::ValueDomain::Integer;
         }
@@ -15320,8 +15320,8 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     if (is_hir_vhdl_environment_expression(expression_id)
         && expression->vhdl != nullptr) {
         using Api = frontend::VhdlSimulatorApi;
-        const auto api = frontend::vhdl_simulator_api(
-            expression->vhdl->text);
+        const auto api = hir_vhdl_simulator_api(
+            *expression->vhdl);
         if (api == Api::dir_itemexists || api == Api::dir_itemisdir
             || api == Api::dir_itemisfile) {
             return 1U;
@@ -17985,6 +17985,21 @@ Lowerer::hir_vhdl_expression_subtype(
         return subtype;
     }
     if (const auto actual = hir_generic_actual(expression_id)) {
+        // The actual is converted to a constrained formal's subtype (IEEE
+        // 1076-2008 6.5.6.2): `g : bit_vector(3 downto 0)` stays descending
+        // whatever the actual's own bounds.
+        if (const auto formal = hir_referenced_declaration(expression_id)) {
+            const auto declaration
+                = specialized_hir_unit_->find_declaration(*formal);
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype) {
+                const auto declared
+                    = hir_effective_vhdl_subtype(*declaration->vhdl->subtype);
+                if (declared && !declared->constraints.empty()) {
+                    return declared;
+                }
+            }
+        }
         if (const auto subtype = hir_vhdl_expression_subtype(*actual)) {
             return subtype;
         }

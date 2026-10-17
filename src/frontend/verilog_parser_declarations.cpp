@@ -1524,8 +1524,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
                 || unit.kind == UnitKind::SystemVerilogProgram
                 || unit.kind == UnitKind::SystemVerilogInterface)
             && named != "process"
-            // A scoped type may name a package covergroup.
-            && named.find("::") == std::string::npos
+            // A scoped type may name a package covergroup; one that names a
+            // class parsed in this file constructs it.
+            && (named.find("::") == std::string::npos
+                || known_class_names_.contains(
+                    named.substr(named.rfind("::") + 2U)))
             && std::ranges::none_of(
                 unit.systemverilog_covergroups,
                 [&](const SystemVerilogCovergroupDeclaration& covergroup) {

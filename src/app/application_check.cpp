@@ -789,6 +789,50 @@ static std::optional<CompilationWorkspace> check_project_impl(
       frontend::StandardRevision standard;
       std::string compatibility_profile;
   };
+  // Analyzing a VHDL library unit again replaces it (IEEE 1076-2008 13.5).
+  // Within one source file, a later entity, package, configuration or
+  // context of the same name replaces an earlier one, together with the
+  // secondary units analyzed against the earlier one in between.
+  {
+    const auto vhdl_primary = [](const frontend::DesignUnit& unit) {
+      return unit.language == frontend::Language::Vhdl2008
+          && (unit.kind == frontend::UnitKind::VhdlEntity
+              || unit.kind == frontend::UnitKind::VhdlConfiguration
+              || unit.kind == frontend::UnitKind::VhdlContext
+              || (unit.kind == frontend::UnitKind::VhdlPackage
+                  && unit.primary_name.empty()));
+    };
+    std::vector<bool> replaced(ordered_units.size());
+    for (std::size_t earlier = 0; earlier < ordered_units.size(); ++earlier) {
+      const auto& unit = ordered_units[earlier].unit;
+      if (!vhdl_primary(unit)) {
+        continue;
+      }
+      const auto key = unit_key(unit);
+      for (auto later = earlier + 1U; later < ordered_units.size(); ++later) {
+        const auto& candidate = ordered_units[later].unit;
+        if (ordered_units[later].source_order
+                != ordered_units[earlier].source_order
+            || !vhdl_primary(candidate) || unit_key(candidate) != key) {
+          continue;
+        }
+        replaced[earlier] = true;
+        for (auto between = earlier + 1U; between < later; ++between) {
+          const auto& secondary = ordered_units[between].unit;
+          if (secondary.language == frontend::Language::Vhdl2008
+              && secondary.kind == frontend::UnitKind::VhdlArchitecture
+              && secondary.primary_name == unit.name) {
+            replaced[between] = true;
+          }
+        }
+        break;
+      }
+    }
+    std::size_t index = 0;
+    std::erase_if(ordered_units, [&](const OrderedUnit&) {
+      return replaced[index++];
+    });
+  }
   std::map<std::string, UnitProfile> known_units;
   checked.parsed.units.reserve(ordered_units.size());
   for (auto& ordered : ordered_units) {

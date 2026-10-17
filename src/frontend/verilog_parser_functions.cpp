@@ -431,7 +431,21 @@ void VerilogParser::validate_function_body(
           const std::vector<Statement>& statements) -> void {
         for (const auto& statement : statements) {
           if (statement.kind == StatementKind::Assignment) {
-            const Expression* root = &statement.target;
+            // Every leaf of a concatenation target (`{hi, lo} = v;`) is a
+            // variable lvalue (IEEE 1800-2017 10.4.1).
+            std::vector<const Expression*> leaves { &statement.target };
+            for (std::size_t index = 0; index < leaves.size(); ++index) {
+              if (leaves[index]->kind == ExpressionKind::Concatenation) {
+                for (const auto& operand : leaves[index]->operands) {
+                  leaves.push_back(&operand);
+                }
+              }
+            }
+            for (const auto* leaf : leaves) {
+            if (leaf->kind == ExpressionKind::Concatenation) {
+              continue;
+            }
+            const Expression* root = leaf;
             while ((root->kind == ExpressionKind::Index
                     || root->kind == ExpressionKind::Slice)
                    && !root->operands.empty()) {
@@ -453,6 +467,7 @@ void VerilogParser::validate_function_body(
                   start,
                   "FSIM-SV-SEM-249",
                   "a const ref function formal is read-only");
+            }
             }
             if (statement.assignment_kind
                     != AssignmentKind::Blocking

@@ -2121,6 +2121,38 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
   }
   if (label_token) {
     const auto label = vhdl_name(label_token->text);
+    // A name followed by `<=` is a signal assignment target (`d(1) <= x;`),
+    // never a procedure call (IEEE 1076-2008 11.6).
+    const auto assignment_target_ahead = [&] {
+      std::size_t lookahead = 0;
+      if (!at(TokenKind::Identifier, lookahead)) {
+        return false;
+      }
+      ++lookahead;
+      for (;;) {
+        if (at(TokenKind::Dot, lookahead)
+            && at(TokenKind::Identifier, lookahead + 1)) {
+          lookahead += 2;
+        } else if (at(TokenKind::LeftParen, lookahead)) {
+          const auto closed = skip_vhdl_parentheses(lookahead);
+          if (!closed) {
+            return false;
+          }
+          lookahead = *closed;
+        } else {
+          break;
+        }
+      }
+      return at(TokenKind::LessEqual, lookahead);
+    };
+    if (assignment_target_ahead()) {
+      if (auto statement = parse_assignment(true)) {
+        statement->label = label;
+        statement->span = cover(label_token->span, statement->span);
+        unit.concurrent_statements.push_back(std::move(*statement));
+        return;
+      }
+    }
     if (auto procedure = parse_vhdl_procedure_call()) {
       procedure->label = label;
       procedure->span = cover(label_token->span, procedure->span);

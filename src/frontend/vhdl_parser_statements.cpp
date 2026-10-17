@@ -175,11 +175,15 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
         auto expression = parse_expression();
         const bool identifier =
             expression.kind == ExpressionKind::Identifier;
+        // A name keeps its expression too, so a record field (`s.x`) or a
+        // signal formal resolves where the design-signal name does not
+        // (IEEE 1076-2008 10.2).
+        auto name = identifier ? vhdl_name(expression.text) : std::string{};
         statement.sensitivities.push_back(Sensitivity{
             EdgeKind::Any,
-            identifier ? vhdl_name(expression.text) : std::string{},
+            std::move(name),
             expression.span,
-            identifier ? Expression{} : std::move(expression)});
+            std::move(expression)});
       } while (match(TokenKind::Comma));
     }
     if (match_keyword("until", true)) {
@@ -1099,7 +1103,50 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
         error(current(), "FSIM-VHDL-PARSE-280",
               "a VHDL force assignment requires a forcing expression");
       } else {
-        statement.value = parse_expression();
+        statement.value = parse_expression(0, false);
+      }
+      // A conditional force assignment (`t <= force a when c else b;`,
+      // IEEE 1076-2008 10.5.3) forces the first value whose condition
+      // holds; it is the equivalent if statement of forces.
+      if (keyword("when", 0, true)) {
+        std::vector<std::pair<Expression, std::optional<Expression>>> arms;
+        auto value = std::move(statement.value);
+        for (;;) {
+          if (!match_keyword("when", true)) {
+            arms.emplace_back(std::move(value), std::nullopt);
+            break;
+          }
+          auto condition = parse_expression();
+          arms.emplace_back(std::move(value), std::move(condition));
+          if (!match_keyword("else", true)) {
+            break;
+          }
+          value = parse_expression(0, false);
+        }
+        expect(TokenKind::Semicolon,
+               "';' after VHDL force or release assignment",
+               "FSIM-VHDL-PARSE-282");
+        const auto span = span_from(start, previous());
+        std::optional<Statement> tail;
+        for (auto arm = arms.rbegin(); arm != arms.rend(); ++arm) {
+          auto forced = statement;
+          forced.value = std::move(arm->first);
+          forced.span = span;
+          if (!arm->second) {
+            tail = std::move(forced);
+            continue;
+          }
+          Statement conditional;
+          conditional.kind = StatementKind::If;
+          conditional.condition = std::move(*arm->second);
+          conditional.statements.push_back(std::move(forced));
+          if (tail) {
+            conditional.else_statements.push_back(std::move(*tail));
+          }
+          conditional.span = span;
+          tail = std::move(conditional);
+        }
+        return std::move(*tail);
       }
     } else if (!at(TokenKind::Semicolon)) {
       error(current(), "FSIM-VHDL-PARSE-281",

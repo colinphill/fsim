@@ -178,9 +178,16 @@ VerilogModulePathDeclaration VerilogParser::parse_specify_module_path(
              || (match(TokenKind::Minus) && match(TokenKind::Colon))) {
     path.polarity = VerilogPathPolarity::Negative;
     path.destination_data_source = parse_expression();
+  } else if (grouped_destination && match(TokenKind::Colon)) {
+    // The polarity of an edge-sensitive path's data source is optional
+    // (IEEE 1800-2017 30.4.4).
+    path.destination_data_source = parse_expression();
   }
+  // The edge identifier of an edge-sensitive path is optional too; its
+  // grouped data source makes the path edge sensitive.
   const bool edge_sensitive =
-      path.source_edge != VerilogSpecifyEdge::None;
+      path.source_edge != VerilogSpecifyEdge::None
+      || path.destination_data_source.valid();
   if (path.kind == VerilogModulePathKind::Parallel
       && (path.sources.size() != 1 || path.destinations.size() != 1)) {
     error(

@@ -16495,11 +16495,29 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 && name_actual(name_actual,
                     candidate->vhdl->operands.front());
         };
+        // Individually associated subelements each take one of those
+        // actuals (IEEE 1076-1993 4.3.2.2).
+        const auto subelement_input_actual = [&] {
+            const auto candidate = port_actual_specialization.find_expression(
+                *binding.expression);
+            return candidate && candidate->vhdl != nullptr
+                && candidate->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && candidate->vhdl->text == "@vhdl-formal-subelements"
+                && !candidate->vhdl->associations.empty()
+                && std::ranges::all_of(candidate->vhdl->associations,
+                    [&](const semantic::vhdl::AggregateAssociation&
+                            association) {
+                        return name_actual(name_actual, association.value)
+                            || static_actual(static_actual, association.value);
+                    });
+        };
         if (accepts_input && pre_2008
             && !name_actual(
                 name_actual, *binding.expression)
             && !conversion_actual()
-            && !static_actual(static_actual, *binding.expression)) {
+            && !static_actual(static_actual, *binding.expression)
+            && !subelement_input_actual()) {
             report(
                 "FSIM-ELAB-VHPORT-001",
                 "VHDL input port '" + formal_declaration.name

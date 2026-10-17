@@ -1399,6 +1399,11 @@ bool Interpreter::Impl::update_container_alias_driver_force(
         }
     }
     if (signal.value_kind == ValueKind::logic9) {
+        // Each driver starts at the signal's default value (IEEE 1076-2008
+        // 14.7.5.2).
+        if (signal.initial_value.is_logic9()) {
+            return signal.initial_value;
+        }
         auto result = PackedLogic4 {
             signal.initial_value.width(), Logic4::x
         };

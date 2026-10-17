@@ -2078,6 +2078,17 @@ ResolutionKind HierarchyBuilder::native_resolution(
         || signal.type_name == "std_logic_vector") {
         return ResolutionKind::std_logic;
     }
+    // A record whose elements are all resolved STD_LOGIC values resolves
+    // element by element (IEEE 1076-2008 14.7.3.2).
+    if (!signal.packed_members.empty()
+        && std::ranges::all_of(signal.packed_members,
+            [](const PackedMemberMetadata& member) {
+                const auto type = lowercase_vhdl_simple_name(member.spelling);
+                return member.domain == frontend::ValueDomain::Logic9
+                    && (type == "std_logic" || type == "std_logic_vector");
+            })) {
+        return ResolutionKind::std_logic;
+    }
     // IEEE 1800-2017 6.7.2: a real net is unresolved; only a user nettype
     // can resolve several drivers of a real value.
     if (signal.systemverilog_scalar
@@ -2516,14 +2527,10 @@ void HierarchyBuilder::validate_process_drivers()
                     });
             }
         }
-        if (!overlap
-            && (!info.vhdl_mode_view_bindings.empty()
-                || info.vhdl_array
-                || std::ranges::all_of(
-                    process_drivers,
-                    [](const auto& driver) {
-                        return driver.continuous;
-                    }))) {
+        // Drivers of disjoint parts are legal: SystemVerilog checks the
+        // longest static prefixes (IEEE 1800-2017 6.5) and each VHDL scalar
+        // subelement has its own driver (IEEE 1076-2008 14.7.2).
+        if (!overlap) {
             continue;
         }
         if (process_drivers.size() == 2

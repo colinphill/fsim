@@ -30,6 +30,8 @@ package vunit_shim_pkg is
   -- Testbenches are compiled with their runner_cfg generic removed; this
   -- constant takes its place.
   constant runner_cfg : string := "";
+  -- VUnit's type of the runner_cfg generic.
+  subtype runner_cfg_t is string;
 
   procedure test_runner_setup(
     constant runner : in runner_sync_t;

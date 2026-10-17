@@ -2207,24 +2207,10 @@ std::optional<Process> Lowerer::lower_hir_process(
                     }
                     const auto width = hir_expression_width(
                         *sensitivity.expression, input.scope);
-                    const auto container_element
-                        = hir_container_element_binding(
-                            *sensitivity.expression);
-                    const bool element_backed
-                        = container_element
-                        && std::ranges::any_of(
-                            design_.container_element_signal_aliases_,
-                            [&](const auto& alias) {
-                                return alias.object
-                                        == container_element->object
-                                    && alias.readable;
-                            });
+                    // An edge of a vector expression is detected on its
+                    // least significant bit (IEEE 1800-2017 9.4.2).
                     if (!width || *width == 0U
-                        || *width > std::numeric_limits<std::uint32_t>::max()
-                        || (sensitivity.edge
-                                != semantic::sv::EdgeKind::any
-                            && *width != 1U
-                            && !element_backed)) {
+                        || *width > std::numeric_limits<std::uint32_t>::max()) {
                         return std::nullopt;
                     }
                     auto dependencies = hir_signal_dependencies(
@@ -2236,8 +2222,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                         = *sensitivity.expression;
                     description.event_edge = edge_kind(sensitivity.edge);
                     description.event_expression_scalar_edge
-                        = element_backed
-                        && sensitivity.edge
+                        = sensitivity.edge
                             != semantic::sv::EdgeKind::any;
                     for (const auto dependency : dependencies) {
                         description.sensitivities.push_back({
@@ -3538,9 +3523,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     if (description.event_expression) {
         const auto expression_width = hir_expression_width(
             *description.event_expression, hir_process_scope_);
-        const auto width = description.event_expression_scalar_edge
-            ? std::optional<std::size_t> { 1U }
-            : expression_width;
+        const auto width = expression_width;
         if (!width || *width == 0U
             || *width > std::numeric_limits<std::uint32_t>::max()) {
             process_ = { };
@@ -3553,18 +3536,33 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             return std::nullopt;
         }
     }
+    // The least significant bit of an edge-qualified event expression.
+    const auto event_bit = [&](const RegisterId value) {
+        if (!description.event_expression_scalar_edge
+            || register_width(value) == 1U) {
+            return value;
+        }
+        const auto bit = allocate_register(1U, register_domain(value));
+        process_.operations.emplace_back(Extract { bit, value, 0U, 1U });
+        return bit;
+    };
+    if (event_baseline) {
+        event_baseline = event_bit(*event_baseline);
+    }
     const auto resume_entry = static_cast<InstructionIndex>(
         process_.operations.size());
     std::optional<InstructionIndex> event_filter_branch;
     if (description.event_expression) {
         process_.operations.emplace_back(WaitSensitivity { });
-        const auto width = register_width(*event_baseline);
-        const auto current = lower_hir_expression(
-            *description.event_expression, width);
+        const auto expression_width = hir_expression_width(
+            *description.event_expression, hir_process_scope_);
+        auto current = lower_hir_expression(
+            *description.event_expression, expression_width.value_or(1U));
         if (!current) {
             process_ = { };
             return std::nullopt;
         }
+        current = event_bit(*current);
         const auto zero = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         const auto one = allocate_register(

@@ -1353,7 +1353,11 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
                 || statement.kind == StatementKind::Null
                 || statement.kind == StatementKind::Block
                 || statement.kind == StatementKind::Assert
-                || statement.kind == StatementKind::Report;
+                || statement.kind == StatementKind::Report
+                // Force and release are sequential statements (IEEE
+                // 1076-2008 10.5.2.1).
+                || statement.kind == StatementKind::Force
+                || statement.kind == StatementKind::Release;
           }
           if (!supported) {
             error(

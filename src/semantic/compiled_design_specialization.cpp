@@ -1213,6 +1213,30 @@ std::optional<std::int64_t> parse_based_literal(
                 std::numeric_limits<std::int64_t>::max())) {
             return std::nullopt;
         }
+        // A based literal's exponent scales by its base (IEEE 1076-2008
+        // 15.5.3): 16#E#E1 is 224.
+        auto exponent_text = normalized.substr(second_hash + 1U);
+        if (!exponent_text.empty()
+            && (exponent_text.front() == 'e' || exponent_text.front() == 'E')) {
+            exponent_text.remove_prefix(1U);
+            if (!exponent_text.empty() && exponent_text.front() == '+') {
+                exponent_text.remove_prefix(1U);
+            }
+            const auto exponent = parse_unsigned(exponent_text, 10U);
+            if (!exponent) {
+                return std::nullopt;
+            }
+            auto scaled = *value;
+            for (std::uint64_t step { }; step < *exponent; ++step) {
+                if (scaled > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())
+                        / *base) {
+                    return std::nullopt;
+                }
+                scaled *= *base;
+            }
+            return static_cast<std::int64_t>(scaled);
+        }
         return static_cast<std::int64_t>(*value);
     }
 
@@ -11038,6 +11062,22 @@ private:
                             return evaluate_declaration(
                                 *view->vhdl->alias_target->selected);
                         }
+                    }
+                }
+                // A parameterless function called by its name (`limit`,
+                // IEEE 1076-2008 9.3.4) evaluates like the call.
+                const CompiledDeclarationPredicate function_declaration
+                    = [](const CompiledDeclarationView& candidate) {
+                          return candidate.vhdl != nullptr
+                              && candidate.vhdl->form
+                              == vhdl::DeclarationForm::function;
+                      };
+                if (resolve_vhdl_expression_declaration(
+                        expression.id, function_declaration)) {
+                    if (const auto value = evaluate_vhdl_value(expression.id);
+                        value
+                        && value->kind == VhdlConstantValue::Kind::integer) {
+                        return value->integer;
                     }
                 }
                 if (const auto hierarchy = hierarchy_identities_.find(

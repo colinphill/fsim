@@ -289,6 +289,14 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item()
             }
             continue;
         }
+        // A use clause may select an operator symbol (`use pkg."+";`,
+        // IEEE 1076-2008 12.4).
+        if (at(TokenKind::StringLiteral)
+            && context_kind == VhdlContextItemKind::UseClause
+            && !selected_name.empty() && selected_name.back() == '.') {
+            selected_name += advance().text;
+            continue;
+        }
         malformed = true;
         advance();
     }
@@ -663,6 +671,13 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
         } else if (match_keyword("signal", true)) {
             // Entity declarative signals (IEEE 1076-2008 3.2.3).
             parse_signal_declaration(unit.signals, &unit.parameters);
+        } else if (match_keyword("shared", true)) {
+            // Shared variables are entity declarative items too (IEEE
+            // 1076-2008 3.2.3).
+            parse_vhdl_shared_variable(unit, previous());
+        } else if (match_keyword("disconnect", true)) {
+            parse_vhdl_disconnection_specification(
+                unit.vhdl_disconnections, previous());
         } else if (match_keyword("package", true)) {
             const auto package_start = previous();
             parse_local_vhdl_package_instantiation(

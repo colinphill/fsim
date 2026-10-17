@@ -8770,6 +8770,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && value_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::name
                 && !contextual_literal
+                // A selected name (`r.e`) reads a record element.
+                && value_expression->vhdl->text.find('.') == std::string::npos
                 && (!value_expression->vhdl->referenced_name
                     || (!value_expression->vhdl->referenced_name->selected
                         && value_expression->vhdl->referenced_name
@@ -18391,6 +18393,34 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             class_static_method_call
                     || call->systemverilog->kind
                         == semantic::sv::ExpressionKind::class_cast)) {
+                // `$cast(dst, src);` called as a task is a run-time error
+                // when the assignment is invalid (IEEE 1800-2017 8.16).
+                if (call->systemverilog->kind
+                    == semantic::sv::ExpressionKind::class_cast) {
+                    const auto assigned = lower_hir_expression(*input.value, 1U);
+                    if (!assigned) {
+                        return false;
+                    }
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        *assigned, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto failure = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Report {
+                        "$cast called as a task found an invalid cast",
+                        runtime::simir::AssertionSeverity::error,
+                        runtime_source_location(span),
+                    });
+                    process_.operations[branch] = Branch {
+                        *assigned,
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()),
+                        failure,
+                        UnknownBranchPolicy::when_false,
+                    };
+                    return true;
+                }
                 if (hir_expression_is_string(
                         *input.value, hir_process_scope_)) {
                     return lower_hir_string_expression(*input.value)
@@ -19752,8 +19782,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
             *input.condition, hir_process_scope_);
         const auto condition_domain = hir_expression_domain(
             *input.condition, hir_process_scope_);
-        const auto boolean_condition = condition_width
-                == std::optional<std::size_t> { 1U }
+        // A BOOLEAN call whose width is not inferred here (a function with
+        // a separate declaration) is still a BOOLEAN condition, as for `if`.
+        const auto boolean_condition
+            = (!condition_width
+                  || *condition_width == 1U)
             && condition_domain
             && *condition_domain == frontend::ValueDomain::Boolean;
         const auto vhdl_2019_scalar_condition
@@ -19949,7 +19982,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     whole_signals.push_back(*denoted);
                     continue;
                 }
-                if (sensitivity.expression) {
+                if (!sensitivity.signal.empty() && sensitivity.expression) {
+                    signal = hir_named_signal(
+                        sensitivity.signal, hir_process_scope_);
+                }
+                if (!signal && sensitivity.expression) {
                     const auto declaration = hir_referenced_declaration(
                         *sensitivity.expression);
                     const auto binding = declaration
@@ -19963,6 +20000,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         auto dependencies = hir_signal_dependencies(
                             *sensitivity.expression,
                             hir_process_scope_);
+                        // A sensitivity names a signal (IEEE 1076-2008
+                        // 10.2).
+                        if (dependencies.empty()) {
+                            report(
+                                "FSIM-ELAB-059",
+                                "unknown wait signal '"
+                                    + sensitivity.signal + "'",
+                                hir_source_span(sensitivity.source));
+                            return true;
+                        }
                         if (dependencies.size() == 1U) {
                             parts.emplace_back(*sensitivity.expression,
                                 dependencies.front());
