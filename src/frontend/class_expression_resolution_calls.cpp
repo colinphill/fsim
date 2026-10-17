@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
+#include "fsim/support/uvm_identity.hpp"
 #include <array>
 
 #include <algorithm>
@@ -392,6 +393,12 @@ void Resolver::retain_task_profile(
         }
         return method->method->return_type;
       }
+      // `p.randomize` without parentheses calls the built-in method
+      // (IEEE 1800-2017 13.5.5, 18.6.1).
+      if (member == "randomize") {
+        expression.text = ".randomize";
+        return resolve_call(expression, scope, expected_class, expected_scalar);
+      }
       diagnose(
           diagnostics_,
           "FSIM-SV-CLASS-012",
@@ -437,6 +444,31 @@ void Resolver::retain_task_profile(
             expression.operands.front().text + expression.text, scope)) {
       expression.operands.front().text =
           "this." + expression.operands.front().text;
+    }
+    // `obj.rand_mode(b)` and `obj.constraint_mode(b)` set the mode of every
+    // random variable or constraint of the object (IEEE 1800-2017 18.8,
+    // 18.9).
+    if (built_in_mode && expression.operands.size() == 2U
+        && expression.operands.front().kind == ExpressionKind::Identifier
+        && expression.operands.front().text.find('.') == std::string::npos) {
+      auto receiver = expression.operands.front();
+      const auto receiver_type = resolve_expression(receiver, scope);
+      if (receiver_type && class_identity(*receiver_type)
+          && !receiver_type->systemverilog_container) {
+        expression.operands.front() = std::move(receiver);
+        expression.text = "@sv-method:@builtin-"
+            + std::string{expression.text == ".rand_mode"
+                  ? "rand-mode:" : "constraint-mode:"}
+            + "@object";
+        expression.call_argument_names.resize(expression.operands.size());
+        expression.call_argument_directions.assign(
+            expression.operands.size(), PortDirection::Input);
+        resolve_expression(expression.operands.back(), scope);
+        Type result{
+            ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+        retain_result_type(expression, result);
+        return result;
+      }
     }
     if (built_in_mode
         && expression.operands.front().kind == ExpressionKind::Identifier) {
@@ -1160,6 +1192,22 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         resolve_expression(statement.task_arguments.back(), scope);
         return;
       }
+      // The built-in pre_randomize and post_randomize do nothing unless a
+      // class overrides them (IEEE 1800-2017 18.6.2).
+      if ((name == "pre_randomize" || name == "post_randomize")
+          && statement.task_arguments.empty()
+          && find_methods(*class_identity(*receiver_type), name,
+                 SystemVerilogClassMethodKind::Function)
+                 .empty()
+          && find_methods(*class_identity(*receiver_type), name,
+                 SystemVerilogClassMethodKind::Task)
+                 .empty()) {
+        statement.kind = StatementKind::Null;
+        statement.task_name.clear();
+        statement.task_arguments.clear();
+        statement.task_argument_names.clear();
+        return;
+      }
       auto kind = SystemVerilogClassMethodKind::Constructor;
       if (name != "new") {
         kind = find_methods(
@@ -1299,8 +1347,8 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             && kind == SystemVerilogClassMethodKind::Function
             && scope.class_owner == nullptr
             && selected_uvm_intrinsic(*owner, name).empty()
-            && match->method->canonical_identity.find("::uvm_")
-                == std::string::npos) {
+            && !support::is_uvm_library_identity(
+                match->method->canonical_identity)) {
           // A static function called as a statement discards its result
           // (IEEE 1800-2017 13.4.1) and lowers as an expression statement;
           // native UVM methods keep their task form.
@@ -1435,24 +1483,20 @@ void Resolver::resolve_statement(
     }
   }
   const Scope& scope = declared_scope ? *declared_scope : inherited_scope;
-  // `$cast(dest, value);` to an integral destination discards the call's
-  // result (IEEE 1800-2017 6.24.2).
+  // `$cast(dest, value);` discards the call's result (IEEE 1800-2017
+  // 6.24.2); a class destination resolves to the checked class cast.
   if (statement.kind == StatementKind::TaskCall
       && statement.task_name == "$cast"
       && statement.task_arguments.size() == 2U) {
-    auto destination = statement.task_arguments.front();
-    const auto destination_type = resolve_expression(destination, scope);
-    if (!destination_type || !class_identity(*destination_type)) {
-      Expression call{ExpressionKind::Call, "@sv-dollar-cast",
-          {std::move(statement.task_arguments[0]),
-           std::move(statement.task_arguments[1])},
-          statement.span};
-      statement.kind = StatementKind::ContainerMethod;
-      statement.value = std::move(call);
-      statement.task_name.clear();
-      statement.task_arguments.clear();
-      statement.task_argument_names.clear();
-    }
+    Expression call{ExpressionKind::Call, "@sv-dollar-cast",
+        {std::move(statement.task_arguments[0]),
+         std::move(statement.task_arguments[1])},
+        statement.span};
+    statement.kind = StatementKind::ContainerMethod;
+    statement.value = std::move(call);
+    statement.task_name.clear();
+    statement.task_arguments.clear();
+    statement.task_argument_names.clear();
   }
   // A task of an element of a module or interface instance array,
   // `u[0].t(x)`, is a hierarchical task call (IEEE 1800-2017 23.8).
@@ -1669,6 +1713,13 @@ void Resolver::resolve_statement(
   }
 }
 void Resolver::resolve_function(FunctionDeclaration& function, Scope scope) {
+  // A default argument is resolved where the subroutine is declared
+  // (IEEE 1800-2017 13.5.3).
+  for (auto& argument : function.arguments) {
+    if (argument.default_value) {
+      resolve_typed_expression(*argument.default_value, scope, argument.type);
+    }
+  }
   add_objects(scope, function.arguments);
   add_objects(scope, function.variables);
   scope.objects[function.name] = function.return_type;
@@ -1688,6 +1739,13 @@ void Resolver::resolve_function(FunctionDeclaration& function, Scope scope) {
   for (auto& nested : function.functions) resolve_function(nested, scope);
 }
 void Resolver::resolve_task(TaskDeclaration& task, Scope scope) {
+  // A default argument is resolved where the subroutine is declared
+  // (IEEE 1800-2017 13.5.3).
+  for (auto& argument : task.arguments) {
+    if (argument.default_value) {
+      resolve_typed_expression(*argument.default_value, scope, argument.type);
+    }
+  }
   add_objects(scope, task.arguments);
   add_objects(scope, task.variables);
   for (auto& variable : task.variables) {

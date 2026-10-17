@@ -104,6 +104,20 @@ void Resolver::run() {
         effective_library(unit.library) + "::" + unit.name,
         nullptr,
         {}};
+    // Compilation-unit objects are visible to every unit of the file, and
+    // the unit's own declarations hide them (IEEE 1800-2017 3.12.1).
+    for (const auto& import : unit.systemverilog_imports) {
+      if (!import.package.starts_with("fsim_unit_")) continue;
+      for (const auto& candidate : design_.units) {
+        if (candidate.kind == UnitKind::SystemVerilogPackage
+            && candidate.name == import.package
+            && effective_library(candidate.library)
+                == effective_library(unit.library)) {
+          add_objects(scope, candidate.signals);
+          add_objects(scope, candidate.variables);
+        }
+      }
+    }
     add_objects(scope, unit.parameters);
     add_objects(scope, unit.ports);
     for (const auto& instance : unit.instances) {
@@ -1708,6 +1722,18 @@ void Resolver::retain_result_type(
             return resolve_expression(expression, scope);
           }
         }
+      }
+      // `p.randomize` without parentheses calls the built-in method
+      // (IEEE 1800-2017 13.5.5, 18.6.1).
+      if (member == "randomize"
+          && find_methods(*class_identity(*receiver_type), member,
+                 SystemVerilogClassMethodKind::Function)
+                 .empty()) {
+        expression.kind = ExpressionKind::Call;
+        expression.text = ".randomize";
+        expression.operands = {std::move(receiver)};
+        return resolve_call(expression, scope, std::nullopt,
+            SystemVerilogScalarKind::None);
       }
       const auto method = select_method(
           *class_identity(*receiver_type),

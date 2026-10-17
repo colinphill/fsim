@@ -993,9 +993,19 @@ def vests_cases(root: Path) -> list[Case]:
         group_dir = base / directory
         exp = group_dir / exp_name
         libraries: list[str] = []
+        # Libraries a chained group has compiled into, and those its script
+        # deletes before the next case (`delete_lib`): a later chapter may
+        # reuse an earlier chapter's unit names.
+        compiled_libraries: set[str] = set()
+        pending_deletes: list[str] = []
         for command, positional, options in parse_exp(exp):
             if command == "create_lib" and positional:
                 libraries.append(positional[0])
+                continue
+            if command == "delete_lib" and positional and chain:
+                if positional[0] in compiled_libraries:
+                    compiled_libraries.discard(positional[0])
+                    pending_deletes.append(positional[0])
                 continue
             if command not in ("build_compliant_test", "run_compliant_test",
                                "run_non_compliant_test", "run_err_non_compliant_test"):
@@ -1020,7 +1030,11 @@ def vests_cases(root: Path) -> list[Case]:
             local_name = source.name
             compile_args.append(local_name)
             copies = [(str(source), local_name)]
-            commands = [Command("compile", compile_args)]
+            commands = [Command("compile", ["library", "delete", lib])
+                        for lib in pending_deletes]
+            pending_deletes = []
+            commands.append(Command("compile", compile_args))
+            compiled_libraries.add(library)
             text = read_text(source)
             checker_data: dict = {"outputs": []}
             case_chain = chain
@@ -1380,9 +1394,16 @@ def ivtest_source_location_lines(case_id: str, lines: list[str]) -> list[str]:
         "br_gh782a": {"br_gh782a.v": "sources/roots/root",
                        "br_gh782a.vi": "includes/roots"},
         "br_gh782b": {"br_gh782b.v": "sources/roots/root"},
+        "fileline": {"fileline.v": "sources/roots/root"},
     }.get(case_id, {})
     result = []
     for line in lines:
+        bare = re.fullmatch(
+            r"objects/[0-9a-f]{64}/(sources/roots/root)/[0-9]{8}/([^/ ]+)",
+            line)
+        if bare and files.get(bare[2]) == bare[1]:
+            result.append(f"./ivltests/{bare[2]}")
+            continue
         match = re.fullmatch(
             r"(File|Included file) objects/[0-9a-f]{64}/"
             r"(sources/roots/root|includes/roots)/[0-9]{8}/"
@@ -1522,8 +1543,9 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
         if gold:
             expected = [l.rstrip() for l in read_text(Path(gold)).splitlines()
                         if not re.match(r"^(VCD info:|.*\$finish called|.*: warning|.*:\d+\s+warning)", l)]
-            actual = [l.rstrip() for l in lines if not l.startswith("objects/")]
-            actual = ivtest_source_location_lines(case.id, actual)
+            actual = ivtest_source_location_lines(
+                case.id, [l.rstrip() for l in lines])
+            actual = [l for l in actual if not l.startswith("objects/")]
             if expected != actual:
                 return "fail", "output differs from gold"
             return "pass", ""

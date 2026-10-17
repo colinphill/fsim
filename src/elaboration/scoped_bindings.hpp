@@ -177,6 +177,14 @@ public:
         return end();
     }
 
+    // A binding of this layer only, ignoring enclosing scopes.
+    [[nodiscard]] const_iterator find_local(const Key& key) const
+    {
+        const auto found = local_.find(key);
+        return found == local_.end() ? end()
+                                     : const_iterator { this, this, found };
+    }
+
     [[nodiscard]] const Value& at(const Key& key) const
     {
         const auto found = find(key);

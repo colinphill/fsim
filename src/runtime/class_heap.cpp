@@ -583,6 +583,20 @@ void SystemVerilogClassHeap::set_constraint_mode(
   found->second = enabled;
 }
 
+void SystemVerilogClassHeap::set_all_random_modes(
+    const SystemVerilogClassHandle handle, const bool enabled) {
+  for (auto& property : object(handle).properties) {
+    if (property.random_state) property.random_state->enabled = enabled;
+  }
+}
+
+void SystemVerilogClassHeap::set_all_constraint_modes(
+    const SystemVerilogClassHandle handle, const bool enabled) {
+  for (auto& entry : object(handle).constraint_modes) {
+    entry.second = enabled;
+  }
+}
+
 void SystemVerilogClassHeap::reset_randc_cycle(
     const SystemVerilogClassHandle handle,
     const std::string_view property_name) {

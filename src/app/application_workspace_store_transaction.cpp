@@ -50,10 +50,15 @@ bool merge_records(LibraryCatalog& catalog,
     const auto primary_identity = [](const library::UnitIndexEntry& unit) {
         auto primary = unit;
         primary.kind = "primary";
-        primary.name = unit.primary_name.empty() ? unit.name : unit.primary_name;
+        // A configuration names its entity in primary_name but is itself a
+        // primary unit.
+        const bool own_name = unit.primary_name.empty()
+            || (unit.kind != "architecture" && unit.kind != "package_body"
+                && unit.kind != "package");
+        primary.name = own_name ? unit.name : unit.primary_name;
         primary.primary_name.clear();
         primary.architecture.clear();
-        primary.name_form = unit.primary_name.empty()
+        primary.name_form = own_name
             ? unit.name_form : unit.primary_name_form;
         primary.primary_name_form = library::VhdlIdentifierForm::unknown;
         return unit_identity(primary);

@@ -1910,6 +1910,17 @@ namespace {
                     8U, frontend::ValueDomain::Bit2
                 };
             }
+            // The encodings of REAL_VECTOR and TIME_VECTOR elements.
+            if (compiled_vhdl_name_equal(name, "real")) {
+                return CompiledVhdlSignalLayout {
+                    64U, frontend::ValueDomain::Bit2
+                };
+            }
+            if (compiled_vhdl_name_equal(name, "time")) {
+                return CompiledVhdlSignalLayout {
+                    64U, frontend::ValueDomain::Integer
+                };
+            }
             if (compiled_vhdl_name_equal(name, "severity_level")
                 || compiled_vhdl_name_equal(name, "file_open_kind")
                 || compiled_vhdl_name_equal(name, "file_open_status")) {
@@ -21274,14 +21285,28 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
         }
         const auto& definition = *type->vhdl;
         auto issues = static_cast<unsigned>(no_composite_issue);
+        // Element type marks are named in the type declaration's scope,
+        // which may see an enclosing entity's declarations.
+        const auto type_declaration
+            = specialized->find_declaration(definition.declaration);
+        const auto element_scope
+            = type_declaration && type_declaration->vhdl != nullptr
+            ? std::optional { type_declaration->vhdl->scope }
+            : std::nullopt;
+        const auto element_subtype
+            = [&](semantic::vhdl::SubtypeIndication element) {
+                  return compiled_vhdl_link_subtype(
+                      *specialized, std::move(element), element_scope);
+              };
         if (definition.form == semantic::vhdl::TypeForm::record) {
             if (definition.record_elements.empty()) {
                 issues |= unresolved_composite_type;
             }
             for (const auto& element : definition.record_elements) {
                 issues |= inspect(
-                    semantic::vhdl::constrained_element_subtype(
-                        subtype, element.name, element.subtype),
+                    element_subtype(
+                        semantic::vhdl::constrained_element_subtype(
+                            subtype, element.name, element.subtype)),
                     visiting, false);
             }
         } else if (definition.form
@@ -21299,8 +21324,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             }
             if (definition.element_subtype) {
                 issues |= inspect(
-                    semantic::vhdl::constrained_element_subtype(
-                        subtype, "", *definition.element_subtype),
+                    element_subtype(
+                        semantic::vhdl::constrained_element_subtype(
+                            subtype, "", *definition.element_subtype)),
                     visiting, false);
             } else {
                 issues |= unresolved_composite_type;
@@ -22279,6 +22305,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                    .vhdl_package_member_visible(architecture, *owner, type.name);
     };
     bool valid = true;
+    std::unordered_set<std::string> null_integer_subtypes;
     for (const auto& compiled_type :
         compiled_->vhdl_hir.types()) {
         const auto effective_view = specialized->find_type(
@@ -22559,12 +22586,11 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 ? *constraint.left < *constraint.right
                 : *constraint.left > *constraint.right;
             if (constraint.null || null) {
-                report(
-                    "FSIM-ELAB-INTEGER-002",
-                    "null VHDL integer subtype constraints are not "
-                    "executable in this bounded runtime",
-                    compiled_source_span(*compiled_, source));
-                valid = false;
+                // A null subtype is legal (a loop over it runs no
+                // iterations); only an object of it has no value
+                // (IEEE 1076-2008 5.2.1).
+                null_integer_subtypes.insert(
+                    lowercase_vhdl_simple_name(type.name));
             } else if (profile.scalar_range
                 && (*constraint.left
                         < std::min(profile.scalar_range->left,
@@ -22641,6 +22667,17 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 unconstrained,
                 declaration->vhdl->scope,
                 constraint_visiting);
+            if (constraints.empty()
+                && null_integer_subtypes.contains(lowercase_vhdl_simple_name(
+                    linked_subtype.type_mark.spelling))) {
+                report(
+                    "FSIM-ELAB-INTEGER-002",
+                    "null VHDL integer subtype constraints are not "
+                    "executable in this bounded runtime",
+                    compiled_source_span(
+                        *compiled_, declaration->vhdl->source));
+                valid = false;
+            }
             for (const auto& constraint : constraints) {
                 if (base_profile.type_class
                         != SubtypeClass::integer

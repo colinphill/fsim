@@ -8,6 +8,9 @@ namespace fsim::elaboration {
 void Lowerer::record_implicit_signal_dependency(SignalId signal,
     std::uint32_t offset, std::uint32_t width)
 {
+    if (hir_static_storage_signals_.contains(signal)) {
+        return;
+    }
     if (signal < design_.signal_info_.size()
         && offset == 0U && width == design_.signal_info_[signal].width) {
         width = 0U;

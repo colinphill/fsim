@@ -1536,6 +1536,21 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
           construction = std::move(initializer);
           initializer.reset();
         }
+        // A container initializer that is not an elaboration constant runs
+        // at time zero before any procedure (IEEE 1800-2017 6.8); a
+        // constant one is applied at elaboration and stored again.
+        std::optional<Expression> container_initializer;
+        if (initializer && declaration_type.systemverilog_container
+            && !package_variable && !systemverilog_const
+            && (unit.kind == UnitKind::VerilogModule
+                || unit.kind == UnitKind::SystemVerilogProgram
+                || unit.kind == UnitKind::SystemVerilogInterface)
+            && (initializer->kind == ExpressionKind::Call
+                || initializer->kind == ExpressionKind::Identifier
+                || initializer->kind == ExpressionKind::Index
+                || initializer->kind == ExpressionKind::Slice)) {
+          container_initializer = *initializer;
+        }
         VariableDeclaration variable{
             name.text,
             std::move(declaration_type),
@@ -1563,6 +1578,22 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
                 return !process.name.starts_with("$class_initializer_");
               });
           unit.processes.insert(position, std::move(initializer_process));
+        }
+        if (container_initializer) {
+          Statement assignment;
+          assignment.kind = StatementKind::Assignment;
+          assignment.assignment_kind = AssignmentKind::Blocking;
+          assignment.target = Expression {
+              ExpressionKind::Identifier, name.text, { }, name.span
+          };
+          assignment.value = std::move(*container_initializer);
+          assignment.span = cover(name.span, assignment.value.span);
+          Process process;
+          process.kind = ProcessKind::Initial;
+          process.name = "$declaration_initializer_" + name.text;
+          process.statements.push_back(std::move(assignment));
+          process.span = process.statements.front().span;
+          unit.processes.push_back(std::move(process));
         }
       }
       if (!match(TokenKind::Comma)) {
@@ -2246,8 +2277,10 @@ void VerilogParser::parse_gate_primitive(
                          : static_cast<std::int64_t>(ordinal));
             }
           } else if (
-              terminal.kind == ExpressionKind::LogicLiteral
-              && terminal.text.starts_with("1'")) {
+              (terminal.kind == ExpressionKind::LogicLiteral
+                  && terminal.text.starts_with("1'"))
+              || terminal.kind == ExpressionKind::Index) {
+            // A bit-select is a scalar terminal shared by every instance.
             return terminal;
           } else {
             // A sized literal or a constant part-select has a known width,
@@ -2278,6 +2311,28 @@ void VerilogParser::parse_gate_primitive(
                   "a gate-array terminal must be scalar or match the "
                   "instance count");
               return terminal;
+            }
+            // The leftmost instance takes the leftmost bit of a constant
+            // part-select (IEEE 1364-2005 7.1.6).
+            if (width && terminal.kind == ExpressionKind::Slice
+                && terminal.text != "+:" && terminal.text != "-:") {
+              if (*width == 1U) {
+                return terminal;
+              }
+              const auto left = *detail::decimal_i64(terminal.operands[1].text);
+              const auto right = *detail::decimal_i64(terminal.operands[2].text);
+              const auto offset = static_cast<std::int64_t>(ordinal);
+              Expression bit{
+                  ExpressionKind::IntegerLiteral,
+                  std::to_string(left > right ? left - offset : left + offset),
+                  {},
+                  terminal.span};
+              const auto span = terminal.span;
+              return Expression{
+                  ExpressionKind::Index,
+                  "",
+                  {std::move(terminal.operands[0]), std::move(bit)},
+                  span};
             }
           }
           Expression index{
@@ -2316,6 +2371,7 @@ void VerilogParser::parse_gate_primitive(
       }
 
       Expression value = std::move(mapped_inputs.front());
+      std::optional<std::pair<Expression, Expression>> tristate_drivers;
       if (unary) {
         const auto combined = cover(start.span, value.span);
         if (operation == "not") {
@@ -2367,12 +2423,28 @@ void VerilogParser::parse_gate_primitive(
             "1'bz",
             {},
             start.span};
+        const auto gate_span = cover(start.span, previous().span);
+        auto data = value;
         value = Expression{
             ExpressionKind::Call,
             "?:",
-            {std::move(control), std::move(value),
-             std::move(high_impedance)},
-            cover(start.span, previous().span)};
+            {std::move(control), std::move(value), high_impedance},
+            gate_span};
+        // Without a delay, the gate is two drivers so that an unknown
+        // control drives L or H, a strength range on one side (IEEE
+        // 1800-2017 28.6, Table 28-7): one pulls only to 0, the other only
+        // to 1. A delayed gate keeps one driver.
+        if (!delay) {
+          const auto split = [&](const char* blocked) {
+            Expression level{
+                ExpressionKind::LogicLiteral, blocked, {}, gate_span};
+            Expression test{ExpressionKind::Binary, "===",
+                {data, std::move(level)}, gate_span};
+            return Expression{ExpressionKind::Call, "?:",
+                {std::move(test), high_impedance, value}, gate_span};
+          };
+          tristate_drivers = {split("1'b1"), split("1'b0")};
+        }
       } else {
         const auto binary_operation =
             operation == "and" || operation == "nand"
@@ -2421,6 +2493,24 @@ void VerilogParser::parse_gate_primitive(
             ? base_label
             : base_label + "$output" + std::to_string(output);
         statement.span = cover(start.span, previous().span);
+        if (tristate_drivers) {
+          const auto declared = strength.value_or(VerilogDriveStrength{
+              VerilogStrength::Strong, VerilogStrength::Strong,
+              statement.span});
+          auto high = statement;
+          statement.value = tristate_drivers->first;
+          statement.verilog_drive_strength = VerilogDriveStrength{
+              declared.zero, VerilogStrength::HighZ, declared.span};
+          high.value = tristate_drivers->second;
+          high.verilog_drive_strength = VerilogDriveStrength{
+              VerilogStrength::HighZ, declared.one, declared.span};
+          if (!high.label.empty()) {
+            high.label += "$one";
+          }
+          statements.push_back(std::move(statement));
+          statements.push_back(std::move(high));
+          continue;
+        }
         statements.push_back(std::move(statement));
       }
     }

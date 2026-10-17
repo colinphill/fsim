@@ -2,6 +2,7 @@
 #include "fsim/frontend/class_specialization.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <functional>
 #include <limits>
@@ -100,9 +101,119 @@ void diagnose(
       span.expansion_stack});
 }
 
+// The value of `value` held in `width` bits, sign-extended when signed.
+[[nodiscard]] std::int64_t fit_width(
+    const std::int64_t value, const std::uint64_t width, const bool is_signed) {
+  if (width == 0U || width >= 64U) {
+    return value;
+  }
+  const auto mask = (std::uint64_t{1} << width) - 1U;
+  auto bits = static_cast<std::uint64_t>(value) & mask;
+  if (is_signed && ((bits >> (width - 1U)) & 1U) != 0U) {
+    bits |= ~mask;
+  }
+  return static_cast<std::int64_t>(bits);
+}
+
+// A based or sized literal without unknown bits (`8'd1`, `16'h1`, `4'sb10`,
+// `'0`); IEEE 1800-2017 5.7.1.
+[[nodiscard]] std::optional<std::int64_t> evaluate_based_literal(
+    std::string_view text) {
+  std::string digits_text;
+  for (const char character : text) {
+    if (character != '_') {
+      digits_text += character;
+    }
+  }
+  const std::string_view literal{digits_text};
+  const auto quote = literal.find('\'');
+  if (quote == std::string_view::npos) {
+    return std::nullopt;
+  }
+  std::uint64_t width{};
+  if (quote != 0U) {
+    const auto converted = std::from_chars(
+        literal.data(), literal.data() + quote, width, 10);
+    if (converted.ec != std::errc{} || width == 0U) {
+      return std::nullopt;
+    }
+  }
+  auto rest = literal.substr(quote + 1U);
+  if (rest == "0") {
+    return 0;
+  }
+  bool is_signed = false;
+  if (!rest.empty() && (rest.front() == 's' || rest.front() == 'S')) {
+    is_signed = true;
+    rest.remove_prefix(1U);
+  }
+  if (rest.empty()) {
+    return std::nullopt;
+  }
+  int base = 0;
+  switch (rest.front()) {
+  case 'b': case 'B': base = 2; break;
+  case 'o': case 'O': base = 8; break;
+  case 'd': case 'D': base = 10; break;
+  case 'h': case 'H': base = 16; break;
+  default: return std::nullopt;
+  }
+  rest.remove_prefix(1U);
+  std::uint64_t value{};
+  const auto converted =
+      std::from_chars(rest.data(), rest.data() + rest.size(), value, base);
+  if (rest.empty() || converted.ec != std::errc{}
+      || converted.ptr != rest.data() + rest.size()) {
+    return std::nullopt;
+  }
+  return fit_width(static_cast<std::int64_t>(value), width, is_signed);
+}
+
 [[nodiscard]] std::optional<std::int64_t> evaluate(
     const Expression& expression,
     const ValueEnvironment& environment) {
+  if (expression.kind == ExpressionKind::LogicLiteral) {
+    return evaluate_based_literal(expression.text);
+  }
+  if (expression.kind == ExpressionKind::Call && expression.text == "?:"
+      && expression.operands.size() == 3U) {
+    const auto condition = evaluate(expression.operands[0], environment);
+    if (!condition) {
+      return std::nullopt;
+    }
+    return evaluate(expression.operands[*condition != 0 ? 1U : 2U],
+        environment);
+  }
+  // A cast to an integral type or a size (IEEE 1800-2017 6.24.1).
+  if (expression.kind == ExpressionKind::Call
+      && expression.text.starts_with("@sv-cast:")
+      && expression.operands.size() == 1U) {
+    const auto value = evaluate(expression.operands.front(), environment);
+    if (!value) {
+      return std::nullopt;
+    }
+    const std::string_view target{
+        std::string_view{expression.text}.substr(9U)};
+    static constexpr std::array<std::pair<std::string_view, std::uint64_t>, 5>
+        signed_types{{{"byte", 8U}, {"shortint", 16U}, {"int", 32U},
+            {"longint", 64U}, {"integer", 32U}}};
+    for (const auto& [name, width] : signed_types) {
+      if (target == name) {
+        return fit_width(*value, width, true);
+      }
+    }
+    if (target == "bit" || target == "logic" || target == "reg") {
+      return fit_width(*value, 1U, false);
+    }
+    std::uint64_t width{};
+    const auto converted = std::from_chars(
+        target.data(), target.data() + target.size(), width, 10);
+    if (converted.ec == std::errc{}
+        && converted.ptr == target.data() + target.size() && width > 0U) {
+      return fit_width(*value, width, false);
+    }
+    return std::nullopt;
+  }
   if (expression.kind == ExpressionKind::Identifier) {
     const auto found = environment.find(expression.text);
     return found == environment.end()
@@ -154,6 +265,19 @@ void diagnose(
   if (expression.text == "%") {
     return *right == 0 ? std::nullopt
                        : std::optional{*left % *right};
+  }
+  if (expression.text == "&&") return *left != 0 && *right != 0 ? 1 : 0;
+  if (expression.text == "||") return *left != 0 || *right != 0 ? 1 : 0;
+  if ((expression.text == "<<" || expression.text == "<<<"
+          || expression.text == ">>" || expression.text == ">>>")
+      && *right >= 0 && *right < 63) {
+    if (expression.text.starts_with("<")) {
+      return static_cast<std::int64_t>(
+          static_cast<std::uint64_t>(*left) << *right);
+    }
+    return expression.text == ">>>" ? *left >> *right
+        : static_cast<std::int64_t>(
+              static_cast<std::uint64_t>(*left) >> *right);
   }
   if (expression.text == "&") return *left & *right;
   if (expression.text == "|") return *left | *right;

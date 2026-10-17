@@ -261,6 +261,10 @@ class SystemVerilogClassHeap final {
   [[nodiscard]] bool constraint_mode(
       SystemVerilogClassHandle handle,
       std::string_view constraint) const;
+  // Object-level rand_mode(b) and constraint_mode(b).
+  void set_all_random_modes(SystemVerilogClassHandle handle, bool enabled);
+  void set_all_constraint_modes(
+      SystemVerilogClassHandle handle, bool enabled);
   void set_constraint_mode(
       SystemVerilogClassHandle handle,
       std::string_view constraint,

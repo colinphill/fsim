@@ -5,6 +5,7 @@
 #include "fsim/runtime/uvm_factory.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/runtime/uvm_registry.hpp"
+#include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -76,7 +77,8 @@ bool is_systemverilog_uvm_type(
     const std::string_view base_name) {
   const auto* current = &specialization;
   while (current != nullptr) {
-    if (class_leaf_name(current->declaration_identity) == base_name)
+    if (class_leaf_name(current->declaration_identity) == base_name
+        && support::is_uvm_library_identity(current->declaration_identity))
       return true;
     current = current->base
         ? &find_specialization(
@@ -85,7 +87,8 @@ bool is_systemverilog_uvm_type(
   }
   const auto inherited_property = std::ranges::any_of(
       specialization.properties, [&](const auto& property) {
-        return class_leaf_name(property.owner_identity) == base_name;
+        return class_leaf_name(property.owner_identity) == base_name
+            && support::is_uvm_library_identity(property.owner_identity);
       });
   if (inherited_property)
     return true;
@@ -93,7 +96,8 @@ bool is_systemverilog_uvm_type(
   return std::ranges::any_of(
       specialization.methods, [&](const auto& method) {
         return method.canonical_identity.find(owner_fragment)
-            != std::string::npos;
+            != std::string::npos
+            && support::is_uvm_library_identity(method.canonical_identity);
       });
 }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "lowerer_internal.hpp"
@@ -1847,6 +1848,15 @@ Lowerer::lower_hir_static_container_actual(
                 false,
             });
     }
+    // An unpacked array concatenation actual of a queue or dynamic array
+    // formal, `{5, 6}` or `{}` (IEEE 1800-2017 10.10, 13.5).
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::concatenation
+        && !formal_type.fixed && !formal_type.associative) {
+        return lower_hir_container_concatenation(
+            formal_type, expression->systemverilog->operands);
+    }
     const auto diagnostics_before = diagnostics_.size();
     const auto source = lower_hir_static_container_value(expression_id);
     if (!source) {
@@ -2353,6 +2363,21 @@ std::optional<SignalId> Lowerer::hir_named_signal(
     if (hir_genvar_hides_signal(name, scope)) {
         return std::nullopt;
     }
+    // An expanded name through the enclosing architecture,
+    // `arch.q` (IEEE 1076-2008 8.3).
+    if (const auto dot = name.find('.');
+        language_ == frontend::Language::Vhdl2008 && dot != std::string::npos
+        && specialized_hir_unit_ != nullptr) {
+        const auto& units = specialized_hir_unit_->design().vhdl_hir.units();
+        const auto unit = std::ranges::find(units,
+            specialized_hir_unit_->unit(), &semantic::vhdl::Unit::id);
+        if (unit != units.end()
+            && unit->kind == semantic::vhdl::UnitKind::architecture
+            && equal_ignoring_ascii_case(
+                std::string_view { name }.substr(0U, dot), unit->name)) {
+            return hir_named_signal(name.substr(dot + 1U), scope, source_order);
+        }
+    }
     if (specialized_hir_unit_ != nullptr && source_order != 0U) {
         const auto resolution = hir_resolver().resolve_systemverilog(
             name, scope, { }, true, std::nullopt, source_order);
@@ -2705,9 +2730,8 @@ Lowerer::hir_class_method_profile(
     const auto* selected = resolver.resolve_systemverilog_class_method(
         call.class_member_identity, static_call,
         semantic::sv::ClassMethodKind::function).unique();
-    const auto native_uvm = call.class_member_identity.starts_with("@uvm-")
-        || call.class_member_identity.find("::uvm_")
-            != std::string::npos;
+    const auto native_uvm
+        = support::is_uvm_library_identity(call.class_member_identity);
     // A virtual call dispatches to the object's override, so a pure
     // virtual prototype supplies only the signature (IEEE 1800-2017 8.21).
     const auto dispatched = instance_call
@@ -2860,9 +2884,8 @@ Lowerer::hir_class_task_profile(
     if (identity.empty()) {
         return std::nullopt;
     }
-    const auto native_uvm = class_call
-        && (identity.starts_with("@uvm-")
-            || identity.find("::uvm_") != std::string_view::npos);
+    const auto native_uvm
+        = class_call && support::is_uvm_library_identity(identity);
 
     auto selected_declaration = std::optional<semantic::DeclarationId> { };
     auto interface_receiver = std::optional<std::string> { };
@@ -3272,7 +3295,7 @@ bool Lowerer::hir_class_derives_from_uvm(
         = specialized_hir_unit_->design().systemverilog_hir.classes();
     std::set<std::string_view> visited;
     for (auto current = identity; !current.empty();) {
-        if (current.find("uvm_") != std::string_view::npos) {
+        if (support::is_uvm_library_identity(current)) {
             return true;
         }
         if (!visited.insert(current).second) {
@@ -3283,8 +3306,10 @@ bool Lowerer::hir_class_derives_from_uvm(
         if (found == classes.end()) {
             return false;
         }
-        if (found->base && found->base->name.find("uvm_")
-                != std::string::npos) {
+        // A base that did not resolve in this design names a separately
+        // compiled library class.
+        if (found->base && found->base_declaration_identity.empty()
+            && found->base->name.starts_with("uvm_")) {
             return true;
         }
         current = found->base_declaration_identity;
@@ -3311,8 +3336,8 @@ Lowerer::hir_lowerable_constructor_class(const std::string_view identity) const
     for (const auto* current = selected; current != nullptr;) {
         if (!visited.insert(current->canonical_identity).second
             || !current->parameters.empty() || current->interface_class
-            || current->canonical_identity.find("uvm_pkg::")
-                != std::string::npos
+            || support::is_uvm_library_identity(
+                current->canonical_identity)
             || (current->base && !current->base->actuals.empty())) {
             return nullptr;
         }
@@ -3808,7 +3833,7 @@ Lowerer::lower_hir_class_function_call(
     if ((!lower_class_functions_ && !retry_input_container_actuals)
         || profile.static_method != !receiver
         || profile.identity.empty() || profile.identity.starts_with('@')
-        || profile.identity.find("uvm_") != std::string::npos) {
+        || support::is_uvm_library_identity(profile.identity)) {
         return std::nullopt;
     }
     if (const auto separator = profile.identity.rfind("::");
@@ -4617,8 +4642,8 @@ bool Lowerer::lower_hir_class_task_call(
     if (!profile) {
         return false;
     }
-    const auto native_uvm = profile->identity.starts_with("@uvm-")
-        || profile->identity.find("::uvm_") != std::string::npos;
+    const auto native_uvm
+        = support::is_uvm_library_identity(profile->identity);
     std::optional<RegisterId> receiver;
     if (profile->receiver) {
         receiver = lower_hir_expression(*profile->receiver, 64U);

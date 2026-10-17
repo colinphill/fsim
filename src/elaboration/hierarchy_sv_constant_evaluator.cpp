@@ -1560,6 +1560,22 @@ private:
                 + record.text + "'";
             return std::nullopt;
         }
+        // Outside a constant function, a variable's initializer is only its
+        // starting value, not a constant (IEEE 1800-2017 11.2.1).
+        if (frames_.empty()) {
+            const auto view = specialization_.find_declaration(*selected);
+            using Form = semantic::sv::DeclarationForm;
+            if (view && view->systemverilog != nullptr
+                && (view->systemverilog->form == Form::variable
+                    || view->systemverilog->form == Form::net
+                    || view->systemverilog->form == Form::port)
+                && !view->systemverilog->array_local_parameter
+                && !view->systemverilog->array_parameter) {
+                error_ = "SystemVerilog name '" + record.text
+                    + "' is not a constant";
+                return std::nullopt;
+            }
+        }
         auto result = value_for_declaration(*selected);
         // A declaration reference uses the value parameter's resolved or
         // inferred type. Do not carry an unbased-unsized literal's contextual
@@ -1606,6 +1622,20 @@ private:
                 && declaration->systemverilog->type) {
                 result->packed_range
                     = declaration->systemverilog->type->packed_range;
+                // Bounds written as constant expressions (`[base+15:base]`)
+                // still number the parameter's bits (IEEE 1800-2017 6.20.2).
+                if (auto& range = result->packed_range) {
+                    if (!range->left && range->left_expression) {
+                        range->left = specialization_
+                            .evaluate_integral_expression(
+                                *range->left_expression);
+                    }
+                    if (!range->right && range->right_expression) {
+                        range->right = specialization_
+                            .evaluate_integral_expression(
+                                *range->right_expression);
+                    }
+                }
             }
         }
         return result;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "fsim/support/uvm_identity.hpp"
 
 #include <charconv>
 
@@ -25,6 +26,7 @@ namespace fsim::app {
     // the simulation's UVM phase services perform; their bodies are not run.
     if (canonical_identity.find("uvm_pkg::uvm_component::")
             != std::string_view::npos
+        && support::is_uvm_library_identity(canonical_identity)
         && method_name.ends_with("_phase")) {
         return runtime::PackedLogic4 { };
     }
@@ -32,6 +34,7 @@ namespace fsim::app {
     // macros make answer from the simulation's report policy.
     if (canonical_identity.find("uvm_report_object::")
             != std::string_view::npos
+        && support::is_uvm_library_identity(canonical_identity)
         && (method_name == "get_report_verbosity_level"
             || method_name == "get_report_action"
             || method_name == "uvm_report_enabled")) {
@@ -317,8 +320,8 @@ void Simulation::Impl::invoke_source_constructor(
     // the complete reference scheduler into each source allocation. The host
     // services initialize the corresponding object/component state after the
     // user-derived constructor returns.
-    if (specialization.declaration_identity.find("uvm_pkg::")
-        != std::string::npos) {
+    if (support::is_uvm_library_identity(
+            specialization.declaration_identity)) {
         return;
     }
     const bool outermost = source_function_dispatch_depth == 0U;

@@ -253,6 +253,99 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 61: UVM identity, generate names, class calls and VHDL subtypes
+
+Baseline: the Batch60 full six-suite checkpoint, re-run unchanged after the
+duplication refactor (commit 9ad14244). Six read-only triage lanes ranked the
+remaining failures by shared cause (`.local-artifacts/lrm-closure/triage/b61-INDEX.md`).
+
+SystemVerilog and Verilog:
+
+- UVM detection matched any name containing `uvm_`, so user classes named
+  `uvm_object` or `uvm_test`, or declared in a package such as `ivl_uvm_pkg`,
+  were taken over by the native UVM services. One shared predicate now accepts
+  only identities in the UVM package (`support::is_uvm_library_identity`).
+- `$cast(dst, src);` as a statement with a class destination is lowered, and a
+  default `pre_randomize`/`post_randomize` called through `super` is empty
+  (IEEE 1800-2017 18.6.2). `p.randomize` without parentheses is a call.
+- Object-level `obj.rand_mode(b)` and `obj.constraint_mode(b)` set every random
+  variable or constraint of the object (18.8, 18.9).
+- Class-parameter defaults evaluate sized and based literals, casts, `?:`,
+  shifts and logical operators.
+- Generate regions: an unnamed `else` or case item holding only a nested
+  generate construct adds no scope, and an `else` named like its `if` keeps
+  that name (27.5). A generate block's own declaration no longer aliases a
+  same-named object of an enclosing scope.
+- Anonymous-program tasks and functions are compilation-unit callables.
+- Gate-instance arrays accept bit-select and constant part-select terminals.
+  A delay-free `bufif`/`notif` is two strength-limited drivers, so an unknown
+  control drives L or H (28.6).
+- A queue or dynamic-array formal accepts a concatenation actual (`{}`), and a
+  container variable with a non-constant initializer gets a time-zero
+  initializer process.
+- Names inside a task or function called through an instance resolve from the
+  callee's instance first (23.8). `$unit::name` names the compilation-unit
+  scope. Function and task default arguments are resolved.
+- A block-local variable was folded to its initializer when combined with a
+  parameter (`a < N/2`); variables are no longer constant outside constant
+  functions. `!x` has a 1-bit unsigned result.
+- A sampled-value function without a clock argument in a concurrent assertion
+  uses the assertion's clock (16.9.3). `p.status()` has its 32-bit width.
+- Static task and function storage is not a multiple-driver conflict and adds
+  no implicit sensitivity. A delayed continuous assignment with a run-time
+  delay starts the net at X.
+- `$isunbounded` in a constraint is false. `$ferror` reports only the most
+  recent file operation, and `$ungetc(-1)` fails.
+- An instance-array output port may connect to a constant part-select.
+
+VHDL:
+
+- `T'BASE'attr` (16.2.2) and user-defined attributes through an object alias.
+- Null integer subtypes are legal; only objects of them are rejected.
+- Integer `**` accepts a run-time exponent, checked nonnegative when it runs.
+- Record and array element subtypes resolve in their declaring scope (an
+  entity's subtype used by an architecture's record).
+- Named constrained REAL and TIME subtypes may type a signal.
+- Aliases of an element or slice can be assignment targets, aliases of
+  constants evaluate, and `use inst.all` imports a local package instance.
+- A deferred STRING constant can be indexed. A literal-only string
+  concatenation takes a STRING target's type.
+- Overloaded enumeration literals with the same position, or selected by the
+  declared type of a local initializer, resolve. CHARACTER literals compare
+  with a 32-bit loop parameter.
+- An expanded name through the architecture (`arch.q`) names the signal, and a
+  recursive architecture may bind its own instances while it is analyzed.
+
+Libraries: analysing a configuration made every architecture of its entity
+obsolete, because the catalog took the configured entity's name as the
+configuration's primary-unit identity. A configuration is now its own primary
+unit (IEEE 1076-2008 13.5).
+
+Runner: the ivtest `fileline` case maps the bare `__FILE__` path, and chained
+VESTs groups now honour `delete_lib`, so later chapters no longer re-analyse
+over earlier chapters' same-named units.
+
+Measurement on frozen `b61b`: every Batch60 failure was re-run (all six suites)
+and the 295-case fast set passed 295/295. **71 new passes, zero observed
+regressions.** Targeted reruns on `b61c` add pr544, pr1787394b,
+switch_primitives, t_gen_for and sv-tests 18.8 `rand_mode_2`, and the
+Ashenden chain on `b61d` adds ch_15 `dlxr`, `dlxstsv` and `dlxtstr` (79 in all,
+fast set 295/295 on both). The table is an overlay on the Batch60 checkpoint.
+
+| Suite | Batch60 passes / in scope | Batch61 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2436 / 2657 | 2450 / 2657 | 169 |
+| sv-tests | 1424 / 1497 | 1426 / 1497 | 0 |
+| verilator | 1412 / 2216 | 1441 / 2216 | 199 |
+| vests | 3517 / 3646 | 3536 / 3646 | 2 |
+| nvc | 773 / 1262 | 788 / 1262 | 220 |
+| vhdl-compliance | 35 / 72 | 35 / 72 | 0 |
+
+Several global changes (variable constant folding, sampled-value clocks,
+logical-not signedness, delay-free tristate gates) are covered only by the fast
+set and the failure re-run; the next full six-suite checkpoint is due in
+Batch62 or Batch63.
+
 ### Batch 59: event lifetime, lexical types and VHDL composite shape
 
 SystemVerilog fixes preserve declaration and instance identity for event arrays,

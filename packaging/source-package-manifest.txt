@@ -582,6 +582,7 @@ include/fsim/support/path.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/teardown.hpp
+include/fsim/support/uvm_identity.hpp
 include/fsim/support/vhdl_identifier.hpp
 include/fsim/support/vhdl_time.hpp
 include/fsim/systemc.hpp

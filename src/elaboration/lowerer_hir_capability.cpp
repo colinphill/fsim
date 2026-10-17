@@ -3874,8 +3874,11 @@ bool Lowerer::hir_expression_signed(
         if (expression->systemverilog != nullptr
             && expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::unary
-            && systemverilog_reduction_operator(
-                expression->systemverilog->text)) {
+            && (systemverilog_reduction_operator(
+                    expression->systemverilog->text)
+                // Logical negation has a 1-bit unsigned result (IEEE
+                // 1800-2017 11.4.7, 11.8.1).
+                || expression->systemverilog->text == "!")) {
             return false;
         }
         if (expression->systemverilog != nullptr
@@ -5649,7 +5652,31 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
             : std::nullopt;
     };
     if (!name.starts_with("$root.")) {
+        // Inside a task or function called through an instance
+        // (`u.f()`), names resolve from the callee's instance first.
         std::string_view scope = hierarchy_;
+        if (active_hir_callable_
+            && *active_hir_callable_ < hir_callable_frames_.size()) {
+            const auto& receiver
+                = hir_callable_frames_[*active_hir_callable_]
+                      .interface_receiver;
+            constexpr std::string_view instance_prefix { "@instance:" };
+            if (receiver && receiver->starts_with(instance_prefix)) {
+                for (std::string_view callee
+                    = std::string_view { *receiver }.substr(
+                        instance_prefix.size());
+                    !callee.empty() && callee != scope;) {
+                    if (const auto signal = lookup(std::string { callee }
+                            + "." + std::string { path })) {
+                        return signal;
+                    }
+                    const auto separator = callee.find_last_of('.');
+                    callee = separator == std::string_view::npos
+                        ? std::string_view { }
+                        : callee.substr(0U, separator);
+                }
+            }
+        }
         while (!scope.empty()) {
             if (const auto signal = lookup(
                     std::string { scope } + "." + std::string { path })) {
@@ -6093,6 +6120,9 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
         lookup(signals_, key, result.signal);
         lookup(string_objects_, key, result.string);
         lookup(container_objects_, key, result.container);
+    }
+    if (result.signal) {
+        hir_static_storage_signals_.insert(*result.signal);
     }
     return result.signal || result.string || result.container
         ? std::optional { result }
@@ -12581,6 +12611,10 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         || hir_vhdl_runtime_string_bound(expression_id)) {
         return frontend::ValueDomain::Integer;
     }
+    if (const auto status = hir_process_status_query(expression_id)) {
+        return *status ? frontend::ValueDomain::Integer
+                       : frontend::ValueDomain::Bit2;
+    }
     if (const auto member = hir_class_property_member(expression_id)) {
         return member->member.domain;
     }
@@ -14903,9 +14937,10 @@ bool Lowerer::hir_vhdl_runtime_string_prefix(const semantic::ExpressionId prefix
     const auto subtype = constant && constant->vhdl != nullptr && constant->vhdl->subtype
         ? hir_effective_vhdl_subtype(*constant->vhdl->subtype)
         : std::nullopt;
+    // A deferred constant's value is on its full declaration.
     return constant && constant->vhdl != nullptr
         && constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
-        && constant->vhdl->initializer && subtype
+        && hir_constant_initializer(*declaration).has_value() && subtype
         && subtype->domain == semantic::vhdl::ValueDomain::string;
 }
 
@@ -14961,6 +14996,24 @@ std::optional<std::string> Lowerer::hir_vhdl_physical_unit_name(
     return std::nullopt;
 }
 
+std::optional<bool> Lowerer::hir_process_status_query(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto query = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!query || query->systemverilog == nullptr
+        || query->systemverilog->kind != semantic::sv::ExpressionKind::call
+        || (query->systemverilog->text != ".status"
+            && query->systemverilog->text != ".completed")
+        || query->systemverilog->operands.size() != 1U
+        || !hir_process_handle_expression(
+            query->systemverilog->operands.front())) {
+        return std::nullopt;
+    }
+    return query->systemverilog->text == ".status";
+}
+
 std::optional<std::size_t> Lowerer::hir_expression_width(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope,
@@ -14974,6 +15027,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_runtime_string_bound(expression_id)) {
         return 32U;
+    }
+    if (const auto status = hir_process_status_query(expression_id)) {
+        return *status ? 32U : 1U;
     }
     // A character of a constant string (`s'at1(1)` after the attribute's
     // value is substituted).

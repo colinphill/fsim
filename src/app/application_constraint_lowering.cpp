@@ -416,6 +416,15 @@ class Lowerer final {
       }
       return builder_.conjunction(comparisons);
     }
+    // Only a parameter given `$` is unbounded (IEEE 1800-2017 20.6.3);
+    // a constraint operand never is.
+    if (expression.text == "$isunbounded" && expression.operands.size() == 1U) {
+      return builder_.constant(
+          low_value(1, 0),
+          runtime::SystemVerilogConstraintVariableProfile{
+              runtime::SystemVerilogConstraintDomainKind::BitVector,
+              1, false, "$isunbounded-result", false});
+    }
     std::vector<ExpressionId> operands;
     operands.reserve(expression.operands.size());
     for (const auto& operand : expression.operands) {

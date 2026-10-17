@@ -1167,8 +1167,24 @@ Expression VhdlParser::parse_primary()
                 attach_selected_spelling(qualified);
                 return qualified;
             }
-            const auto attribute = expect_identifier("attribute designator");
-            const auto designator = vhdl_name(attribute.text);
+            auto attribute = expect_identifier("attribute designator");
+            auto designator = vhdl_name(attribute.text);
+            // T'BASE denotes the base type of T and is allowed only as the
+            // prefix of another attribute (IEEE 1076-2008 16.2.2).
+            if (designator == "base") {
+                const auto separator = canonical.find_last_of('.');
+                const auto base = vhdl_base_type_mark(
+                    separator == std::string::npos
+                        ? canonical
+                        : canonical.substr(separator + 1U));
+                if (base && match(TokenKind::Apostrophe)
+                    && at(TokenKind::Identifier)) {
+                    canonical = *base;
+                    selected_spelling = *base;
+                    attribute = expect_identifier("attribute designator");
+                    designator = vhdl_name(attribute.text);
+                }
+            }
             static constexpr std::array<std::string_view, 36> supported_attributes {
                 "left", "right", "low", "high",
                 "length", "ascending", "event", "last_value",
@@ -1191,6 +1207,14 @@ Expression VhdlParser::parse_primary()
                         ? canonical
                         : canonical.substr(separator + 1U);
                     auto found = values->second.find(entity);
+                    // An attribute of an object applies to its aliases.
+                    for (auto alias = vhdl_object_alias_targets_.find(entity);
+                         found == values->second.end()
+                         && alias != vhdl_object_alias_targets_.end()
+                         && alias->second != alias->first;
+                         alias = vhdl_object_alias_targets_.find(alias->second)) {
+                        found = values->second.find(alias->second);
+                    }
                     if (found == values->second.end()) {
                         found = values->second.find("others");
                     }

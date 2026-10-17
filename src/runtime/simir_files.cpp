@@ -495,6 +495,10 @@ std::string Interpreter::Impl::read_file_line(
     std::uint32_t& count)
 {
     auto& file = checked_file(process, handle);
+    // $ferror reports the most recent operation (IEEE 1800-2017 21.3.7).
+    if (&file != &invalid_systemverilog_file) {
+        file.last_error.clear();
+    }
     if (!file.readable && soft_unreadable_file(process, file)) {
         count = 0;
         return { };
@@ -562,6 +566,10 @@ std::int32_t Interpreter::Impl::read_file_character(
     const FileHandle handle)
 {
     auto& file = checked_file(process, handle);
+    // $ferror reports the most recent operation (IEEE 1800-2017 21.3.7).
+    if (&file != &invalid_systemverilog_file) {
+        file.last_error.clear();
+    }
     if (file.pushback) {
         const auto character = *file.pushback;
         file.pushback.reset();
@@ -594,6 +602,7 @@ std::int32_t Interpreter::Impl::unread_file_character(
     if (&file == &invalid_systemverilog_file) {
         return -1;
     }
+    file.last_error.clear();
     // $ungetc pushes back one character whatever the file's mode.
     if (!file.readable
         && processes.scheduling_domain(process)
@@ -638,6 +647,10 @@ std::int32_t Interpreter::Impl::position_file(
     std::int32_t origin)
 {
     auto& file = checked_file(process, handle);
+    // $ferror reports the most recent operation (IEEE 1800-2017 21.3.7).
+    if (&file != &invalid_systemverilog_file) {
+        file.last_error.clear();
+    }
     const auto fail = [&](const std::string_view message) {
         file.last_error = message;
         return std::int32_t { -1 };
@@ -1007,9 +1020,10 @@ void Interpreter::Impl::execute_file(
             if (character.bval == 0) {
                 const auto requested = static_cast<std::int32_t>(
                     static_cast<std::uint32_t>(character.aval));
-                result = unread_file_character(
-                             process.id, handle, requested)
-                        == requested
+                result = requested >= 0 && requested <= 255
+                        && unread_file_character(
+                               process.id, handle, requested)
+                            == requested
                     ? 0
                     : -1;
             } else {

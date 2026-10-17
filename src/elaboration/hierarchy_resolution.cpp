@@ -2488,6 +2488,7 @@ void HierarchyBuilder::validate_process_drivers()
             || (boundary_drivers != boundary_driver_paths_.end()
                 && boundary_drivers->second.size() > 1U)
             || vhdl_unprotected_shared_signals_.contains(signal)
+            || static_callable_signals_.contains(signal)
             || info.resolution != ResolutionKind::none
             || ((info.type_name == "reg" || info.type_name == "integer")
                 && !variable_container_signals.contains(signal)

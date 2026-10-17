@@ -1730,6 +1730,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
         const auto& input = *statement->vhdl;
         source = input.source;
         target = input.target;
+        // An assignment to an alias of an element or slice assigns that
+        // part of the aliased object (IEEE 1076-2008 6.6.2).
+        for (std::size_t depth = 0; target && depth < 16U; ++depth) {
+            const auto aliased = hir_vhdl_alias_target_expression(*target);
+            if (!aliased) {
+                break;
+            }
+            target = aliased;
+        }
         value = input.kind
                     == semantic::vhdl::StatementKind::signal_assignment
                 && !input.waveform.empty()
@@ -4036,11 +4045,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && high - low < 4096) {
                     const auto width = static_cast<std::size_t>(
                         high - low + 1);
-                    const auto lowered_value
+                    auto lowered_value
                         = lower_statement_packed_expression(*value, width);
-                    if (!lowered_value
-                        || register_width(*lowered_value) != width) {
+                    if (!lowered_value) {
                         return assignment_rejected(__LINE__);
+                    }
+                    // The value converts to the select's width like any
+                    // assignment (IEEE 1800-2017 10.7).
+                    if (register_width(*lowered_value) != width) {
+                        lowered_value = resize_register(*lowered_value,
+                            width, hir_expression_signed(*value));
                     }
                     const auto clipped_low = std::max(low, range_low);
                     const auto clipped_high = std::min(high, range_high);
@@ -7819,17 +7833,38 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
             const auto process_randstate = lower_process_randstate(*value);
+            // A predefined STRING target gives literal-only concatenations
+            // (`"foo" & 'l'`) their type (IEEE 1076-2008 9.2.5).
+            const auto string_context = [&]()
+                -> std::optional<semantic::vhdl::SubtypeIndication> {
+                if (target_expression->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                auto subtype = hir_vhdl_expression_subtype(*target);
+                const auto effective = subtype
+                    ? hir_effective_vhdl_subtype(*subtype)
+                    : std::nullopt;
+                if (!effective
+                    || effective->domain
+                        != semantic::vhdl::ValueDomain::string
+                    || !hir_vhdl_predefined_string_type(*effective)) {
+                    return std::nullopt;
+                }
+                return subtype;
+            }();
+            const auto* value_context
+                = string_context ? &*string_context : nullptr;
             if (signal_assignment || nonblocking
                 || !can_lower_hir_string_expression(
                     *target, hir_process_scope_)
                 || (!process_randstate
                     && !can_lower_hir_string_expression(
-                        *value, hir_process_scope_))) {
+                        *value, hir_process_scope_, value_context))) {
                 return assignment_rejected(__LINE__);
             }
             const auto lowered = process_randstate
                 ? process_randstate
-                : lower_hir_string_expression(*value);
+                : lower_hir_string_expression(*value, value_context);
             if (!lowered) {
                 return assignment_rejected(__LINE__);
             }
@@ -9952,6 +9987,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 vhdl_projected_assignment->mode,
             });
         } else if (runtime_delay && (constant_selection || (!index && !slice))) {
+            initialize_delayed_net_driver(*binding->signal,
+                constant_selection ? constant_selection->offset : 0U,
+                register_width(*lowered), continuous_assignment);
             process_.operations.emplace_back(WriteDelayed {
                 *binding->signal,
                 *lowered,
@@ -18350,7 +18388,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         == semantic::sv::ExpressionKind::class_method_call
                     || call->systemverilog->kind
                         == semantic::sv::ExpressionKind::
-                            class_static_method_call)) {
+                            class_static_method_call
+                    || call->systemverilog->kind
+                        == semantic::sv::ExpressionKind::class_cast)) {
                 if (hir_expression_is_string(
                         *input.value, hir_process_scope_)) {
                     return lower_hir_string_expression(*input.value)
@@ -18471,10 +18511,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     = specialized_hir_unit_->find_expression(discarded);
                 if (discarded_expression
                     && discarded_expression->systemverilog != nullptr
-                    && discarded_expression->systemverilog->kind
-                        == semantic::sv::ExpressionKind::call
-                    && discarded_expression->systemverilog->text
-                        == "@sv-dollar-cast") {
+                    && ((discarded_expression->systemverilog->kind
+                                == semantic::sv::ExpressionKind::call
+                            && discarded_expression->systemverilog->text
+                                == "@sv-dollar-cast")
+                        || discarded_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::class_cast)) {
                     return lower_hir_expression(discarded, 1U).has_value();
                 }
                 if (discarded != *input.value && discarded_expression

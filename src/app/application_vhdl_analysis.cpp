@@ -666,7 +666,18 @@ class AnalysisOrderValidator {
                   + "' must be analyzed before it is used in a binding",
               binding.span);
       }
-      if (!validate_dependency(
+      // A recursive architecture binds its own instances to itself while
+      // it is being analyzed.
+      const auto self_binding
+          = owner.kind == frontend::UnitKind::VhdlArchitecture
+          && library == owner_library
+          && vhdl_identifier_key(owner.primary_name,
+                 owner.vhdl_extended_primary_name)
+              == entity
+          && vhdl_identifier_key(owner.name, owner.vhdl_extended_name)
+              == architecture;
+      if (!self_binding
+          && !validate_dependency(
               architectures_, architecture_key(library, entity, architecture),
               "architecture", owner, binding.span)) {
           report(

@@ -40,6 +40,21 @@ runtime::PackedLogic4 invoke_systemverilog_randomization_mode(
   const auto random = method.starts_with(random_prefix);
   const auto identity = method.substr(
       random ? random_prefix.size() : constraint_prefix.size());
+  // An object-level call sets every random variable or constraint and has
+  // no value (IEEE 1800-2017 18.8, 18.9).
+  if (identity == "@object") {
+    const auto value = actuals.empty()
+        ? runtime::Logic4Word{}
+        : actuals.front().low_word();
+    if (actuals.empty() || value.bval != 0
+        || (value.aval != 0 && value.aval != 1)) {
+      throw std::invalid_argument{
+          "object randomization mode update requires a known zero or one"};
+    }
+    if (random) heap.set_all_random_modes(handle, value.aval != 0);
+    else heap.set_all_constraint_modes(handle, value.aval != 0);
+    return runtime::PackedLogic4::from_aval_bval(32, 0U, 0);
+  }
   if (!actuals.empty()) {
     const auto value = actuals.front().low_word();
     if (value.bval != 0 || (value.aval != 0 && value.aval != 1)) {

@@ -357,6 +357,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                                         const bool nested_scope) {
   const auto name = expect_identifier("type name");
   const auto canonical_name = vhdl_name(name.text);
+  vhdl_subtype_type_marks_.insert_or_assign(canonical_name, canonical_name);
   auto prior_declaration =
       std::find_if(unit.type_aliases.begin(), unit.type_aliases.end(),
                    [&](const TypeAliasDeclaration &declaration) {
@@ -1578,6 +1579,35 @@ void VhdlParser::apply_vhdl_disconnection_specifications(
   }
 }
 
+std::optional<std::string> VhdlParser::vhdl_base_type_mark(
+    std::string name) const {
+  for (std::size_t depth = 0; depth < 64U; ++depth) {
+    if (const auto found = vhdl_subtype_type_marks_.find(name);
+        found != vhdl_subtype_type_marks_.end()) {
+      if (found->second == name) {
+        return name;
+      }
+      name = found->second;
+      continue;
+    }
+    if (name == "natural" || name == "positive") {
+      return "integer";
+    }
+    if (name == "delay_length") {
+      return "time";
+    }
+    static constexpr std::array<std::string_view, 10> predefined {
+      "integer", "real", "time", "boolean", "bit", "character",
+      "severity_level", "file_open_kind", "file_open_status", "std_ulogic"
+    };
+    if (std::ranges::find(predefined, name) != predefined.end()) {
+      return name;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
                                            const bool nested_scope) {
   const auto name = expect_identifier("subtype name");
@@ -1623,6 +1653,13 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
   }
   if (!nested_scope) {
     vhdl_named_types_.insert(canonical_name);
+  }
+  if (const auto separator = type.spelling.find_last_of('.');
+      !type.spelling.empty()) {
+    vhdl_subtype_type_marks_.insert_or_assign(canonical_name,
+        vhdl_name(separator == std::string::npos
+                ? type.spelling
+                : type.spelling.substr(separator + 1U)));
   }
   unit.type_aliases.push_back(
       TypeAliasDeclaration { canonical_name,
@@ -1801,6 +1838,12 @@ void VhdlParser::parse_vhdl_object_alias(
     // A record element (`r.f`) is a subelement of its object too.
     rewind(target_start);
     actual_expression = parse_expression();
+  }
+  if (!actual_expression) {
+    const auto separator = actual.find_last_of('.');
+    vhdl_object_alias_targets_.insert_or_assign(vhdl_name(name.text),
+        separator == std::string::npos ? actual
+                                       : actual.substr(separator + 1U));
   }
   if (match(TokenKind::LeftBracket)) {
       const auto signature_start = previous();

@@ -701,6 +701,9 @@ private:
         const frontend::SourceSpan& span);
     [[nodiscard]] bool hir_process_handle_expression(
         semantic::ExpressionId expression) const;
+    // `p.status()` (true) or `p.completed()` (false) of a process handle.
+    [[nodiscard]] std::optional<bool> hir_process_status_query(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_vhdl_subtype_name_bound(
         semantic::ExpressionId expression, std::size_t depth) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
@@ -2914,6 +2917,10 @@ private:
     hir_static_signal_sensitivity(semantic::ExpressionId expression,
         semantic::ScopeId process_scope);
     std::vector<runtime::simir::Sensitivity> implicit_signal_dependencies_;
+    // Static storage of called tasks and functions. Their bodies' reads of
+    // it are not operands of the calling expression, so they add no
+    // implicit sensitivity (IEEE 1800-2017 9.4.2.2, 10.3).
+    mutable std::unordered_set<SignalId> hir_static_storage_signals_;
     RegisterId next_register_ { };
     StringRegisterId next_string_register_ { };
     ContainerRegisterId next_container_register_ { };

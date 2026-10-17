@@ -10538,8 +10538,45 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             : std::nullopt;
         const semantic::vhdl::EnumerationLiteral* selected = nullptr;
         bool ambiguous { };
+        // An enumeration context type selects among overloaded literals
+        // (IEEE 1076-2008 12.5).
+        const semantic::vhdl::TypeDefinition* context_enumeration = nullptr;
+        if (vhdl_array_context != nullptr) {
+            const auto effective
+                = hir_effective_vhdl_subtype(*vhdl_array_context);
+            auto type_id = effective && effective->type_mark.target.valid()
+                ? effective->type_mark.target
+                : vhdl_array_context->type_mark.target;
+            for (std::size_t depth { }; type_id.valid() && depth < 32U;
+                 ++depth) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    break;
+                }
+                if (!type->vhdl->enumeration_literals.empty()) {
+                    context_enumeration = type->vhdl;
+                    break;
+                }
+                if (type->vhdl->base.type_mark.target == type_id) {
+                    break;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+        }
+        bool relaxed_width { };
         const auto consider_type = [&](const auto& type) {
-            if (type.enumeration_literals.empty()) {
+            if (type.enumeration_literals.empty()
+                || (relaxed_width
+                    && !equal_ignoring_ascii_case(type.name, "character"))) {
+                return;
+            }
+            if (context_enumeration != nullptr
+                && std::ranges::none_of(context_enumeration
+                                            ->enumeration_literals,
+                    [&](const auto& candidate) {
+                        return candidate.declaration
+                            == type.enumeration_literals.front().declaration;
+                    })) {
                 return;
             }
             const auto literal = std::ranges::find_if(
@@ -10568,16 +10605,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     ++ordinal_width;
                 }
                 if (expected_width != 0U
-                    && ordinal_width != expected_width) {
+                    && (relaxed_width ? ordinal_width > expected_width
+                                      : ordinal_width != expected_width)) {
                     return;
                 }
             }
+            // Overloaded literals of types that give them the same
+            // position denote the same value here (IEEE 1076-2008 5.2.2.1).
             if (selected != nullptr
-                && selected->declaration != literal->declaration) {
+                && selected->declaration != literal->declaration
+                && selected->ordinal != literal->ordinal) {
                 ambiguous = true;
                 return;
             }
-            selected = &*literal;
+            if (selected == nullptr) {
+                selected = &*literal;
+            }
         };
         for (const auto& type : specialized_hir_unit_->vhdl_types()) {
             consider_type(type);
@@ -10585,6 +10628,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         for (const auto& type :
             specialized_hir_unit_->design().vhdl_hir.types()) {
             consider_type(type);
+        }
+        // A CHARACTER literal compared in a wider register (a CHARACTER
+        // loop parameter held in 32 bits) keeps its position.
+        if (selected == nullptr && !ambiguous && !exact_literal
+            && expected_width != 0U) {
+            relaxed_width = true;
+            for (const auto& type : specialized_hir_unit_->vhdl_types()) {
+                consider_type(type);
+            }
+            for (const auto& type :
+                specialized_hir_unit_->design().vhdl_hir.types()) {
+                consider_type(type);
+            }
         }
         if (ambiguous) {
             selected = nullptr;
@@ -11956,6 +12012,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == semantic::sv::EdgeKind::negative
                 ? SampledClockEdge::negative
                 : SampledClockEdge::any;
+        }
+        // Without a clocking argument, a sampled value function in a
+        // concurrent assertion uses the assertion's clock (IEEE 1800-2017
+        // 16.9.3).
+        if (!argument(clock_index) && !global
+            && sample_concurrent_assertion_reads_
+            && process_.static_sensitivity.size() == 1U
+            && process_.static_sensitivity.front().edge
+                != runtime::simir::EdgeKind::transaction) {
+            const auto& assertion_clock = process_.static_sensitivity.front();
+            if (assertion_clock.signal < design_.signal_info_.size()
+                && design_.signal_info_[assertion_clock.signal].width == 1U) {
+                clock = assertion_clock.signal;
+                clock_edge = assertion_clock.edge
+                        == runtime::simir::EdgeKind::posedge
+                    ? SampledClockEdge::positive
+                    : assertion_clock.edge
+                        == runtime::simir::EdgeKind::negedge
+                    ? SampledClockEdge::negative
+                    : SampledClockEdge::any;
+            }
         }
         const auto kind = source.text == "$sampled"
             ? SignalReadKind::sampled
@@ -20322,6 +20399,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto systemverilog_power
                 = language_ != frontend::Language::Vhdl2008
                 && source.text == "**";
+            bool dynamic_vhdl_exponent { };
             if (language_ == frontend::Language::Vhdl2008
                 && source.text == "**") {
                 auto exponent
@@ -20347,7 +20425,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         exponent = binding->second;
                     }
                 }
-                if (!exponent || *exponent < 0) {
+                // A dynamic exponent is checked when the power executes:
+                // a negative integer exponent is an error (IEEE 1076-2008
+                // 9.2.8).
+                dynamic_vhdl_exponent = !exponent;
+                if (exponent && *exponent < 0) {
                     const auto exponent_expression
                         = specialized_hir_unit_->find_expression(
                             source.operands[1]);
@@ -20559,6 +20641,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 source.operands[1],
                 systemverilog_power ? rhs_width : operand_width,
                 source.operands[0], unsigned_operands && !systemverilog_power);
+            if (rhs && dynamic_vhdl_exponent) {
+                process_.operations.emplace_back(IntegerCheck {
+                    *rhs, 0, std::numeric_limits<std::int32_t>::max() });
+            }
             if (lhs && rhs) {
                 const auto packed_domain = [](const frontend::ValueDomain domain) {
                     return domain == frontend::ValueDomain::Bit2

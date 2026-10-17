@@ -2195,7 +2195,18 @@ CompiledDesignResolver::resolve_systemverilog(
     }
 
     if (!package_name.empty()) {
-        auto result = package_tier(package_name);
+        // `$unit::name` names the compilation-unit scope the unit imports
+        // (IEEE 1800-2017 3.12.1, 26.3).
+        std::string_view requested_package = package_name;
+        if (package_name == "$unit") {
+            for (const auto& import : owner->systemverilog->imports) {
+                if (import.package.spelling.starts_with("fsim_unit_")) {
+                    requested_package = import.package.spelling;
+                    break;
+                }
+            }
+        }
+        auto result = package_tier(requested_package);
         if (result.status != CompiledResolutionStatus::not_found) {
             return result;
         }
@@ -5873,27 +5884,25 @@ CompiledDesignResolver::resolve_vhdl_package_members(
         }
     };
 
-    if (parts.size() == 2U) {
+    // The package instances named `name` in the nearest enclosing scope of
+    // the use site that declares one.
+    const auto local_package_instances = [&](const std::string_view name) {
+        std::vector<DeclarationId> instances;
         auto scope = use_scope;
         for (std::size_t depth { };
              scope.valid() && depth <= design_->semantics.scopes().size();
              ++depth) {
-            std::vector<DeclarationId> instances;
             visit_vhdl_declarations_in_scope(
-                *design_, effective_, scope, parts.front(),
+                *design_, effective_, scope, name,
                 [&](const vhdl::Declaration& declaration) {
                     if (declaration.form
                             == vhdl::DeclarationForm::package_instance
-                        && same_vhdl_identifier(
-                            declaration.name, parts.front())) {
+                        && same_vhdl_identifier(declaration.name, name)) {
                         instances.push_back(declaration.id);
                     }
                 });
             if (!instances.empty()) {
                 sort_unique(instances);
-                for (const auto instance : instances) {
-                    append_instance(instance, parts.back());
-                }
                 break;
             }
             const auto* record = find_scope(*design_, scope);
@@ -5901,6 +5910,13 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 break;
             }
             scope = *record->parent;
+        }
+        return instances;
+    };
+
+    if (parts.size() == 2U) {
+        for (const auto instance : local_package_instances(parts.front())) {
+            append_instance(instance, parts.back());
         }
 
         const auto consider_binding = [&](const CompiledActualBinding& binding) {
@@ -6094,6 +6110,16 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                         if (const auto instance = bound_package_instance(
                                 selected_parts.front())) {
                             append_instance(*instance, parts.back());
+                            continue;
+                        }
+                        // `use inst.all` of a local package instance
+                        // (IEEE 1076-2008 4.9, 12.4).
+                        const auto instances = local_package_instances(
+                            selected_parts.front());
+                        if (!instances.empty()) {
+                            for (const auto instance : instances) {
+                                append_instance(instance, parts.back());
+                            }
                             continue;
                         }
                     }

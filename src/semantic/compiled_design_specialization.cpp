@@ -11015,6 +11015,31 @@ private:
                     }
                     return evaluate_declaration(*declaration);
                 }
+                // An object alias has the value of the object it denotes
+                // (IEEE 1076-2008 6.6.2).
+                const CompiledDeclarationPredicate alias_declaration
+                    = [](const CompiledDeclarationView& candidate) {
+                          return candidate.vhdl != nullptr
+                              && candidate.vhdl->form
+                              == vhdl::DeclarationForm::alias;
+                      };
+                if (const auto alias = resolve_vhdl_expression_declaration(
+                        expression.id, alias_declaration)) {
+                    const auto view = unit_.find_declaration(*alias);
+                    if (view && view->vhdl != nullptr) {
+                        if (view->vhdl->initializer
+                            && *view->vhdl->initializer != expression.id) {
+                            return evaluate(*view->vhdl->initializer);
+                        }
+                        if (view->vhdl->alias_target
+                            && view->vhdl->alias_target->selected
+                            && *view->vhdl->alias_target->selected
+                                != *alias) {
+                            return evaluate_declaration(
+                                *view->vhdl->alias_target->selected);
+                        }
+                    }
+                }
                 if (const auto hierarchy = hierarchy_identities_.find(
                         std::string { expression.text });
                     hierarchy != hierarchy_identities_.end()) {

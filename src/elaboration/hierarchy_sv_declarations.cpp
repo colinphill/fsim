@@ -786,6 +786,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         }
         const auto signal = register_static_storage_alias(materialization.signals,
             design_.signal_by_name_, storage.name, materialization.path, key);
+        if (signal) {
+            static_callable_signals_.insert(materialization.signals.at(key));
+        }
         if (signal && packed_initializer) {
             design_.signals_[materialization.signals.at(key)].initial_value
                 = std::move(packed_initializer->packed);
@@ -866,7 +869,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                                         const SystemVerilogHirMaterialization& value,
                                         const std::string_view name) -> std::optional<SignalId> {
         const auto& signals = value.signals;
-        if (const auto direct = signals.find(std::string { name });
+        // A generate block's own declaration may share the name of an
+        // enclosing scope's object without denoting it (IEEE 1800-2017
+        // 27.4).
+        if (const auto direct = signals.find_local(std::string { name });
             direct != signals.end()) {
             return direct->second;
         }
@@ -964,6 +970,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 result.name, materialization.path, key);
             if (!signal && !string_object && !container_object) {
                 return false;
+            }
+            if (signal) {
+                static_callable_signals_.insert(
+                    materialization.signals.at(key));
             }
         }
         return materialize_compiled_systemverilog_static_storage(unit,

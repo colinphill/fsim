@@ -595,6 +595,17 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
         if (!record) {
             return false;
         }
+        // A member of an unpacked structure (`u.a`) is stored as its own
+        // signal.
+        if (record->systemverilog != nullptr
+            && record->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            && record->systemverilog->text.find('.') != std::string::npos) {
+            if (const auto found = signals_.find(record->systemverilog->text);
+                found != signals_.end()) {
+                dependencies.push_back(found->second);
+            }
+        }
         std::span<const semantic::ExpressionId> operands;
         if (record->systemverilog != nullptr) {
             operands = record->systemverilog->operands;
@@ -1943,7 +1954,11 @@ bool Lowerer::initialize_hir_declarations(
                 ? lower_hir_vhdl_access_expression(
                       *initializer, binding->width,
                       &*declaration->vhdl->subtype)
-                : lower_hir_expression(*initializer, binding->width);
+                : lower_hir_expression(*initializer, binding->width,
+                      frontend::SystemVerilogScalarKind::None,
+                      !enumeration_literals.empty() && vhdl_initializer_subtype
+                          ? &*vhdl_initializer_subtype
+                          : nullptr);
             if (!initial) {
                 if (declaration->vhdl != nullptr) {
                     report(
@@ -3927,17 +3942,43 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         if (description.actual_slice) {
             // One instance of an instance array drives its slice of the
             // actual net.
-            const auto target = hir_direct_signal(*description.output_actual);
+            auto target = hir_direct_signal(*description.output_actual);
+            std::size_t actual_offset { };
+            std::size_t actual_width = target
+                ? design_.signal_info_[*target].width
+                : 0U;
+            // A constant bit- or part-select actual (`.o(bus[17:10])`)
+            // places the slice within its signal.
+            if (const auto selected = specialized_hir_unit_->find_expression(
+                    *description.output_actual);
+                !target && selected && selected->systemverilog != nullptr
+                && (selected->systemverilog->kind
+                        == semantic::sv::ExpressionKind::index
+                    || selected->systemverilog->kind
+                        == semantic::sv::ExpressionKind::slice)
+                && !selected->systemverilog->operands.empty()) {
+                const auto root = hir_direct_signal(
+                    selected->systemverilog->operands.front());
+                const auto selection = hir_constant_selection(
+                    *description.output_actual, hir_process_scope_);
+                if (root && selection) {
+                    target = root;
+                    actual_offset = selection->offset;
+                    actual_width = selection->width;
+                }
+            }
             const auto [offset, width] = *description.actual_slice;
             if (!target || width != signal.width
-                || offset + width > design_.signal_info_[*target].width) {
+                || offset + width > actual_width
+                || actual_offset + actual_width
+                    > design_.signal_info_[*target].width) {
                 process_ = { };
                 return std::nullopt;
             }
             process_.operations.emplace_back(WriteUpdateSlice {
                 *target,
                 value,
-                offset,
+                static_cast<std::uint32_t>(actual_offset + offset),
                 process_.scheduling_domain
                         == ProcessSchedulingDomain::systemverilog
                     ? SignalUpdateDomain::systemverilog_active

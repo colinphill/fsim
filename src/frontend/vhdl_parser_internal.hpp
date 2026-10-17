@@ -429,6 +429,15 @@ private:
   // Aliases of external names (IEEE 1076-2008 6.6.2, 8.7): each use of the
   // alias denotes the external name.
   std::unordered_map<std::string, Expression> vhdl_external_aliases_;
+  // Object alias name -> simple name of the whole object it denotes, so a
+  // user-defined attribute of the object applies through the alias (IEEE
+  // 1076-2008 6.6.2).
+  std::unordered_map<std::string, std::string> vhdl_object_alias_targets_;
+  // Type mark of each subtype declared in this design file; a type
+  // declaration maps to itself. Resolves `T'BASE` (IEEE 1076-2008 16.2.2).
+  std::unordered_map<std::string, std::string> vhdl_subtype_type_marks_;
+  [[nodiscard]] std::optional<std::string> vhdl_base_type_mark(
+      std::string name) const;
   std::unordered_set<std::string> vhdl_access_object_names_;
   void note_vhdl_access_object(const std::string& name, const Type& type);
   bool vhdl_profile_compatible_{true};

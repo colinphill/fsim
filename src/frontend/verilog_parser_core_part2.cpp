@@ -1713,14 +1713,17 @@ void VerilogParser::parse_anonymous_program(
         TokenKind::Semicolon,
         "';' after anonymous program",
         "FSIM-SV-PARSE-382");
+    // Anonymous-program items belong to the compilation-unit scope (IEEE
+    // 1800-2017 24.9).
+    auto& compilation_unit = compilation_unit_package(start);
     const auto duplicate_callable = [&](const std::string_view name) {
         return std::ranges::any_of(
-                   design.functions,
+                   compilation_unit.functions,
                    [&](const FunctionDeclaration& function) {
                        return function.name == name;
                    })
             || std::ranges::any_of(
-                design.tasks,
+                compilation_unit.tasks,
                 [&](const TaskDeclaration& task) {
                     return task.name == name;
                 });
@@ -1731,6 +1734,7 @@ void VerilogParser::parse_anonymous_program(
         }
         if (match_keyword("function")) {
             const auto declaration = previous();
+            const auto references = implicit_net_references_.size();
             auto function = parse_function(declaration);
             if (duplicate_callable(function.name)) {
                 error(
@@ -1739,12 +1743,15 @@ void VerilogParser::parse_anonymous_program(
                     "duplicate anonymous-program callable '"
                         + function.name + "'");
             } else {
-                design.functions.push_back(std::move(function));
+                compilation_unit.functions.push_back(std::move(function));
+                resolve_compilation_unit_references(
+                    references, compilation_unit.functions.back().name);
             }
             continue;
         }
         if (match_keyword("task")) {
             const auto declaration = previous();
+            const auto references = implicit_net_references_.size();
             auto task = parse_task(declaration);
             if (duplicate_callable(task.name)) {
                 error(
@@ -1753,7 +1760,9 @@ void VerilogParser::parse_anonymous_program(
                     "duplicate anonymous-program callable '"
                         + task.name + "'");
             } else {
-                design.tasks.push_back(std::move(task));
+                compilation_unit.tasks.push_back(std::move(task));
+                resolve_compilation_unit_references(
+                    references, compilation_unit.tasks.back().name);
             }
             continue;
         }

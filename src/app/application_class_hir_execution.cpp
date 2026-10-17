@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_hir_execution.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/uvm_identity.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
 
 #include "fsim/frontend/output_format.hpp"
@@ -8283,8 +8284,8 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     // user-derived constructor returns.
     if (selected.base
         && (base == nullptr
-            || base->declaration_identity.find("uvm_pkg::")
-                == std::string::npos)) {
+            || !support::is_uvm_library_identity(
+                base->declaration_identity))) {
         if (base == nullptr)
             throw std::invalid_argument { "base HIR class specialization is unavailable" };
         invoke_constructor_impl(

@@ -1757,6 +1757,9 @@ private:
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
+    // Static storage of SystemVerilog task and function locals and formals:
+    // every caller writes it procedurally, whatever the calling context.
+    std::unordered_set<SignalId> static_callable_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>

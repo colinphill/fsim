@@ -306,8 +306,18 @@ CollectionResult collect_occurrences(
         if (active) {
             // The selected region's label is always its own hierarchy
             // name. alternative_label names the sibling else branch and is
-            // only used while selecting that nested region.
-            nested_parent = generated_path(current_path, generate.label);
+            // only used while selecting that nested region. An unnamed
+            // `else` or case item that only holds a directly nested
+            // generate construct adds no scope (IEEE 1800-2017 27.5).
+            const bool transparent
+                = (generate.label.ends_with(".else")
+                      || generate.label.ends_with(".alternative"))
+                && generate.declarations.empty()
+                && generate.instances.empty()
+                && generate.processes.empty()
+                && generate.concurrent_statements.empty();
+            nested_parent = generated_path(
+                current_path, transparent ? "" : generate.label);
             result.occurrences.push_back({ &generate, nested_parent,
                 std::make_shared<const semantic::SpecializedHirUnit>(
                     parent_specialization) });
@@ -322,7 +332,13 @@ CollectionResult collect_occurrences(
                     parent_specialization)) {
                 continue;
             }
-            if (!self(self, nested, nested_parent,
+            // An `else` region named like its `if` region shares its scope
+            // and its name (IEEE 1800-2017 27.5).
+            const auto child_parent = !active && nested.label.empty()
+                    && nested.scope == generate.scope
+                ? generated_path(current_path, generate.label)
+                : nested_parent;
+            if (!self(self, nested, child_parent,
                     parent_specialization)) {
                 return false;
             }
