@@ -323,8 +323,13 @@ Expression VerilogParser::parse_lvalue()
     Expression expression { ExpressionKind::Identifier, name.text, { },
         name.span };
     expression.systemverilog_source_order = source_order;
+    // `g[0].D` names a member of a generate block array element, not the
+    // simple name `g` (IEEE 1800-2017 27.6).
+    bool member_after_select { };
     for (;;) {
         if (at(TokenKind::Dot) || at(TokenKind::Scope)) {
+            member_after_select = member_after_select
+                || expression.kind != ExpressionKind::Identifier;
             const auto separator = advance();
             const auto selected = expect_identifier("selected name");
             expression.text += separator.kind == TokenKind::Scope ? "::" : ".";
@@ -374,7 +379,7 @@ Expression VerilogParser::parse_lvalue()
         root = &root->operands.front();
     }
     if (root->kind == ExpressionKind::Identifier
-        && root->text == name.text) {
+        && root->text == name.text && !member_after_select) {
         note_implicit_net_reference(
             name, expression.kind == ExpressionKind::Call);
     }
@@ -1077,6 +1082,65 @@ Expression VerilogParser::parse_primary_impl()
         };
         if (const auto required = verilog_system_service_standard(canonical)) {
             note_system_service_standard(canonical, *required, name);
+        }
+        // `$timeunit` and `$timeprecision` of the current design element,
+        // as a power of ten (IEEE 1800-2017 20.4.2). An optional argument
+        // naming the element itself is accepted.
+        if ((canonical == "$timeunit" || canonical == "$timeprecision")
+            && (!at(TokenKind::LeftParen)
+                || (at(TokenKind::RightParen, 1)
+                    || (at(TokenKind::Identifier, 1)
+                        && at(TokenKind::RightParen, 2))))) {
+            const auto exponent_of = [](std::string_view spelling)
+                -> std::optional<int> {
+                int exponent { };
+                while (!spelling.empty() && spelling.front() == '1') {
+                    spelling.remove_prefix(1U);
+                    while (!spelling.empty() && spelling.front() == '0') {
+                        ++exponent;
+                        spelling.remove_prefix(1U);
+                    }
+                }
+                static constexpr std::array<std::pair<std::string_view, int>, 6>
+                    units { { { "s", 0 }, { "ms", -3 }, { "us", -6 },
+                        { "ns", -9 }, { "ps", -12 }, { "fs", -15 } } };
+                for (const auto& [unit, scale] : units) {
+                    if (spelling == unit) {
+                        return exponent + scale;
+                    }
+                }
+                return std::nullopt;
+            };
+            const auto magnitude_digits = [](std::uint64_t magnitude) {
+                std::string digits { "1" };
+                while (magnitude >= 10U) {
+                    digits += '0';
+                    magnitude /= 10U;
+                }
+                return digits;
+            };
+            const auto exponent = canonical == "$timeunit"
+                ? (module_time_unit_.empty()
+                        ? std::nullopt
+                        : exponent_of(magnitude_digits(
+                                          module_time_unit_magnitude_)
+                              + module_time_unit_))
+                : exponent_of(module_time_precision_);
+            if (exponent) {
+                if (match(TokenKind::LeftParen)) {
+                    (void)match(TokenKind::Identifier);
+                    expect(TokenKind::RightParen,
+                        "')' after time scope", "FSIM-SV-PARSE-033");
+                }
+                Expression value { ExpressionKind::IntegerLiteral,
+                    std::to_string(*exponent < 0 ? -*exponent : *exponent),
+                    {}, name.span };
+                if (*exponent >= 0) {
+                    return value;
+                }
+                return Expression { ExpressionKind::Unary, "-",
+                    { std::move(value) }, name.span };
+            }
         }
         if (canonical == "new" && at(TokenKind::LeftBracket)) {
             (void)require_standard(

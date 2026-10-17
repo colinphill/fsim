@@ -430,7 +430,8 @@ end architecture;
     auto auto_project = fsim::app::build_project(
         auto_config, auto_diagnostics);
     assert(auto_project);
-    assert(auto_project->time_resolution == "1ps");
+    // A design with VHDL units counts time in femtoseconds.
+    assert(auto_project->time_resolution == "1fs");
     fsim::app::Simulation auto_simulation {
         std::move(*auto_project),
         auto_config.run.max_deltas,
@@ -440,7 +441,7 @@ end architecture;
     assert(done);
     const auto auto_result = auto_simulation.run();
     assert(auto_result.status == fsim::runtime::RunStatus::completed);
-    assert(auto_result.time == 2);
+    assert(auto_result.time == 2000);
     assert(auto_simulation.read_signal(*done).to_msb_string() == "1");
 
     const auto expect_build_diagnostic =

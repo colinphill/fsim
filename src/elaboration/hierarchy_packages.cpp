@@ -5168,7 +5168,11 @@ namespace {
             return compiled_vhdl_name_equal(name, "real");
         };
         real = real_name(subtype.type_mark.spelling);
-        auto type_id = subtype.type_mark.target;
+        // A type mark declared in a package may reach here unlinked.
+        auto type_id = subtype.type_mark.target.valid()
+            ? subtype.type_mark.target
+            : compiled_vhdl_link_subtype(specialization, subtype)
+                  .type_mark.target;
         std::unordered_set<std::uint32_t> visiting;
         while (type_id.valid() && visiting.insert(type_id.value()).second) {
             const auto type = specialization.find_type(type_id);
@@ -10430,6 +10434,19 @@ namespace {
             std::size_t positional { };
             bool saw_named { };
             for (const auto& association : associations) {
+                // An omitted actual takes the formal's default (IEEE
+                // 1800-2017 13.5.3); lowering requires that default.
+                if (!association.actual
+                    && (!association.formal || association.formal->empty())) {
+                    while (positional < bound.size() && bound[positional]) {
+                        ++positional;
+                    }
+                    if (positional < bound.size()) {
+                        bound[positional] = true;
+                    }
+                    ++positional;
+                    continue;
+                }
                 if (!association.actual) {
                     append(association_code,
                         std::string { context }
@@ -12010,6 +12027,31 @@ namespace {
                       const semantic::sv::TypeDefinition*> { &*member,
                       type->systemverilog };
         };
+        // A select of a multidimensional packed array selects within its
+        // outermost dimension, whose direction may differ from the others
+        // (IEEE 1800-2017 7.4.5).
+        const auto selected_bounds
+            = [&](const semantic::sv::TypeReference& type)
+            -> std::optional<std::pair<std::int64_t, std::int64_t>> {
+            if (type.packed_dimensions.size() > 1U) {
+                const auto& outer = type.packed_dimensions.front();
+                const auto bound = [&](const std::optional<std::int64_t> value,
+                                       const std::optional<semantic::ExpressionId>
+                                           expression) {
+                    return value ? value
+                        : expression && root_specialization != nullptr
+                        ? root_specialization->evaluate_integral_expression(
+                              *expression)
+                        : std::nullopt;
+                };
+                const auto left = bound(outer.left, outer.left_expression);
+                const auto right = bound(outer.right, outer.right_expression);
+                if (left && right) {
+                    return std::pair { *left, *right };
+                }
+            }
+            return bounds_of(type, root_specialization);
+        };
         const auto expression_bounds = [&](const semantic::ExpressionId id)
             -> std::optional<std::pair<std::int64_t, std::int64_t>> {
             const auto expression = compiled.find_expression(id);
@@ -12019,17 +12061,14 @@ namespace {
             const auto& source = *expression->systemverilog;
             const auto member_selection = selected_member(source);
             if (member_selection.first != nullptr) {
-                return bounds_of(
-                    member_selection.first->type, root_specialization);
+                return selected_bounds(member_selection.first->type);
             }
             if (source.referenced_name && source.referenced_name->selected) {
                 const auto declaration = compiled.find_declaration(
                     *source.referenced_name->selected);
                 if (declaration && declaration->systemverilog != nullptr
                     && declaration->systemverilog->type) {
-                    return bounds_of(
-                        *declaration->systemverilog->type,
-                        root_specialization);
+                    return selected_bounds(*declaration->systemverilog->type);
                 }
             }
             if ((source.kind == ExpressionKind::integer_literal
@@ -23019,6 +23058,37 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                         || scope->unit == entity->id);
             });
     };
+    // `F.e` selects element e of the record result of a parameterless
+    // function F (IEEE 1076-2008 8.3, 8.4), not an expanded name.
+    const auto function_result_element = [&](const std::string_view name,
+                                             const std::string_view element) {
+        return std::ranges::any_of(
+            compiled_->vhdl_hir.declarations(),
+            [&](const semantic::vhdl::Declaration& declaration) {
+                if (!declaration.callable || !declaration.callable->function
+                    || !declaration.callable->return_type
+                    || !compiled_vhdl_name_equal(declaration.name, name)) {
+                    return false;
+                }
+                const auto* scope = compiled_semantic_scope(
+                    *compiled_, declaration.scope);
+                if (scope == nullptr
+                    || (scope->unit != architecture.id
+                        && scope->unit != entity->id)) {
+                    return false;
+                }
+                const auto* result = semantic::vhdl_base_type_definition(
+                    *specialized,
+                    declaration.callable->return_type->type_mark.target);
+                return result != nullptr
+                    && result->form == semantic::vhdl::TypeForm::record
+                    && std::ranges::any_of(result->record_elements,
+                        [&](const auto& record_element) {
+                            return compiled_vhdl_name_equal(
+                                record_element.name, element);
+                        });
+            });
+    };
     // Labels of the design unit's blocks, processes, generate statements,
     // loops and subprograms: an expanded name prefixed by one must select
     // a declaration of that construct (IEEE 1076-2008 8.3).
@@ -23073,7 +23143,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                 || (parts.size() == 2U
                     && construct_labels.contains(
                         lowercase_ascii_copy(parts.front()))
-                    && !locally_declared_object(parts.front())));
+                    && !locally_declared_object(parts.front())
+                    && !function_result_element(
+                        parts.front(), parts.back())));
         // An expanded name prefixed by the design unit must denote a
         // declaration of that unit (IEEE 1076-2008 8.3).
         if (hierarchy_root_name && parts.size() == 2U

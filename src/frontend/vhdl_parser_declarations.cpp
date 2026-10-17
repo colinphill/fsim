@@ -2119,32 +2119,32 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
     unit.instances.push_back(parse_vhdl_instance(*label_token));
     return;
   }
+  // A name followed by `<=` is a signal assignment target (`d(1) <= x;`),
+  // never a procedure call (IEEE 1076-2008 11.6).
+  const auto assignment_target_ahead = [&] {
+    std::size_t lookahead = 0;
+    if (!at(TokenKind::Identifier, lookahead)) {
+      return false;
+    }
+    ++lookahead;
+    for (;;) {
+      if (at(TokenKind::Dot, lookahead)
+          && at(TokenKind::Identifier, lookahead + 1)) {
+        lookahead += 2;
+      } else if (at(TokenKind::LeftParen, lookahead)) {
+        const auto closed = skip_vhdl_parentheses(lookahead);
+        if (!closed) {
+          return false;
+        }
+        lookahead = *closed;
+      } else {
+        break;
+      }
+    }
+    return at(TokenKind::LessEqual, lookahead);
+  };
   if (label_token) {
     const auto label = vhdl_name(label_token->text);
-    // A name followed by `<=` is a signal assignment target (`d(1) <= x;`),
-    // never a procedure call (IEEE 1076-2008 11.6).
-    const auto assignment_target_ahead = [&] {
-      std::size_t lookahead = 0;
-      if (!at(TokenKind::Identifier, lookahead)) {
-        return false;
-      }
-      ++lookahead;
-      for (;;) {
-        if (at(TokenKind::Dot, lookahead)
-            && at(TokenKind::Identifier, lookahead + 1)) {
-          lookahead += 2;
-        } else if (at(TokenKind::LeftParen, lookahead)) {
-          const auto closed = skip_vhdl_parentheses(lookahead);
-          if (!closed) {
-            return false;
-          }
-          lookahead = *closed;
-        } else {
-          break;
-        }
-      }
-      return at(TokenKind::LessEqual, lookahead);
-    };
     if (assignment_target_ahead()) {
       if (auto statement = parse_assignment(true)) {
         statement->label = label;
@@ -2169,6 +2169,19 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
           "this labeled concurrent statement is not supported");
   }
 
+  // An unlabeled name that is not an assignment target, such as
+  // `proc (a => 1, b => 2);`, is a concurrent procedure call (11.4).
+  if (at(TokenKind::Identifier) && !assignment_target_ahead()) {
+    const auto call_start = position();
+    const auto diagnostics_before = diagnostics_.size();
+    if (auto procedure = parse_vhdl_procedure_call();
+        procedure && diagnostics_.size() == diagnostics_before) {
+      unit.concurrent_statements.push_back(std::move(*procedure));
+      return;
+    }
+    rewind(call_start);
+    diagnostics_.resize(diagnostics_before);
+  }
   const auto before = position();
   auto statement = parse_assignment(true);
   if (statement && statement->kind == StatementKind::Block) {

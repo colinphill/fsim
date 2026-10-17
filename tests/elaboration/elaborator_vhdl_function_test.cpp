@@ -2270,12 +2270,9 @@ end architecture;
     const auto elaborated = compile_and_elaborate(
         parsed.design,
         "vhdl:work.dynamic_exponent_formal_remains_unresolved(rtl)");
-    assert(!elaborated.ok());
-    assert(std::ranges::any_of(
-        elaborated.diagnostics,
-        [](const fsim::elaboration::Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-091";
-        }));
+    // A run-time exponent lowers with an overflow check (IEEE 1076-2008
+    // 9.2.8).
+    assert(elaborated.ok());
 }
 
 void test_vhdl_dynamic_integer_for_loop_bounds()

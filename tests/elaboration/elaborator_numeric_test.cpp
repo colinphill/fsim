@@ -644,9 +644,8 @@ end architecture;
         && has_diagnostic(
             rejected_vhdl_subtypes,
             "FSIM-ELAB-VHSUBTYPE-004")
-        && has_diagnostic(
-            rejected_vhdl_subtypes,
-            "FSIM-ELAB-INTEGER-002")
+        // A null integer subtype is legal; only objects of it are
+        // rejected (IEEE 1076-2008 5.2.1).
         && has_diagnostic(
             rejected_vhdl_subtypes,
             "FSIM-ELAB-PKG-006")

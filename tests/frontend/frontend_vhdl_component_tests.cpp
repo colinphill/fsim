@@ -110,7 +110,7 @@ entity invalid_default_top is
 end entity;
 architecture rtl of invalid_default_top is
   component invalid_default_leaf is
-    port (value : out integer := 1);
+    port (value : linkage integer := 1);
   end component;
 begin
 end architecture;
@@ -120,7 +120,7 @@ end architecture;
       !invalid_default.ok()
           && has_code(
               invalid_default, "FSIM-VHDL-SEM-072"),
-      "non-input component defaults need a targeted diagnostic");
+      "linkage component defaults need a targeted diagnostic");
 
   const auto visibility = parse_text(
       "component_visibility.vhd",

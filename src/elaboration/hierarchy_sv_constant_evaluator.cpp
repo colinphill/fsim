@@ -2465,13 +2465,24 @@ private:
         auto packed = PackedLogic4 { result_width,
             base->domain == frontend::ValueDomain::Bit2
                 ? Logic4::zero : Logic4::x };
+        // An ascending base (`[0:15]`) takes `p[b +: w]` as `p[b : b+w-1]`
+        // and `p[b -: w]` as `p[b-w+1 : b]`, both with the MSB on the left
+        // (IEEE 1800-2017 11.5.1).
+        const bool ascending = base->packed_range && base->packed_range->left
+            && base->packed_range->right
+            && *base->packed_range->left < *base->packed_range->right;
         for (std::uint32_t bit = 0U; bit < result_width; ++bit) {
             std::int64_t source_index { };
             if (record.text == "+:") {
-                source_index = *first_index + bit;
+                source_index = ascending
+                    ? *first_index
+                        + static_cast<std::int64_t>(result_width - bit - 1U)
+                    : *first_index + bit;
             } else if (record.text == "-:") {
-                source_index = *first_index
-                    - static_cast<std::int64_t>(result_width - bit - 1U);
+                source_index = ascending
+                    ? *first_index - bit
+                    : *first_index
+                        - static_cast<std::int64_t>(result_width - bit - 1U);
             } else if (*first_index >= *second_index) {
                 source_index = *second_index + bit;
             } else {

@@ -1031,22 +1031,16 @@ module second;
 endmodule
 )",
         Language::SystemVerilog2017);
+    // `timescale is illegal within a design element (IEEE 1800-2017 22.7).
     require(
-        mid_module_directive.ok(),
-        "a directive inside a module must affect only following modules");
-    require(
-        mid_module_directive.design.units.size() == 2,
-        "mid-module timescale design unit count");
-    const auto& first = mid_module_directive.design.units[0];
-    const auto& second = mid_module_directive.design.units[1];
-    require(
-        first.time_unit == "1ns"
-            && first.processes.front().statements.front().delay->magnitude == 2,
-        "current module must retain the timescale active at its start");
-    require(
-        second.time_unit == "10ns"
-            && second.processes.front().statements.front().delay->magnitude == 20,
-        "mid-module directive must apply to a following module");
+        !mid_module_directive.ok()
+            && std::any_of(
+                mid_module_directive.diagnostics.begin(),
+                mid_module_directive.diagnostics.end(),
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-054";
+                }),
+        "a directive inside a module must be rejected");
 
     const auto invalid_precision = parse_text(
         "bad_timescale.sv",

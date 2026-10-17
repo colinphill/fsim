@@ -70,6 +70,10 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
                 PackedRange { 0, 0, true }, false };
         } else if (keyword("struct") || keyword("union")) {
             member_type = parse_systemverilog_aggregate_type();
+        } else if (auto named_array = parse_named_packed_array_type()) {
+            // A packed array of a named packed type (`inner_t [1:0] e;`,
+            // IEEE 1800-2017 7.4.1).
+            member_type = std::move(*named_array);
         } else if (!packed) {
             member_type = parse_parameter_type();
         } else if (keyword("logic") || keyword("reg")

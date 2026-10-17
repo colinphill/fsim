@@ -6623,7 +6623,42 @@ bool Lowerer::lower_hir_statement_unsuspended(
         const auto declaration = vhdl_array_call
             ? std::optional { vhdl_array_call->declaration }
             : hir_target_declaration(*target);
-        const auto direct_binding = hir_direct_signal_binding(*target);
+        // A select of a hierarchical reference (`u.s[1] = 1`) writes the
+        // signal the reference names (IEEE 1800-2017 23.6).
+        const auto direct_binding = [&]() -> std::optional<HirRuntimeBinding> {
+            if (auto binding = hir_direct_signal_binding(*target)) {
+                return binding;
+            }
+            if (declaration) {
+                return std::nullopt;
+            }
+            auto root = *target;
+            for (;;) {
+                const auto view = specialized_hir_unit_->find_expression(root);
+                if (!view || view->systemverilog == nullptr
+                    || (view->systemverilog->kind
+                            != semantic::sv::ExpressionKind::index
+                        && view->systemverilog->kind
+                            != semantic::sv::ExpressionKind::slice)
+                    || view->systemverilog->operands.empty()) {
+                    break;
+                }
+                root = view->systemverilog->operands.front();
+            }
+            if (root == *target) {
+                return std::nullopt;
+            }
+            const auto root_view = specialized_hir_unit_->find_expression(root);
+            if (!root_view || root_view->systemverilog == nullptr
+                || root_view->systemverilog->kind
+                    != semantic::sv::ExpressionKind::name
+                || root_view->systemverilog->text.find('.')
+                    == std::string::npos
+                || hir_target_declaration(root)) {
+                return std::nullopt;
+            }
+            return hir_direct_signal_binding(root);
+        }();
         if (trace_generated_assignment) {
             const auto binding = direct_binding
                 ? direct_binding
@@ -10006,6 +10041,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 runtime_fall,
                 runtime_turnoff,
             });
+        } else if (runtime_delay && nonblocking && index && dynamic_selection
+            && statement->systemverilog != nullptr
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::delay
+            && timed_nonblocking) {
+            // `v[i] <= #d x` captures the index and value now and updates
+            // the selected bit after the delay (IEEE 1800-2017 10.4.2).
+            const auto handoff = begin_nonblocking_handoff();
+            if (!handoff) {
+                return assignment_rejected(__LINE__);
+            }
+            process_.operations.emplace_back(WriteUpdateDynamicSlice {
+                *binding->signal,
+                *lowered,
+                *dynamic_selection,
+                update_domain,
+            });
+            end_nonblocking_handoff(*handoff);
         } else if (runtime_delay) {
             report(
                 "FSIM-ELAB-SVDELAY-004",
@@ -16194,6 +16247,25 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            // `a[i++] += 2` evaluates its index once (IEEE 1800-2017 11.4.1).
+            struct CapturedIndicesReset {
+                Lowerer& lowerer;
+                ~CapturedIndicesReset()
+                {
+                    lowerer.hir_captured_update_indices_.clear();
+                    lowerer.hir_update_indices_captured_ = false;
+                    lowerer.hir_reevaluation_cache_ = { };
+                }
+            } const captured_indices_reset { *this };
+            if (input.assignment_kind
+                    == semantic::sv::AssignmentKind::blocking
+                && input.assignment_control
+                    == semantic::sv::AssignmentControl::none
+                && !input.delay
+                && hir_update_reevaluates_target(input)
+                && capture_hir_update_target_indices(input)) {
+                hir_update_indices_captured_ = true;
+            }
             const auto lowered = lower_assignment(
                 input.assignment_kind
                     == semantic::sv::AssignmentKind::continuous,
@@ -20323,10 +20395,62 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
     visit(visit, statements);
 }
 
+bool Lowerer::hir_update_expression_pure(
+    const semantic::ExpressionId id, const std::size_t depth) const
+{
+    using Kind = semantic::sv::ExpressionKind;
+    if (hir_captured_update_indices_.contains(id.value())) {
+        return true;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(id);
+    if (!expression || expression->systemverilog == nullptr
+        || depth > 64U) {
+        return false;
+    }
+    const auto& source = *expression->systemverilog;
+    if (semantic::sv::is_expression_size_cast(source)) {
+        // The size is elaboration-time constant; runtime purity depends
+        // only on the value expression.
+        return hir_update_expression_pure(source.operands.back(), depth + 1U);
+    }
+    switch (source.kind) {
+    case Kind::name:
+    case Kind::integer_literal:
+    case Kind::boolean_literal:
+    case Kind::logic_literal:
+    case Kind::string_literal:
+        return true;
+    case Kind::unary:
+    case Kind::binary:
+    case Kind::index:
+    case Kind::slice:
+    case Kind::concatenation:
+    case Kind::class_property:
+        break;
+    case Kind::call:
+        // Member selections and casts are names, not calls.
+        if (!source.text.starts_with("@sv-select:")
+            && !source.text.starts_with("@sv-cast:")
+            && !source.text.starts_with("@sv-property:")
+            && !source.text.starts_with("@sv-container-index:")
+            && !source.text.starts_with("@sv-container-property:")) {
+            return false;
+        }
+        break;
+    default:
+        return false;
+    }
+    return std::ranges::all_of(source.operands,
+        [&](const semantic::ExpressionId operand) {
+            return hir_update_expression_pure(operand, depth + 1U);
+        });
+}
+
 bool Lowerer::hir_update_reevaluates_target(
     const semantic::sv::Statement& statement) const
 {
-    if (statement.update_kind == semantic::sv::UpdateKind::none) {
+    if (statement.update_kind == semantic::sv::UpdateKind::none
+        || hir_update_indices_captured_) {
         return false;
     }
     if (!statement.target || specialized_hir_unit_ == nullptr) {
@@ -20336,54 +20460,85 @@ bool Lowerer::hir_update_reevaluates_target(
         && hir_reevaluation_cache_.unit == specialized_hir_unit_) {
         return hir_reevaluation_cache_.reevaluates;
     }
+    const bool reevaluates = !hir_update_expression_pure(*statement.target);
+    hir_reevaluation_cache_ = { &statement, specialized_hir_unit_, reevaluates };
+    return reevaluates;
+}
+
+bool Lowerer::capture_hir_update_target_indices(
+    const semantic::sv::Statement& statement)
+{
     using Kind = semantic::sv::ExpressionKind;
-    const auto pure = [&](const auto& self,
-                          const semantic::ExpressionId id,
-                          const std::size_t depth) -> bool {
-        const auto expression = specialized_hir_unit_->find_expression(id);
-        if (!expression || expression->systemverilog == nullptr
-            || depth > 64U) {
+    if (!statement.target || specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    // The normalized value (`a[i++] + 2`) reads its own copy of the
+    // target; its indices take the same captured registers.
+    std::optional<semantic::ExpressionId> copy;
+    if (statement.value) {
+        const auto normalized = specialized_hir_unit_->find_expression(
+            *statement.value);
+        if (normalized && normalized->systemverilog != nullptr
+            && normalized->systemverilog->kind == Kind::binary
+            && normalized->systemverilog->operands.size() == 2U) {
+            copy = normalized->systemverilog->operands.front();
+        }
+    }
+    // Walk the select chain from the target to its root, capturing each
+    // impure index; anything else impure cannot be captured.
+    auto current = *statement.target;
+    for (std::size_t depth = 0U; depth < 64U; ++depth) {
+        const auto expression = specialized_hir_unit_->find_expression(
+            current);
+        if (!expression || expression->systemverilog == nullptr) {
             return false;
         }
         const auto& source = *expression->systemverilog;
-        if (semantic::sv::is_expression_size_cast(source)) {
-            // The size is elaboration-time constant; runtime purity depends
-            // only on the value expression.
-            return self(self, source.operands.back(), depth + 1U);
+        if (source.kind != Kind::index && source.kind != Kind::slice) {
+            return hir_update_expression_pure(current);
         }
-        switch (source.kind) {
-        case Kind::name:
-        case Kind::integer_literal:
-        case Kind::boolean_literal:
-        case Kind::logic_literal:
-        case Kind::string_literal:
-            return true;
-        case Kind::unary:
-        case Kind::binary:
-        case Kind::index:
-        case Kind::slice:
-        case Kind::concatenation:
-        case Kind::class_property:
-            break;
-        case Kind::call:
-            // Member selections and casts are names, not calls.
-            if (!source.text.starts_with("@sv-select:")
-                && !source.text.starts_with("@sv-cast:")
-                && !source.text.starts_with("@sv-property:")) {
-                return false;
-            }
-            break;
-        default:
+        if (source.operands.empty()) {
             return false;
         }
-        return std::ranges::all_of(source.operands,
-            [&](const semantic::ExpressionId operand) {
-                return self(self, operand, depth + 1U);
-            });
-    };
-    const bool reevaluates = !pure(pure, *statement.target, 0U);
-    hir_reevaluation_cache_ = { &statement, specialized_hir_unit_, reevaluates };
-    return reevaluates;
+        for (std::size_t operand = 1U; operand < source.operands.size();
+            ++operand) {
+            const auto index = source.operands[operand];
+            if (hir_update_expression_pure(index)) {
+                continue;
+            }
+            const auto width = hir_expression_width(index, hir_process_scope_)
+                                   .value_or(32U);
+            const auto value = lower_hir_expression(index, width);
+            if (!value) {
+                return false;
+            }
+            hir_captured_update_indices_.insert_or_assign(
+                index.value(), *value);
+            const auto copy_expression = copy
+                ? specialized_hir_unit_->find_expression(*copy)
+                : std::nullopt;
+            if (!copy_expression || copy_expression->systemverilog == nullptr
+                || copy_expression->systemverilog->kind != source.kind
+                || copy_expression->systemverilog->operands.size()
+                    != source.operands.size()) {
+                return false;
+            }
+            hir_captured_update_indices_.insert_or_assign(
+                copy_expression->systemverilog->operands[operand].value(),
+                *value);
+        }
+        current = source.operands.front();
+        if (copy) {
+            const auto copy_expression = specialized_hir_unit_->find_expression(
+                *copy);
+            copy = copy_expression && copy_expression->systemverilog != nullptr
+                    && !copy_expression->systemverilog->operands.empty()
+                ? std::optional { copy_expression->systemverilog->operands
+                                      .front() }
+                : std::nullopt;
+        }
+    }
+    return false;
 }
 
 std::string Lowerer::hir_scope_hierarchy() const

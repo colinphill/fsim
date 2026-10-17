@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
@@ -555,6 +556,15 @@ std::string effective_resolution(
     const semantic::CompiledDesign& compiled)  {
   if (config.project.time_resolution != "auto") {
     return config.project.time_resolution;
+  }
+  // A design with VHDL units counts time in femtoseconds, the primary unit
+  // of TIME (IEEE 1076-2008 5.2.4.2; owner decision 2026-10-17), so every
+  // TIME literal and computed delay keeps its exact value.
+  if (std::ranges::any_of(compiled.vhdl_units(), [](const auto& unit) {
+        return !support::equal_ignoring_ascii_case(unit.library, "std")
+            && !support::equal_ignoring_ascii_case(unit.library, "ieee");
+      })) {
+    return "1fs";
   }
   std::uint64_t finest_femtoseconds = 1'000'000;
   std::string finest_spelling{"1ns"};

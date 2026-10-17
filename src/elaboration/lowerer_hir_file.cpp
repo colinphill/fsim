@@ -1388,7 +1388,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 } else if (call.text == "$fopen") {
                     if (call.operands.empty()
                         || call.operands.size() > 2U
-                        || !hir_expression_is_string(
+                        || !hir_filename_operand(
                             call.operands.front(), call.scope)
                         || (call.operands.size() == 2U
                             && !hir_expression_is_string(
@@ -1968,8 +1968,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                     ? container_objects_.find(*name)
                     : container_objects_.end();
                 const auto valid_object = source.value && source.target
-                    && hir_expression_is_string(
-                        *source.value, source.scope)
+                    && hir_filename_operand(*source.value, source.scope)
                     && object != container_objects_.end()
                     && (source.memory_write
                         || !read_only_container_objects_.contains(*name))
@@ -2340,7 +2339,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
 
     if (call.text == "$fopen") {
         if (call.operands.empty() || call.operands.size() > 2U
-            || !hir_expression_is_string(
+            || !hir_filename_operand(
                 call.operands.front(), hir_process_scope_)
             || (call.operands.size() == 2U
                 && !hir_expression_is_string(
@@ -2348,7 +2347,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             return fail("FSIM-ELAB-SVFILE-003",
                 "$fopen requires a byte-string filename and optional mode");
         }
-        const auto path = lower_hir_string_expression(call.operands.front());
+        const auto path = lower_hir_filename(call.operands.front());
         auto mode = call.operands.size() == 2U
             ? lower_hir_string_expression(call.operands.back())
             : std::optional<StringRegisterId> { };
@@ -3423,7 +3422,31 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     static_cast<std::uint32_t>(target->width),
                     true,
                 };
-                if (value_class == TextioScalarClass::integer) {
+                // A TIME value is an abstract literal and a unit name
+                // (IEEE 1076-2008 16.4, 15.5.3).
+                const auto time_target = [&] {
+                    const auto subtype = hir_vhdl_expression_subtype(*value);
+                    if (!subtype) {
+                        return false;
+                    }
+                    const auto is_time_name = [](const std::string_view name) {
+                        return name == "time" || name == "delay_length";
+                    };
+                    if (is_time_name(vhdl_simple_name(
+                            semantic::vhdl::without_builtin_prefix(
+                                subtype->type_mark.spelling)))) {
+                        return true;
+                    }
+                    const auto* base = semantic::vhdl_base_type_definition(
+                        *specialized_hir_unit_, subtype->type_mark.target);
+                    return base != nullptr
+                        && base->form == semantic::vhdl::TypeForm::physical
+                        && is_time_name(vhdl_simple_name(base->name));
+                };
+                if (value_class == TextioScalarClass::integer
+                    && time_target()) {
+                    conversion.format = InputScanFormat::time;
+                } else if (value_class == TextioScalarClass::integer) {
                     conversion.format = InputScanFormat::decimal;
                 } else if (value_class == TextioScalarClass::boolean) {
                     conversion.format = InputScanFormat::boolean_value;
@@ -3460,10 +3483,15 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             }
             const auto count = allocate_register(
                 32U, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(FileScan {
-                count, 0U, *line->local, true,
+            const bool time_conversion
+                = conversion.format == InputScanFormat::time;
+            FileScan scan { count, 0U, *line->local, true,
                 { std::move(conversion) }, { }, !success,
-                success, true });
+                success, true };
+            if (time_conversion) {
+                scan.time_unit_femtoseconds = hir_time_unit_femtoseconds();
+            }
+            process_.operations.emplace_back(std::move(scan));
             if (selection_target && selection_scan_target
                 && selection_offset) {
                 // FileScan writes a full temporary value. Update the
@@ -4336,7 +4364,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
         || !source.value || !source.target) {
         return false;
     }
-    const auto path = lower_hir_string_expression(*source.value);
+    const auto path = lower_hir_filename(*source.value);
     const auto name = hir_name(*source.target);
     const auto object = name
         ? container_objects_.find(*name)
@@ -4406,6 +4434,57 @@ Lowerer::HirPatternText Lowerer::lower_hir_pattern_text(
         return { .failed = false, .text = *name };
     }
     return { };
+}
+
+
+bool Lowerer::hir_filename_operand(const semantic::ExpressionId expression,
+    const semantic::ScopeId scope) const
+{
+    if (hir_expression_is_string(expression, scope)) {
+        return true;
+    }
+    // An integral variable may hold the name (IEEE 1800-2017 21.3.1); a
+    // numeric literal is not a filename.
+    if (const auto literal = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_expression(expression)
+            : std::nullopt;
+        literal && literal->systemverilog != nullptr
+        && (literal->systemverilog->kind
+                == semantic::sv::ExpressionKind::integer_literal
+            || literal->systemverilog->kind
+                == semantic::sv::ExpressionKind::logic_literal)) {
+        return false;
+    }
+    const auto width = hir_expression_width(expression, scope);
+    const auto domain = hir_expression_domain(expression, scope);
+    return width && *width != 0U && domain
+        && (*domain == frontend::ValueDomain::Bit2
+            || *domain == frontend::ValueDomain::Logic4);
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_filename(
+    const semantic::ExpressionId expression)
+{
+    if (hir_expression_is_string(expression, hir_process_scope_)) {
+        return lower_hir_string_expression(expression);
+    }
+    const auto width = hir_expression_width(expression, hir_process_scope_);
+    if (!width || *width == 0U) {
+        return std::nullopt;
+    }
+    const auto value = lower_hir_expression(expression, *width);
+    if (!value) {
+        return std::nullopt;
+    }
+    // The characters of an integral file name; leading zero bytes are not
+    // part of the name (IEEE 1800-2017 11.10).
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(LoadStringConstant { destination, { } });
+    auto operation = hir_format_packed(destination, *value,
+        register_width(*value), runtime::simir::OutputFormat::string);
+    operation.suppress_leading_zero = true;
+    process_.operations.emplace_back(operation);
+    return destination;
 }
 
 } // namespace fsim::elaboration

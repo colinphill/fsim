@@ -8800,6 +8800,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const frontend::SystemVerilogScalarKind scalar_context,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context)
 {
+    if (const auto captured
+        = hir_captured_update_indices_.find(expression_id.value());
+        captured != hir_captured_update_indices_.end()) {
+        return expected_width != 0U
+                && register_width(captured->second) != expected_width
+            ? resize_register(captured->second, expected_width,
+                  hir_expression_signed(expression_id))
+            : captured->second;
+    }
     if (const auto characters
         = lower_hir_vhdl_static_string_concatenation(
             expression_id, expected_width)) {
@@ -13284,7 +13293,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (!width || *width == 0U || *width > 64U || !declaration) {
             return std::nullopt;
         }
-        auto value = lower_hir_expression(cast.operands.back(), *width);
+        // A real source is rounded to the integral destination (6.12.2).
+        auto value = hir_systemverilog_scalar_kind(cast.operands.back())
+                != frontend::SystemVerilogScalarKind::None
+            ? lower_hir_scalar_converted_value(cast.operands.back(), *width,
+                  frontend::SystemVerilogScalarKind::None)
+            : lower_hir_expression(cast.operands.back(), *width);
         auto current = lower_hir_expression(target, *width);
         if (!value || !current) {
             return std::nullopt;
@@ -14387,6 +14401,48 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             expression->systemverilog->text == "!=",
         });
         result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::binary
+        && expression->systemverilog->operands.size() == 2U
+        && (expression->systemverilog->text == "<"
+            || expression->systemverilog->text == "<="
+            || expression->systemverilog->text == ">"
+            || expression->systemverilog->text == ">=")
+        && hir_expression_is_string(
+            expression->systemverilog->operands[0], hir_process_scope_)
+        && hir_expression_is_string(
+            expression->systemverilog->operands[1], hir_process_scope_)) {
+        // String relational operators compare lexicographically (IEEE
+        // 1800-2017 6.16, Table 6-9): the sign of str1.compare(str2).
+        const auto lhs = lower_hir_string_expression(
+            expression->systemverilog->operands[0]);
+        const auto rhs = lower_hir_string_expression(
+            expression->systemverilog->operands[1]);
+        if (!lhs || !rhs) {
+            return std::nullopt;
+        }
+        StringMethod method;
+        method.operation = StringMethodOperator::compare;
+        method.destination = allocate_register(
+            32U, frontend::ValueDomain::Integer);
+        method.source = *lhs;
+        method.argument = *rhs;
+        process_.operations.emplace_back(method);
+        const auto& text = expression->systemverilog->text;
+        const auto destination = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            text == "<"    ? BinaryOperator::less_signed
+                : text == "<=" ? BinaryOperator::less_equal_signed
+                : text == ">"  ? BinaryOperator::greater_signed
+                               : BinaryOperator::greater_equal_signed,
+            destination, method.destination,
+            load_constant(unsigned_value(0U, 32U),
+                frontend::ValueDomain::Integer) });
+        result = expected_width != 0U && expected_width != 1U
+            ? std::optional { resize_register(destination, expected_width, false) }
+            : std::optional { destination };
     } else if (const auto folded = expression->systemverilog != nullptr
                    && expression->systemverilog->kind
                        == semantic::sv::ExpressionKind::call
@@ -14509,6 +14565,72 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       resize_register(destination, expected_width, true)
                   }
                 : std::optional { destination };
+        } else if (const auto controls = std::span { call.operands }.subspan(1U);
+                   std::ranges::any_of(controls, [&](const auto control) {
+                       std::string error;
+                       return !evaluate_hir_systemverilog_constant(
+                           *specialized_hir_unit_, control, error);
+                   })) {
+            // Run-time control bits (IEEE 1800-2017 20.9): count each of
+            // the four states whose value some control bit matches.
+            static constexpr std::array<std::pair<char, std::uint8_t>, 4>
+                states { { { '0', 0x01U }, { '1', 0x02U }, { 'x', 0x04U },
+                    { 'z', 0x08U } } };
+            std::vector<RegisterId> control_values;
+            for (const auto control : controls) {
+                auto value = lower_hir_expression(control, 1U);
+                if (!value) {
+                    return std::nullopt;
+                }
+                control_values.push_back(*value);
+            }
+            std::optional<RegisterId> total;
+            for (const auto& [state, mask] : states) {
+                const auto state_value = load_constant(
+                    PackedLogic4::from_msb_string(std::string(1U, state)),
+                    frontend::ValueDomain::Logic4);
+                std::optional<RegisterId> selected;
+                for (const auto control : control_values) {
+                    const auto matches = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, matches, control,
+                        state_value });
+                    if (selected) {
+                        const auto merged = allocate_register(
+                            1U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::bit_or, merged, *selected,
+                            matches });
+                        selected = merged;
+                    } else {
+                        selected = matches;
+                    }
+                }
+                const auto count = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(CountBits {
+                    count, *source_value, mask });
+                const auto counted = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::multiply_unsigned, counted, count,
+                    resize_register(*selected, 32U, false) });
+                if (total) {
+                    const auto sum = allocate_register(
+                        32U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::add_unsigned, sum, *total, counted });
+                    total = sum;
+                } else {
+                    total = counted;
+                }
+            }
+            result = expected_width != 0U && expected_width != 32U
+                ? std::optional {
+                      resize_register(*total, expected_width, true)
+                  }
+                : total;
         } else {
             std::uint8_t state_mask { };
             for (const auto control :
@@ -24936,6 +25058,9 @@ bool Lowerer::lower_hir_packed_copy_out(
             // evaluated when the assignment executes.
             std::optional<HirContainerElementBinding> element { };
             std::optional<RegisterId> element_index { };
+            // A bit select with a run-time index, evaluated when the
+            // assignment executes (IEEE 1800-2017 11.5.1).
+            std::optional<DynamicIndex> dynamic_bit { };
         };
         std::vector<PendingUpdate> updates;
         const auto collect = [&](auto&& self,
@@ -25073,10 +25198,34 @@ bool Lowerer::lower_hir_packed_copy_out(
                 return false;
             }
             if (selected_target && !constant_selection) {
-                // Dynamic bit and part selects need a captured selector and
-                // failure semantics that this source-ordered update path does
-                // not model yet.
-                return false;
+                // A one-bit select of a whole vector with a run-time index;
+                // dynamic part selects are not modelled here.
+                const auto lvalue_width = hir_expression_width(
+                    lvalue, hir_process_scope_);
+                // Only a nonblocking update takes the run-time index; a
+                // continuous assignment's target needs constant selects.
+                if (mode != HirPackedCopyOutMode::
+                        systemverilog_nonblocking_update
+                    || !index || member || !lvalue_width
+                    || *lvalue_width != 1U
+                    || binding->domain == frontend::ValueDomain::Unknown
+                    || binding->width == 0U) {
+                    return false;
+                }
+                auto dynamic = lower_hir_dynamic_index(
+                    selected.operands.front(), selected.operands[1],
+                    binding->width);
+                if (!dynamic) {
+                    return false;
+                }
+                PendingUpdate update;
+                update.binding = std::move(*binding);
+                update.source_offset = source_offset;
+                update.width = 1U;
+                update.domain = update.binding.domain;
+                update.dynamic_bit = std::move(*dynamic);
+                updates.push_back(std::move(update));
+                return true;
             }
             const auto width = constant_selection
                 ? std::optional { constant_selection->width }
@@ -25139,7 +25288,9 @@ bool Lowerer::lower_hir_packed_copy_out(
         for (std::size_t left { }; left < updates.size(); ++left) {
             for (std::size_t right = left + 1U;
                 right < updates.size(); ++right) {
-                if (updates[left].element || updates[right].element) {
+                if (updates[left].element || updates[right].element
+                    || updates[left].dynamic_bit
+                    || updates[right].dynamic_bit) {
                     continue;
                 }
                 if (updates[left].binding.signal
@@ -25211,7 +25362,14 @@ bool Lowerer::lower_hir_packed_copy_out(
                         update.binding.integer_range->right),
                 });
             }
-            if (update.destination_offset) {
+            if (update.dynamic_bit) {
+                process_.operations.emplace_back(WriteUpdateDynamicSlice {
+                    *update.binding.signal,
+                    value,
+                    *update.dynamic_bit,
+                    staged_domain,
+                });
+            } else if (update.destination_offset) {
                 process_.operations.emplace_back(WriteUpdateSlice {
                     *update.binding.signal,
                     value,

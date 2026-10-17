@@ -253,6 +253,100 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 63: VHDL femtosecond resolution, update targets and specify values
+
+Four new read-only triage lanes (Verilator lowering and run-time failures,
+ivtest and nvc) extended the index (`.local-artifacts/lrm-closure/triage/b63-INDEX.md`).
+
+Time resolution (owner decision): with `time_resolution = auto`, a design that
+contains VHDL units outside STD and IEEE now counts time in femtoseconds, the
+primary unit of TIME (IEEE 1076-2008 5.2.4.2). Before, automatic selection
+started at 1 ns and refined only to the finest unit spelled in the design, so
+`0.01 ns` could not be represented. SystemVerilog-only designs keep the
+existing selection. TextIO READ of a TIME value now reads the abstract literal
+and its unit; it used to read only the number, which matched only at 1 ns
+resolution.
+
+SystemVerilog and Verilog:
+
+- `$timeunit` and `$timeprecision` (20.4.2); `$countbits` with run-time control
+  bits (20.9); string `<`, `<=`, `>`, `>=` (6.16).
+- Real specparams and specparams with a packed range, also as path delays and
+  timing-check limits (6.20.5); a size cast of an unsigned operand folds in
+  constant evaluation.
+- `a[i++] += 2` and other updates with a side-effecting index evaluate the
+  index once (11.4.1); `{a, v[i]} <= x` and `v[i] <= #(d) x` with a run-time
+  index (10.4.2); a delayed nonblocking write outside the declared range has no
+  effect (11.5.1).
+- Bit and part selects written through a hierarchical reference
+  (`u.s[1] = 1`); `g[0].D = 5` names a member of a generate block array
+  element; a filename given as a packed value (`$fopen`, `$readmem*`); blank
+  positional task actuals take their defaults.
+- `@(posedge clk iff en)` on concurrent assertions (16.5): the guard was taken
+  as the clock signal.
+- `inner_t [1:0] e;` members of structures (7.4.1); `$cast` from a real
+  expression rounds (6.12.2); `+:`/`-:` on an ascending constant select
+  MSB-first; Verilog-2005 genvars are integers.
+- Sequential UDPs: an input change that no table row covers sets the output
+  to x (29.6).
+- A pull port (`inout tri0 z`) merged with a plain wire actual makes the net
+  that pull type (23.3.3.7).
+
+VHDL:
+
+- Component ports of every mode except linkage may have a default (6.5.2).
+- An unlabeled concurrent procedure call with named association
+  (`proc (a => 1, b => 2);`).
+- Unconstrained STD.STANDARD array constants initialised by a positional
+  aggregate take its length; a record signal of a package record type takes
+  its elements' defaults (the package subtype was unlinked).
+- STD.ENV TIME_TO_SECONDS and SECONDS_TO_TIME results take part in overload
+  resolution.
+- `F.e` for a parameterless function returning a record selects the element
+  only when the record has it (8.3).
+
+Runner: `wire real` and other real-valued built-in nets are an Icarus
+extension (IEEE 1800-2017 6.7.1 allows only four-state integral net types).
+34 ivtest cases use them; the 27 that fail are now out of scope (the 7 that
+pass still count, as for other out-of-scope cases).
+
+Measurement: the Batch 62 failures of the SystemVerilog suites were rerun on
+frozen `b63a`, `b63b` and `b63c`, with every ivtest UDP, `$fopen` and
+`$readmem` case and every Verilator and ivtest `tri0`/`tri1` case; the three
+VHDL suites were run in full on `b63c`, since the femtosecond default changes
+every VHDL design. A first full VHDL run on `b63a` showed four VESTs losses,
+fixed before `b63c`: tc979, tc980 and tc990 (an invalid `F.e` element is again
+rejected) and tc3188, which had passed only because TextIO READ ignored the
+unit at 1 ns resolution. The 295-case fast set passed on `b63c`. Net against
+Batch 62: **51 new passes, zero regressions**.
+
+| Suite | Batch62 passes / in scope | Batch63 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2461 / 2657 | 2487 / 2630 | 196 |
+| sv-tests | 1426 / 1497 | 1426 / 1497 | 0 |
+| verilator | 1457 / 2216 | 1472 / 2218 | 197 |
+| vests | 3545 / 3646 | 3547 / 3646 | 2 |
+| nvc | 806 / 1262 | 813 / 1262 | 220 |
+| vhdl-compliance | 37 / 72 | 38 / 72 | 0 |
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels had drifted to 33
+failures over Batches 60 to 63. Fixed here: two undocumented
+`FSIM-ELAB-VHACCESS` codes (catalog now 2974 production codes), three files
+without an SPDX notice, and unit tests that still expected behaviour the LRM
+batches changed (`` `timescale `` inside a module is an error, split
+`bufif`/`notif` drivers, null integer subtypes, array conversions that only
+need equal lengths, run-time `**` exponents and `$countbits` controls,
+anonymous-program callables in `$unit`, the 1 fs automatic resolution, a test
+UDP without the `(??)` row that LRM 29.6 requires). 28 remain: 10 of the 11
+known ones; the UVM audit, which counts an untracked top-level file in this
+checkout; and 17 that fail the same way on the Batch 62 binary or could not be
+tied to this batch: seven VHDL application tests rejected with
+`FSIM-ELAB-VHSUBTYPE-003` (Synopsys and other IEEE package uses), three
+compliance fixtures in both engines (`sv_class_handle_fixed_array_*`,
+`vhdl_enum_index_arrays`),
+`vhdl_vital_delays`, `artifact_phases`, `classes`, and a crash in
+`native-frontier-a2-blocking-immediate`. They are left for a regression batch.
+
 ### Batch 62: runner flags, drivers, VHDL parsing gaps and full checkpoint
 
 Five new triage lanes covered the compile- and elaboration-stage failures the

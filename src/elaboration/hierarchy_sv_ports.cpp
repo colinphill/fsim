@@ -1745,6 +1745,30 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 child_path + "." + formal_declaration.name,
                 compiled_source_span(*compiled_, binding.source));
         }
+        // A pull port (`inout tri0 z`) merged with a plain wire or tri
+        // actual makes the merged net that pull type (IEEE 1800-2017
+        // 23.3.3.7, Table 23-1).
+        if (!interface_port && formal_declaration.type
+            && *actual_signal < design_.signals_.size()
+            && *actual_signal < design_.signal_info_.size()) {
+            const auto& formal_net
+                = formal_declaration.type->systemverilog_net_type.empty()
+                ? formal_declaration.type->target.spelling
+                : formal_declaration.type->systemverilog_net_type;
+            auto& merged = design_.signals_[*actual_signal];
+            auto& merged_info = design_.signal_info_[*actual_signal];
+            if ((formal_net == "tri0" || formal_net == "tri1")
+                && !merged.implicit_driver
+                && (merged_info.systemverilog_net_type == "wire"
+                    || merged_info.systemverilog_net_type == "tri")) {
+                const auto pull = formal_net == "tri0"
+                    ? Logic4::zero : Logic4::one;
+                merged.implicit_driver = pull;
+                merged.initial_value = PackedLogic4 {
+                    merged.initial_value.width(), pull };
+                merged_info.systemverilog_net_type = formal_net;
+            }
+        }
         if (!child_aliases.emplace(
                               formal_declaration.name, *actual_signal)
                 .second) {

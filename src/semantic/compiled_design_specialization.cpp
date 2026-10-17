@@ -11382,6 +11382,35 @@ private:
                     ? evaluate(expression.operands.front())
                     : std::nullopt;
             }
+            // A size cast `N'(v)` keeps v when v fits as a nonnegative value
+            // of either signedness, and reduces an unsigned operand modulo
+            // 2**N (IEEE 1800-2017 6.24.1).
+            if (systemverilog && expression.kind == Kind::call
+                && expression.text.starts_with("@sv-cast:")
+                && expression.operands.size() == 1U) {
+                const auto width = parse_unsigned(
+                    std::string_view { expression.text }.substr(9U), 10U);
+                if (!width || *width == 0U || *width > 63U) {
+                    return std::nullopt;
+                }
+                const auto operand = evaluate(expression.operands.front());
+                if (!operand) {
+                    return std::nullopt;
+                }
+                const auto modulus = std::int64_t { 1 }
+                    << static_cast<unsigned>(*width);
+                if (*operand >= 0 && *operand < modulus / 2) {
+                    return operand;
+                }
+                const auto operand_view = unit_.find_expression(
+                    expression.operands.front());
+                if (operand_view && operand_view->systemverilog != nullptr
+                    && operand_view->systemverilog->kind == Kind::call
+                    && operand_view->systemverilog->text == "$unsigned") {
+                    return ((*operand % modulus) + modulus) % modulus;
+                }
+                return std::nullopt;
+            }
             if (expression.kind == Kind::call
                 && expression.text == "$clog2") {
                 if (expression.operands.size() != 1U) {

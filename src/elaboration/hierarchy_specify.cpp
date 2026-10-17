@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <charconv>
 #include <cctype>
@@ -61,9 +62,9 @@ namespace {
     }
 
     std::string canonical_specparam_integral_identity(
-        const std::int64_t value)
+        const std::int64_t value, const std::size_t width = 32U,
+        const bool signed_value = true)
     {
-        constexpr std::size_t width = 32U;
         std::string bits(width, value < 0 ? '1' : '0');
         const auto raw = static_cast<std::uint64_t>(value);
         for (std::size_t offset = 0U; offset < width; ++offset) {
@@ -72,7 +73,8 @@ namespace {
                 ? '1'
                 : '0';
         }
-        return "svconst-v3:b=0:w=32:s=1:u=0:d="
+        return "svconst-v3:b=0:w=" + std::to_string(width) + ":s="
+            + (signed_value ? "1" : "0") + ":u=0:d="
             + std::to_string(static_cast<unsigned>(
                 frontend::ValueDomain::Logic4))
             + ":n=0::v=" + bits;
@@ -195,6 +197,25 @@ namespace {
                 || source.kind
                     == semantic::sv::ExpressionKind::boolean_literal) {
                 return literal_identity(source.text);
+            }
+            // A ranged specparam holds its value at the range's width.
+            if (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with("@sv-cast:")
+                && source.operands.size() == 1U) {
+                std::size_t width { };
+                const auto digits = std::string_view { source.text }
+                                        .substr(9U);
+                const auto parsed = std::from_chars(digits.data(),
+                    digits.data() + digits.size(), width);
+                const auto value = specialization.evaluate_integral_expression(
+                    source.operands.front());
+                if (parsed.ec != std::errc { }
+                    || parsed.ptr != digits.data() + digits.size()
+                    || width == 0U || width > 64U || !value) {
+                    return std::nullopt;
+                }
+                return canonical_specparam_integral_identity(
+                    *value, width, false);
             }
             if (source.kind != semantic::sv::ExpressionKind::name) {
                 return std::nullopt;
@@ -567,6 +588,7 @@ void HierarchyBuilder::validate_verilog_specify(
         = specialization.specialization().hierarchy_identities;
     auto working = specialization.with_hierarchy_identities(identities);
     std::unordered_map<std::string, std::int64_t> specparam_values;
+    std::unordered_map<std::string, double> specparam_reals;
     const auto bind_specparam = [&](const std::string& name,
                                     std::string identity,
                                     const std::optional<std::int64_t> value) {
@@ -586,6 +608,101 @@ void HierarchyBuilder::validate_verilog_specify(
     struct StaticSpecparamValue {
         std::string identity;
         std::optional<std::int64_t> integral;
+        std::optional<double> real;
+    };
+    // A real constant expression of real literals, integral constants and
+    // earlier specparams (IEEE 1800-2017 6.20.5); nullopt when no operand
+    // is real, so integral specparams keep integral arithmetic.
+    const auto real_specparam_value = [&](const semantic::ExpressionId root)
+        -> std::optional<double> {
+        bool saw_real { };
+        std::function<std::optional<double>(semantic::ExpressionId,
+            std::size_t)> evaluate;
+        evaluate = [&](const semantic::ExpressionId expression,
+                       const std::size_t depth) -> std::optional<double> {
+            const auto view = working.find_expression(expression);
+            if (depth > 64U || !view || view->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& item = *view->systemverilog;
+            if (item.kind == semantic::sv::ExpressionKind::integer_literal
+                && item.scalar_kind == semantic::sv::ScalarKind::real) {
+                std::string text;
+                std::ranges::copy_if(item.text, std::back_inserter(text),
+                    [](const char value) { return value != '_'; });
+                char* end { };
+                const auto value = std::strtod(text.c_str(), &end);
+                if (end == text.c_str() || *end != '\0') {
+                    return std::nullopt;
+                }
+                saw_real = true;
+                return value;
+            }
+            if (item.kind == semantic::sv::ExpressionKind::name) {
+                for (const auto* spelling : { &item.text,
+                         item.referenced_name
+                             ? &item.referenced_name->spelling
+                             : nullptr }) {
+                    if (spelling == nullptr) {
+                        continue;
+                    }
+                    if (const auto found = specparam_reals.find(*spelling);
+                        found != specparam_reals.end()) {
+                        saw_real = true;
+                        return found->second;
+                    }
+                }
+                const auto selected
+                    = semantic::CompiledDesignResolver { working }
+                          .resolve_expression_name(expression, { }, true)
+                          .unique();
+                const auto declaration = selected
+                    ? working.find_declaration(*selected)
+                    : std::nullopt;
+                if (declaration && declaration->systemverilog != nullptr
+                    && declaration->systemverilog->initializer
+                    && (!declaration->systemverilog->type
+                        || (!declaration->systemverilog->type->packed_range
+                            && (declaration->systemverilog->type->target
+                                    .spelling.empty()
+                                || declaration->systemverilog->type->target
+                                        .spelling.ends_with("real")
+                                || declaration->systemverilog->type->target
+                                        .spelling == "realtime")))) {
+                    return evaluate(
+                        *declaration->systemverilog->initializer,
+                        depth + 1U);
+                }
+            }
+            if (item.kind == semantic::sv::ExpressionKind::unary
+                && item.operands.size() == 1U
+                && (item.text == "-" || item.text == "+")) {
+                const auto operand = evaluate(item.operands.front(),
+                    depth + 1U);
+                return operand && item.text == "-" ? -*operand : operand;
+            }
+            if (item.kind == semantic::sv::ExpressionKind::binary
+                && item.operands.size() == 2U
+                && (item.text == "+" || item.text == "-"
+                    || item.text == "*" || item.text == "/")) {
+                const auto left = evaluate(item.operands[0], depth + 1U);
+                const auto right = evaluate(item.operands[1], depth + 1U);
+                if (!left || !right) {
+                    return std::nullopt;
+                }
+                return item.text == "+" ? *left + *right
+                    : item.text == "-"  ? *left - *right
+                    : item.text == "*"  ? *left * *right
+                                        : *left / *right;
+            }
+            if (const auto integral
+                = working.evaluate_integral_expression(expression)) {
+                return static_cast<double>(*integral);
+            }
+            return std::nullopt;
+        };
+        const auto value = evaluate(root, 0U);
+        return saw_real ? value : std::nullopt;
     };
     const auto validate_specparam_expression = [&](
                                                    const semantic::ExpressionId
@@ -595,6 +712,14 @@ void HierarchyBuilder::validate_verilog_specify(
                                                    const std::string_view
                                                        description)
         -> std::optional<StaticSpecparamValue> {
+        if (const auto real = real_specparam_value(expression)) {
+            return StaticSpecparamValue {
+                frontend::SystemVerilogScalarConstant {
+                    frontend::SystemVerilogScalarKind::Real,
+                    std::bit_cast<std::uint64_t>(*real) }
+                    .canonical(),
+                std::nullopt, real };
+        }
         const auto integral
             = working.evaluate_integral_expression(expression);
         const auto identity = compiled_specparam_identity(
@@ -606,7 +731,7 @@ void HierarchyBuilder::validate_verilog_specify(
                 source(expression_source));
             return std::nullopt;
         }
-        return StaticSpecparamValue { *identity, integral };
+        return StaticSpecparamValue { *identity, integral, std::nullopt };
     };
     for (const auto& block : unit.timing) {
         for (const auto& specparam : block.specparams) {
@@ -616,6 +741,10 @@ void HierarchyBuilder::validate_verilog_specify(
             if (value) {
                 bind_specparam(specparam.name, value->identity,
                     value->integral);
+                if (value->real) {
+                    specparam_reals.insert_or_assign(
+                        specparam.name, *value->real);
+                }
                 specialization_info.parameter_identity_values.emplace_back(
                     "@specparam:" + specparam.name,
                     value->identity);
@@ -741,6 +870,21 @@ void HierarchyBuilder::validate_verilog_specify(
             ? expression_override
             : delay.expression;
         if (expression) {
+            if (const auto real = real_specparam_value(*expression)) {
+                const auto scaled = *real
+                    * static_cast<double>(delay.magnitude);
+                if (!(scaled >= 0.0) || scaled > 9.0e18
+                    || delay.divisor != 1U || !delay.unit.empty()) {
+                    report(std::string { code },
+                        std::string { role } + " at '" + path
+                            + "' is not a static nonnegative simulation "
+                              "time",
+                        source(location));
+                    return std::nullopt;
+                }
+                return static_cast<runtime::SimulationTick>(
+                    std::llround(scaled));
+            }
             const auto value = static_timing_value(*expression);
             const bool overflow = !value || *value < 0
                 || delay.divisor == 0U
@@ -799,6 +943,18 @@ void HierarchyBuilder::validate_verilog_specify(
                 return std::nullopt;
             }
             return static_cast<std::int64_t>(value.magnitude);
+        }
+        if (const auto real = real_specparam_value(*value.expression)) {
+            const auto scaled = *real
+                * static_cast<double>(value.magnitude);
+            if (!(std::abs(scaled) <= 9.0e18)) {
+                report("FSIM-ELAB-SVSPEC-016",
+                    "timing-check limit at '" + path
+                        + "' is not a static representable simulation time",
+                    source(location));
+                return std::nullopt;
+            }
+            return static_cast<std::int64_t>(std::llround(scaled));
         }
         const auto evaluated = static_timing_value(*value.expression);
         if (!evaluated

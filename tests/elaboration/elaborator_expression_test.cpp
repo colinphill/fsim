@@ -1262,12 +1262,11 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_countbits.ok());
-    const auto rejected_countbits = compile_and_elaborate(
+    // Control bits may be run-time values (IEEE 1800-2017 20.9).
+    const auto runtime_countbits = compile_and_elaborate(
         invalid_countbits.design,
         "sv:work.invalid_countbits");
-    assert(!rejected_countbits.ok());
-    assert(has_diagnostic(
-        rejected_countbits, "FSIM-ELAB-089"));
+    assert(runtime_countbits.ok());
 
     const auto logical_process = fsim::frontend::parse_text(
         "logical_process.sv",

@@ -4,6 +4,8 @@
 #include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <bit>
 #include <boost/multiprecision/cpp_int.hpp>
 #include <cctype>
@@ -796,6 +798,71 @@ namespace {
         return index == text.size();
     }
 
+    // A VHDL TIME literal read by TEXTIO, `1994 ns` or `2.5 us`, in project
+    // ticks of `resolution` femtoseconds; a value below the resolution
+    // truncates toward zero (IEEE 1076-2008 5.2.4.2).
+    [[nodiscard]] std::optional<InputScanValue> packed_vhdl_time(
+        const std::string_view text,
+        const InputScanTarget& target,
+        const std::uint64_t resolution)
+    {
+        const auto separator = text.find(' ');
+        if (separator == std::string_view::npos || resolution == 0U
+            || target.width == 0U || target.width > 64U) {
+            return std::nullopt;
+        }
+        static constexpr std::array<std::pair<std::string_view, double>, 8>
+            units { { { "fs", 1.0 }, { "ps", 1.0e3 }, { "ns", 1.0e6 },
+                { "us", 1.0e9 }, { "ms", 1.0e12 }, { "sec", 1.0e15 },
+                { "min", 60.0e15 }, { "hr", 3600.0e15 } } };
+        const auto unit_name = text.substr(separator + 1U);
+        const auto unit = std::ranges::find(units, unit_name,
+            &std::pair<std::string_view, double>::first);
+        if (unit == units.end()) {
+            return std::nullopt;
+        }
+        std::string number;
+        for (const auto character : text.substr(0U, separator)) {
+            if (character != '_') {
+                number.push_back(character);
+            }
+        }
+        const bool real_literal = number.find_first_of(".") != std::string::npos;
+        if (real_literal ? !valid_vhdl_real_literal(number)
+                         : number.find_first_not_of("0123456789+-eE")
+                             != std::string::npos) {
+            return std::nullopt;
+        }
+        // Exact integer arithmetic when the literal and unit allow it.
+        cpp_int ticks;
+        if (!real_literal && number.find_first_of("eE") == std::string::npos) {
+            const auto unit_femtoseconds = static_cast<std::uint64_t>(
+                unit->second);
+            ticks = cpp_int { number } * unit_femtoseconds
+                / static_cast<std::uint64_t>(resolution);
+        } else {
+            char* end { };
+            const auto value = std::strtod(number.c_str(), &end);
+            if (end == number.c_str() || *end != '\0') {
+                return std::nullopt;
+            }
+            const auto scaled = value * unit->second
+                / static_cast<double>(resolution);
+            if (!std::isfinite(scaled) || std::abs(scaled) > 9.2e18) {
+                return std::nullopt;
+            }
+            ticks = cpp_int { static_cast<std::int64_t>(scaled) };
+        }
+        if (ticks > std::numeric_limits<std::int64_t>::max()
+            || ticks < std::numeric_limits<std::int64_t>::min()) {
+            return std::nullopt;
+        }
+        const auto signed_ticks = ticks.convert_to<std::int64_t>();
+        return InputScanValue { PackedLogic4::from_aval_bval(target.width,
+            static_cast<std::uint64_t>(signed_ticks), 0U),
+            std::string { }, false };
+    }
+
     [[nodiscard]] std::tuple<std::string, bool, bool> read_conversion_text(
         Scanner& scanner,
         const InputScanConversion& conversion,
@@ -868,6 +935,47 @@ namespace {
             }
             const bool complete = text.size() == limit;
             return { std::move(text), complete, eof };
+        }
+        // A TIME value: an abstract literal, then its unit name (IEEE
+        // 1076-2008 16.4 READ, 15.5.3).
+        if (vhdl_textio && conversion.format == InputScanFormat::time) {
+            (void)scanner.skip_space(true);
+            std::string number;
+            for (;;) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                const auto value = static_cast<char>(character);
+                const bool sign = (value == '-' || value == '+')
+                    && (number.empty() || number.back() == 'e'
+                        || number.back() == 'E');
+                if (!(std::isdigit(static_cast<unsigned char>(value)) != 0
+                        || value == '.' || value == '_' || value == 'e'
+                        || value == 'E' || sign)) {
+                    scanner.unread(character);
+                    break;
+                }
+                number.push_back(value);
+            }
+            (void)scanner.skip_space(true);
+            std::string unit;
+            for (;;) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                if (std::isalpha(character) == 0) {
+                    scanner.unread(character);
+                    break;
+                }
+                unit.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(character))));
+            }
+            const bool complete = !number.empty() && !unit.empty();
+            return { number + " " + unit, complete, eof };
         }
         if (vhdl_textio
             && conversion.format == InputScanFormat::binary) {
@@ -1148,7 +1256,13 @@ InputScanResult scan_formatted_input_impl(
                                 && conversion.format
                                     != InputScanFormat::unsigned_decimal)
                             || valid_vhdl_numeric_separators(text)));
-            if (valid_textio_number
+            if (vhdl_textio_line
+                && conversion.format == InputScanFormat::time) {
+                value = time_format != nullptr
+                    ? packed_vhdl_time(text, conversion.target,
+                          time_format->resolution_femtoseconds)
+                    : std::nullopt;
+            } else if (valid_textio_number
                 && conversion.format == InputScanFormat::time) {
                 value = time_format != nullptr
                     ? packed_time(text, conversion.target,

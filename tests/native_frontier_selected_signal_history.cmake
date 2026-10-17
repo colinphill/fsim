@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Include inside the FSIM_WITH_LLVM native-frontier test block.
 add_executable(
   fsim_application_native_frontier_selected_signal_history_tests

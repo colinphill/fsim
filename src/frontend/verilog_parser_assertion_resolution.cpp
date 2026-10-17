@@ -418,6 +418,12 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             std::vector<std::string_view> clock_objects;
             bool after_dot { };
             for (const auto& token : assertion_clock_tokens) {
+                // `@(posedge clk iff en)`: the guard is an expression, not
+                // a clock object (IEEE 1800-2017 9.4.2.3, 16.5).
+                if (token.kind == TokenKind::Identifier
+                    && token.text == "iff") {
+                    break;
+                }
                 if (token.kind == TokenKind::Dot) {
                     after_dot = true;
                     continue;
@@ -1364,8 +1370,32 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         if (!general_property) {
             process.variables = std::move(assertion_local_variables);
         }
+        // `@(posedge clk iff en)`: the clock ticks only while the guard is
+        // true when the edge occurs (IEEE 1800-2017 9.4.2.3, 16.5).
+        std::optional<Expression> clock_guard;
+        std::span<const Token> clock_event_tokens = assertion_clock_tokens;
         if (assertion_clock) {
-            const auto event = assertion_clock_tokens;
+            const auto guard = std::ranges::find_if(
+                assertion_clock_tokens, [](const Token& token) {
+                    return token.kind == TokenKind::Identifier
+                        && token.text == "iff";
+                });
+            if (guard != assertion_clock_tokens.end()) {
+                const auto offset = static_cast<std::size_t>(
+                    guard - assertion_clock_tokens.begin());
+                clock_event_tokens = assertion_clock_tokens.first(offset);
+                clock_guard = assertion_expression(
+                    assertion_clock_tokens.subspan(offset + 1U));
+                if (!clock_guard) {
+                    error(*guard, "FSIM-SV-SEM-201",
+                        "the assertion clock guard after 'iff' is not an "
+                        "expression");
+                    continue;
+                }
+            }
+        }
+        if (assertion_clock) {
+            const auto event = clock_event_tokens;
             const auto signal = std::ranges::find_if(
                 event.rbegin(), event.rend(), [](const Token& token) {
                     return token.kind == TokenKind::Identifier
@@ -2137,6 +2167,15 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             append_evaluation(std::move(implication));
         } else {
             append_evaluation(std::move(assertion));
+        }
+        if (clock_guard) {
+            Statement guarded;
+            guarded.kind = StatementKind::If;
+            guarded.condition = std::move(*clock_guard);
+            guarded.span = directive.span;
+            guarded.statements = std::move(process.statements);
+            process.statements.clear();
+            process.statements.push_back(std::move(guarded));
         }
         process.statements.insert(
             process.statements.begin(), coverage_marker("register"));

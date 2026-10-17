@@ -641,9 +641,11 @@ std::optional<std::string> validate_file_scan_metadata(
         const auto scalar_width = scalar == runtime::SystemVerilogScalarKind::ShortReal
             ? 32U
             : 64U;
+        // A VHDL TEXTIO READ of TIME scans a literal into integral ticks.
         const bool scalar_format = scalar == runtime::SystemVerilogScalarKind::None
             ? conversion.format != InputScanFormat::real
-                && conversion.format != InputScanFormat::time
+                && (conversion.format != InputScanFormat::time
+                    || runtime::simir::vhdl_textio_read(operation))
             : real_scalar ? conversion.format == InputScanFormat::real
                     || conversion.format == InputScanFormat::time
             : scalar == runtime::SystemVerilogScalarKind::Time

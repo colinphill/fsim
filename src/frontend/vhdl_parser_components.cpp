@@ -275,11 +275,13 @@ void VhdlParser::parse_vhdl_component_ports(
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
-      if (!mode_view && direction != PortDirection::Input) {
+      // Every mode but linkage may have a default; for an output it is
+      // the driver's initial value (IEEE 1076-2008 6.5.2).
+      if (linkage) {
         error(
             names.front(),
             "FSIM-VHDL-SEM-072",
-            "a component port default is only legal on an input port");
+            "a component port of mode linkage cannot have a default");
       }
     }
     for (const auto& name : names) {

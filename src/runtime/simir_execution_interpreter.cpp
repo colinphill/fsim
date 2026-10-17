@@ -1629,9 +1629,14 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
                     auto value = get_register(process, op.source);
-                    const auto offset = selected_offset(op.selection);
+                    // A SystemVerilog write outside the declared range has
+                    // no effect (IEEE 1800-2017 11.5.1).
+                    const auto written = written_offset(op.selection);
                     ++process.pc;
-                    if (op.domain
+                    const auto offset = written.value_or(0U);
+                    if (!written) {
+                        // Nothing to schedule.
+                    } else if (op.domain
                         != SignalUpdateDomain::generic) {
                         schedule_systemverilog_update(
                             process.id, op.signal, std::move(value),

@@ -910,7 +910,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-068` | error | One declarative region repeats an exact component profile. |
 | `FSIM-VHDL-SEM-069` | error | A component declaration's end name does not match its opening name. |
 | `FSIM-VHDL-SEM-071` | error | A component generic or port formal is declared more than once or conflicts with another component formal. |
-| `FSIM-VHDL-SEM-072` | error | A component port default is declared on a non-input formal. |
+| `FSIM-VHDL-SEM-072` | error | A component port default is declared on a linkage formal. |
 | `FSIM-VHDL-SEM-073` | error | A positional VHDL function-call actual follows a named actual. |
 | `FSIM-VHDL-SEM-074` | error | A VHDL procedure parameter default is declared on a non-input formal. |
 | `FSIM-VHDL-SEM-075` | error | Retired catalog identity: VHDL ports of every mode accept a default. |
@@ -2367,6 +2367,8 @@ scheduler.
 | `FSIM-ELAB-VHACCESS-020` | error | VHDL access assignment is not a same-nominal value or `null`. |
 | `FSIM-ELAB-VHACCESS-021` | error | A nonnull process-local VHDL access handle escapes through a signal. |
 | `FSIM-ELAB-VHACCESS-022` | error | Explicit access deallocation is requested for a bounded simulation-lifetime object. |
+| `FSIM-ELAB-VHACCESS-023` | error | A VHDL allocator's access subtype does not identify its resolved access type. |
+| `FSIM-ELAB-VHACCESS-024` | error | A VHDL access type designates a string-domain subtype other than the predefined STRING. |
 | `FSIM-ELAB-VHPHYSICAL-001` | error | A VHDL physical type lacks its range or primary unit. |
 | `FSIM-ELAB-VHPHYSICAL-002` | error | A physical range is nonstatic or outside signed 32-bit primary-unit ticks. |
 | `FSIM-ELAB-VHPHYSICAL-003` | error | A physical primary unit incorrectly carries a secondary-unit scale. |

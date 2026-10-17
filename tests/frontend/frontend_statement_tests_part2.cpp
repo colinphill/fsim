@@ -560,8 +560,11 @@ endmodule
         Language::SystemVerilog2017);
     require(result.ok(), "built-in gate primitives must parse");
     const auto& statements = result.design.units.front().concurrent_statements;
+    // The notif0 drives through one strength driver per output value
+    // (`tri_not_gate` and `tri_not_gate$one`), so it contributes two
+    // statements.
     require(
-        statements.size() == 18
+        statements.size() == 19
             && std::ranges::all_of(
                 statements,
                 [](const Statement& statement) {
@@ -605,18 +608,21 @@ endmodule
             && statements[13].delay->additional_values.size() == 2
             && statements[14].label == "tri_not_gate"
             && statements[14].value.kind == ExpressionKind::Call
+            && statements[14].value.operands.size() == 3U
             && statements[14].value.operands[0].kind
-                == ExpressionKind::Unary
-            && statements[14].value.operands[1].kind
-                == ExpressionKind::Unary
-            && statements[15].label == "fanout$output0"
-            && statements[16].label == "fanout$output1"
-            && statements[15].value.text == "|"
-            && statements[15].value.operands[0].text == "a"
+                == ExpressionKind::Binary
+            && statements[14].value.operands[0].text == "==="
+            && statements[14].value.operands[2].kind
+                == ExpressionKind::Call
+            && statements[15].label == "tri_not_gate$one"
+            && statements[16].label == "fanout$output0"
+            && statements[17].label == "fanout$output1"
             && statements[16].value.text == "|"
             && statements[16].value.operands[0].text == "a"
-            && statements[17].label == "single_input"
-            && statements[17].value.text == "a",
+            && statements[17].value.text == "|"
+            && statements[17].value.operands[0].text == "a"
+            && statements[18].label == "single_input"
+            && statements[18].value.text == "a",
         "tri-state, multiple-output, and single-input gate forms lower to "
         "continuous drivers");
 

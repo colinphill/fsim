@@ -350,6 +350,13 @@ public:
 
     [[nodiscard]] runtime::simir::Process build()
     {
+        // The activation that applies the initial output is not an input
+        // transition of the table.
+        std::optional<runtime::simir::RegisterId> was_initialized;
+        if (declaration_.sequential && declaration_.initial_output
+            && initialized_) {
+            was_initialized = equals(*initialized_, runtime::Logic4::one);
+        }
         if (declaration_.sequential) {
             append_initialization();
         }
@@ -393,6 +400,30 @@ public:
             process_.operations.emplace_back(runtime::simir::WriteBlocking {
                 value_, constant(runtime::Logic4::x)
             });
+        } else if (!inputs_.empty()) {
+            // An input change that no row covers makes the output x
+            // (IEEE 1800-2017 29.6).
+            auto any_changed = changed(0U);
+            for (std::size_t index = 1U; index < inputs_.size(); ++index) {
+                any_changed = disjunction(any_changed, changed(index));
+            }
+            if (was_initialized) {
+                any_changed = conjunction(any_changed, *was_initialized);
+            }
+            const auto branch = instruction();
+            process_.operations.emplace_back(runtime::simir::Branch {
+                any_changed, 0U, 0U,
+                runtime::simir::UnknownBranchPolicy::when_false
+            });
+            const auto when_true = instruction();
+            process_.operations.emplace_back(runtime::simir::WriteBlocking {
+                value_, constant(runtime::Logic4::x)
+            });
+            const auto when_false = instruction();
+            process_.operations[branch] = runtime::simir::Branch {
+                any_changed, when_true, when_false,
+                runtime::simir::UnknownBranchPolicy::when_false
+            };
         }
         const auto finish = instruction();
         for (const auto exit : exits) {

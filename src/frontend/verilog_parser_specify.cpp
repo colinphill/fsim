@@ -63,6 +63,22 @@ void VerilogParser::parse_specparam_declaration(
       declaration.maximum = parse_expression();
       declaration.value = *declaration.typical;
     }
+    if (range_type.packed_range && !declaration.path_pulse) {
+      // The declared range sets the value's width (IEEE 1800-2017 6.20.5).
+      const auto value_span = declaration.value.span;
+      auto unsigned_value = Expression {
+          ExpressionKind::Call, "$unsigned",
+          { std::move(declaration.value) }, value_span };
+      auto cast = Expression {
+          ExpressionKind::Call,
+          "@sv-cast:" + std::to_string(range_type.packed_range->width()),
+          { std::move(unsigned_value) },
+          value_span
+      };
+      cast.call_result_width = range_type.packed_range->width();
+      cast.call_result_domain = ValueDomain::Logic4;
+      declaration.value = std::move(cast);
+    }
     declaration.span = span_from(start, previous());
     if (declaration.path_pulse) {
       const auto pulse_delay = [&](const Expression& expression) {

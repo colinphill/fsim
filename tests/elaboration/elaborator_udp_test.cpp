@@ -38,6 +38,7 @@ primitive dff_udp (q, d, clock);
     0 (01) : ? : 0;
     1 r    : ? : 1;
     ? n    : ? : -;
+    (??) ? : ? : -;
   endtable
 endprimitive
 

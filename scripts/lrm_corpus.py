@@ -462,10 +462,14 @@ def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
 # Icarus system tasks that are not in IEEE 1364/1800.
 ICARUS_EXTENSION_TASKS = re.compile(
     r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|deposit|finish_and_return|ivlh_\w+)\b")
-# Icarus syntax extensions: the `bool` variable type and the binary `~&`
-# and `~|` operators (the IEEE LRMs define them only as unary reductions).
+# Icarus syntax extensions: the `bool` variable type, the binary `~&`
+# and `~|` operators (the IEEE LRMs define them only as unary reductions),
+# and real-valued built-in nets (`wire real`; IEEE 1800-2017 6.7.1 allows
+# only four-state integral net types).
 ICARUS_EXTENSION_SYNTAX = re.compile(
-    r"\breg\s+bool\b|[\w)\]]\s*~[&|]\s*[\w(]")
+    r"\breg\s+bool\b|[\w)\]]\s*~[&|]\s*[\w(]"
+    r"|\b(?:wire|tri|tri0|tri1|wand|wor|triand|trior|uwire)\s+"
+    r"(?:real|realtime|shortreal)\b")
 # ivtest cases whose expected output depends on Icarus's own choices:
 # the order of processes in one time step (IEEE 1800-2017 4.7 leaves it
 # undefined), implementation-defined formatting or widths, or Icarus-only

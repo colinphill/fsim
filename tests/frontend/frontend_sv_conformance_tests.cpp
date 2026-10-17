@@ -1295,11 +1295,24 @@ endprogram
 endprogram
 )" },
         StandardRevision::SystemVerilog2017);
+    // The callable belongs to the compilation-unit (`$unit`) package.
+    const auto retained_function_count = [&] {
+        auto count = static_cast<std::size_t>(std::ranges::count_if(
+            retained_anonymous_program.design.functions,
+            [](const auto& function) {
+                return function.name == "retained_value";
+            }));
+        for (const auto& unit : retained_anonymous_program.design.units) {
+            count += static_cast<std::size_t>(std::ranges::count_if(
+                unit.functions, [](const auto& function) {
+                    return function.name == "retained_value";
+                }));
+        }
+        return count;
+    }();
     require(
         retained_anonymous_program.ok()
-            && retained_anonymous_program.design.functions.size() == 1
-            && retained_anonymous_program.design.functions.front().name
-                == "retained_value"
+            && retained_function_count == 1U
             && retained_anonymous_program.design.systemverilog_classes.size()
                 == 1
             && retained_anonymous_program.design.systemverilog_classes.front()

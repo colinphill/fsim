@@ -63,7 +63,9 @@ namespace {
         const semantic::ScopeId use_scope,
         const std::string_view name)
     {
-        if (specialization.language() != semantic::Language::system_verilog
+        // Verilog-2005 genvars are integers too (IEEE 1364-2005 12.4.1).
+        if ((specialization.language() != semantic::Language::system_verilog
+                && specialization.language() != semantic::Language::verilog)
             || name.empty()) {
             return false;
         }
@@ -15480,11 +15482,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                         || predefined_concatenation);
                 // Positional associations may contain whole array values.
                 // Reuse the contextual aggregate layout to count their width.
-                if (unconstrained_array && array != nullptr && value_expression
+                if (unconstrained_array && value_expression
                     && value_expression->vhdl != nullptr
                     && value_expression->vhdl->kind
                         == semantic::vhdl::ExpressionKind::aggregate
-                    && array->array_dimensions.size() == 1U && array->element_subtype
+                    && (array != nullptr
+                            ? array->array_dimensions.size() == 1U
+                                && array->element_subtype.has_value()
+                            : standard_unconstrained_array)
                     && !value_expression->vhdl->associations.empty()
                     && std::ranges::all_of(value_expression->vhdl->associations,
                         [](const semantic::vhdl::AggregateAssociation& association) {
@@ -17921,6 +17926,25 @@ Lowerer::hir_vhdl_expression_subtype(
             *specialized_hir_unit_, source.nominal_type, source.scope);
         return declared ? hir_effective_vhdl_subtype(*declared)
                         : std::nullopt;
+    }
+    // STD.ENV TIME_TO_SECONDS returns REAL and SECONDS_TO_TIME returns
+    // TIME (IEEE 1076-2019 16.5), which overload resolution of an
+    // enclosing call needs.
+    if (const auto call = specialized_hir_unit_->find_expression(expression_id);
+        call && call->vhdl != nullptr
+        && (call->vhdl->kind == semantic::vhdl::ExpressionKind::call
+            || call->vhdl->kind == semantic::vhdl::ExpressionKind::name)) {
+        const auto api = hir_vhdl_simulator_api(*call->vhdl);
+        if (api == frontend::VhdlSimulatorApi::time_to_seconds
+            || api == frontend::VhdlSimulatorApi::seconds_to_time) {
+            semantic::vhdl::SubtypeIndication result;
+            result.type_mark.spelling
+                = api == frontend::VhdlSimulatorApi::time_to_seconds
+                ? "std.standard.real" : "std.standard.time";
+            if (const auto resolved = hir_effective_vhdl_subtype(result)) {
+                return resolved;
+            }
+        }
     }
     if (const auto element = specialized_hir_unit_->find_expression(expression_id);
         element && element->vhdl != nullptr

@@ -271,21 +271,8 @@ begin
 end architecture;
 )",
       "FSIM-ELAB-VHCONV-003");
-  reject(
-      "vhdl_conversion_shape.vhd",
-      R"(
-entity Invalid is end entity;
-architecture rtl of invalid is
-  type Bits_T is array (natural range <>) of bit;
-  subtype Descending_T is Bits_T(3 downto 0);
-  subtype Ascending_T is Bits_T(0 to 3);
-  signal Source : Ascending_T;
-  signal Value : Descending_T;
-begin
-  Value <= Descending_T(Source);
-end architecture;
-)",
-      "FSIM-ELAB-VHCONV-003");
+  // Converting between index directions or bounds of one array type is
+  // legal; only the lengths must match (IEEE 1076-2008 9.3.6).
   reject(
       "vhdl_conversion_indefinite.vhd",
       R"(
@@ -353,21 +340,6 @@ architecture rtl of invalid is
   signal Value : One_T;
 begin
   Value <= One_T(Source);
-end architecture;
-)",
-      "FSIM-ELAB-VHCONV-003");
-  reject(
-      "vhdl_conversion_bounds.vhd",
-      R"(
-entity Invalid is end entity;
-architecture rtl of invalid is
-  type Bits_T is array (natural range <>) of bit;
-  subtype Zero_Based_T is Bits_T(0 to 3);
-  subtype One_Based_T is Bits_T(1 to 4);
-  signal Source : One_Based_T;
-  signal Value : Zero_Based_T;
-begin
-  Value <= Zero_Based_T(Source);
 end architecture;
 )",
       "FSIM-ELAB-VHCONV-003");

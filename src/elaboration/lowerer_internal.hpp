@@ -2642,6 +2642,19 @@ private:
         bool reevaluates { };
     };
     mutable HirReevaluationCache hir_reevaluation_cache_;
+    // Index expressions of an update target with side effects
+    // (`a[i++] += 2`), evaluated once before the update; lowering reads
+    // these registers instead of evaluating them again (IEEE 1800-2017
+    // 11.4.1).
+    std::unordered_map<std::uint32_t, RegisterId> hir_captured_update_indices_;
+    // Whether every side effect of the current update target is captured.
+    bool hir_update_indices_captured_ { };
+    [[nodiscard]] bool hir_update_expression_pure(
+        semantic::ExpressionId expression, std::size_t depth = 0U) const;
+    // Evaluate the impure indices of an update target once; false when a
+    // side effect is outside an index.
+    [[nodiscard]] bool capture_hir_update_target_indices(
+        const semantic::sv::Statement& statement);
     // `%v` (IEEE 1800-2017 21.2.1.5): the strength text of a named net or
     // variable.
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_strength_text(
@@ -2704,6 +2717,12 @@ private:
         frontend::ValueDomain domain);
     // A format_packed string method appending `value`, `width` bits wide,
     // to `target` in `format`; the caller sets any other options.
+    // A file name operand: a string, or an integral value holding its
+    // characters (IEEE 1800-2017 21.3.1, 21.4).
+    [[nodiscard]] bool hir_filename_operand(
+        semantic::ExpressionId expression, semantic::ScopeId scope) const;
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_filename(
+        semantic::ExpressionId expression);
     [[nodiscard]] StringMethod hir_format_packed(StringRegisterId target,
         RegisterId value, std::size_t width,
         runtime::simir::OutputFormat format);

@@ -434,6 +434,8 @@ max_deltas = 1000
     {
         std::ofstream source(directory / "logic9.vhd");
         source << R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity api_logic9 is
   port (value : out std_logic_vector(7 downto 0));
 end entity;

@@ -1,4 +1,5 @@
 // fsim: top=sv_class_handle_fixed_array_range_index_20261015 std=2017
+// SPDX-License-Identifier: Apache-2.0
 class RangeIndexLeaf;
   int marker;
   function new(input int initial_marker);
