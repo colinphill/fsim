@@ -1306,7 +1306,9 @@ endmodule
         malformed_ports_diagnostics.diagnostics(), [](const auto& value) {
             return value.code == "FSIM-SV-UNSUPPORTED-051";
         }));
-    assert(std::ranges::any_of(
+    // A name listed twice in a non-ANSI port list is two ports connected to
+    // the same object (IEEE 1800-2017 23.2.2.1), not a duplicate.
+    assert(std::ranges::none_of(
         malformed_ports_diagnostics.diagnostics(), [](const auto& value) {
             return value.code == "FSIM-SV-SEM-003";
         }));

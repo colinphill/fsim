@@ -1485,7 +1485,14 @@ void Interpreter::Impl::begin_wait_timeout(
         ProcessId process { };
         InstructionIndex origin { };
         std::uint64_t generation { };
+        bool after_updates { };
     };
+    // IEEE 1076-2008 14.7.5.1: a VHDL process whose timeout expires resumes
+    // after the signal updates of that time, as queue_timeout does.
+    const bool after_updates
+        = process.program().scheduling_domain()
+            != ProcessSchedulingDomain::systemverilog
+        && !process.program().postponed() && delay != 0;
     const auto task =
         fsim::runtime::detail::make_scheduler_task_descriptor<
             WaitTimeoutTask,
@@ -1505,10 +1512,14 @@ void Interpreter::Impl::begin_wait_timeout(
                 state.wait_timeout_origin.reset();
                 timeout->wait_timeout_deadline.reset();
                 timeout->wait_timeout_result.reset();
-                scheduled.owner->queue_active_current(
-                    scheduled.process);
+                if (scheduled.after_updates) {
+                    scheduled.owner->queue_next_delta(scheduled.process);
+                } else {
+                    scheduled.owner->queue_active_current(
+                        scheduled.process);
+                }
             }>(WaitTimeoutTask {
-                this, process.id, origin, generation });
+                this, process.id, origin, generation, after_updates });
     const bool systemverilog_process
         = process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog;
@@ -1524,8 +1535,9 @@ void Interpreter::Impl::begin_wait_timeout(
         scheduler.schedule_internal_systemverilog_at(
             deadline, SchedulerPhase::active, process.id, task);
     } else {
-        scheduler.schedule_internal_at(
-            deadline, SchedulerPhase::active, process.id, task);
+        scheduler.schedule_internal_at(deadline,
+            after_updates ? SchedulerPhase::update : SchedulerPhase::active,
+            process.id, task);
     }
 }
 
@@ -2187,6 +2199,15 @@ void Interpreter::Impl::notify_static_value_change(
 void Interpreter::Impl::queue_at(
     ProcessId id, SimulationTick time, const bool initial)
 {
+    // Within a time step processes run in stable order. An always_comb or
+    // always_latch starts after every other time-zero procedure has started
+    // (IEEE 1800-2017 9.2.2.2.2), so its first run orders after them all.
+    constexpr StableOrder after_procedures_order { StableOrder { 1U } << 40U };
+    const StableOrder order = initial
+            && processes.program_view(id).startup_phase()
+                == ProcessStartupPhase::after_procedures
+        ? after_procedures_order + id
+        : StableOrder { id };
     if (auto* const compact = processes.compact_constant(id)) {
         if (compact->halted || compact->queued) {
             return;
@@ -2217,7 +2238,7 @@ void Interpreter::Impl::queue_at(
         if (processes.program_view(id).scheduling_domain()
             == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_internal_systemverilog_at(
-                time, phase, id, task);
+                time, phase, order, task);
         } else {
             // A postponed process makes its initialization run with the
             // others (IEEE 1076-2008 14.7.5.2).
@@ -2225,7 +2246,7 @@ void Interpreter::Impl::queue_at(
                 initial && phase == SchedulerPhase::postponed
                     ? SchedulerPhase::active
                     : phase,
-                id, task);
+                order, task);
         }
         return;
     }
@@ -2259,13 +2280,13 @@ void Interpreter::Impl::queue_at(
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog_at(
-            time, phase, id, task);
+            time, phase, order, task);
     } else {
         scheduler.schedule_internal_at(time,
             initial && phase == SchedulerPhase::postponed
                 ? SchedulerPhase::active
                 : phase,
-            id, task);
+            order, task);
     }
 }
 

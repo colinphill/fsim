@@ -1282,10 +1282,6 @@ struct ParameterDeclaration {
     // Its full declaration must appear in the corresponding package body.
     bool vhdl_deferred { };
     std::optional<SourceSpan> vhdl_completion_span;
-    // A SystemVerilog parameter without a data type whose string-literal
-    // default made it a string: an override's final value retypes it
-    // (IEEE 1800-2017 6.20.2).
-    bool systemverilog_inferred_string { };
     ParameterDeclaration() = default;
 
     ParameterDeclaration(std::string parameter_name, Type parameter_type,

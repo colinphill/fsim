@@ -724,6 +724,7 @@ DesignUnit VerilogParser::parse_module(
 {
     non_ansi_ports_.clear();
     non_ansi_port_selections_.clear();
+    non_ansi_port_expressions_.clear();
     unit_value_parameter_names_.clear();
     explicit_port_types_.clear();
     body_port_declarations_.clear();
@@ -1669,6 +1670,7 @@ DesignUnit VerilogParser::parse_module(
         }
       }
     }
+    finalize_non_ansi_port_expressions(unit);
     // Each port named in a non-ANSI port list is declared in the body
     // (IEEE 1364-2005 12.3.3, IEEE 1800-2017 23.2.2.1).
     for (const auto& port : unit.ports) {

@@ -2969,6 +2969,42 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (!target_expression) {
             return assignment_rejected(__LINE__);
         }
+        // A packed member of an interface array element's signal
+        // (`bus[2].data.d = v`, IEEE 1800-2017 25.4, 7.2) is a constant
+        // part of that signal.
+        if (statement->systemverilog != nullptr
+            && target_expression->systemverilog != nullptr
+            && target_expression->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            && statement->systemverilog->assignment_control
+                == semantic::sv::AssignmentControl::none
+            && !statement->systemverilog->delay) {
+            if (const auto member = hir_hierarchical_signal_member(*target);
+                member && member->signal < design_.signal_info_.size()
+                && member->offset
+                    <= std::numeric_limits<std::uint32_t>::max()) {
+                const auto width = static_cast<std::size_t>(member->width);
+                auto lowered = lower_hir_expression(*value, width);
+                if (!lowered) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (register_width(*lowered) != width) {
+                    lowered = resize_register(
+                        *lowered, width, member->signed_value);
+                }
+                const auto offset = static_cast<std::uint32_t>(
+                    member->offset);
+                if (nonblocking || signal_assignment) {
+                    process_.operations.emplace_back(WriteUpdateSlice {
+                        member->signal, *lowered, offset, update_domain });
+                } else {
+                    process_.operations.emplace_back(WriteBlockingSlice {
+                        member->signal, *lowered, offset });
+                }
+                hierarchical_reference_used_ = true;
+                return true;
+            }
+        }
         if (statement->vhdl != nullptr
             && target_expression->vhdl != nullptr
             && target_expression->vhdl->kind

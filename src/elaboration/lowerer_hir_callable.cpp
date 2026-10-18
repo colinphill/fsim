@@ -5182,19 +5182,21 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver) const
         = hir_resolver()
               .resolve_systemverilog(
                   receiver, hir_process_scope_,
-                  [](const semantic::CompiledDeclarationView& candidate) {
+                  [&](const semantic::CompiledDeclarationView& candidate) {
                       return candidate.systemverilog != nullptr
-                          && candidate.systemverilog->type.has_value()
-                          && candidate.systemverilog->type->virtual_interface;
+                          && hir_systemverilog_virtual_interface_type(
+                              *candidate.systemverilog);
                   },
                   false)
               .unique();
     const auto declaration = receiver_declaration
         ? specialized_hir_unit_->find_declaration(*receiver_declaration)
         : std::nullopt;
-    if (!declaration || declaration->systemverilog == nullptr
-        || !declaration->systemverilog->type
-        || declaration->systemverilog->type->interface_type.empty()) {
+    const auto virtual_type = declaration
+            && declaration->systemverilog != nullptr
+        ? hir_systemverilog_virtual_interface_type(*declaration->systemverilog)
+        : std::nullopt;
+    if (!virtual_type) {
         return std::nullopt;
     }
     // Every interface instance must be elaborated: resolve in the second
@@ -5203,8 +5205,7 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver) const
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
-    const auto& interface_type
-        = declaration->systemverilog->type->interface_type;
+    const auto& interface_type = virtual_type->interface_type;
     std::vector<std::pair<std::uint64_t, std::string>> instances;
     std::set<std::uint64_t> seen;
     for (const auto& [path, type] : *systemverilog_interface_types_) {
@@ -7728,6 +7729,52 @@ Lowerer::hir_callable_formal_binding(
     return result;
 }
 
+bool Lowerer::hir_vhdl_actual_lengths_fit(
+    const semantic::DeclarationId callable,
+    const std::span<const semantic::ExpressionId> actuals,
+    const semantic::ScopeId process_scope) const
+{
+    const auto declaration = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(callable)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->callable) {
+        return false;
+    }
+    const auto& formals = declaration->vhdl->callable->formals;
+    for (std::size_t index = 0;
+         index < formals.size() && index < actuals.size(); ++index) {
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
+            continue;
+        }
+        const auto subtype = hir_effective_vhdl_subtype(
+            *formal->vhdl->subtype);
+        if (!subtype || subtype->unconstrained
+            || subtype->constraints.empty() || !subtype->executable_width) {
+            continue;
+        }
+        // Only an object, a slice of one or a literal has a width known
+        // here; a call's result width may depend on its own actuals.
+        const auto actual = specialized_hir_unit_->find_expression(
+            actuals[index]);
+        if (!actual || actual->vhdl == nullptr
+            || (actual->vhdl->kind != semantic::vhdl::ExpressionKind::name
+                && actual->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::slice
+                && actual->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::string_literal)) {
+            continue;
+        }
+        const auto width = hir_expression_width(actuals[index], process_scope);
+        if (width && *width != *subtype->executable_width) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::optional<std::vector<semantic::ExpressionId>>
 Lowerer::bind_hir_function_actuals(
     const semantic::ExpressionId expression_id,
@@ -7794,6 +7841,7 @@ Lowerer::bind_hir_function_actuals(
     }
 
     std::vector<semantic::ExpressionId> result(formals.size());
+    std::vector<bool> opened(formals.size(), false);
     std::size_t positional { };
     for (std::size_t index = 0U; index < operands.size(); ++index) {
         std::size_t formal_index = positional;
@@ -7802,7 +7850,7 @@ Lowerer::bind_hir_function_actuals(
             : std::string_view { names[index] };
         if (name.empty()) {
             while (formal_index < result.size()
-                && result[formal_index].valid()) {
+                && (result[formal_index].valid() || opened[formal_index])) {
                 ++formal_index;
             }
             positional = formal_index;
@@ -7831,8 +7879,22 @@ Lowerer::bind_hir_function_actuals(
                 std::distance(formals.begin(), found));
         }
         if (formal_index >= result.size()
-            || result[formal_index].valid()) {
+            || result[formal_index].valid() || opened[formal_index]) {
             return std::nullopt;
+        }
+        // An `open` actual leaves the formal its default (IEEE 1076-2008
+        // 6.5.7.1).
+        if (const auto actual
+            = vhdl ? specialized_hir_unit_->find_expression(operands[index])
+                   : std::nullopt;
+            actual && actual->vhdl != nullptr
+            && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && same_hir_identifier(actual->vhdl->text, "open", true)
+            && !(actual->vhdl->referenced_name
+                && (actual->vhdl->referenced_name->selected
+                    || !actual->vhdl->referenced_name->overloads.empty()))) {
+            opened[formal_index] = true;
+            continue;
         }
         result[formal_index] = operands[index];
     }
@@ -11588,6 +11650,8 @@ Lowerer::resolve_hir_vhdl_function_call(
         && !checker_resolution->generic_bindings.empty();
     std::optional<HirCallableResolution> selected;
     std::optional<HirCallableResolution> contextual_fallback;
+    std::vector<HirCallableResolution> applicable;
+    bool ambiguous { };
     for (const auto& resolution : candidates) {
         hir_generic_binding_frames_.push_back(
             resolution.generic_bindings);
@@ -11643,6 +11707,7 @@ Lowerer::resolve_hir_vhdl_function_call(
         if (!compatible) {
             continue;
         }
+        applicable.push_back(resolution);
         auto& destination = !type || contextual_width == 0U
                 || type->width == contextual_width
             ? selected
@@ -11650,9 +11715,34 @@ Lowerer::resolve_hir_vhdl_function_call(
         if (destination
             && (destination->key != resolution.key
                 || destination->body != resolution.body)) {
-            return std::nullopt;
+            ambiguous = true;
+            continue;
         }
         destination = resolution;
+    }
+    // The design's context-typed resolution (IEEE 1076-2008 12.5) selects
+    // among the overloads whose profiles match the actuals, and decides a
+    // call whose actuals this width-keyed match rejects by type.
+    if (const auto& stored = expression->vhdl->resolved_declaration) {
+        const auto& pool = applicable.empty() ? candidates : applicable;
+        const auto chosen = std::ranges::find_if(pool,
+            [&](const HirCallableResolution& resolution) {
+                return resolution.key == *stored
+                    || resolution.body == *stored;
+            });
+        const auto actuals = chosen != pool.end() && applicable.empty()
+            ? bind_hir_function_actuals(expression_id, chosen->body)
+            : std::nullopt;
+        if (chosen != pool.end()
+            && (!applicable.empty()
+                || (actuals
+                    && hir_vhdl_actual_lengths_fit(
+                        chosen->body, *actuals, process_scope)))) {
+            return *chosen;
+        }
+    }
+    if (ambiguous) {
+        return std::nullopt;
     }
     if (selected) {
         return selected;
@@ -11707,6 +11797,8 @@ Lowerer::resolve_hir_vhdl_procedure_call(
     const bool checker_selected_generic_call = checker_resolution
         && !checker_resolution->generic_bindings.empty();
     std::optional<HirCallableResolution> selected;
+    std::vector<HirCallableResolution> applicable;
+    bool ambiguous { };
     for (const auto& resolution : candidates) {
         hir_generic_binding_frames_.push_back(
             resolution.generic_bindings);
@@ -11736,12 +11828,38 @@ Lowerer::resolve_hir_vhdl_procedure_call(
         if (!compatible) {
             continue;
         }
+        applicable.push_back(resolution);
         if (selected
             && (selected->key != resolution.key
                 || selected->body != resolution.body)) {
-            return std::nullopt;
+            ambiguous = true;
+            continue;
         }
         selected = resolution;
+    }
+    // The design's context-typed resolution (IEEE 1076-2008 12.5) selects
+    // among the profile matches, and decides a call whose actuals this
+    // width-keyed match rejects by type.
+    if (const auto& stored = statement->vhdl->resolved_procedure) {
+        const auto& pool = applicable.empty() ? candidates : applicable;
+        const auto chosen = std::ranges::find_if(pool,
+            [&](const HirCallableResolution& resolution) {
+                return resolution.key == *stored
+                    || resolution.body == *stored;
+            });
+        const auto actuals = chosen != pool.end() && applicable.empty()
+            ? bind_hir_vhdl_procedure_actuals(statement_id, chosen->body)
+            : std::nullopt;
+        if (chosen != pool.end()
+            && (!applicable.empty()
+                || (actuals
+                    && hir_vhdl_actual_lengths_fit(
+                        chosen->body, *actuals, process_scope)))) {
+            return *chosen;
+        }
+    }
+    if (ambiguous) {
+        return std::nullopt;
     }
     if (selected) {
         return selected;

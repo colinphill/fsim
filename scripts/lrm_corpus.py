@@ -610,12 +610,42 @@ ICARUS_NONSTANDARD = {
         "(IEEE 1364-2005 A.4.1.1)" for name in ("z1", "z2")},
     **{name: "declares ports in a module without a port list" for name in (
         "module_output_port_var2", "module_output_port_sv_var2")},
+    "param_string": "expects an untyped string-valued parameter displayed "
+        "without a format as text; it is integral and prints in decimal "
+        "(IEEE 1800-2017 5.9, 6.20.2, 21.2.1.2)",
 }
 # Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
 VERILATOR_NONSTANDARD = {
+    "t_param_avec": "passes a [0:7] array to a [7:0] formal and expects "
+        "index-matched elements; unpacked array assignment is positional, "
+        "so formal element 0 is actual element 7 (IEEE 1800-2017 7.6)",
+    "t_interface_generic_iface_param_genblock": "reads localparams declared "
+        "in generate blocks without the block name; a generate block's "
+        "names are reached through its block name (IEEE 1800-2017 27.6)",
+    "t_sys_psprintf": "calls $psprintf, a Verilator extension; the LRM "
+        "string formatting function is $sformatf (IEEE 1800-2017 21.3.3)",
+    "t_sys_readmem": "its memory file has a '#' comment line, a Verilator "
+        "extension; a $readmem file holds only white space, // and /* */ "
+        "comments, addresses and numbers (IEEE 1800-2017 21.4.3)",
+    "t_sys_writemem": "reads the same '#'-commented memory file as "
+        "t_sys_readmem (IEEE 1800-2017 21.4.3)",
+    "t_sys_writemem_b": "reads the same '#'-commented memory file as "
+        "t_sys_readmem (IEEE 1800-2017 21.4.3)",
+    "t_detectarray_1": "writes a variable member with both a continuous "
+        "assignment and a procedural assignment, which is an error "
+        "(IEEE 1800-2017 6.5)",
+    "t_detectarray_2": "writes a variable member with both a continuous "
+        "assignment and a procedural assignment, which is an error "
+        "(IEEE 1800-2017 6.5)",
+    "t_enum_huge_methods": "formats an enumeration with %s as its name, "
+        "which the test itself calls non-standard; %s reads the value's "
+        "bits as characters (IEEE 1800-2017 21.2.1.7)",
+    "t_enum": "declares an enumeration literal (~0 in a 3-bit unsigned "
+        "base) whose value does not fit its base type, an error under "
+        "IEEE 1800-2017 6.19",
     # IEEE 1800-2017 9.2.2.2.2: always_comb runs once at time zero; an
     # always @* procedure waits for its first event.
     "t_enum_func": "expects an always @* procedure to run at time zero, "

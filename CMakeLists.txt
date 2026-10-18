@@ -546,6 +546,7 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/compiled_design_linker_classes.cpp
   src/semantic/compiled_design_normalization.cpp
   src/semantic/compiled_design_resolver.cpp
+  src/semantic/compiled_design_vhdl_resolution.cpp
   src/semantic/compiled_design_specialization.cpp
   src/semantic/compiled_design_specialization_vhdl_generate.cpp
   src/semantic/design_ir.cpp

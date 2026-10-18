@@ -253,6 +253,93 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 69: VHDL context-typed resolution, R2-SV array constants, access allocators, port expressions
+
+Batch 69 adds a design-wide VHDL resolution pass and finishes the R2-SV
+items deferred from Batch 68. It also closes access-type, interface and
+port-list gaps found by triage. Triage notes and plans are under
+`.local-artifacts/lrm-closure/triage/b69-*.md`, `ACCESS-PLAN-b69.md`,
+`VHDL-CONST-PLAN-b69.md` and `PORTCONV-PLAN-b69.md`.
+
+VHDL context-typed resolution (IEEE 1076-2008 12.5):
+- A new pass, `src/semantic/compiled_design_vhdl_resolution.cpp`, types each
+  complete context once at the end of design normalization. It records:
+  - the chosen function or procedure overload;
+  - enumeration and character literal types;
+  - aggregate types (9.3.3.1);
+  - loop-parameter types (10.10);
+  - the predefined operator, when no user overload of the symbol applies.
+  The lowerer and the constant evaluator use these decisions.
+  `FSIM_VHDL_RESOLVE_TRACE=1` traces them.
+- Protected-type method calls resolve through the object's protected body
+  (5.6.2).
+- Subprogram instance formals are typed through the generic map (4.9).
+- Open actuals take the formal's default (6.5.7.1).
+- `numeric_std` types and type conversions are typed (9.3.6).
+
+Other VHDL:
+- Access allocators (9.3.7):
+  - accept an index constraint for any one-dimensional array, written as a
+    range, a `'range` attribute or a subtype name;
+  - a STRING object keeps its own length;
+  - an unconstrained constant initializer gives the object its shape.
+- Elements of an access-designated array can be assigned (`p(i) := v`).
+- A STRING `.all` assignment checks the object's length.
+- Element signal attributes select the element (16.2.4).
+- A composite `'driving` needs every scalar subelement driven (16.2.4).
+- `wait on ... for T` resumes after the updates at T (14.7.5.1).
+- `new T` takes T's default value.
+- A parameterless function name with an unconstrained array result no longer
+  folds comparisons by a placeholder width (9.3.4).
+- A string constant of a package instance reads that instance's generics
+  (4.9).
+- STD.ENV simple names imported by `use std.env.all`:
+  - types such as `dir_open_status`;
+  - assert-API procedures (IEEE 1076-2019 16.5).
+- An empty alias signature is accepted (6.6.3).
+- A parameterless function called with actuals indexes its result (8.1).
+
+SystemVerilog:
+- R2-SV E1: unpacked array constants. Constant functions take array and
+  dynamic-array formals and return arrays; array parameters, slices and
+  calls initialise containers (7.4, 13.4.3).
+- A string-default untyped parameter is integral (5.9, 6.20.2).
+- The generate-condition constant hook and element selects of
+  multidimensional packed arrays in constant functions (27.5, 7.4.5).
+- Real operands are rejected for the integral-only operators (11.3.1).
+- Non-ANSI port expressions (23.2.2.1): `.name(expr)`, concatenations,
+  partial selections and a name listed more than once.
+- A typedef'd virtual interface type is still a virtual interface (25.9).
+- Members of a structure parameter:
+  - inside a pattern (`'{R: s.R}`);
+  - through a hierarchical path, including structure localparams, which are
+    now published with their typed value (7.2.1, 23.6).
+- Packed members of interface array elements (`sh[0].data.d`) can be read and
+  written, with the member's width (25.4).
+- A type parameter whose actual is a packed structure no longer squares its
+  width (6.20.3).
+- `always_comb` starts after the other time-zero processes (9.2.2.2.2).
+- Vector transition delays use the whole value (10.3.3).
+- A leading `` is a no-op delimiter (22.5.1).
+
+Runner, out of scope (non-LRM expectations):
+- verilator:
+  - t_sys_readmem, t_sys_writemem and t_sys_writemem_b (`#` comments in
+    memory files);
+  - t_detectarray_1 and t_detectarray_2 (mixed continuous and procedural
+    writes, 6.5);
+  - t_sys_psprintf;
+  - t_interface_generic_iface_param_genblock;
+  - t_param_avec (positional array assignment, 7.6);
+  - t_enum and t_enum_huge_methods.
+- ivtest param_string.
+
+Reverted after triage: per-element `'last_value` for composites. nvc
+signal22 and attr6 expect different behaviour; this is left open.
+
+Measurement: see the Batch 69 close notes below once the full run on the
+frozen `b69w1` completes.
+
 ### Batch 68: R2-SV type operator and shared constant values, quick wins
 
 Batch 68 starts the R2-SV plan (`.local-artifacts/lrm-closure/R2SV-PLAN-b68.md`):
@@ -343,8 +430,21 @@ Tests flipped to the LRM:
 Measurement:
 - The labelled ctest ends with the 28 known failures.
 - No diagnostic codes were added or retired (2965 codes).
-- The full six-suite run on the frozen `b68w1` against `b67w6` is in progress.
-  Its results and any regression fixes come with Batch 69.
+- All six suites were run in full on the frozen `b68w1` and compared with
+  Batch 67 (`b67w6`): **46 new passes, one regression** (ivtest wild_cmp_err,
+  fixed in Batch 69).
+
+| Suite | Batch67 passes / in scope | Batch68 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2514 / 2570 | 2517 / 2570 | 256 |
+| sv-tests | 1438 / 1497 | 1440 / 1497 | 0 |
+| verilator | 1586 / 2138 | 1609 / 2134 | 281 |
+| vests | 3578 / 3646 | 3584 / 3646 | 2 |
+| nvc | 878 / 1260 | 887 / 1260 | 222 |
+| vhdl-compliance | 41 / 72 | 43 / 72 | 0 |
+
+Scope changes: verilator t_math_shortreal, t_display_time,
+t_scheduling_many_clocks and t_enum_func are now excluded.
 
 Deferred to Batch 69, together with folding `inferred_string_type` into the
 descriptor:

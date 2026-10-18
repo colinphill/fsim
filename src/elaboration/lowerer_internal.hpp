@@ -736,6 +736,11 @@ private:
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
     };
+    // The virtual interface type of a declaration, through type aliases
+    // (IEEE 1800-2017 25.9, 6.18).
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_systemverilog_virtual_interface_type(
+        const semantic::sv::Declaration& declaration) const;
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(semantic::ExpressionId expression_id) const;
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
@@ -1805,6 +1810,10 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_designated_subtype(
         const semantic::vhdl::SubtypeIndication& access_subtype) const;
+    // An access type's designated subtype with its heap's object shape.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_access_shape_subtype(
+        const semantic::vhdl::TypeDefinition& type) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_access_expression(
         semantic::ExpressionId expression,
@@ -1826,6 +1835,10 @@ private:
         semantic::StatementId statement);
     [[nodiscard]] bool is_hir_vhdl_access_assignment(
         semantic::StatementId statement) const;
+    // `p(i) := v` for an access value p: nullopt when the target is not
+    // such an element.
+    [[nodiscard]] std::optional<bool> lower_hir_vhdl_access_element_assignment(
+        semantic::ExpressionId target, semantic::ExpressionId value);
     [[nodiscard]] bool lower_hir_vhdl_access_assignment(
         semantic::StatementId statement);
     [[nodiscard]] bool reject_hir_vhdl_access_signal_escape(
@@ -2796,6 +2809,12 @@ private:
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
         semantic::DeclarationId declaration) const;
+    // Whether no actual of known width differs from the width of its
+    // constrained array formal (IEEE 1076-2008 4.2.2.1, 14.6).
+    [[nodiscard]] bool hir_vhdl_actual_lengths_fit(
+        semantic::DeclarationId callable,
+        std::span<const semantic::ExpressionId> actuals,
+        semantic::ScopeId process_scope) const;
     /// The STD.ENV spelling (`std.env.stop`) of a simple procedure name
     /// that a use clause imports from STD.ENV and no declaration overloads.
     // The STD.ENV operation an expression names, including a simple name
@@ -2900,6 +2919,11 @@ private:
             frontend::SystemVerilogScalarKind::None
         };
     };
+    // The packed member `path` of a structure parameter value (7.2.1).
+    [[nodiscard]] std::optional<HirHierarchicalParameter>
+    hir_parameter_member_slice(const HirHierarchicalParameter& whole,
+        semantic::UnitId unit, std::string_view formal,
+        std::string_view path) const;
     // The signal an external name denotes (IEEE 1076-2008 8.7), checked
     // against the name's subtype; a mismatch is reported.
     [[nodiscard]] std::optional<SignalId> hir_vhdl_external_signal(

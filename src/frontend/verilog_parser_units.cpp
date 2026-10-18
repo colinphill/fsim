@@ -1770,23 +1770,9 @@ void VerilogParser::parse_parameter_group(
           "FSIM-SV-PARSE-050",
           "value parameters require a default constant expression");
     }
+    // An untyped parameter takes the type of its final value (IEEE
+    // 1800-2017 6.20.2); a string literal is an integral value (5.9).
     auto declared_type = type;
-    const auto definitely_string =
-        [&](const auto& self, const Expression& expression) -> bool {
-          return expression.kind == ExpressionKind::StringLiteral
-              || (expression.kind == ExpressionKind::Call
-                  && expression.text == "?:"
-                  && expression.operands.size() == 3U
-                  && self(self, expression.operands[1])
-                  && self(self, expression.operands[2]));
-        };
-    const bool inferred_string = implicit_value_type
-        && definitely_string(definitely_string, value);
-    if (inferred_string) {
-      declared_type.spelling = "string";
-      declared_type.domain = ValueDomain::String;
-      declared_type.is_signed = false;
-    }
     ParameterDeclaration declaration{
         name.text,
         std::move(declared_type),
@@ -1797,7 +1783,6 @@ void VerilogParser::parse_parameter_group(
             ? ParameterKind::Type
             : ParameterKind::Value,
         std::move(default_type)};
-    declaration.systemverilog_inferred_string = inferred_string;
     add_parameter(unit, std::move(declaration), name);
     if (!match(TokenKind::Comma)) {
       break;

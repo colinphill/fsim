@@ -18,12 +18,14 @@ namespace fsim::elaboration::hierarchy_sv_parameters_detail {
     const semantic::sv::Declaration& declaration,
     std::string_view display);
 
-// Whether a parameter actual cannot be assigned to its formal: an explicit
-// `string` formal needs a string actual, and a string-valued actual (a string
-// literal is integral, IEEE 1800-2017 5.9) suits a packed formal or an
-// untyped one, which takes the type of its final value (6.20.2).
+// Whether a parameter actual cannot be assigned to its formal (IEEE
+// 1800-2017 6.16): a `string` formal needs a string value, and a value of
+// type string needs a `string` formal. A string literal is integral (5.9),
+// so it suits either.
 [[nodiscard]] bool systemverilog_string_actual_incompatible(
-    const semantic::sv::Declaration& formal, bool actual_string) noexcept;
+    const semantic::SpecializedHirUnit& actual_scope,
+    const semantic::sv::Declaration& formal,
+    semantic::ExpressionId actual);
 
 [[nodiscard]] bool compiled_systemverilog_string_declaration(
     const semantic::sv::Declaration& declaration) noexcept;

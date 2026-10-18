@@ -1014,9 +1014,6 @@ struct Declaration {
     bool array_parameter { };
     // An unpacked array local parameter, kept the same way.
     bool array_local_parameter { };
-    // An untyped parameter whose string default made it a string; an
-    // integral override retypes it (IEEE 1800-2017 6.20.2).
-    bool inferred_string_type { };
     // A `localparam type`: not a formal of a parameter association list
     // (IEEE 1800-2017 23.10.1).
     bool local_type_parameter { };

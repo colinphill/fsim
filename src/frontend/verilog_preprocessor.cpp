@@ -1576,12 +1576,9 @@ namespace {
                 if (index + 1 < tokens.size()
                     && tokens[index].kind == TokenKind::Backtick
                     && tokens[index + 1].kind == TokenKind::Backtick) {
+                    // `` only delimits tokens (IEEE 1800-2017 22.5.1); with
+                    // nothing on one side it joins nothing.
                     if (result.empty() || index + 2 >= tokens.size()) {
-                        diagnose(
-                            "FSIM-SV-PP-025",
-                            "token concatenation requires tokens on both sides",
-                            invocation.span,
-                            expansion_stack);
                         index += 1;
                         continue;
                     }

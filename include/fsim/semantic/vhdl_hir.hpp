@@ -429,6 +429,14 @@ struct Expression {
     BuiltinOperatorIdentity builtin_operator {
         BuiltinOperatorIdentity::none
     };
+    // The declaration the design's context-typed resolution pass selected
+    // for a function call, enumeration literal or parameterless call (IEEE
+    // 1076-2008 12.5); unset when the pass could not decide.
+    std::optional<DeclarationId> resolved_declaration;
+    // The type that pass gave a literal from its context: the root type, or
+    // the name of a predefined type whose declaration is not retained.
+    std::optional<TypeId> resolved_type;
+    std::string resolved_builtin_type;
 };
 
 struct DelayValue {
@@ -522,6 +530,9 @@ struct Statement {
     std::vector<CaseAlternative> alternatives;
     std::vector<DeclarationId> declarations;
     std::optional<ScopeId> nested_scope;
+    // The procedure the design's context-typed resolution pass selected for
+    // a procedure call (IEEE 1076-2008 12.5); unset when it could not.
+    std::optional<DeclarationId> resolved_procedure;
 };
 
 struct Process {

@@ -1956,10 +1956,17 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 : formal_declaration.type->systemverilog_net_type;
             auto& merged = design_.signals_[*actual_signal];
             auto& merged_info = design_.signal_info_[*actual_signal];
+            // A port whose actual is an expression has its own net, of the
+            // port's net type (23.3.3.7).
+            const bool formal_own_net
+                = merged_info.systemverilog_net_type.empty()
+                && merged_info.name
+                    == child_path + "." + formal_declaration.name;
             if ((formal_net == "tri0" || formal_net == "tri1")
                 && !merged.implicit_driver
                 && (merged_info.systemverilog_net_type == "wire"
-                    || merged_info.systemverilog_net_type == "tri")) {
+                    || merged_info.systemverilog_net_type == "tri"
+                    || formal_own_net)) {
                 const auto pull = formal_net == "tri0"
                     ? Logic4::zero : Logic4::one;
                 merged.implicit_driver = pull;

@@ -408,6 +408,8 @@ private:
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
   bool numeric_bit_context_{};
+  // The design unit's context imports STD.ENV (`use std.env.all`).
+  bool std_env_context_{};
   // Units of physical types declared so far in this design file; a unit
   // name alone denotes one unit (IEEE 1076-2008 5.2.4.1).
   std::unordered_set<std::string> vhdl_physical_unit_names_;

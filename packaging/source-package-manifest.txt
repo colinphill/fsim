@@ -565,6 +565,7 @@ include/fsim/semantic/compiled_design_linker.hpp
 include/fsim/semantic/compiled_design_normalization.hpp
 include/fsim/semantic/compiled_design_resolver.hpp
 include/fsim/semantic/compiled_design_specialization.hpp
+include/fsim/semantic/compiled_design_vhdl_resolution.hpp
 include/fsim/semantic/design_ir.hpp
 include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
@@ -1412,6 +1413,7 @@ src/semantic/compiled_design_normalization.cpp
 src/semantic/compiled_design_resolver.cpp
 src/semantic/compiled_design_specialization.cpp
 src/semantic/compiled_design_specialization_vhdl_generate.cpp
+src/semantic/compiled_design_vhdl_resolution.cpp
 src/semantic/design_ir.cpp
 src/semantic/hierarchy_path.cpp
 src/semantic/integral_identity_memo.hpp

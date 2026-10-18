@@ -431,6 +431,21 @@ std::string systemverilog_string_identity(const std::string_view bytes)
 
 namespace {
 
+// The design's resolution pass chose the predefined operator for this VHDL
+// operator expression, although the design overloads its symbol (IEEE
+// 1076-2008 12.5).
+template <typename Expression>
+bool vhdl_predefined_operator_selected(const Expression& expression)
+{
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        return !expression.resolved_declaration
+            && (expression.resolved_type
+                || !expression.resolved_builtin_type.empty());
+    } else {
+        return false;
+    }
+}
+
 const bool semantic_profile_diagnostics_enabled
     = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
 
@@ -5115,7 +5130,8 @@ private:
             return std::nullopt;
         }
         if ((source.kind == Kind::unary || source.kind == Kind::binary)
-            && vhdl_operator_overloaded_by_design(unit_.design(), source.text)) {
+            && vhdl_operator_overloaded_by_design(unit_.design(), source.text)
+            && !vhdl_predefined_operator_selected(source)) {
             return evaluate_vhdl_overloaded_operator(source);
         }
         if (source.kind == Kind::unary && source.operands.size() == 1U) {
@@ -7951,8 +7967,18 @@ private:
             const auto& actual_type = *actual.systemverilog_type;
             const auto native_actual_width
                 = systemverilog_native_integral_width(actual_type);
+            // A packed aggregate's own flat range is likewise already its
+            // width (7.2.1).
+            const bool flat_actual_range = actual_type.packed_range
+                && actual_type.packed_dimensions.empty()
+                && actual_type.packed_range->left
+                && actual_type.packed_range->right
+                && support::index_distance(*actual_type.packed_range->left,
+                       *actual_type.packed_range->right)
+                        + 1U
+                    == *base_width;
             const bool native_range_is_already_in_base
-                = native_actual_width
+                = (native_actual_width || flat_actual_range)
                 && reference.packed_range
                 && reference.packed_dimensions.empty()
                 && reference.packed_range->left
@@ -11928,7 +11954,8 @@ private:
         // A VHDL operator the design overloads is a function call.
         if (!systemverilog
             && (expression.kind == Kind::unary || expression.kind == Kind::binary)
-            && vhdl_operator_overloaded_by_design(unit_.design(), expression.text)) {
+            && vhdl_operator_overloaded_by_design(unit_.design(), expression.text)
+            && !vhdl_predefined_operator_selected(expression)) {
             return std::nullopt;
         }
         // An increment or decrement in a constant function updates its
@@ -12810,17 +12837,53 @@ void preserve_generate_subtree(
     }
 }
 
+std::atomic<SystemVerilogConstantIntegral> shared_constant_integral_ {
+    nullptr
+};
+
+/// The shared constant evaluator, not re-entered from inside itself: its
+/// own use of the integral fast path must not loop back.
+std::optional<std::int64_t> shared_constant_integral(
+    const SpecializedHirUnit& unit, const ExpressionId expression)
+{
+    thread_local bool active { };
+    const auto evaluator = shared_constant_integral_.load(
+        std::memory_order_acquire);
+    if (evaluator == nullptr || active) {
+        return std::nullopt;
+    }
+    struct Reentry {
+        bool& flag;
+        explicit Reentry(bool& value) : flag { value } { flag = true; }
+        ~Reentry() { flag = false; }
+        Reentry(const Reentry&) = delete;
+        Reentry& operator=(const Reentry&) = delete;
+    } reentry { active };
+    return evaluator(unit, expression);
+}
+
+/// A generate expression: the integral fast path, then the shared
+/// constant evaluator.
+std::optional<std::int64_t> generate_integral(
+    HirIntegralEvaluator& evaluator, const ExpressionId expression)
+{
+    if (const auto value = evaluator.evaluate(expression)) {
+        return value;
+    }
+    return shared_constant_integral(evaluator.unit(), expression);
+}
+
 template <typename Choice>
 std::optional<bool> choice_matches(const Choice& choice,
     const std::int64_t selector, HirIntegralEvaluator& evaluator)
 {
-    const auto left = evaluator.evaluate(choice.left);
+    const auto left = generate_integral(evaluator, choice.left);
     if (!left) {
         return std::nullopt;
     }
     auto right = left;
     if (choice.right) {
-        right = evaluator.evaluate(*choice.right);
+        right = generate_integral(evaluator, *choice.right);
         if (!right) {
             return std::nullopt;
         }
@@ -12965,7 +13028,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
             return;
         }
     }
-    const auto selector = evaluator.evaluate(*generate.condition);
+    const auto selector = generate_integral(evaluator, *generate.condition);
     const auto bit_selector = selector
         ? std::optional<std::string> { }
         : evaluator.evaluate_systemverilog_bits(*generate.condition);
@@ -16193,7 +16256,10 @@ SpecializedHirUnit::evaluate_integral_expression(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_
     };
-    return evaluator.evaluate(expression);
+    if (const auto value = evaluator.evaluate(expression)) {
+        return value;
+    }
+    return shared_constant_integral(*this, expression);
 }
 
 std::optional<std::int64_t>
@@ -16317,7 +16383,17 @@ SpecializedHirUnit::evaluate_systemverilog_condition_truth(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_
     };
-    return evaluator.evaluate_condition_truth(expression);
+    if (const auto truth = evaluator.evaluate_condition_truth(expression)) {
+        return truth;
+    }
+    const auto value = shared_constant_integral(*this, expression);
+    return value ? std::optional<bool> { *value != 0 } : std::nullopt;
+}
+
+void set_systemverilog_constant_integral(
+    const SystemVerilogConstantIntegral evaluator) noexcept
+{
+    shared_constant_integral_.store(evaluator, std::memory_order_release);
 }
 
 std::optional<std::string>

@@ -199,8 +199,24 @@ Lowerer::hir_vhdl_designated_subtype(
     const semantic::vhdl::SubtypeIndication& access_subtype) const
 {
     const auto* type = hir_vhdl_access_type_definition(access_subtype);
-    return type != nullptr && type->designated_subtype
-        ? hir_effective_vhdl_subtype(*type->designated_subtype)
+    return type != nullptr ? hir_vhdl_access_shape_subtype(*type)
+                           : std::nullopt;
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_access_shape_subtype(
+    const semantic::vhdl::TypeDefinition& type) const
+{
+    // The heap fixes an open designated array's shape from its allocators
+    // (IEEE 1076-2008 5.4.2); a STRING object keeps its own length.
+    if (const auto heap = hir_vhdl_access_heaps_.find(type.id.value());
+        heap != hir_vhdl_access_heaps_.end()
+        && heap->second.designated_subtype.domain
+            != semantic::vhdl::ValueDomain::string) {
+        return heap->second.designated_subtype;
+    }
+    return type.designated_subtype
+        ? hir_effective_vhdl_subtype(*type.designated_subtype)
         : std::nullopt;
 }
 
@@ -472,11 +488,14 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             && designated.builtin_type
                 == semantic::vhdl::BuiltinTypeIdentity::
                     std_standard_bit_vector;
-        if (!predefined_bit_vector
+        const bool one_dimensional_array = predefined_bit_vector
+            || string_payload
+            || (array != nullptr && array->array_dimensions.size() == 1U);
+        if (!one_dimensional_array
             || normalized_allocator_ranges.size() != 1U) {
             report(
                 "FSIM-ELAB-VHACCESS-006",
-                "explicit allocator bounds currently require one predefined BIT_VECTOR index range",
+                "explicit allocator bounds require one index range of a one-dimensional array",
                 span);
             return nullptr;
         }
@@ -495,8 +514,19 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             = allocator_range.left && allocator_range.right
             && natural_index_subtype.contains(*allocator_range.left)
             && natural_index_subtype.contains(*allocator_range.right);
-        if (!endpoints_in_integer_base
-            || (!allocator_range.null && !endpoints_in_natural)) {
+        const auto positive_index_subtype
+            = frontend::vhdl_predefined_integer_range(
+                vhdl_standard_, "positive");
+        const bool endpoints_in_positive
+            = allocator_range.left && allocator_range.right
+            && positive_index_subtype.contains(*allocator_range.left)
+            && positive_index_subtype.contains(*allocator_range.right);
+        // BIT_VECTOR is indexed by NATURAL and STRING by POSITIVE (16.3).
+        if ((predefined_bit_vector || string_payload)
+            && (!endpoints_in_integer_base
+                || (!allocator_range.null
+                    && !(string_payload ? endpoints_in_positive
+                                        : endpoints_in_natural)))) {
             report(
                 "FSIM-ELAB-VHACCESS-023",
                 "the BIT_VECTOR allocator bounds are outside its predefined NATURAL index subtype",
@@ -575,7 +605,9 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
                         initializer_width.value_or(0U),
                         hir_process_scope_,
                         &proven_width)) {
-                    initializer_width = proven_width;
+                    if (proven_width != 0U) {
+                        initializer_width = proven_width;
+                    }
                     semantic::vhdl::RangeConstraint range;
                     range.kind = semantic::vhdl::RangeKind::array_index;
                     range.left = inferred->left;
@@ -589,6 +621,47 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         }
     }
 
+    // A STRING value's literal or constant initializer gives its range
+    // (9.3.7, 5.3.2.2).
+    if (string_payload && !object_range && !value_range && initializer) {
+        auto value_id = *initializer;
+        for (std::size_t depth = 0U; depth < 16U; ++depth) {
+            const auto qualified = specialized_hir_unit_->find_expression(
+                value_id);
+            if (!qualified || qualified->vhdl == nullptr
+                || qualified->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || !qualified->vhdl->text.starts_with(
+                    semantic::vhdl::qualified_expression_prefix)
+                || qualified->vhdl->operands.size() != 1U) {
+                break;
+            }
+            value_id = qualified->vhdl->operands.front();
+        }
+        const auto value = specialized_hir_unit_->find_expression(value_id);
+        std::optional<HirPackedRange> literal_range;
+        if (value && value->vhdl != nullptr
+            && value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            && value->vhdl->decoded_string) {
+            literal_range = hir_vhdl_string_literal_range(
+                *value->vhdl->decoded_string);
+        } else if (value && value->vhdl != nullptr
+            && value->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+            literal_range = hir_vhdl_constant_string_literal_range(value_id);
+        }
+        if (literal_range) {
+            semantic::vhdl::RangeConstraint range;
+            range.kind = semantic::vhdl::RangeKind::array_index;
+            range.left = literal_range->left;
+            range.right = literal_range->right;
+            range.descending = literal_range->descending;
+            range.null = literal_range->descending
+                ? literal_range->left < literal_range->right
+                : literal_range->left > literal_range->right;
+            value_range = std::move(range);
+        }
+    }
     if (object_range && value_range
         && !same_range(*object_range, *value_range)) {
         report(
@@ -606,7 +679,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             return &found->second;
         }
     }
-    if (open_array && !object_range) {
+    // STRING objects keep their own lengths in string storage.
+    if (open_array && !object_range && !string_payload) {
         report(
             "FSIM-ELAB-VHACCESS-006",
             "an unconstrained VHDL access object requires one statically resolved rank-one index range",
@@ -662,8 +736,20 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         && designated.builtin_type
             == semantic::vhdl::BuiltinTypeIdentity::
                 std_standard_bit_vector;
-    if (predefined_bit_vector && open_array && object_range
-        && object_range->left && object_range->right) {
+    // An open one-dimensional array object is as wide as its range's
+    // elements (5.3.2.2).
+    std::optional<std::size_t> open_element_width;
+    if (predefined_bit_vector) {
+        open_element_width = 1U;
+    } else if (!string_payload && open_array && array != nullptr
+        && array->array_dimensions.size() == 1U && array->element_subtype) {
+        const auto element = hir_effective_vhdl_subtype(
+            *array->element_subtype);
+        open_element_width = element ? vhdl_subtype_width(*element)
+                                     : std::nullopt;
+    }
+    if (open_element_width && *open_element_width != 0U && open_array
+        && object_range && object_range->left && object_range->right) {
         const auto distance = index_distance(
             *object_range->left, *object_range->right);
         if (!object_range->null
@@ -683,23 +769,23 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
                 span);
             return nullptr;
         }
-        width = static_cast<std::size_t>(extent);
-        designated.executable_width = extent;
+        if (extent > std::numeric_limits<std::uint32_t>::max()
+                / *open_element_width) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "the VHDL access-object width exceeds the supported bound",
+                span);
+            return nullptr;
+        }
+        width = static_cast<std::size_t>(extent) * *open_element_width;
+        designated.executable_width = *width;
     }
     if (!string_payload && (open_array || !width) && initializer_width) {
         width = initializer_width;
         designated.executable_width = *width;
     }
-    if (string_payload) {
-        if (!object_range) {
-            report(
-                "FSIM-ELAB-VHACCESS-006",
-                "a VHDL STRING access object requires a concrete index range",
-                span);
-            return nullptr;
-        }
-    } else if (!width || *width == 0U
-        || *width > std::numeric_limits<std::uint32_t>::max()) {
+    if (!string_payload && (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max())) {
         report(
             "FSIM-ELAB-VHACCESS-006",
             "a bounded VHDL allocator requires a concrete nonempty packed designated subtype",
@@ -742,7 +828,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         found != hir_vhdl_access_heaps_.end()) {
         const auto existing_range = index_range(
             found->second.designated_subtype.constraints);
-        if (object_range && existing_range
+        if (!string_payload && object_range && existing_range
             && !same_range(*object_range, *existing_range)) {
             report(
                 "FSIM-ELAB-VHACCESS-023",
@@ -1210,20 +1296,56 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             && designated_subtype->builtin_type
                 == semantic::vhdl::BuiltinTypeIdentity::
                     std_standard_bit_vector;
-        if (predefined_bit_vector && allocator_subtype
+        // An index constraint of a one-dimensional array allocator
+        // (IEEE 1076-2008 9.3.7).
+        const auto* allocated_array = designated_subtype
+            ? hir_vhdl_named_type(*specialized_hir_unit_,
+                  *designated_subtype, semantic::vhdl::TypeForm::array)
+            : nullptr;
+        const bool one_dimensional_array = predefined_bit_vector
+            || (designated_subtype
+                && designated_subtype->domain
+                    == semantic::vhdl::ValueDomain::string)
+            || (allocated_array != nullptr
+                && allocated_array->array_dimensions.size() == 1U);
+        if (one_dimensional_array && allocator_subtype
             && allocator_subtype->vhdl != nullptr) {
             for (const auto bound_id : allocator_subtype->vhdl->operands) {
                 const auto bound = specialized_hir_unit_->find_expression(
                     bound_id);
-                if (!bound || bound->vhdl == nullptr
-                    || bound->vhdl->kind
-                        != semantic::vhdl::ExpressionKind::binary
-                    || (bound->vhdl->text != "to"
-                        && bound->vhdl->text != "downto")
-                    || bound->vhdl->operands.size() != 2U) {
+                // A range attribute (`x'range`) or a discrete subtype name
+                // also constrains the index (5.3.2.1).
+                const bool explicit_range = bound && bound->vhdl != nullptr
+                    && bound->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::binary
+                    && (bound->vhdl->text == "to"
+                        || bound->vhdl->text == "downto")
+                    && bound->vhdl->operands.size() == 2U;
+                if (!explicit_range && bound && bound->vhdl != nullptr) {
+                    auto discrete = [&]() -> std::optional<HirPackedRange> {
+                        if (const auto attribute = hir_vhdl_attribute_profile(
+                                bound_id, hir_process_scope_);
+                            attribute && attribute->discrete_range) {
+                            return attribute->discrete_range;
+                        }
+                        return hir_expression_range(
+                            bound_id, hir_process_scope_);
+                    }();
+                    if (discrete) {
+                        semantic::vhdl::RangeConstraint range;
+                        range.kind = semantic::vhdl::RangeKind::array_index;
+                        range.left = discrete->left;
+                        range.right = discrete->right;
+                        range.descending = discrete->descending;
+                        range.source = bound->vhdl->source;
+                        allocator_constraints.push_back(std::move(range));
+                        continue;
+                    }
+                }
+                if (!explicit_range) {
                     report(
                         "FSIM-ELAB-VHACCESS-006",
-                        "an explicit BIT_VECTOR allocator range requires one static to/downto constraint",
+                        "an explicit array allocator range requires one static to/downto constraint",
                         span);
                     return std::nullopt;
                 }
@@ -1232,6 +1354,27 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 range.left_expression = bound->vhdl->operands[0];
                 range.right_expression = bound->vhdl->operands[1];
                 range.descending = bound->vhdl->text == "downto";
+                // A range attribute or subtype name keeps its endpoints as
+                // 'LEFT and 'RIGHT; their values give its direction.
+                const auto bound_attribute = [&](
+                    const semantic::ExpressionId id) -> std::string {
+                    const auto endpoint
+                        = specialized_hir_unit_->find_expression(id);
+                    return endpoint && endpoint->vhdl != nullptr
+                            && endpoint->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::call
+                        ? endpoint->vhdl->text
+                        : std::string { };
+                };
+                const auto left_attribute
+                    = bound_attribute(bound->vhdl->operands[0]);
+                const auto right_attribute
+                    = bound_attribute(bound->vhdl->operands[1]);
+                range.direction_from_bounds
+                    = (left_attribute == "'left"
+                          && right_attribute == "'right")
+                    || (left_attribute == "'right"
+                        && right_attribute == "'left");
                 range.source = bound->vhdl->source;
                 allocator_constraints.push_back(std::move(range));
             }
@@ -1239,7 +1382,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 && allocator_constraints.size() != 1U) {
                 report(
                     "FSIM-ELAB-VHACCESS-006",
-                    "a predefined BIT_VECTOR allocator requires one index range",
+                    "a one-dimensional array allocator requires one index range",
                     span);
                 return std::nullopt;
             }
@@ -1257,16 +1400,76 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         }
         if (heap->designated_subtype.domain
             == semantic::vhdl::ValueDomain::string) {
-            if (source.text != "@vhdl-new-qualified"
-                || source.operands.size() != 2U) {
-                report(
-                    "FSIM-ELAB-VHACCESS-006",
-                    "a bounded VHDL STRING allocator requires one qualified initial value",
-                    span);
-                return std::nullopt;
+            // Each STRING object has its own length. Its index range is
+            // the allocator's constraint or the designated subtype's; an
+            // unconstrained qualified value defines its own (9.3.7).
+            const semantic::vhdl::RangeConstraint* object_range = nullptr;
+            if (!allocator_constraints.empty()) {
+                object_range = &allocator_constraints.front();
+            } else if (designated_subtype) {
+                const auto found = std::ranges::find_if(
+                    designated_subtype->constraints,
+                    [](const semantic::vhdl::RangeConstraint& constraint) {
+                        return constraint.kind
+                            == semantic::vhdl::RangeKind::array_index;
+                    });
+                if (found != designated_subtype->constraints.end()) {
+                    object_range = &*found;
+                }
+            }
+            std::optional<std::uint64_t> extent;
+            if (object_range != nullptr) {
+                const auto left = hir_range_left(*object_range);
+                const auto right = hir_range_right(*object_range);
+                if (!left || !right) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-006",
+                        "a VHDL STRING allocator requires concrete index bounds",
+                        span);
+                    return std::nullopt;
+                }
+                const bool descending = object_range->direction_from_bounds
+                    ? *left > *right
+                    : object_range->descending;
+                const bool null_range = descending
+                    ? *left < *right : *left > *right;
+                extent = null_range
+                    ? std::uint64_t { }
+                    : index_distance(*left, *right) + 1U;
+                if (*extent > std::numeric_limits<std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-006",
+                        "the VHDL STRING access-object length exceeds the supported bound",
+                        span);
+                    return std::nullopt;
+                }
+            }
+            const bool qualified = source.text == "@vhdl-new-qualified"
+                && source.operands.size() == 2U;
+            if (!qualified) {
+                if (!extent) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-006",
+                        "a VHDL STRING allocator requires an index range or a qualified initial value",
+                        span);
+                    return std::nullopt;
+                }
+                // The default value repeats CHARACTER'LEFT (6.4.2.3).
+                const auto initial = allocate_string_register();
+                process_.operations.emplace_back(LoadStringConstant {
+                    initial,
+                    std::string(static_cast<std::size_t>(*extent), '\0') });
+                return issue_hir_vhdl_access_handle(
+                    *heap, span, [&](const RegisterId handle) {
+                        process_.operations.emplace_back(ContainerStringWrite {
+                            heap->objects, handle, initial, false, false,
+                            false, { } });
+                    });
             }
             const auto text = lower_hir_string_expression(
-                source.operands[1], &heap->designated_subtype);
+                source.operands[1],
+                designated_subtype ? &*designated_subtype
+                                   : &heap->designated_subtype);
             if (!text) {
                 report(
                     "FSIM-ELAB-VHACCESS-012",
@@ -1274,36 +1477,20 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                     span);
                 return std::nullopt;
             }
-            const auto range = std::ranges::find_if(
-                heap->designated_subtype.constraints,
-                [](const semantic::vhdl::RangeConstraint& constraint) {
-                    return constraint.kind
-                        == semantic::vhdl::RangeKind::array_index;
-                });
-            if (range == heap->designated_subtype.constraints.end()
-                || !range->left || !range->right) {
-                report(
-                    "FSIM-ELAB-VHACCESS-006",
-                    "a VHDL STRING allocator requires concrete index bounds",
-                    span);
-                return std::nullopt;
-            }
-            const auto extent = range->null
-                ? std::uint64_t { }
-                : index_distance(*range->left, *range->right) + 1U;
-            if (extent > std::numeric_limits<std::uint32_t>::max()) {
-                report(
-                    "FSIM-ELAB-VHACCESS-006",
-                    "the VHDL STRING access-object length exceeds the supported bound",
-                    span);
-                return std::nullopt;
+            if (!extent) {
+                return issue_hir_vhdl_access_handle(
+                    *heap, span, [&](const RegisterId handle) {
+                        process_.operations.emplace_back(ContainerStringWrite {
+                            heap->objects, handle, *text, false, false,
+                            false, { } });
+                    });
             }
             const auto actual_length = allocate_register(
                 32U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(
                 StringLength { actual_length, *text });
             const auto required_length = load_constant(
-                unsigned_value(extent, 32U), frontend::ValueDomain::Bit2);
+                unsigned_value(*extent, 32U), frontend::ValueDomain::Bit2);
             const auto correct_length = allocate_register(
                 1U, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(Binary {
@@ -1344,11 +1531,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 : lower_hir_expression(source.operands[1], *width);
         } else if (source.text == "@vhdl-new"
             && source.operands.size() == 1U) {
+            // An allocator without an initial value creates an object with
+            // its subtype's default value (IEEE 1076-2008 9.3.7, 6.4.2.3).
             value = allocate_register(
                 *width,
                 vhdl_value_domain(heap->designated_subtype.domain));
+            const auto initial = hir_vhdl_default_value(
+                heap->designated_subtype, *width);
             process_.operations.emplace_back(LoadConstant {
-                *value, unsigned_value(0U, *width) });
+                *value, initial ? *initial : unsigned_value(0U, *width) });
         }
         if (!value) {
             report(
@@ -1521,6 +1712,29 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     if (member && member->access_object_root) {
         return true;
     }
+    // An element of an object designated by an access value (`p(i)`,
+    // IEEE 1076-2008 8.4 implicit dereference); its shape is known once
+    // the heap exists.
+    if ((target->vhdl->kind == semantic::vhdl::ExpressionKind::index
+            || target->vhdl->kind == semantic::vhdl::ExpressionKind::call)
+        && !target->vhdl->text.starts_with('@')
+        && !target->vhdl->operands.empty()) {
+        // The prefix's expression subtype is already the designated one;
+        // its declaration names the access type.
+        const auto prefix_declaration = hir_target_declaration(
+            target->vhdl->operands.front());
+        const auto declaration = prefix_declaration
+            ? specialized_hir_unit_->find_declaration(*prefix_declaration)
+            : std::nullopt;
+        if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->subtype
+            && hir_vhdl_named_type(*specialized_hir_unit_,
+                   *declaration->vhdl->subtype,
+                   semantic::vhdl::TypeForm::access)
+                != nullptr) {
+            return true;
+        }
+    }
     const auto member_root = member && member->root.valid()
         ? specialized_hir_unit_->find_expression(member->root)
         : std::nullopt;
@@ -1610,6 +1824,107 @@ bool Lowerer::reject_hir_vhdl_access_signal_escape(
     return true;
 }
 
+std::optional<bool> Lowerer::lower_hir_vhdl_access_element_assignment(
+    const semantic::ExpressionId target_id,
+    const semantic::ExpressionId value_id)
+{
+    // An element of an array object an access value designates (`p(i)`,
+    // IEEE 1076-2008 8.4 implicit dereference, 10.6.2.1).
+    const auto target = specialized_hir_unit_->find_expression(target_id);
+    if (!target || target->vhdl == nullptr
+        || (target->vhdl->kind != semantic::vhdl::ExpressionKind::index
+            && (target->vhdl->kind != semantic::vhdl::ExpressionKind::call
+                || target->vhdl->text.starts_with('@')))
+        || target->vhdl->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto prefix = target->vhdl->operands.front();
+    const auto prefix_declaration = hir_target_declaration(prefix);
+    const auto declaration = prefix_declaration
+        ? specialized_hir_unit_->find_declaration(*prefix_declaration)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->subtype) {
+        return std::nullopt;
+    }
+    const auto& access_subtype = *declaration->vhdl->subtype;
+    const auto* type = hir_vhdl_named_type(*specialized_hir_unit_,
+        access_subtype, semantic::vhdl::TypeForm::access);
+    if (type == nullptr) {
+        return std::nullopt;
+    }
+    const auto span = hir_source_span(target->vhdl->source);
+    auto* heap = hir_vhdl_access_heap(*type, span, &access_subtype);
+    if (heap == nullptr
+        || heap->designated_subtype.domain
+            == semantic::vhdl::ValueDomain::string) {
+        return false;
+    }
+    const auto& designated = heap->designated_subtype;
+    const auto width = vhdl_subtype_width(designated);
+    const auto range = std::ranges::find_if(designated.constraints,
+        [](const semantic::vhdl::RangeConstraint& constraint) {
+            return constraint.kind == semantic::vhdl::RangeKind::array_index;
+        });
+    const auto* array = designated.type_mark.target.valid()
+        ? hir_vhdl_array_type(
+              *specialized_hir_unit_, designated.type_mark.target)
+        : nullptr;
+    const auto element = array != nullptr && array->element_subtype
+        ? hir_effective_vhdl_subtype(*array->element_subtype)
+        : std::nullopt;
+    if (!width || range == designated.constraints.end() || !element
+        || array->array_dimensions.size() != 1U) {
+        return false;
+    }
+    const auto left = hir_range_left(*range);
+    const auto right = hir_range_right(*range);
+    const auto selected = hir_constant_integer(target->vhdl->operands[1]);
+    if (!left || !right || !selected
+        || *selected < std::min(*left, *right)
+        || *selected > std::max(*left, *right)) {
+        return false;
+    }
+    const auto count = index_distance(*left, *right) + 1U;
+    if (count == 0U || *width % count != 0U) {
+        return false;
+    }
+    // The right bound's element is the least significant (5.3.2.1).
+    const auto element_width = *width / static_cast<std::size_t>(count);
+    const auto offset = index_distance(*selected, *right) * element_width;
+    if (offset > std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
+    // The prefix names the access variable; its value is the handle.
+    const auto binding = hir_runtime_binding(
+        *prefix_declaration, hir_process_scope_, true);
+    const auto handle = binding ? binding->local : std::nullopt;
+    auto value = lower_hir_expression(value_id, element_width);
+    if (!handle || !value) {
+        return false;
+    }
+    if (register_width(*value) != element_width) {
+        value = resize_register(*value, element_width, element->signed_value);
+    }
+    const auto element_domain = vhdl_value_domain(element->domain);
+    if (register_domain(*value) != element_domain) {
+        const auto converted = allocate_register(element_width, element_domain);
+        process_.operations.emplace_back(CopyRegister { converted, *value });
+        value = converted;
+    }
+    emit_hir_vhdl_access_live_check(*heap, *handle, span);
+    const auto object_domain = vhdl_value_domain(designated.domain);
+    const auto current = allocate_register(*width, object_domain);
+    process_.operations.emplace_back(ContainerRead {
+        current, heap->objects, *handle, false });
+    const auto updated = allocate_register(*width, object_domain);
+    process_.operations.emplace_back(Insert {
+        updated, current, *value, static_cast<std::uint32_t>(offset) });
+    process_.operations.emplace_back(ContainerWrite {
+        heap->objects, *handle, updated, false });
+    return true;
+}
+
 bool Lowerer::lower_hir_vhdl_access_assignment(
     const semantic::StatementId statement_id)
 {
@@ -1623,6 +1938,10 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         *statement->vhdl->target);
     if (!target || target->vhdl == nullptr) {
         return false;
+    }
+    if (const auto element = lower_hir_vhdl_access_element_assignment(
+            *statement->vhdl->target, *statement->vhdl->value)) {
+        return *element;
     }
     const auto line_declaration = hir_target_declaration(
         *statement->vhdl->target);
@@ -1798,8 +2117,51 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
     auto* heap = hir_vhdl_access_heap(
         *type, hir_source_span(target->vhdl->source),
         subtype ? &*subtype : nullptr);
-    const auto designated = hir_effective_vhdl_subtype(
-        *type->designated_subtype).value_or(*type->designated_subtype);
+    // A whole STRING object takes a value of its own length (10.6.2.1).
+    if (heap != nullptr && !member && handle
+        && heap->designated_subtype.domain
+            == semantic::vhdl::ValueDomain::string) {
+        const auto type_designated = hir_effective_vhdl_subtype(
+            *type->designated_subtype);
+        const auto text = lower_hir_string_expression(
+            *statement->vhdl->value,
+            type_designated ? &*type_designated : nullptr);
+        if (!text) {
+            return false;
+        }
+        const auto span = hir_source_span(target->vhdl->source);
+        emit_hir_vhdl_access_live_check(*heap, *handle, span);
+        const auto current = allocate_string_register();
+        process_.operations.emplace_back(ContainerStringRead {
+            current, heap->objects, *handle, false, false, false, { } });
+        const auto current_length = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            StringLength { current_length, current });
+        const auto value_length = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            StringLength { value_length, *text });
+        const auto same_length = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::equal, same_length, current_length,
+            value_length });
+        process_.operations.emplace_back(Assert {
+            same_length,
+            "VHDL STRING object assignment value does not have the object's length",
+            AssertionSeverity::failure,
+            runtime_source_location(span),
+        });
+        process_.operations.emplace_back(ContainerStringWrite {
+            heap->objects, *handle, *text, false, false, false, { } });
+        return true;
+    }
+    // The object's shape is the heap's designated subtype (5.4.2).
+    const auto designated = heap != nullptr
+        ? heap->designated_subtype
+        : hir_effective_vhdl_subtype(*type->designated_subtype)
+              .value_or(*type->designated_subtype);
     const auto width = vhdl_subtype_width(designated);
     const auto assignment_width = member
         ? std::optional { member->width }

@@ -99,6 +99,11 @@ ParseResult VhdlParser::run()
                 return name == "ieee.numeric_bit" || name.starts_with("ieee.numeric_bit.");
             });
         });
+        std_env_context_ = std::ranges::any_of(pending_context, [](const VhdlContextItem& item) {
+            return item.kind == VhdlContextItemKind::UseClause && std::ranges::any_of(item.selected_names, [](const std::string_view name) {
+                return name == "std.env.all";
+            });
+        });
         if (at(TokenKind::PslDirective)) {
             const auto marker = advance();
             skip_vhdl_psl_markers();
@@ -1329,6 +1334,21 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     const auto simple_name = spelling.substr(spelling.find_last_of('.') == std::string::npos
             ? 0
             : spelling.find_last_of('.') + 1);
+    // A STD.ENV type imported by `use std.env.all` denotes the package's
+    // type (IEEE 1076-2019 16.5).
+    if (std_env_context_ && spelling.find('.') == std::string::npos
+        && !vhdl_source_declares_type(spelling)
+        && (spelling == "dayofweek" || spelling == "time_record"
+            || spelling == "call_path_element"
+            || spelling == "call_path_vector"
+            || spelling == "call_path_vector_ptr" || spelling == "directory"
+            || spelling == "directory_items" || spelling == "dir_open_status"
+            || spelling == "dir_create_status"
+            || spelling == "dir_delete_status"
+            || spelling == "file_delete_status")) {
+        spelling = "std.env." + spelling;
+        type.spelling = spelling;
+    }
     if (simple_name == "file_open_kind" || simple_name == "file_open_status") {
         require_vhdl_standard(
             first, VhdlStandard::Vhdl1993,

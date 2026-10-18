@@ -62,7 +62,8 @@ namespace {
         const semantic::SpecializedHirUnit& specialization,
         const ContainerType& type,
         const semantic::ExpressionId initializer,
-        const semantic::sv::TypeReference* const element_type = nullptr)
+        const semantic::sv::TypeReference* const element_type = nullptr,
+        std::string* const failure = nullptr)
     {
         using semantic::sv::ExpressionKind;
         // `'{key: value, ...}` for an associative array (7.9.11, 10.9.2).
@@ -338,6 +339,45 @@ namespace {
         const auto* const initializer_source = initializer_expression
             ? initializer_expression->systemverilog
             : nullptr;
+        // An array parameter, an array-valued constant function call or a
+        // slice of one gives its elements from the left bound (7.6, 13.4).
+        if (initializer_source != nullptr && type.fixed
+            && type.dimensions.size() == 1U
+            && type.element_kind == ContainerElementKind::Packed
+            && (initializer_source->kind == ExpressionKind::name
+                || initializer_source->kind == ExpressionKind::call
+                || initializer_source->kind == ExpressionKind::slice)) {
+            std::string array_error;
+            const auto array = evaluate_hir_systemverilog_array_constant(
+                specialization, initializer, array_error);
+            if (failure != nullptr) {
+                *failure = array ? std::string { "the array has "
+                                       + std::to_string(array->elements.size())
+                                       + " elements" }
+                                 : array_error;
+            }
+            if (array && array->elements.size() == *leaf_count) {
+                auto value = default_container_value(type);
+                for (std::size_t at = 0; at < *leaf_count; ++at) {
+                    const auto& element = array->elements[at];
+                    const auto sign = element.packed.width() != 0U
+                            && element.signed_value
+                        ? runtime::to_logic4(element.packed.get_logic9(
+                              element.packed.width() - 1U))
+                        : Logic4::zero;
+                    PackedLogic4 bits(type.element_width, Logic4::zero);
+                    for (std::size_t bit = 0; bit < type.element_width;
+                         ++bit) {
+                        bits.set(bit, bit < element.packed.width()
+                                ? runtime::to_logic4(
+                                      element.packed.get_logic9(bit))
+                                : sign);
+                    }
+                    value.elements[at] = std::move(bits);
+                }
+                return value;
+            }
+        }
         // A string literal initializes an unpacked array of bytes one
         // character per element, right-justified like the packed value it
         // denotes (5.9).
@@ -1558,6 +1598,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             }
         }
         std::optional<ContainerValue> initial_container;
+        std::string initializer_failure;
         // An instance's value for an unpacked array parameter (6.20.2).
         const auto array_actual = declaration.array_parameter
             ? working_specialization.systemverilog_array_actual(
@@ -1585,7 +1626,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             element_type.container_element_types.clear();
             initial_container = constant_container_initializer(
                 working_specialization, *executable_container_type,
-                *declaration.initializer, &element_type);
+                *declaration.initializer, &element_type, &initializer_failure);
         }
         // A variable's initializer that is not a constant runs as its
         // time-zero declaration initializer process (6.8).
@@ -1604,7 +1645,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 "FSIM-ELAB-HIR-001",
                 "compiled container declaration '"
                     + declaration.name
-                    + "' has an unsupported initializer",
+                    + "' has an unsupported initializer"
+                    + (initializer_failure.empty()
+                            ? std::string { }
+                            : ": " + initializer_failure),
                 compiled_source_span(
                     *compiled_, declaration.source));
             return false;

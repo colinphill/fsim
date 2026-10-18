@@ -272,6 +272,19 @@ struct SpecializedHirVhdlPackedArrayValue {
 using SpecializedHirVhdlConstantValue =
     std::variant<std::int64_t, SpecializedHirVhdlPackedValue>;
 
+class SpecializedHirUnit;
+
+/// The shared SystemVerilog constant evaluator, which elaboration provides:
+/// an integral value, or nullopt when the expression is not constant.
+using SystemVerilogConstantIntegral = std::optional<std::int64_t> (*)(
+    const SpecializedHirUnit& unit, ExpressionId expression);
+
+/// Register the shared constant evaluator, which integral evaluation and
+/// generate selection use where the integral fast path cannot evaluate
+/// (IEEE 1800-2017 11.2.1, 27.5).
+void set_systemverilog_constant_integral(
+    SystemVerilogConstantIntegral evaluator) noexcept;
+
 /// Mutable, unit-scoped HIR replacements for one specialization. Records not
 /// replaced here remain owned by, and are resolved through, the immutable
 /// CompiledDesign supplied at construction. Replacements never allocate new

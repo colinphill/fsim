@@ -1350,6 +1350,40 @@ class VhdlExecutableBuilder final {
       }
       const auto* declaration = find_declaration(
           *expression.referenced_name->selected);
+      // A function without parameters called with actuals is called and
+      // its result indexed (IEEE 1076-2008 8.1, 9.3.4).
+      const bool indexed_result = declaration != nullptr
+          && declaration->callable && declaration->callable->function
+          && declaration->callable->formals.empty()
+          && declaration->callable->return_type
+          && std::ranges::all_of(expression.referenced_name->overloads,
+              [&](const semantic::DeclarationId overload) {
+                const auto* candidate = find_declaration(overload);
+                return candidate != nullptr && candidate->callable
+                    && candidate->callable->function
+                    && candidate->callable->formals.empty();
+              });
+      if (indexed_result) {
+        const auto prefix_origin = origin(
+            expression.source, expression.origin, "VHDL indexed function result");
+        const auto prefix_id = model_.add_expression_identity(
+            expression.scope, expression.source, prefix_origin);
+        vh::Expression prefix;
+        prefix.id = prefix_id;
+        prefix.scope = expression.scope;
+        prefix.kind = vh::ExpressionKind::name;
+        prefix.text = expression.text;
+        prefix.source = expression.source;
+        prefix.origin = prefix_origin;
+        prefix.referenced_name = expression.referenced_name;
+        indexed_prefixes.push_back(std::move(prefix));
+        expression.kind = vh::ExpressionKind::index;
+        expression.text = "index";
+        expression.referenced_name.reset();
+        expression.operands.insert(expression.operands.begin(), prefix_id);
+        expression.argument_names.clear();
+        continue;
+      }
       if (declaration == nullptr || !declaration->subtype
           || !indexed_object(declaration->form)) {
         continue;

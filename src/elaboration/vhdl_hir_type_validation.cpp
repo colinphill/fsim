@@ -4091,6 +4091,27 @@ private:
                    })) {
                 return { };
             }
+            // An enumeration literal the design's context-typed resolution
+            // selected has the type declaring it (IEEE 1076-2008 9.3.2).
+            if (value.kind == Kind::name && value.resolved_declaration) {
+                const auto declaration = specialization_.find_declaration(
+                    *value.resolved_declaration);
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::enumeration_literal) {
+                    for (const auto& type
+                        : specialization_.design().vhdl_hir.types()) {
+                        if (std::ranges::any_of(type.enumeration_literals,
+                                [&](const semantic::vhdl::EnumerationLiteral& literal) {
+                                    return literal.declaration
+                                        == *value.resolved_declaration;
+                                })) {
+                            return { OperandClass::enumeration,
+                                "#" + std::to_string(type.id.value()) };
+                        }
+                    }
+                }
+            }
             // A CHARACTER control literal (NUL, ESC, ...) of STD.STANDARD,
             // which is not retained as a declaration.
             if (value.kind == Kind::name

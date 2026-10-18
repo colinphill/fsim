@@ -132,15 +132,12 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       auto target = parse_vhdl_selected_name("protected method alias target");
       if (match(TokenKind::LeftBracket)) {
         const auto signature_start = previous();
-        std::size_t signature_tokens = 0;
+        // An empty signature `[]` names a method without parameters or a
+        // result (IEEE 1076-2008 4.5.3).
+        static_cast<void>(signature_start);
         while (!at_end() && !at(TokenKind::RightBracket) &&
                !at(TokenKind::Semicolon)) {
-          ++signature_tokens;
           advance();
-        }
-        if (signature_tokens == 0) {
-          error(signature_start, "FSIM-VHDL-PARSE-277",
-                "a protected method alias signature cannot be empty");
         }
         expect(TokenKind::RightBracket,
                "']' after protected method alias signature",
@@ -1912,14 +1909,10 @@ void VhdlParser::parse_vhdl_object_alias(
       require_vhdl_standard(
           signature_start, VhdlStandard::Vhdl1993, "an alias signature",
           "select VHDL-1993 or remove the overload-disambiguating signature");
-      std::size_t signature_tokens = 0;
+      // An empty signature `[]` names a subprogram without parameters or a
+      // result (IEEE 1076-2008 4.5.3).
       while (!at_end() && !at(TokenKind::RightBracket) && !at(TokenKind::Semicolon)) {
-          ++signature_tokens;
           advance();
-      }
-      if (signature_tokens == 0) {
-          error(signature_start, "FSIM-VHDL-PARSE-236",
-              "an alias signature cannot be empty");
       }
       expect(TokenKind::RightBracket, "']' after alias signature",
           "FSIM-VHDL-PARSE-236");

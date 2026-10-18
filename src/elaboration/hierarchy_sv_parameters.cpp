@@ -5,6 +5,7 @@
 
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -100,16 +101,17 @@ std::string compiled_systemverilog_integral_identity(
 }
 
 bool systemverilog_string_actual_incompatible(
-    const semantic::sv::Declaration& formal, const bool actual_string) noexcept
+    const semantic::SpecializedHirUnit& actual_scope,
+    const semantic::sv::Declaration& formal,
+    const semantic::ExpressionId actual)
 {
-    const bool formal_string = !formal.inferred_string_type
-        && compiled_systemverilog_string_declaration(formal);
-    if (formal_string) {
-        return !actual_string;
+    if (compiled_systemverilog_string_declaration(formal)) {
+        return !actual_scope.evaluate_string_expression(actual).has_value();
     }
-    const bool packed_formal = formal.type && formal.type->packed_range;
-    return actual_string && !packed_formal && !formal.inferred_string_type
-        && formal.type && formal.type->target.spelling != "implicit";
+    const auto type = semantic::describe_systemverilog_expression_type(
+        actual_scope, actual);
+    return type
+        && type->kind == semantic::SystemVerilogTypeDescriptor::Kind::string;
 }
 
 bool compiled_systemverilog_string_declaration(
@@ -343,14 +345,11 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 == semantic::SpecializedHirAssociationKind::expression
             && binding.expression) {
             const auto formal = compiled_->find_declaration(binding.formal);
-            const auto actual_string
-                = working_specialization.evaluate_string_expression(
-                                            *binding.expression)
-                      .has_value();
             if (formal && formal->systemverilog != nullptr
                 && hierarchy_sv_parameters_detail::
                     systemverilog_string_actual_incompatible(
-                        *formal->systemverilog, actual_string)) {
+                        working_specialization, *formal->systemverilog,
+                        *binding.expression)) {
                 add_diagnostic(
                     "FSIM-ELAB-SVSTRING-002",
                     "string and integral parameter actuals are "

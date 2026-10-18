@@ -217,7 +217,6 @@ namespace codec_detail {
                                 "modport", "lifetime", "nested_scope",
                                 "callable", "children", "statements",
                                 "array_parameter", "array_local_parameter",
-                                "inferred_string_type",
                                 "local_type_parameter",
                             };
                             const auto field_name

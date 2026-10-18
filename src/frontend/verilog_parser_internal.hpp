@@ -680,6 +680,7 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_module_ports(DesignUnit& unit);
   void validate_non_ansi_port_selections(const DesignUnit& unit);
+  void finalize_non_ansi_port_expressions(DesignUnit& unit);
 
   void skip_to_port_delimiter();
 
@@ -907,8 +908,21 @@ class VerilogParser final : private detail::ParserBase {
     Expression left;
     Expression right;
     SourceSpan span;
+    // The whole `name[...]` port expression, for a selection that becomes
+    // a port expression.
+    Expression expression;
   };
   std::vector<NonAnsiPortSelection> non_ansi_port_selections_;
+  // A non-ANSI port whose port expression is not a whole port name: an
+  // explicit `.name(expression)`, a concatenation, a selection, or a name
+  // listed more than once (IEEE 1800-2017 23.2.2.1). An unnamed port has a
+  // generated external name.
+  struct NonAnsiPortExpression {
+    std::string external;
+    std::optional<Expression> expression;
+    SourceSpan span;
+  };
+  std::vector<NonAnsiPortExpression> non_ansi_port_expressions_;
   // The design unit's default lifetime for its tasks and functions
   // (`module automatic m;`, IEEE 1800-2017 6.21).
   bool unit_default_automatic_ = false;

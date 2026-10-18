@@ -1337,34 +1337,33 @@ std::optional<SimulationTick> transition_delay(
     throw std::invalid_argument(
         "transition-delay values must have the same non-zero width");
   }
-  std::optional<SimulationTick> selected;
-  const auto consider =
-      [&](const SimulationTick candidate) {
-        if (!selected || candidate < *selected) {
-          selected = candidate;
-        }
-      };
+  // A delay applies to the whole new value (IEEE 1800-2017 10.3.3): a
+  // change to 0 takes the fall delay, to z the turn-off delay, to a value
+  // with x the smallest delay, and any other change the rise delay.
+  bool changed { };
+  bool all_zero { true };
+  bool all_z { true };
+  bool any_x { };
   for (std::size_t bit = 0; bit < current.width(); ++bit) {
-    if (current.get(bit) == next.get(bit)) {
-      continue;
-    }
-    switch (next.get(bit)) {
-      case Logic4::zero:
-        consider(delays.fall);
-        break;
-      case Logic4::one:
-        consider(delays.rise);
-        break;
-      case Logic4::z:
-        consider(delays.turnoff);
-        break;
-      case Logic4::x:
-        consider(std::min(
-            {delays.rise, delays.fall, delays.turnoff}));
-        break;
-    }
+    const auto value = next.get(bit);
+    changed = changed || current.get(bit) != value;
+    all_zero = all_zero && value == Logic4::zero;
+    all_z = all_z && value == Logic4::z;
+    any_x = any_x || value == Logic4::x;
   }
-  return selected;
+  if (!changed) {
+    return std::nullopt;
+  }
+  if (all_zero) {
+    return delays.fall;
+  }
+  if (all_z) {
+    return delays.turnoff;
+  }
+  if (any_x) {
+    return std::min({delays.rise, delays.fall, delays.turnoff});
+  }
+  return delays.rise;
 }
 
 InterpreterError::InterpreterError(ProcessId process,

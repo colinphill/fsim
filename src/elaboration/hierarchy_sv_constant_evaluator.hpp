@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::elaboration {
 
@@ -85,6 +86,23 @@ evaluate_hir_systemverilog_typed_constant(
     const semantic::SpecializedHirUnit& specialization,
     semantic::ExpressionId expression,
     const semantic::sv::TypeReference& type,
+    std::string& error);
+
+/// The value of a fixed one-dimensional unpacked array constant: its bounds
+/// and its elements from the left bound (IEEE 1800-2017 7.4).
+struct HirSystemVerilogArrayConstant {
+    std::int64_t left { };
+    std::int64_t right { };
+    std::vector<HirSystemVerilogConstant> elements;
+};
+
+/// Evaluate an unpacked array expression: an array parameter, an
+/// array-valued constant function call, or a slice of one (IEEE 1800-2017
+/// 7.4, 13.4).
+[[nodiscard]] std::optional<HirSystemVerilogArrayConstant>
+evaluate_hir_systemverilog_array_constant(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression,
     std::string& error);
 
 /// The bit width of a type in a specialization, or nullopt when it is not a

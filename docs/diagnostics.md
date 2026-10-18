@@ -1036,7 +1036,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-022` | error | An include file cannot be resolved from the including file or configured search roots. |
 | `FSIM-SV-PP-023` | error | A function-like macro invocation lacks an argument list. |
 | `FSIM-SV-PP-024` | error | A function-like macro argument list is unterminated. |
-| `FSIM-SV-PP-025` | error | Token concatenation lacks an operand. |
 | `FSIM-SV-PP-026` | error | Token concatenation does not form exactly one valid token. |
 | `FSIM-SV-PP-027` | error | A backtick is not followed by a macro identifier. |
 | `FSIM-SV-PP-028` | error | A macro invocation or compiler directive is undefined. |

@@ -184,6 +184,33 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       first_empty_ansi_error_reported = true;
     }
   };
+  // A port expression's names are the internal objects the body declares
+  // (IEEE 1800-2017 23.2.2.1).
+  const auto note_port_expression_names = [&](const Expression& expression) {
+    const auto visit = [&](const auto& self, const Expression& node) -> void {
+      if (node.kind == ExpressionKind::Identifier) {
+        non_ansi_ports_.insert(node.text);
+      }
+      for (const auto& operand : node.operands) {
+        self(self, operand);
+      }
+    };
+    visit(visit, expression);
+  };
+  const auto add_port_expression = [&](std::string external,
+                                       std::optional<Expression> expression,
+                                       const SourceSpan span) {
+    if (external.empty()) {
+      external = "fsim__port_expression_"
+          + std::to_string(non_ansi_port_expressions_.size());
+    }
+    if (expression) {
+      note_port_expression_names(*expression);
+    }
+    non_ansi_port_expressions_.push_back(
+        {external, std::move(expression), span});
+    return external;
+  };
   while (!at_end() && !at(TokenKind::RightParen)) {
       if (verilog_attribute_instance_start()) {
           parse_verilog_attribute_instances();
@@ -208,11 +235,38 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         break;
       }
       continue;
-    } else if (at(TokenKind::Dot)) {
+    } else if (at(TokenKind::Dot)
+        && (have_inherited_type || ansi_port_list.value_or(false))) {
       const auto dot = advance();
       error(dot, "FSIM-SV-UNSUPPORTED-005",
             "named port connections are not valid in a module declaration");
       skip_to_port_delimiter();
+    } else if (at(TokenKind::Dot)) {
+      // `.name(expression)` names a port whose connection is the port
+      // expression (IEEE 1800-2017 23.2.2.1).
+      const auto dot = advance();
+      const auto external = expect_identifier("port name");
+      note_port_style(false, external);
+      expect(TokenKind::LeftParen, "'(' after explicit port name",
+          "FSIM-SV-PARSE-006");
+      std::optional<Expression> internal;
+      if (!at(TokenKind::RightParen)) {
+        internal = parse_expression();
+      }
+      expect(TokenKind::RightParen, "')' after port expression",
+          "FSIM-SV-PARSE-006");
+      unit.systemverilog_port_slots->push_back(add_port_expression(
+          external.text, std::move(internal),
+          cover(dot.span, previous().span)));
+    } else if (at(TokenKind::LeftBrace) && !have_inherited_type
+        && !ansi_port_list.value_or(false)) {
+      // An unnamed port whose port expression is a concatenation.
+      const auto open = current();
+      note_port_style(false, open);
+      auto internal = parse_expression();
+      const auto span = cover(open.span, previous().span);
+      unit.systemverilog_port_slots->push_back(
+          add_port_expression({}, std::move(internal), span));
     } else {
       const bool explicit_generic_interface = keyword("interface");
       const bool typed_interface =
@@ -402,6 +456,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         spec.direction = PortDirection::Unknown;
       }
 
+      const auto name_position = position();
       const auto port_name = expect_identifier("port name");
       const bool ansi_port = spec.direction != PortDirection::Unknown;
       note_port_style(ansi_port, port_name);
@@ -457,11 +512,43 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           }
           expect(TokenKind::RightBracket,
               "']' after non-ANSI port selection", "FSIM-SV-PARSE-006");
+          // Reparse the whole selection as the port expression it is.
+          const auto end = position();
+          rewind(name_position);
+          auto whole = parse_expression();
+          if (position() != end) {
+            rewind(end);
+            whole = Expression{ExpressionKind::Identifier, port_name.text, {},
+                port_name.span};
+          }
           non_ansi_port_selections_.push_back({
               port_name.text, std::move(left), std::move(right),
-              cover(open.span, previous().span)});
+              cover(open.span, previous().span), std::move(whole)});
         }
       }
+      const bool repeated_non_ansi_port = !ansi_port
+          && std::ranges::any_of(unit.ports,
+              [&](const SignalDeclaration& port) {
+                return port.name == port_name.text;
+              });
+      if (repeated_non_ansi_port) {
+        // A name listed again is another port connected to the same
+        // internal object (IEEE 1800-2017 23.2.2.1).
+        const bool selected = !non_ansi_port_selections_.empty()
+            && non_ansi_port_selections_.back().port_name == port_name.text
+            && non_ansi_port_selections_.back().span.begin.offset
+                > port_name.span.begin.offset;
+        auto expression = selected
+            ? std::move(non_ansi_port_selections_.back().expression)
+            : Expression{ExpressionKind::Identifier, port_name.text, {},
+                  port_name.span};
+        if (selected) {
+          non_ansi_port_selections_.pop_back();
+        }
+        unit.systemverilog_port_slots->back() = add_port_expression(
+            {}, std::move(expression), span_from(port_name, previous()));
+        (void)declared_here;
+      } else {
       const auto duplicate = std::find_if(
           unit.ports.begin(),
           unit.ports.end(),
@@ -488,6 +575,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       } else {
         unit.ports.push_back(std::move(declaration));
       }
+      }
       (void)declared_here;
     }
 
@@ -508,6 +596,149 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       break;
     }
   }
+}
+
+void VerilogParser::finalize_non_ansi_port_expressions(DesignUnit& unit)
+{
+  if (non_ansi_port_expressions_.empty() || !unit.systemverilog_port_slots) {
+    return;
+  }
+  const auto identifier = [](const std::string& name, const SourceSpan& span) {
+    return Expression{ExpressionKind::Identifier, name, {}, span};
+  };
+  const auto is_external = [&](const std::string& name) {
+    return std::ranges::any_of(non_ansi_port_expressions_,
+        [&](const NonAnsiPortExpression& port) {
+          return port.external == name;
+        });
+  };
+  // The internal objects the port expressions connect.
+  std::vector<std::string> internals;
+  const auto collect = [&](const auto& self, const Expression& node) -> void {
+    if (node.kind == ExpressionKind::Identifier
+        && std::ranges::find(internals, node.text) == internals.end()
+        && std::ranges::any_of(unit.ports,
+            [&](const SignalDeclaration& port) {
+              return port.name == node.text && !is_external(node.text);
+            })) {
+      internals.push_back(node.text);
+    }
+    for (const auto& operand : node.operands) {
+      self(self, operand);
+    }
+  };
+  for (const auto& port : non_ansi_port_expressions_) {
+    if (port.expression) {
+      collect(collect, *port.expression);
+    }
+  }
+  // A listed name or selection of an object another port expression also
+  // connects is a port expression too (IEEE 1800-2017 23.2.2.1).
+  for (auto& slot : *unit.systemverilog_port_slots) {
+    if (!slot || is_external(*slot)
+        || std::ranges::find(internals, *slot) == internals.end()) {
+      continue;
+    }
+    const auto declared = std::ranges::find(
+        unit.ports, *slot, &SignalDeclaration::name);
+    const auto span = declared != unit.ports.end() ? declared->span
+                                                   : SourceSpan{};
+    const auto selection = std::ranges::find(
+        non_ansi_port_selections_, *slot, &NonAnsiPortSelection::port_name);
+    auto expression = identifier(*slot, span);
+    if (selection != non_ansi_port_selections_.end()) {
+      expression = std::move(selection->expression);
+      non_ansi_port_selections_.erase(selection);
+    }
+    std::string external = "fsim__port_expression_"
+        + std::to_string(non_ansi_port_expressions_.size());
+    non_ansi_port_expressions_.push_back({external, std::move(expression),
+        span});
+    *slot = std::move(external);
+  }
+  // The internal objects are ordinary declarations of the body.
+  std::unordered_map<std::string, SignalDeclaration> internal_declarations;
+  for (const auto& name : internals) {
+    const auto declared = std::ranges::find(
+        unit.ports, name, &SignalDeclaration::name);
+    if (declared == unit.ports.end()) {
+      continue;
+    }
+    auto signal = std::move(*declared);
+    unit.ports.erase(declared);
+    internal_declarations.emplace(name, signal);
+    signal.is_port = false;
+    signal.direction = PortDirection::Unknown;
+    unit.signals.push_back(std::move(signal));
+  }
+  std::vector<Statement> connections;
+  for (const auto& port : non_ansi_port_expressions_) {
+    // The port takes the direction of the objects it connects.
+    std::optional<PortDirection> direction;
+    const auto direction_of = [&](const auto& self, const Expression& node)
+        -> void {
+      if (node.kind == ExpressionKind::Identifier) {
+        const auto found = internal_declarations.find(node.text);
+        if (found != internal_declarations.end()) {
+          if (!direction
+              || found->second.direction == PortDirection::Inout) {
+            direction = found->second.direction;
+          }
+        }
+      }
+      for (const auto& operand : node.operands) {
+        self(self, operand);
+      }
+    };
+    if (port.expression) {
+      direction_of(direction_of, *port.expression);
+    }
+    const auto port_direction = direction.value_or(PortDirection::Input);
+    Type type = default_port_net_type();
+    if (port.expression && port.expression->kind == ExpressionKind::Identifier
+        && internal_declarations.contains(port.expression->text)) {
+      type = internal_declarations.at(port.expression->text).type;
+    } else if (port.expression) {
+      // The port is as wide as its port expression.
+      const auto span = port.expression->span;
+      type.packed_range_expression = PackedRangeExpression{
+          Expression{ExpressionKind::Binary, "-",
+              {Expression{ExpressionKind::Call, "$bits", {*port.expression},
+                   span},
+                  Expression{ExpressionKind::IntegerLiteral, "1", {}, span}},
+              span},
+          Expression{ExpressionKind::IntegerLiteral, "0", {}, span}, span,
+          std::nullopt};
+    }
+    unit.ports.emplace_back(
+        port.external, std::move(type), port_direction, true, port.span);
+    body_port_declarations_.insert(port.external);
+    if (!port.expression) {
+      continue;
+    }
+    const auto external = identifier(port.external, port.span);
+    if (port_direction == PortDirection::Inout) {
+      unit.systemverilog_aliases.push_back(
+          SystemVerilogAliasDeclaration{{external, *port.expression},
+              port.span});
+      continue;
+    }
+    Statement connection;
+    connection.kind = StatementKind::Assignment;
+    connection.assignment_kind = AssignmentKind::Continuous;
+    // An input drives its internal objects; an output is driven by them.
+    const bool output = port_direction == PortDirection::Output
+        || port_direction == PortDirection::Buffer;
+    connection.target = output ? external : *port.expression;
+    connection.value = output ? *port.expression : external;
+    connection.span = port.span;
+    connections.push_back(std::move(connection));
+  }
+  // A port's connection is established before the body's processes start,
+  // as for a port collapsed with its internal net (IEEE 1800-2017 23.3.3).
+  unit.concurrent_statements.insert(unit.concurrent_statements.begin(),
+      std::make_move_iterator(connections.begin()),
+      std::make_move_iterator(connections.end()));
 }
 
 void VerilogParser::validate_non_ansi_port_selections(

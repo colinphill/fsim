@@ -3587,6 +3587,23 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     }
     const auto& aggregate = *expression->vhdl;
     const auto aggregate_span = hir_source_span(aggregate.source);
+    // Without a contextual subtype here, the composite type the design's
+    // context-typed resolution gave the aggregate applies (IEEE 1076-2008
+    // 9.3.3.1).
+    std::optional<semantic::vhdl::SubtypeIndication> resolved_context;
+    if (contextual_subtype == nullptr && aggregate.resolved_type) {
+        semantic::vhdl::SubtypeIndication subtype;
+        subtype.type_mark.target = *aggregate.resolved_type;
+        if (const auto type = specialized_hir_unit_->find_type(
+                *aggregate.resolved_type);
+            type && type->vhdl != nullptr) {
+            subtype.type_mark.spelling = type->vhdl->name;
+        }
+        resolved_context = hir_effective_vhdl_subtype(subtype);
+        if (resolved_context) {
+            contextual_subtype = &*resolved_context;
+        }
+    }
     const auto definition_for = [&](
                                     const semantic::vhdl::SubtypeIndication& subtype)
         -> const semantic::vhdl::TypeDefinition* {
@@ -9986,7 +10003,11 @@ Lowerer::hir_hierarchical_parameter(
     // A published name such as `$bits:type_t` (a typedef's width).
     const auto parameter = std::string { published_prefix }
         + std::string { name.substr(name.find_last_of('.') + 1U) };
-    const auto lookup = [&](const std::string& path)
+    const std::remove_cvref_t<
+        decltype(design_.specializations_)>::value_type*
+        matched_specialization = nullptr;
+    const auto lookup_parameter = [&](const std::string& path,
+                                      const std::string& parameter)
         -> std::optional<HirHierarchicalParameter> {
         // An interface port or array element names the interface instance
         // with the same handle (25.5).
@@ -10044,6 +10065,7 @@ Lowerer::hir_hierarchical_parameter(
                 if (formal != parameter) {
                     continue;
                 }
+                matched_specialization = &specialization;
                 if (const auto constant
                     = decode_hir_systemverilog_constant(identity)) {
                     return HirHierarchicalParameter {
@@ -10067,6 +10089,9 @@ Lowerer::hir_hierarchical_parameter(
         }
         return std::nullopt;
     };
+    const auto lookup = [&](const std::string& path) {
+        return lookup_parameter(path, parameter);
+    };
     // Resolve from the innermost enclosing scope outward (23.8).
     std::string_view scope = hierarchy_;
     while (!scope.empty()) {
@@ -10087,9 +10112,126 @@ Lowerer::hir_hierarchical_parameter(
         if (auto local = hir_generate_block_parameter(name)) {
             return local;
         }
+        // A member of another instance's structure parameter (`i.FOO.A`,
+        // IEEE 1800-2017 7.2.1, 23.6).
+        std::vector<std::size_t> dots;
+        for (std::size_t position = 0; position < name.size(); ++position) {
+            if (name[position] == '.') {
+                dots.push_back(position);
+            }
+        }
+        for (std::size_t split = dots.size() > 1U ? dots.size() - 1U : 0U;
+             split-- > 0U;) {
+            const auto member_path = name.substr(dots[split + 1U] + 1U);
+            if (member_path.find('[') != std::string_view::npos) {
+                continue;
+            }
+            const auto member_instance
+                = std::string { name.substr(0U, dots[split]) };
+            const auto formal = std::string { name.substr(dots[split] + 1U,
+                dots[split + 1U] - dots[split] - 1U) };
+            matched_specialization = nullptr;
+            std::optional<HirHierarchicalParameter> whole;
+            for (std::string_view outer = hierarchy_;
+                 !whole && !outer.empty();) {
+                whole = lookup_parameter(
+                    std::string { outer } + "." + member_instance, formal);
+                const auto dot = outer.find_last_of('.');
+                outer = dot == std::string_view::npos
+                    ? std::string_view { }
+                    : outer.substr(0U, dot);
+            }
+            if (!whole) {
+                whole = lookup_parameter(member_instance, formal);
+            }
+            if (!whole || matched_specialization == nullptr
+                || !matched_specialization->source_unit) {
+                continue;
+            }
+            if (auto member = hir_parameter_member_slice(*whole,
+                    *matched_specialization->source_unit, formal,
+                    member_path)) {
+                hierarchical_reference_used_ = true;
+                return member;
+            }
+        }
     }
     hierarchical_reference_missed_ = true;
     return std::nullopt;
+}
+
+std::optional<Lowerer::HirHierarchicalParameter>
+Lowerer::hir_parameter_member_slice(const HirHierarchicalParameter& whole,
+    const semantic::UnitId unit_id, const std::string_view formal,
+    std::string_view path) const
+{
+    const auto& design = specialized_hir_unit_->design();
+    const auto unit = design.find_unit(unit_id);
+    if (!unit || unit->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const semantic::sv::Declaration* parameter = nullptr;
+    for (const auto id : unit->systemverilog->declarations) {
+        const auto declaration = design.find_declaration(id);
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->name == formal
+            && declaration->systemverilog->type) {
+            parameter = declaration->systemverilog;
+            break;
+        }
+    }
+    if (parameter == nullptr) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver { design, unit_id };
+    auto type = *parameter->type;
+    std::uint64_t offset { };
+    std::uint64_t width = whole.value.width();
+    while (!path.empty()) {
+        const auto separator = path.find('.');
+        const auto segment = path.substr(0U, separator);
+        if (const auto effective = resolver.effective_systemverilog_type(
+                type, parameter->scope)) {
+            type = *effective;
+        }
+        const auto definition = type.target.target.valid()
+            ? design.find_type(type.target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr
+            || definition->systemverilog->form
+                != semantic::sv::TypeForm::packed_structure) {
+            return std::nullopt;
+        }
+        const auto& members = definition->systemverilog->members;
+        const auto member = std::ranges::find(
+            members, segment, &semantic::sv::PackedMember::name);
+        if (member == members.end() || member->lsb_offset >= width) {
+            return std::nullopt;
+        }
+        // A member extends to the next member above it (7.2.1).
+        auto upper = width;
+        for (const auto& other : members) {
+            if (other.lsb_offset > member->lsb_offset) {
+                upper = std::min(upper, other.lsb_offset);
+            }
+        }
+        offset += member->lsb_offset;
+        width = upper - member->lsb_offset;
+        type = member->type;
+        path = separator == std::string_view::npos
+            ? std::string_view { }
+            : path.substr(separator + 1U);
+    }
+    if (width == 0U || offset + width > whole.value.width()) {
+        return std::nullopt;
+    }
+    runtime::PackedLogic4 value {
+        static_cast<std::size_t>(width), runtime::Logic4::x };
+    for (std::uint64_t bit = 0U; bit < width; ++bit) {
+        value.set(static_cast<std::size_t>(bit),
+            whole.value.get(static_cast<std::size_t>(offset + bit)));
+    }
+    return HirHierarchicalParameter { std::move(value), false };
 }
 
 std::optional<Lowerer::HirHierarchicalParameter>
@@ -10392,20 +10534,50 @@ Lowerer::hir_hierarchical_signal_member(
     const auto record = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    if (!record || record->systemverilog == nullptr
-        || record->systemverilog->kind != semantic::sv::ExpressionKind::name
-        || record->systemverilog->text.find('.') == std::string::npos
-        || hir_hierarchical_signal(record->systemverilog->text)) {
+    if (!record || record->systemverilog == nullptr) {
         return std::nullopt;
     }
-    if (const auto declaration = hir_referenced_declaration(expression_id)) {
-        if (!hir_is_interface_hierarchical_path(
-                record->systemverilog->text)
-            || hir_interface_path_has_lexical_root_binding(expression_id)) {
+    // A member of an element of an interface instance array
+    // (`sh[0].data.d`, IEEE 1800-2017 25.4, 7.2) is written as a selection
+    // of the indexed element.
+    std::string indexed_path;
+    const auto& source = *record->systemverilog;
+    if ((source.kind == semantic::sv::ExpressionKind::index
+            && source.text.starts_with("index."))
+        || (source.kind == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-select:"))) {
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!path || path->find('[') == std::string::npos) {
+            return std::nullopt;
+        }
+        indexed_path = *path;
+    } else if (source.kind != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const std::string_view name = indexed_path.empty()
+        ? std::string_view { source.text }
+        : std::string_view { indexed_path };
+    if (name.find('.') == std::string_view::npos) {
+        return std::nullopt;
+    }
+    // A member named like its structure signal (`i.data.data`) can resolve
+    // to that same signal as a whole name; it is still a member select.
+    if (const auto whole = hir_hierarchical_signal(name)) {
+        const auto parent = hir_hierarchical_signal(
+            name.substr(0U, name.find_last_of('.')));
+        if (!parent || *parent != *whole) {
             return std::nullopt;
         }
     }
-    const std::string_view name { record->systemverilog->text };
+    if (indexed_path.empty()) {
+        if (const auto declaration = hir_referenced_declaration(expression_id)) {
+            if (!hir_is_interface_hierarchical_path(source.text)
+                || hir_interface_path_has_lexical_root_binding(
+                    expression_id)) {
+                return std::nullopt;
+            }
+        }
+    }
     for (auto dot = name.find_last_of('.');
          dot != std::string_view::npos && dot != 0U;
          dot = name.find_last_of('.', dot - 1U)) {
@@ -11379,6 +11551,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && std::ranges::find(
                    design_.roots_, name.substr(0U, separator))
                 != design_.roots_.end()) {
+            // The target may be an instance elaborated later, such as a
+            // clocking block signal (23.8): resolve in the second pass.
+            if (hierarchical_reference_retry_) {
+                hierarchical_reference_missed_ = true;
+                return std::nullopt;
+            }
             report(
                 "FSIM-ELAB-ROOT-001",
                 "cross-root hierarchical reference '" + name
@@ -20899,10 +21077,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         // that placeholder as the result's shape can fold
                         // equality against a constrained array to a false
                         // constant before the function executes.
+                        // A parameterless function name is such a call
+                        // (IEEE 1076-2008 9.3.4).
                         if (node && node->vhdl != nullptr
-                            && node->vhdl->kind
-                                == semantic::vhdl::ExpressionKind::call
-                            && node->vhdl->referenced_name) {
+                            && ((node->vhdl->kind
+                                        == semantic::vhdl::ExpressionKind::call
+                                    && node->vhdl->referenced_name)
+                                || (node->vhdl->kind
+                                        == semantic::vhdl::ExpressionKind::name
+                                    && hir_vhdl_function_name(operand)))) {
                             const auto subtype
                                 = hir_vhdl_expression_subtype(operand);
                             if (subtype && subtype->unconstrained) {
@@ -24226,6 +24409,22 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                         *declared_string_subtype)
                 ? &*declared_string_subtype
                 : nullptr;
+            // A constant of a package instance reads that instance's
+            // generics (IEEE 1076-2008 4.9).
+            const auto instance_member = source.referenced_name
+                ? hir_resolver()
+                      .resolve_vhdl_package_members(
+                          *source.referenced_name, source.scope)
+                      .unique()
+                : std::nullopt;
+            if (instance_member && !instance_member->generic_bindings.empty()) {
+                hir_generic_binding_frames_.push_back(
+                    instance_member->generic_bindings);
+                auto lowered = lower_hir_string_expression(
+                    *initializer, initializer_context);
+                hir_generic_binding_frames_.pop_back();
+                return lowered;
+            }
             return lower_hir_string_expression(
                 *initializer, initializer_context);
         }

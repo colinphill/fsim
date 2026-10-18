@@ -75,6 +75,22 @@ resolve_constant_name_declaration(
               .unique()) {
         return rebound;
     }
+    // `P.m` selects a member of the structure constant P (IEEE 1800-2017
+    // 7.2.1); evaluate_name slices the member.
+    if (const auto dot = expression.text.find('.');
+        !selected && dot != std::string::npos && dot != 0U) {
+        if (const auto prefix
+            = semantic::CompiledDesignResolver { specialization }
+                  .resolve_systemverilog_constant(
+                      std::string_view { expression.text }.substr(0U, dot),
+                      specialization.scope(), false,
+                      expression.referenced_name
+                          ? expression.referenced_name->source_order
+                          : 0U)
+                  .unique()) {
+            return prefix;
+        }
+    }
     return selected;
 }
 
@@ -1342,6 +1358,23 @@ public:
         return result;
     }
 
+    /// The value of an unpacked array expression.
+    struct ArrayResult {
+        std::int64_t left { };
+        std::int64_t right { };
+        std::vector<Value> elements;
+    };
+    [[nodiscard]] std::optional<ArrayResult> evaluate_unpacked_array(
+        const semantic::ExpressionId expression)
+    {
+        auto value = evaluate_array(expression);
+        if (!value) {
+            return std::nullopt;
+        }
+        return ArrayResult { value->left, value->right,
+            std::move(value->elements) };
+    }
+
     /// A constant declaration's value in its declared type.
     [[nodiscard]] std::optional<Value> evaluate_declaration(
         const semantic::DeclarationId declaration)
@@ -1475,6 +1508,23 @@ private:
         return static_cast<std::size_t>(distance);
     }
 
+    /// A fixed one-dimensional unpacked array type, through typedefs.
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    unpacked_array_type(const semantic::sv::TypeReference& type,
+        const semantic::ScopeId scope) const
+    {
+        if (fixed_one_dimensional_array_type(type)) {
+            return type;
+        }
+        const auto resolved = semantic::CompiledDesignResolver {
+            specialization_
+        }.underlying_systemverilog_type(type, scope);
+        if (resolved && fixed_one_dimensional_array_type(*resolved)) {
+            return resolved;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool initialize_local_array(
         const semantic::DeclarationId declaration_id,
         const semantic::sv::Declaration& declaration)
@@ -1482,15 +1532,23 @@ private:
         if (frames_.empty()
             || declaration.form
                 != semantic::sv::DeclarationForm::variable
-            || !declaration.type
-            || !fixed_one_dimensional_array_type(*declaration.type)) {
+            || !declaration.type) {
             return true;
         }
-        if (frames_.back().arrays.contains(declaration_id)) {
+        const auto array_type
+            = unpacked_array_type(*declaration.type, declaration.scope);
+        if (!array_type || frames_.back().arrays.contains(declaration_id)) {
             return true;
         }
+        return create_local_array(declaration_id, *array_type);
+    }
 
-        const auto& declared_type = *declaration.type;
+    /// A frame-local array of a fixed one-dimensional unpacked array type,
+    /// its elements at the element type's default.
+    [[nodiscard]] bool create_local_array(
+        const semantic::DeclarationId declaration_id,
+        const semantic::sv::TypeReference& declared_type)
+    {
         const auto& dimension = declared_type.unpacked_dimensions.front();
         const auto resolve_bound = [&](
             const std::optional<std::int64_t> value,
@@ -2341,13 +2399,26 @@ private:
         if (record.operands.size() != 2U) {
             return std::nullopt;
         }
-        if ((record.text == "+" || record.text == "-" || record.text == "*"
-                || record.text == "/" || record.text == "**"
-                || record.text == "%" || record.text == "=="
-                || record.text == "!=" || record.text == "==="
-                || record.text == "!==" || record.text == "<"
-                || record.text == "<=" || record.text == ">"
-                || record.text == ">=")
+        // Only these operators take real operands (IEEE 1800-2017 11.3.1,
+        // Table 11-1); `%`, case and wildcard equality, bitwise and shift
+        // operators are integral only.
+        const bool real_operator = record.text == "+" || record.text == "-"
+            || record.text == "*" || record.text == "/"
+            || record.text == "**" || record.text == "=="
+            || record.text == "!=" || record.text == "<"
+            || record.text == "<=" || record.text == ">"
+            || record.text == ">=";
+        const bool logical_operator = record.text == "&&"
+            || record.text == "||" || record.text == "->"
+            || record.text == "<->";
+        if (!real_operator && !logical_operator
+            && (real_valued(record.operands.front())
+                || real_valued(record.operands.back()))) {
+            error_ = "operator '" + record.text
+                + "' is not legal for real operands";
+            return std::nullopt;
+        }
+        if (real_operator
             && (real_valued(record.operands.front())
                 || real_valued(record.operands.back())
                 || value_kind_hint(record.operands.front())
@@ -2804,6 +2875,58 @@ private:
             std::move(*element), element_type, error_, &specialization_);
     }
 
+    /// The packed dimensions of a name or of an element of one, outermost
+    /// first, when they are constant.
+    [[nodiscard]] std::optional<std::vector<std::pair<std::int64_t,
+        std::int64_t>>>
+    packed_shape(const semantic::ExpressionId expression)
+    {
+        const auto view = specialization_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::index
+            && record.operands.size() == 2U) {
+            auto shape = packed_shape(record.operands.front());
+            if (!shape || shape->size() < 2U) {
+                return std::nullopt;
+            }
+            shape->erase(shape->begin());
+            return shape;
+        }
+        if (record.kind != ExpressionKind::name || !record.referenced_name
+            || !record.referenced_name->selected) {
+            return std::nullopt;
+        }
+        const auto type = declaration_type(*record.referenced_name->selected);
+        if (!type || type->packed_dimensions.size() < 2U
+            || !type->unpacked_dimensions.empty() || type->container_form) {
+            return std::nullopt;
+        }
+        std::vector<std::pair<std::int64_t, std::int64_t>> shape;
+        for (const auto& range : type->packed_dimensions) {
+            const auto bound = [&](const std::optional<std::int64_t> value,
+                                   const std::optional<semantic::ExpressionId>
+                                       bound_expression)
+                -> std::optional<std::int64_t> {
+                if (bound_expression) {
+                    const auto evaluated = evaluate(*bound_expression);
+                    return evaluated ? evaluated->integer_value()
+                                     : std::nullopt;
+                }
+                return value;
+            };
+            const auto left = bound(range.left, range.left_expression);
+            const auto right = bound(range.right, range.right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            shape.emplace_back(*left, *right);
+        }
+        return shape;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_selection(
         const semantic::sv::Expression& record)
     {
@@ -2842,18 +2965,48 @@ private:
                 return std::nullopt;
             }
             // An index of a multidimensional packed array selects an element
-            // (IEEE 1800-2017 7.4.5), not the bit this fold produces.
-            if (base_view && base_view->systemverilog != nullptr
-                && base_view->systemverilog->kind == ExpressionKind::name
-                && base_view->systemverilog->referenced_name
-                && base_view->systemverilog->referenced_name->selected) {
-                if (const auto type = declaration_type(
-                        *base_view->systemverilog->referenced_name->selected);
-                    type && type->packed_dimensions.size() > 1U) {
-                    error_ = "an element of a multidimensional packed array "
-                             "is not folded";
+            // of its outermost dimension (IEEE 1800-2017 7.4.5).
+            if (const auto shape = packed_shape(record.operands.front());
+                shape && shape->size() > 1U) {
+                const auto base = evaluate(record.operands.front());
+                const auto index = base
+                    ? evaluate(record.operands.back()) : std::nullopt;
+                if (!base || !index) {
                     return std::nullopt;
                 }
+                std::uint64_t element_width = 1U;
+                for (std::size_t level = 1U; level < shape->size(); ++level) {
+                    const auto& [left, right] = (*shape)[level];
+                    element_width *= static_cast<std::uint64_t>(
+                        std::max(left, right) - std::min(left, right) + 1);
+                }
+                if (element_width > maximum_constant_width) {
+                    return std::nullopt;
+                }
+                const auto width = static_cast<std::uint32_t>(element_width);
+                const auto integer = index->known()
+                    ? index->integer_value() : std::nullopt;
+                const auto [left, right] = shape->front();
+                if (!integer || *integer < std::min(left, right)
+                    || *integer > std::max(left, right)) {
+                    return make_value(
+                        PackedLogic4 { width,
+                            base->domain == frontend::ValueDomain::Bit2
+                                ? Logic4::zero : Logic4::x },
+                        false, false, base->domain);
+                }
+                const auto element = static_cast<std::uint64_t>(
+                    left >= right ? *integer - right : right - *integer);
+                auto packed = PackedLogic4 { width, Logic4::zero };
+                for (std::uint32_t bit = 0U; bit < width; ++bit) {
+                    const auto from = element * width + bit;
+                    if (from < base->packed.width()) {
+                        packed.set(bit, runtime::to_logic4(
+                            base->packed.get_logic9(from)));
+                    }
+                }
+                return make_value(
+                    std::move(packed), false, false, base->domain);
             }
             const auto base = evaluate(record.operands.front());
             const auto index = base
@@ -3678,7 +3831,8 @@ private:
 
     [[nodiscard]] std::optional<Value> evaluate_callable(
         const semantic::sv::Declaration& callable,
-        const semantic::sv::Expression& call)
+        const semantic::sv::Expression& call,
+        LocalUnpackedArray* const array_result = nullptr)
     {
         if (!callable.callable || frames_.size() >= maximum_constant_call_depth) {
             error_ = "constant function recursion exceeds the call-depth limit";
@@ -3736,8 +3890,54 @@ private:
             }
             actuals[target] = call.operands[operand];
         }
+        // An unpacked array formal copies its actual's elements (13.5.1).
+        std::vector<std::pair<semantic::DeclarationId, LocalUnpackedArray>>
+            array_formals;
+        std::map<std::uint32_t, semantic::sv::TypeReference>
+            dynamic_array_types;
         for (std::size_t index = 0U; index < formals.size(); ++index) {
             const auto formal = specialization_.find_declaration(formals[index]);
+            auto array_type = formal && formal->systemverilog != nullptr
+                    && formal->systemverilog->type && actuals[index]
+                ? unpacked_array_type(*formal->systemverilog->type,
+                      formal->systemverilog->scope)
+                : std::nullopt;
+            // A dynamic array or queue formal holds a copy of its actual,
+            // indexed from 0 at the actual's left element (7.6, 7.10).
+            const bool dynamic_formal = !array_type && formal
+                && formal->systemverilog != nullptr
+                && formal->systemverilog->type && actuals[index]
+                && (formal->systemverilog->type->container_form
+                        == semantic::sv::TypeForm::dynamic_array
+                    || formal->systemverilog->type->container_form
+                        == semantic::sv::TypeForm::queue);
+            if (array_type || dynamic_formal) {
+                auto actual = evaluate_array(*actuals[index]);
+                if (actual && dynamic_formal) {
+                    auto fixed = *formal->systemverilog->type;
+                    fixed.container_form = semantic::sv::TypeForm::static_array;
+                    fixed.container_element_types.clear();
+                    fixed.queue_maximum.reset();
+                    semantic::sv::PackedRange bounds;
+                    bounds.left = 0;
+                    bounds.right = static_cast<std::int64_t>(
+                        actual->elements.size()) - 1;
+                    fixed.unpacked_dimensions = { bounds };
+                    array_type = fixed;
+                    dynamic_array_types.emplace(
+                        formals[index].value(), std::move(fixed));
+                }
+                if (!actual) {
+                    if (error_.empty()) {
+                        error_ = "cannot evaluate constant function array "
+                                 "argument";
+                    }
+                    return std::nullopt;
+                }
+                array_formals.emplace_back(
+                    formals[index], std::move(*actual));
+                continue;
+            }
             std::optional<Value> value;
             if (actuals[index]) {
                 value = evaluate(*actuals[index]);
@@ -3775,6 +3975,33 @@ private:
         }
         frame.values.emplace(callable.id, result);
         frames_.push_back(std::move(frame));
+        for (auto& [formal, actual] : array_formals) {
+            const auto view = specialization_.find_declaration(formal);
+            const auto dynamic = dynamic_array_types.find(formal.value());
+            const auto formal_type = dynamic != dynamic_array_types.end()
+                ? std::optional { dynamic->second }
+                : unpacked_array_type(*view->systemverilog->type,
+                      view->systemverilog->scope);
+            if (!formal_type || actual.elements.empty()
+                || !create_local_array(formal, *formal_type)
+                || !copy_array(frames_.back().arrays.at(formal), actual)) {
+                frames_.pop_back();
+                return std::nullopt;
+            }
+        }
+        // An unpacked array result is the function's own local array.
+        const auto result_array_type = unpacked_array_type(
+            callable.callable->return_type, callable.scope);
+        if (result_array_type
+            && (array_result == nullptr
+                || !create_local_array(callable.id, *result_array_type))) {
+            if (array_result == nullptr) {
+                error_ = "an unpacked array function result is not a scalar "
+                         "constant";
+            }
+            frames_.pop_back();
+            return std::nullopt;
+        }
         if (callable.nested_scope) {
             for (const auto child_id : callable.children) {
                 const auto child
@@ -3801,11 +4028,237 @@ private:
                 break;
             }
         }
+        if (result_array_type) {
+            *array_result = std::move(frames_.back().arrays.at(callable.id));
+            frames_.pop_back();
+            return make_known(0U, 1U, false, false);
+        }
         auto value = frames_.back().result.value_or(
             frames_.back().values.at(callable.id));
         frames_.pop_back();
         return convert_record_type(
             std::move(value), callable.callable->return_type);
+    }
+
+    /// Copy `source`'s elements, left to right, into `target`, converting
+    /// each to the target element type (7.6).
+    [[nodiscard]] bool copy_array(
+        LocalUnpackedArray& target, const LocalUnpackedArray& source)
+    {
+        if (target.elements.size() != source.elements.size()) {
+            error_ = "unpacked array constant sizes differ";
+            return false;
+        }
+        for (std::size_t index = 0; index < source.elements.size(); ++index) {
+            auto converted = convert_hir_systemverilog_constant(
+                source.elements[index], target.element_type, error_,
+                &specialization_);
+            if (!converted) {
+                return false;
+            }
+            target.elements[index] = std::move(*converted);
+        }
+        return true;
+    }
+
+    /// The value of an unpacked array expression (IEEE 1800-2017 7.4, 10.10,
+    /// 13.4): a frame array, an array parameter, an array-valued constant
+    /// function call, or a slice of one of these.
+    [[nodiscard]] std::optional<LocalUnpackedArray> evaluate_array(
+        const semantic::ExpressionId expression)
+    {
+        const auto view = specialization_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::name && record.referenced_name
+            && record.referenced_name->selected) {
+            const auto declaration_id = *record.referenced_name->selected;
+            if (const auto* local = find_local_array(declaration_id)) {
+                return *local;
+            }
+            return array_parameter_value(declaration_id);
+        }
+        if (record.kind == ExpressionKind::call
+            && !record.text.starts_with("$")
+            && !record.text.starts_with("@")) {
+            std::optional<semantic::DeclarationId> selected;
+            if (record.referenced_name && record.referenced_name->selected) {
+                selected = *record.referenced_name->selected;
+            } else {
+                const semantic::CompiledDeclarationPredicate function
+                    = [](const semantic::CompiledDeclarationView& candidate) {
+                          return candidate.systemverilog != nullptr
+                              && candidate.systemverilog->callable
+                              && candidate.systemverilog->callable->function;
+                      };
+                selected = semantic::CompiledDesignResolver { specialization_ }
+                               .resolve_systemverilog(record.text,
+                                   record.scope, function, false)
+                               .unique();
+            }
+            const auto callable = selected
+                ? specialization_.find_declaration(*selected)
+                : std::nullopt;
+            if (!callable || callable->systemverilog == nullptr
+                || !callable->systemverilog->callable) {
+                return std::nullopt;
+            }
+            LocalUnpackedArray result;
+            if (!evaluate_callable(*callable->systemverilog, record, &result)) {
+                return std::nullopt;
+            }
+            return result;
+        }
+        if (record.kind == ExpressionKind::slice
+            && record.operands.size() == 3U) {
+            auto base = evaluate_array(record.operands[0]);
+            const auto first = base ? evaluate(record.operands[1])
+                                    : std::nullopt;
+            const auto second = first ? evaluate(record.operands[2])
+                                      : std::nullopt;
+            const auto a = first ? first->integer_value() : std::nullopt;
+            const auto b = second ? second->integer_value() : std::nullopt;
+            if (!a || !b) {
+                return std::nullopt;
+            }
+            // A part-select keeps the base's direction (7.4.6).
+            const bool ascending = base->left <= base->right;
+            std::int64_t left = *a;
+            std::int64_t right = *b;
+            if (record.text == "+:" || record.text == "-:") {
+                if (*b <= 0) {
+                    return std::nullopt;
+                }
+                const auto low = record.text == "+:" ? *a : *a - *b + 1;
+                const auto high = low + *b - 1;
+                left = ascending ? low : high;
+                right = ascending ? high : low;
+            }
+            LocalUnpackedArray result;
+            result.left = left;
+            result.right = right;
+            result.element_type = base->element_type;
+            result.default_value = base->default_value;
+            const auto step = left <= right ? 1 : -1;
+            for (auto index = left;; index += step) {
+                const auto offset = local_array_offset(*base, index);
+                if (!offset) {
+                    return std::nullopt;
+                }
+                result.elements.push_back(base->elements[*offset]);
+                if (index == right) {
+                    break;
+                }
+            }
+            return result;
+        }
+        return std::nullopt;
+    }
+
+    /// The value of an unpacked array parameter: its instance actual, or its
+    /// default from a positional pattern or an array expression (6.20.2).
+    [[nodiscard]] std::optional<LocalUnpackedArray> array_parameter_value(
+        const semantic::DeclarationId declaration_id)
+    {
+        const auto declaration
+            = specialization_.find_declaration(declaration_id);
+        // An unpacked array parameter or local parameter may be kept as a
+        // constant container variable (6.20.2).
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->type
+            || (declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::parameter
+                && declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::local_parameter
+                && !declaration->systemverilog->array_parameter
+                && !declaration->systemverilog->array_local_parameter)) {
+            return std::nullopt;
+        }
+        const auto array_type = unpacked_array_type(
+            *declaration->systemverilog->type,
+            declaration->systemverilog->scope);
+        if (!array_type) {
+            return std::nullopt;
+        }
+        // The array is built in a scratch frame so that the frame-array
+        // limits apply.
+        Frame scratch;
+        frames_.push_back(std::move(scratch));
+        const bool created = create_local_array(declaration_id, *array_type);
+        auto result = created
+            ? std::optional { std::move(
+                  frames_.back().arrays.at(declaration_id)) }
+            : std::nullopt;
+        frames_.pop_back();
+        if (!result) {
+            return std::nullopt;
+        }
+        if (const auto actual = declaration->systemverilog->array_parameter
+                ? specialization_.systemverilog_array_actual(declaration_id)
+                : std::nullopt) {
+            if (actual->size() != result->elements.size()) {
+                return std::nullopt;
+            }
+            for (std::size_t index = 0; index < actual->size(); ++index) {
+                auto element = convert_hir_systemverilog_constant(
+                    make_known(static_cast<std::uint64_t>((*actual)[index]),
+                        64U, true, false, frontend::ValueDomain::Bit2),
+                    result->element_type, error_, &specialization_);
+                if (!element) {
+                    return std::nullopt;
+                }
+                result->elements[index] = std::move(*element);
+            }
+            return result;
+        }
+        const auto initializer = declaration->systemverilog->initializer;
+        const auto pattern = initializer
+            ? specialization_.find_expression(*initializer)
+            : std::nullopt;
+        if (!pattern || pattern->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        if (pattern->systemverilog->kind == ExpressionKind::assignment_pattern) {
+            const auto& associations = pattern->systemverilog->associations;
+            std::optional<semantic::ExpressionId> fallback;
+            std::vector<semantic::ExpressionId> positional;
+            for (const auto& association : associations) {
+                if (association.choice_spelling == "default") {
+                    fallback = association.value;
+                } else if (association.choice_spelling.empty()) {
+                    positional.push_back(association.value);
+                } else {
+                    return std::nullopt;
+                }
+            }
+            if (positional.size() != result->elements.size()
+                && !(positional.empty() && fallback)) {
+                return std::nullopt;
+            }
+            for (std::size_t index = 0; index < result->elements.size();
+                 ++index) {
+                auto element = evaluate(
+                    positional.empty() ? *fallback : positional[index]);
+                if (!element) {
+                    return std::nullopt;
+                }
+                auto converted = convert_hir_systemverilog_constant(
+                    std::move(*element), result->element_type, error_,
+                    &specialization_);
+                if (!converted) {
+                    return std::nullopt;
+                }
+                result->elements[index] = std::move(*converted);
+            }
+            return result;
+        }
+        const auto source = evaluate_array(*initializer);
+        if (!source || !copy_array(*result, *source)) {
+            return std::nullopt;
+        }
+        return result;
     }
 
     /// The members of a packed structure or union type, or null.
@@ -3923,6 +4376,11 @@ private:
                 member.type, &specialization_, member_visiting);
             auto value = evaluate_typed(value_id, member.type);
             if (!value || !member_width) {
+                if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+                    std::fprintf(stderr,
+                        "FSIM_SV_CONST pattern member '%s' failed: %s\n",
+                        member.name.c_str(), error_.c_str());
+                }
                 return false;
             }
             const auto fitted = resized(std::move(*value),
@@ -4531,6 +4989,17 @@ private:
                 ? Flow::normal : Flow::failed;
         }
         if (record.kind == Kind::return_statement) {
+            // An unpacked array function returns into its result array.
+            if (record.value
+                && frames_.back().arrays.contains(frames_.back().callable)) {
+                const auto value = evaluate_array(*record.value);
+                return value
+                        && copy_array(frames_.back().arrays.at(
+                                          frames_.back().callable),
+                            *value)
+                    ? Flow::returned
+                    : Flow::failed;
+            }
             if (record.value) {
                 frames_.back().result = evaluate(*record.value);
                 if (!frames_.back().result) {
@@ -5276,6 +5745,23 @@ evaluate_hir_systemverilog_value(
     return value;
 }
 
+std::optional<HirSystemVerilogArrayConstant>
+evaluate_hir_systemverilog_array_constant(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression,
+    std::string& error)
+{
+    error.clear();
+    auto value = HirConstantEvaluator { specialization, error }
+                     .evaluate_unpacked_array(expression);
+    if (!value) {
+        return std::nullopt;
+    }
+    return HirSystemVerilogArrayConstant {
+        value->left, value->right, std::move(value->elements)
+    };
+}
+
 std::optional<std::uint64_t> hir_systemverilog_type_bits(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::TypeReference& type)
@@ -5372,5 +5858,24 @@ convert_hir_systemverilog_constant(
         resolved_type_width(type, specialization, visiting));
 }
 
+
+namespace {
+
+// Generate selection in a specialization reaches this evaluator where its
+// integral fast path stops (IEEE 1800-2017 27.5).
+[[maybe_unused]] const bool shared_constant_integral_registered = [] {
+    semantic::set_systemverilog_constant_integral(
+        [](const semantic::SpecializedHirUnit& unit,
+            const semantic::ExpressionId expression)
+            -> std::optional<std::int64_t> {
+            std::string error;
+            const auto value = evaluate_hir_systemverilog_constant(
+                unit, expression, error);
+            return value ? value->integer_value() : std::nullopt;
+        });
+    return true;
+}();
+
+} // namespace
 
 } // namespace fsim::elaboration

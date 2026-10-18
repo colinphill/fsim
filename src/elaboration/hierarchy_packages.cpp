@@ -13637,6 +13637,13 @@ HierarchyBuilder::build_systemverilog_alias_plan(
         report(std::string { code }, std::move(message),
             compiled_source_span(*compiled_, source));
     };
+    // An inout port is a net (IEEE 1800-2017 23.2.2.3); a port expression
+    // connects one to its internal nets by an alias.
+    const auto alias_net = [](const semantic::sv::Declaration& declaration) {
+        return declaration.form == semantic::sv::DeclarationForm::net
+            || (declaration.form == semantic::sv::DeclarationForm::port
+                && declaration.direction == semantic::sv::Direction::inout);
+    };
     const auto alias_declaration = [&](
                                        const auto& retained_declarations,
                                        const semantic::sv::Expression&
@@ -13712,8 +13719,7 @@ HierarchyBuilder::build_systemverilog_alias_plan(
             : std::optional<std::size_t> { };
         if (!declaration_id || !declaration
             || declaration->systemverilog == nullptr
-            || declaration->systemverilog->form
-                != semantic::sv::DeclarationForm::net
+            || !alias_net(*declaration->systemverilog)
             || !width || *width == 0U) {
             alias_error("FSIM-ELAB-SVALIAS-001",
                 "SystemVerilog alias terminals must be statically "
@@ -13789,8 +13795,7 @@ HierarchyBuilder::build_systemverilog_alias_plan(
                 : std::optional<std::size_t> { };
             if (!declaration_id || !declaration
                 || declaration->systemverilog == nullptr
-                || declaration->systemverilog->form
-                    != semantic::sv::DeclarationForm::net
+                || !alias_net(*declaration->systemverilog)
                 || !width || *width == 0U) {
                 alias_error("FSIM-ELAB-SVALIAS-001",
                     "SystemVerilog alias terminals must be packed nets, "
@@ -16172,7 +16177,40 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
                     specialized,
                     *declaration->systemverilog->initializer));
         std::string scalar_error;
-        if (scalar_applicable) {
+        // A packed structure constant keeps its typed value (7.2.1), so a
+        // member of it can be read hierarchically.
+        const auto structure_type = [&] {
+            if (!declaration->systemverilog->type
+                || !declaration->systemverilog->initializer) {
+                return false;
+            }
+            const auto effective = semantic::CompiledDesignResolver {
+                specialized
+            }
+                .effective_systemverilog_type(
+                    *declaration->systemverilog->type,
+                    declaration->systemverilog->scope);
+            const auto definition = effective
+                    && effective->target.target.valid()
+                ? specialized.find_type(effective->target.target)
+                : std::nullopt;
+            return definition && definition->systemverilog != nullptr
+                && (definition->systemverilog->form
+                        == semantic::sv::TypeForm::packed_structure
+                    || definition->systemverilog->form
+                        == semantic::sv::TypeForm::packed_union);
+        }();
+        if (structure_type) {
+            std::string typed_error;
+            if (const auto typed = evaluate_hir_systemverilog_typed_constant(
+                    specialized, *declaration->systemverilog->initializer,
+                    *declaration->systemverilog->type, typed_error)) {
+                display = typed->display();
+                identity_value = typed->canonical();
+            }
+        }
+        if (display) {
+        } else if (scalar_applicable) {
             if (const auto scalar
                 = evaluate_hir_systemverilog_declaration_value(
                     specialized, declaration_id, scalar_error)) {
@@ -16193,10 +16231,25 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
                     *string_value);
         } else if (declaration->systemverilog->initializer) {
             std::string constant_error;
-            auto constant = evaluate_hir_systemverilog_constant(
-                specialized,
-                *declaration->systemverilog->initializer,
-                constant_error);
+            // A structure parameter's pattern takes its declared type's
+            // layout (IEEE 1800-2017 10.9.2).
+            const auto& declared_type = declaration->systemverilog->type;
+            auto constant = declared_type
+                    && !hir_systemverilog_explicit_integral_type(
+                        *declared_type)
+                ? evaluate_hir_systemverilog_typed_constant(specialized,
+                      *declaration->systemverilog->initializer,
+                      *declared_type, constant_error)
+                : evaluate_hir_systemverilog_constant(
+                      specialized,
+                      *declaration->systemverilog->initializer,
+                      constant_error);
+            if (!constant && declared_type) {
+                constant_error.clear();
+                constant = evaluate_hir_systemverilog_constant(specialized,
+                    *declaration->systemverilog->initializer,
+                    constant_error);
+            }
             if (constant && declaration->systemverilog->type
                 && hir_systemverilog_explicit_integral_type(
                     *declaration->systemverilog->type)) {
@@ -24814,15 +24867,11 @@ HierarchyBuilder::prepare_compiled_vhdl_systemverilog_parameters(
             && association.expression) {
             const auto formal = compiled_->find_declaration(
                 association.formal);
-            const auto actual_string
-                = working_specialization
-                      .evaluate_string_expression(
-                          *association.expression)
-                      .has_value();
             if (formal && formal->systemverilog != nullptr
                 && hierarchy_sv_parameters_detail::
                     systemverilog_string_actual_incompatible(
-                        *formal->systemverilog, actual_string)) {
+                        working_specialization, *formal->systemverilog,
+                        *association.expression)) {
                 report(
                     "FSIM-ELAB-SVSTRING-002",
                     "mixed-language string and integral "

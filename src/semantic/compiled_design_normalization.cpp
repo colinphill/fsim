@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
 #include <algorithm>
 #include <map>
@@ -2655,7 +2656,13 @@ bool normalize_compiled_design(CompiledDesign& design) noexcept
     } catch (...) {
         return false;
     }
-    return true;
+    // Type each VHDL complete context once (IEEE 1076-2008 12.5). A failure
+    // leaves expressions unannotated, which lowering reads as undecided.
+    try {
+        return resolve_vhdl_expression_types(design);
+    } catch (...) {
+        return true;
+    }
 }
 
 bool vhdl_operator_overloaded_by_design(

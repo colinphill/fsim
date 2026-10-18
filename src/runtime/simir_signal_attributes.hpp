@@ -46,13 +46,15 @@ template <typename Owner>
         }
     }
     const auto regions = owner.processes.program_view(process).driver_regions();
-    if (!selection) {
-        return std::ranges::any_of(regions, [signal](const auto& region) {
-            return region.signal == signal;
-        });
-    }
-    const auto begin = static_cast<std::size_t>(selection->offset);
-    const auto end = begin + selection->width;
+    // A composite signal is driving only when every scalar subelement is
+    // (16.2.4).
+    const auto begin = selection
+        ? static_cast<std::size_t>(selection->offset)
+        : std::size_t { };
+    const auto end = selection
+        ? begin + selection->width
+        : static_cast<std::size_t>(
+              owner.signals[signal].initial_value.width());
     auto covered_until = begin;
     while (covered_until < end) {
         auto next = covered_until;

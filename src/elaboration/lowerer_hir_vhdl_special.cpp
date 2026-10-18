@@ -2106,10 +2106,16 @@ bool Lowerer::is_hir_vhdl_assert_statement(
         return false;
     }
     const auto& source = *statement->vhdl;
-    const auto api = frontend::vhdl_simulator_api(
+    // A procedure imported by `use std.env.all` is named by its simple
+    // name (IEEE 1076-2019 16.5).
+    auto api = frontend::vhdl_simulator_api(
         source.procedure.canonical.empty()
             ? source.procedure.spelling
             : source.procedure.canonical);
+    if (api == frontend::VhdlSimulatorApi::none) {
+        api = frontend::vhdl_simulator_api(hir_vhdl_std_env_procedure_spelling(
+            source.procedure, source.scope));
+    }
     if (!vhdl_assert_procedure_api(api)) {
         return false;
     }
@@ -2297,10 +2303,16 @@ bool Lowerer::lower_hir_vhdl_assert_statement(
         return true;
     }
     using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(
+    // A procedure imported by `use std.env.all` is named by its simple
+    // name (IEEE 1076-2019 16.5).
+    auto api = frontend::vhdl_simulator_api(
         source.procedure.canonical.empty()
             ? source.procedure.spelling
             : source.procedure.canonical);
+    if (api == frontend::VhdlSimulatorApi::none) {
+        api = frontend::vhdl_simulator_api(hir_vhdl_std_env_procedure_spelling(
+            source.procedure, source.scope));
+    }
     const auto location = runtime_source_location(span);
     const auto& associations = source.procedure_arguments;
     if (api == Api::clear_vhdl_assert) {

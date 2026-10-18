@@ -209,8 +209,26 @@ std::optional<std::size_t> systemverilog_declaration_width(
                 return std::nullopt;
             }
         }
+        // The actual's own flat range, projected onto the formal reference,
+        // is already its width (7.2.1, 6.20.3).
+        const auto& actual_type = *actual->systemverilog_type;
+        const bool range_is_actual_width = reference.packed_range
+            && actual_type.packed_range
+            && actual_type.packed_dimensions.empty()
+            && reference.packed_range->left == actual_type.packed_range->left
+            && reference.packed_range->right
+                == actual_type.packed_range->right
+            && !reference.packed_range->left_expression
+            && !reference.packed_range->right_expression
+            && actual_type.packed_range->left
+            && actual_type.packed_range->right
+            && elaboration_detail::index_distance(
+                   *actual_type.packed_range->left,
+                   *actual_type.packed_range->right)
+                    + 1U
+                == width;
         if (reference.packed_dimensions.empty()
-            && reference.packed_range
+            && reference.packed_range && !range_is_actual_width
             && !include_range(*reference.packed_range)) {
             return std::nullopt;
         }

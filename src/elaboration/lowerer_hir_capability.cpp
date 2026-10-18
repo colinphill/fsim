@@ -2286,7 +2286,29 @@ Lowerer::hir_vhdl_unconstrained_constant_range(
     }
     using Kind = semantic::vhdl::ExpressionKind;
     if (value->vhdl->kind == Kind::name) {
-        return hir_expression_range(*declaration.initializer, process_scope);
+        if (auto range = hir_expression_range(
+                *declaration.initializer, process_scope)) {
+            return range;
+        }
+        // Another unconstrained constant has the bounds of its own value
+        // (5.3.2.2).
+        const auto referenced = hir_referenced_declaration(
+            *declaration.initializer);
+        const auto source = referenced
+            ? specialized_hir_unit_->find_declaration(*referenced)
+            : std::nullopt;
+        if (!source || source->vhdl == nullptr
+            || source->vhdl == &declaration
+            || source->vhdl->form
+                != semantic::vhdl::DeclarationForm::constant
+            || !source->vhdl->initializer || !source->vhdl->subtype) {
+            return std::nullopt;
+        }
+        const auto source_width = hir_expression_width(
+            *source->vhdl->initializer, process_scope,
+            &*source->vhdl->subtype);
+        return hir_vhdl_unconstrained_constant_range(*source->vhdl,
+            source_width.value_or(0U), process_scope, proven_width);
     }
     if (value->vhdl->kind == Kind::call) {
         const auto constant = specialized_hir_unit_
@@ -4994,6 +5016,22 @@ Lowerer::hir_referenced_declaration(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // The design's context-typed resolution selected the overload or
+    // enumeration literal (IEEE 1076-2008 12.5). A literal it typed as a
+    // predefined CHARACTER or BIT has no retained declaration.
+    if (const auto resolved = specialized_hir_unit_->find_expression(
+            expression_id);
+        resolved && resolved->vhdl != nullptr) {
+        if (resolved->vhdl->resolved_declaration) {
+            return resolved->vhdl->resolved_declaration;
+        }
+        if (resolved->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && (resolved->vhdl->resolved_builtin_type == "character"
+                || resolved->vhdl->resolved_builtin_type == "bit")) {
+            return std::nullopt;
+        }
+    }
     // A character literal in a context of another type denotes that type's
     // literal, not the visible user enumeration literal (9.3.2, 12.5). The
     // context scan can grow the specialization, so it runs before any view
@@ -5298,6 +5336,26 @@ Lowerer::hir_virtual_interface_member(
         expression->systemverilog->text, expression->systemverilog->scope);
 }
 
+std::optional<semantic::sv::TypeReference>
+Lowerer::hir_systemverilog_virtual_interface_type(
+    const semantic::sv::Declaration& declaration) const
+{
+    if (!declaration.type) {
+        return std::nullopt;
+    }
+    if (declaration.type->virtual_interface) {
+        return declaration.type->interface_type.empty()
+            ? std::nullopt
+            : std::optional { *declaration.type };
+    }
+    auto resolved = hir_resolver().underlying_systemverilog_type(
+        *declaration.type, declaration.scope);
+    return resolved && resolved->virtual_interface
+            && !resolved->interface_type.empty()
+        ? resolved
+        : std::nullopt;
+}
+
 std::optional<Lowerer::HirVirtualInterfaceMember>
 Lowerer::hir_virtual_interface_member(
     const std::string_view name, const semantic::ScopeId scope) const
@@ -5316,21 +5374,22 @@ Lowerer::hir_virtual_interface_member(
     auto declaration_id = hir_resolver().resolve_systemverilog(
          std::string_view { text }.substr(0U, separator),
          scope,
-         [](const semantic::CompiledDeclarationView& candidate) {
+         [&](const semantic::CompiledDeclarationView& candidate) {
              return candidate.systemverilog != nullptr
-                 && candidate.systemverilog->type.has_value()
-                 && candidate.systemverilog->type->virtual_interface;
+                 && hir_systemverilog_virtual_interface_type(
+                     *candidate.systemverilog);
          },
          false)
                               .unique();
     const auto declaration = declaration_id
         ? specialized_hir_unit_->find_declaration(*declaration_id)
         : std::nullopt;
-    if (!declaration || declaration->systemverilog == nullptr
-        || declaration->systemverilog->name != text.substr(0U, separator)
-        || !declaration->systemverilog->type
-        || !declaration->systemverilog->type->virtual_interface
-        || declaration->systemverilog->type->interface_type.empty()) {
+    const auto virtual_type = declaration
+            && declaration->systemverilog != nullptr
+        ? hir_systemverilog_virtual_interface_type(*declaration->systemverilog)
+        : std::nullopt;
+    if (!virtual_type
+        || declaration->systemverilog->name != text.substr(0U, separator)) {
         return std::nullopt;
     }
     // Every interface instance must be elaborated: resolve in the second
@@ -5339,8 +5398,7 @@ Lowerer::hir_virtual_interface_member(
         hierarchical_reference_missed_ = true;
         return std::nullopt;
     }
-    const auto& interface_type
-        = declaration->systemverilog->type->interface_type;
+    const auto& interface_type = virtual_type->interface_type;
     const auto member = text.substr(separator + 1U);
     HirVirtualInterfaceMember result;
     result.receiver = *declaration_id;
@@ -5494,6 +5552,15 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
                 indexed_member_prefix)
             && expression->systemverilog->operands.size() == 2U)
         || selected_index != nullptr) {
+        // A packed member of such a signal (`bus[2].data.d`) is a part of
+        // it, not the whole signal.
+        if (const auto member = hir_hierarchical_signal_member(expression_id);
+            member && member->signal < design_.signal_info_.size()
+            && (member->offset != 0U
+                || member->width
+                    != design_.signal_info_[member->signal].width)) {
+            return std::nullopt;
+        }
         // A member of an element of an interface instance array,
         // `bus[2].data`, is that element instance's signal; the member
         // path follows `index.` in the selection's text.
@@ -8713,6 +8780,25 @@ Lowerer::hir_systemverilog_container_query(
         return std::nullopt;
     }
     const auto receiver = call.operands.front();
+    // A string's bit-stream width is eight bits per character (IEEE
+    // 1800-2017 20.6.2); a string parameter's text is constant.
+    if (bits_query && hir_expression_is_string(receiver, hir_process_scope_)) {
+        const auto declaration = hir_referenced_declaration(receiver);
+        const auto record = declaration
+            ? specialized_hir_unit_->find_declaration(*declaration)
+            : std::nullopt;
+        if (record && record->systemverilog != nullptr
+            && (record->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || record->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter)) {
+            if (const auto text
+                = specialized_hir_unit_->evaluate_string_expression(
+                    receiver)) {
+                return static_cast<std::int64_t>(text->size() * 8U);
+            }
+        }
+    }
     if (!bits_query) {
         if (const auto shape = hir_systemverilog_array_query_shape(receiver)) {
             if (dimensions_query) {
@@ -9855,6 +9941,25 @@ bool Lowerer::hir_expression_is_string(
         return false;
     }
     if (const auto initializer = hir_constant_initializer(*declaration)) {
+        // A constant has its declared type; an untyped one takes its
+        // value's type, and a string literal is integral (IEEE 1800-2017
+        // 6.20.2, 5.9).
+        const auto record = specialized_hir_unit_->find_declaration(
+            *declaration);
+        if (record && record->systemverilog != nullptr
+            && record->systemverilog->type
+            && record->systemverilog->type->target.spelling != "implicit") {
+            return record->systemverilog->type->target.spelling == "string"
+                || record->systemverilog->type->value_form
+                    == semantic::sv::TypeForm::string;
+        }
+        const auto initial = specialized_hir_unit_->find_expression(
+            *initializer);
+        if (initial && initial->systemverilog != nullptr
+            && initial->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal) {
+            return false;
+        }
         return *initializer != expression_id
             && hir_expression_is_string(*initializer, process_scope);
     }
@@ -12368,6 +12473,22 @@ Lowerer::hir_vhdl_signal_attribute_profile(
             return std::nullopt;
         }
     }
+    // The attributes of a record element (`r.y'event`) are those of its
+    // scalar subelements (IEEE 1076-2008 16.2.4, 14.7.3.2).
+    std::optional<HirVhdlMemberSelection> member_prefix;
+    if (!element && !active_selection) {
+        member_prefix = hir_vhdl_member_selection(signal_prefix);
+        if (member_prefix
+            && (member_prefix->index || member_prefix->access_object_root
+                || member_prefix->width == 0U)) {
+            member_prefix.reset();
+        }
+        if (member_prefix) {
+            active_selection = HirConstantSelection {
+                member_prefix->offset, member_prefix->width
+            };
+        }
+    }
     const auto declaration = hir_referenced_declaration(signal_prefix);
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, process_scope, false)
@@ -12440,8 +12561,9 @@ Lowerer::hir_vhdl_signal_attribute_profile(
         result.kind = HirVhdlSignalAttributeKind::event;
     } else if (source.text == "'last_value") {
         result.kind = HirVhdlSignalAttributeKind::last_value;
-        result.width = binding->width;
-        result.domain = binding->domain;
+        result.width = member_prefix ? member_prefix->width : binding->width;
+        result.domain
+            = member_prefix ? member_prefix->domain : binding->domain;
     } else if (source.text == "'last_event") {
         result.kind = HirVhdlSignalAttributeKind::last_event;
         result.width = 64U;
@@ -15301,6 +15423,17 @@ std::optional<std::uint64_t> Lowerer::hir_vhdl_character_literal_code(
         // no declaration claims the name (IEEE 1076-2008 16.3).
         return vhdl_character_control_literal_code(expression->vhdl->text);
     }
+    // The design's context-typed resolution decides a literal's type when it
+    // could (IEEE 1076-2008 9.3.2, 12.5).
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
+        && (expression->vhdl->resolved_type
+            || !expression->vhdl->resolved_builtin_type.empty())) {
+        if (expression->vhdl->resolved_builtin_type != "character"
+            || (expected_width != 0U && expected_width != 8U)) {
+            return std::nullopt;
+        }
+        return vhdl_character_literal_code(*expression->vhdl);
+    }
     collect_hir_vhdl_character_contexts();
     // A logic character ('0', 'X', ...) is a BIT or STD_ULOGIC value unless
     // its context is CHARACTER-typed; an 8-bit expected width alone does not
@@ -15535,6 +15668,18 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (const auto status = hir_process_status_query(expression_id)) {
         return *status ? 32U : 1U;
+    }
+    // A packed member of an interface array element's signal
+    // (`sh[0].data.d`, 25.4, 7.2).
+    if (const auto selected = specialized_hir_unit_->find_expression(
+            expression_id);
+        selected && selected->systemverilog != nullptr
+        && selected->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        if (const auto member = hir_hierarchical_signal_member(
+                expression_id)) {
+            return static_cast<std::size_t>(member->width);
+        }
     }
     // A character of a constant string (`s'at1(1)` after the attribute's
     // value is substituted).
@@ -18258,13 +18403,17 @@ Lowerer::hir_systemverilog_member_selection(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->systemverilog == nullptr
-        || expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name) {
+    if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    if (const auto member = hir_hierarchical_signal_member(expression_id)) {
+    const auto hierarchical_member
+        = hir_hierarchical_signal_member(expression_id);
+    if (!hierarchical_member
+        && source.kind != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    if (const auto& member = hierarchical_member) {
         if (member->offset > std::numeric_limits<std::size_t>::max()
             || member->width > std::numeric_limits<std::size_t>::max()
             || member->signal >= design_.signal_info_.size()) {
@@ -20322,8 +20471,7 @@ Lowerer::hir_vhdl_array_selection(
         : static_member_base
         ? std::optional { member_base->subtype }
         : access_object_root && access_root_type != nullptr
-        ? hir_effective_vhdl_subtype(
-              *access_root_type->designated_subtype)
+        ? hir_vhdl_access_shape_subtype(*access_root_type)
         : value_root && root_prefix
         ? hir_vhdl_expression_subtype(*root_prefix)
         : object
@@ -21808,8 +21956,7 @@ Lowerer::hir_vhdl_member_selection(
     bool access_object_root = base_access_type != nullptr
         && base_access_type->designated_subtype.has_value();
     auto selected_base_subtype = access_object_root
-        ? hir_effective_vhdl_subtype(
-              *base_access_type->designated_subtype)
+        ? hir_vhdl_access_shape_subtype(*base_access_type)
         : base_subtype;
     if (!selected_base_subtype) {
         return std::nullopt;
