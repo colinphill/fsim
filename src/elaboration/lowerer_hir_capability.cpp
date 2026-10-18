@@ -3752,6 +3752,24 @@ bool Lowerer::hir_expression_signed(
     if (const auto member = hir_class_property_member(expression_id)) {
         return member->member.signed_value;
     }
+    // An element of an object's array of values has the element's
+    // signedness.
+    constexpr std::string_view container_index_prefix {
+        "@sv-container-index:"
+    };
+    if (const auto access = specialized_hir_unit_->find_expression(
+            expression_id);
+        access && access->systemverilog != nullptr
+        && access->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && access->systemverilog->text.starts_with(container_index_prefix)
+        && access->systemverilog->operands.size() == 2U) {
+        if (const auto type = hir_class_value_container_type(
+                std::string_view { access->systemverilog->text }.substr(
+                    container_index_prefix.size()));
+            type && type->element_kind == ContainerElementKind::Packed) {
+            return type->signed_elements;
+        }
+    }
     // String compare and icompare return a signed int (6.16.8).
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
@@ -13147,10 +13165,25 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text.starts_with(container_index_prefix)) {
+            if (const auto type = hir_class_value_container_type(
+                    std::string_view { source.text }.substr(
+                        container_index_prefix.size()));
+                type && source.operands.size() == 2U
+                && type->element_kind == ContainerElementKind::Packed) {
+                return type->two_state ? frontend::ValueDomain::Bit2
+                                       : frontend::ValueDomain::Logic4;
+            }
             return frontend::ValueDomain::Bit2;
         }
         if (const auto method = sv_container_method_call(source.text);
             method && source.kind == semantic::sv::ExpressionKind::call) {
+            if (!method->reduction.empty()) {
+                const auto type = hir_class_value_container_type(
+                    method->container);
+                return type && type->two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            }
             return method->result_domain();
         }
         if (source.kind == semantic::sv::ExpressionKind::call
@@ -16121,6 +16154,16 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text.starts_with(container_index_prefix)) {
+            // An element of an array of values has its element width; one
+            // of an array of class handles is a handle.
+            if (const auto type = hir_class_value_container_type(
+                    std::string_view { source.text }.substr(
+                        container_index_prefix.size()));
+                type && source.operands.size() == 2U
+                && (type->element_kind == ContainerElementKind::Packed
+                    || type->element_kind == ContainerElementKind::Scalar)) {
+                return type->element_width;
+            }
             return 64U;
         }
         // size() and num() of an unpacked container return int (IEEE
@@ -16135,6 +16178,13 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         }
         if (const auto method = sv_container_method_call(source.text);
             method && source.kind == semantic::sv::ExpressionKind::call) {
+            if (!method->reduction.empty()) {
+                const auto type = hir_class_value_container_type(
+                    method->container);
+                return type ? std::optional<std::size_t> {
+                                  type->element_width }
+                            : std::nullopt;
+            }
             return method->result_width();
         }
         if (source.kind == semantic::sv::ExpressionKind::call
@@ -22119,8 +22169,11 @@ bool Lowerer::can_lower_hir_expression(
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text.starts_with("@sv-container-method:")) {
-            supported = source.operands.size() == 1U
-                && sv_container_method_call(source.text)
+            const auto method = sv_container_method_call(source.text);
+            supported = method
+                && (source.operands.size() == 1U
+                    || (!method->reduction.empty()
+                        && source.operands.size() <= 3U))
                 && hir_expression_width(
                        source.operands.front(), process_scope)
                     == std::optional<std::size_t> { 64U }

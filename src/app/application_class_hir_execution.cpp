@@ -6,6 +6,7 @@
 
 #include "fsim/frontend/output_format.hpp"
 #include "fsim/runtime/output_format.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -4640,6 +4641,15 @@ SystemVerilogClassHirExecution::evaluate_packed(
         }
         const auto identity = marker_payload(*value,
             virtual_dispatch ? method_prefix : base_method_prefix);
+        // An inline constraint block needs the compiled call; the method
+        // body is not interpreted without it.
+        if (identity == "@builtin-randomize"
+            && std::ranges::any_of(value->associations,
+                [](const semantic::sv::AssignmentPatternAssociation& item) {
+                    return item.choice_spelling == "@sv-inline-constraint";
+                })) {
+            return std::nullopt;
+        }
         const auto receiver_handle = receiver->low_word().aval;
         const auto* selected_method = method(
             receiver_handle, identity, virtual_dispatch);
@@ -4870,6 +4880,47 @@ SystemVerilogClassHirExecution::evaluate_packed(
                     1U, 0U, 0U);
             }
             return std::nullopt;
+        }
+        // size() and reductions without a with-clause of an object's array
+        // of values (IEEE 1800-2017 7.5.1, 7.12.3).
+        if (!declaration_id && separator != std::string_view::npos
+            && value->operands.size() == 1U && read_class_property_container_
+            && (method_name == "size" || method_name == "sum"
+                || method_name == "product" || method_name == "and"
+                || method_name == "or" || method_name == "xor")) {
+            const auto receiver = evaluate_packed(
+                value->operands.front(), handle, environment, 64U);
+            if (!receiver || receiver->width() != 64U) {
+                return std::nullopt;
+            }
+            const auto word = receiver->low_word();
+            if (word.bval != 0U) {
+                return std::nullopt;
+            }
+            const auto stored = read_class_property_container_(
+                word.aval, std::string { operation.substr(separator + 1U) });
+            if (!stored) {
+                return std::nullopt;
+            }
+            if (method_name == "size") {
+                return apply_context(runtime::PackedLogic4::from_aval_bval(
+                    32U, runtime::simir::container_value_size(*stored), 0U),
+                    true, true);
+            }
+            if (stored->type.element_kind
+                    != runtime::simir::ContainerElementKind::Packed
+                && stored->type.element_kind
+                    != runtime::simir::ContainerElementKind::Scalar) {
+                return std::nullopt;
+            }
+            using Reduction = runtime::simir::ContainerReductionOperator;
+            const auto reduction = method_name == "sum" ? Reduction::sum
+                : method_name == "product" ? Reduction::product
+                : method_name == "and"     ? Reduction::bit_and
+                : method_name == "or"      ? Reduction::bit_or
+                                           : Reduction::bit_xor;
+            return apply_context(runtime::simir::reduce_container_value(
+                *stored, reduction), stored->type.signed_elements, true);
         }
         auto container = declaration_id && read_package_container_
             ? read_package_container_(*declaration_id)

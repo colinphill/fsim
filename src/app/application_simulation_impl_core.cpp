@@ -3,6 +3,8 @@
 
 #include "../elaboration/hierarchy_sv_constant_evaluator.hpp"
 
+#include "fsim/runtime/class_randomize_graph.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "fsim/support/native_filesystem.hpp"
 
 #include <charconv>
@@ -344,8 +346,9 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
 
     auto& object = class_heap.object(handle);
     const auto prior_properties = object.properties;
-    const auto callback = [&](const std::string_view name) {
-        const auto* method = class_hir_execution.method_named(handle, name);
+    const auto callback_on = [&](const runtime::SystemVerilogClassHandle target,
+                                 const std::string_view name) {
+        const auto* method = class_hir_execution.method_named(target, name);
         if (method == nullptr)
             return;
         const auto returns_void = !method->return_type
@@ -361,12 +364,38 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         std::vector<runtime::PackedLogic4> actuals;
         std::vector<std::string> string_actuals;
         (void)class_hir_execution.invoke_function(
-            *method, handle, actuals, string_actuals, { }, { });
+            *method, target, actuals, string_actuals, { }, { });
+    };
+    const auto callback = [&](const std::string_view name) {
+        callback_on(handle, name);
     };
     try {
         callback("pre_randomize");
     } catch (...) {
         object.properties = prior_properties;
+        return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+    }
+    // Objects reached through class-handle properties join the solve; rand
+    // handles extend randomization to theirs, whose pre_randomize runs after
+    // the parent's (IEEE 1800-2017 18.5.9, 18.6.1).
+    auto members = runtime::systemverilog_class_randomize_members(
+        class_heap, handle);
+    std::vector<std::pair<runtime::SystemVerilogClassHandle,
+        std::vector<runtime::SystemVerilogClassPropertyValue>>>
+        prior_members;
+    try {
+        for (const auto& member : members) {
+            prior_members.emplace_back(member.handle,
+                class_heap.object(member.handle).properties);
+            if (member.randomized) {
+                callback_on(member.handle, "pre_randomize");
+            }
+        }
+    } catch (...) {
+        object.properties = prior_properties;
+        for (auto& [member_handle, properties] : prior_members) {
+            class_heap.object(member_handle).properties = std::move(properties);
+        }
         return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
     }
     runtime::SystemVerilogClassRandomizeRequest request;
@@ -379,36 +408,64 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         + "::randomize@source";
     // A random enumerated property takes only its type's values (IEEE
     // 1800-2017 18.4).
-    for (const auto& property :
-        class_specialization(object.specialization_identity).properties) {
-        if (property.enumeration_domain.empty() || property.static_storage
-            || property.bit_width == 0U || property.bit_width > 64U) {
-            continue;
-        }
-        auto& domain = request.property_domains[property.canonical_identity];
-        domain.clear();
-        for (const auto value : property.enumeration_domain) {
-            const auto masked = property.bit_width == 64U
-                ? value
-                : value & ((std::uint64_t { 1 } << property.bit_width) - 1U);
-            const auto encoded = runtime::PackedLogic4::from_aval_bval(
-                property.bit_width, masked, 0U);
-            if (std::ranges::find(domain, encoded) == domain.end()) {
-                domain.push_back(encoded);
+    const auto enumeration_domains = [&](const std::string& specialization) {
+        std::map<std::string, std::vector<runtime::PackedLogic4>, std::less<>>
+            domains;
+        for (const auto& property :
+            class_specialization(specialization).properties) {
+            if (property.enumeration_domain.empty() || property.static_storage
+                || property.bit_width == 0U || property.bit_width > 64U) {
+                continue;
+            }
+            auto& domain = domains[property.canonical_identity];
+            domain.clear();
+            for (const auto value : property.enumeration_domain) {
+                const auto masked = property.bit_width == 64U
+                    ? value
+                    : value
+                        & ((std::uint64_t { 1 } << property.bit_width) - 1U);
+                const auto encoded = runtime::PackedLogic4::from_aval_bval(
+                    property.bit_width, masked, 0U);
+                if (std::ranges::find(domain, encoded) == domain.end()) {
+                    domain.push_back(encoded);
+                }
             }
         }
+        return domains;
+    };
+    const auto class_constraints_of = [this](
+        const runtime::SystemVerilogClassHandle target,
+        std::string specialization, std::string path) {
+        return runtime::SystemVerilogClassConstraintConfigurator {
+            [this, target, specialization = std::move(specialization),
+                path = std::move(path)](
+                auto& solver, const auto& variables) {
+                application_detail::configure_systemverilog_class_constraints(
+                    solver, variables, built.systemverilog_hir,
+                    class_specialization(specialization),
+                    [this, target](const auto identity) {
+                        if (const auto shared
+                            = static_constraint_modes.find(identity);
+                            shared != static_constraint_modes.end()) {
+                            return shared->second;
+                        }
+                        return class_heap.constraint_mode(target, identity);
+                    },
+                    path);
+            }
+        };
+    };
+    request.property_domains = enumeration_domains(
+        object.specialization_identity);
+    request.class_constraints = class_constraints_of(
+        handle, object.specialization_identity, std::string { });
+    for (auto& member : members) {
+        const auto& specialization
+            = class_heap.object(member.handle).specialization_identity;
+        member.property_domains = enumeration_domains(specialization);
+        member.class_constraints = class_constraints_of(
+            member.handle, specialization, member.path);
     }
-    request.class_constraints
-        = [this, handle,
-              specialization = object.specialization_identity](
-              auto& solver, const auto& variables) {
-              application_detail::configure_systemverilog_class_constraints(
-                  solver, variables, built.systemverilog_hir,
-                  class_specialization(specialization),
-                  [this, handle](const auto identity) {
-                      return class_heap.constraint_mode(handle, identity);
-                  });
-          };
     if (!inline_constraints.empty()) {
         request.inline_constraints
             = [inline_constraints,
@@ -419,13 +476,238 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                       identity + "::randomize@inline");
               };
     }
-    const auto result = runtime::randomize_systemverilog_class_object(
-        class_heap, handle, request);
+    // Unpacked arrays, dynamic arrays and queues of packed values join the
+    // solve element by element (IEEE 1800-2017 18.4).
+    std::vector<runtime::SystemVerilogClassRandomizeContainer> containers;
+    const auto node_handle = [&](const std::size_t node) {
+        return node == 0U ? handle : members[node - 1U].handle;
+    };
+    if (!class_constraint_property_types) {
+        auto& types = class_constraint_property_types.emplace();
+        const auto collect = [&](auto&& self,
+                                 const semantic::sv::ConstraintExpression&
+                                     expression) -> void {
+            for (const auto& binding : expression.bindings) {
+                if (binding.kind
+                        == semantic::sv::ConstraintReferenceKind::property
+                    && binding.canonical_identity.find('.')
+                        == std::string::npos) {
+                    types.try_emplace(binding.canonical_identity,
+                        binding.type);
+                }
+            }
+            for (const auto& operand : expression.operands) {
+                self(self, operand);
+            }
+        };
+        for (const auto& declaration : built.systemverilog_hir.classes()) {
+            for (const auto& constraint : declaration.constraints) {
+                for (const auto& expression : constraint.expressions) {
+                    collect(collect, expression);
+                }
+            }
+        }
+    }
+    for (std::size_t node = 0; node <= members.size(); ++node) {
+        const auto target = node_handle(node);
+        const auto& target_object = class_heap.object(target);
+        for (const auto& property :
+            class_specialization(target_object.specialization_identity)
+                .properties) {
+            if (property.static_storage || !property.type.container_form
+                || property.type.container_element_types.size() != 1U
+                || property.type.container_element_types.front()
+                       .container_form) {
+                continue;
+            }
+            const auto form = *property.type.container_form;
+            const bool resizable
+                = form == semantic::sv::TypeForm::dynamic_array
+                || form == semantic::sv::TypeForm::queue;
+            if (!resizable && form != semantic::sv::TypeForm::static_array) {
+                continue;
+            }
+            // The constraints' profile of the elements, where they name
+            // the array, matches the variables their clauses read.
+            const auto named = class_constraint_property_types->find(
+                property.canonical_identity);
+            // Otherwise the element type, through its typedefs.
+            auto declared = named != class_constraint_property_types->end()
+                ? named->second : property.type;
+            for (std::size_t depth = 0; depth < 16U
+                 && !declared.executable_width && !declared.packed_range;
+                 ++depth) {
+                const auto& element
+                    = declared.container_element_types.empty()
+                    ? declared : declared.container_element_types.front();
+                const auto* definition = element.target.target.valid()
+                    ? built.systemverilog_hir.find_type(element.target.target)
+                    : nullptr;
+                // A typedef from another scope keeps only its spelling; it
+                // resolves when the spelling names one typedef.
+                if (definition == nullptr && !element.target.spelling.empty()) {
+                    for (const auto& candidate :
+                        built.systemverilog_hir.types()) {
+                        if (candidate.name != element.target.spelling) {
+                            continue;
+                        }
+                        if (definition != nullptr) {
+                            definition = nullptr;
+                            break;
+                        }
+                        definition = &candidate;
+                    }
+                }
+                if (definition == nullptr || !definition->members.empty()) {
+                    break;
+                }
+                const auto spelling = declared.target.spelling;
+                declared = definition->base;
+                declared.target.spelling = spelling;
+            }
+            if (!declared.executable_width && declared.packed_range
+                && declared.packed_range->left
+                && declared.packed_range->right) {
+                declared.executable_width = static_cast<std::uint64_t>(
+                    support::index_distance(*declared.packed_range->left,
+                        *declared.packed_range->right) + 1U);
+            }
+            const auto width = declared.executable_width.value_or(0U);
+            const auto& element_type
+                = property.type.container_element_types.front();
+            if (width == 0U || width > 4096U
+                || element_type.value_form == semantic::sv::TypeForm::string
+                || element_type.value_form
+                    == semantic::sv::TypeForm::class_handle
+                || std::ranges::find(target_object.property_names,
+                       property.canonical_identity)
+                    == target_object.property_names.end()) {
+                continue;
+            }
+            runtime::SystemVerilogClassRandomizeContainer container;
+            container.node = node;
+            container.name = property.canonical_identity;
+            container.resizable = resizable;
+            container.element.kind = declared.four_state
+                ? runtime::SystemVerilogClassPropertyKind::Logic4
+                : runtime::SystemVerilogClassPropertyKind::Bit2;
+            const auto initial = declared.four_state
+                ? runtime::Logic4::x : runtime::Logic4::zero;
+            container.element.packed = runtime::PackedLogic4(width, initial);
+            container.element.random_state
+                = runtime::SystemVerilogClassRandomState {
+                      runtime::SystemVerilogClassRandomKind::Rand,
+                      static_cast<std::size_t>(width),
+                      declared.signed_value,
+                      declared.target.spelling.empty()
+                          ? std::string { "$constraint-value" }
+                          : declared.target.spelling,
+                      true, 0, 0, 0, 0, { } };
+            // An array of an enumeration takes only its values.
+            if (!property.enumeration_domain.empty() && width <= 64U) {
+                auto& domains = node == 0U
+                    ? request.property_domains
+                    : members[node - 1U].property_domains;
+                auto& domain = domains[property.canonical_identity];
+                domain.clear();
+                for (const auto value : property.enumeration_domain) {
+                    const auto masked = width == 64U ? value
+                        : value & ((std::uint64_t { 1 } << width) - 1U);
+                    const auto encoded = runtime::PackedLogic4::from_aval_bval(
+                        width, masked, 0U);
+                    if (std::ranges::find(domain, encoded) == domain.end()) {
+                        domain.push_back(encoded);
+                    }
+                }
+            }
+            if (const auto stored = class_value_containers.find(
+                    { target, property.canonical_identity });
+                stored != class_value_containers.end()) {
+                if (stored->second.type.element_kind
+                        != runtime::simir::ContainerElementKind::Packed
+                    || stored->second.type.associative
+                    || std::ranges::any_of(stored->second.elements,
+                        [&](const auto& element) {
+                            return element.width() != width;
+                        })) {
+                    continue;
+                }
+                container.values = stored->second.elements;
+            } else if (!resizable) {
+                // An array never written holds its default elements; only
+                // zero-based ranges map indices to positions directly.
+                if (property.type.unpacked_dimensions.size() != 1U) continue;
+                const auto& range = property.type.unpacked_dimensions.front();
+                if (!range.left || !range.right || *range.left != 0
+                    || *range.right < 0 || *range.right > (1 << 20)) {
+                    continue;
+                }
+                container.values.assign(
+                    static_cast<std::size_t>(*range.right) + 1U,
+                    container.element.packed);
+            }
+            containers.push_back(std::move(container));
+        }
+    }
+    const auto result = runtime::randomize_systemverilog_class_graph(
+        class_heap, handle, request, members, containers);
+    std::vector<std::pair<std::pair<std::uint64_t, std::string>,
+        std::optional<runtime::simir::ContainerValue>>>
+        prior_containers;
+    for (const auto& container : containers) {
+        if (!container.committed) continue;
+        auto key = std::pair<std::uint64_t, std::string> {
+            node_handle(container.node), container.name
+        };
+        auto stored = class_value_containers.find(key);
+        prior_containers.emplace_back(key,
+            stored == class_value_containers.end()
+                ? std::nullopt
+                : std::optional { stored->second });
+        if (stored == class_value_containers.end()) {
+            runtime::simir::ContainerValue created;
+            created.type.element_width = static_cast<std::uint32_t>(
+                container.element.packed.width());
+            created.type.two_state = container.element.kind
+                == runtime::SystemVerilogClassPropertyKind::Bit2;
+            created.type.signed_elements
+                = container.element.random_state->signed_value;
+            created.type.queue = false;
+            created.type.fixed = !container.resizable;
+            if (!container.resizable) {
+                const auto last = static_cast<std::int32_t>(
+                    container.values.size()) - 1;
+                created.type.index_left = 0;
+                created.type.index_right = last;
+                created.type.dimensions.emplace_back(0, last);
+            }
+            stored = class_value_containers.emplace(
+                std::move(key), std::move(created)).first;
+        }
+        stored->second.elements = container.values;
+    }
     if (result.language_result() != 0) {
         try {
             callback("post_randomize");
+            for (const auto& member : members) {
+                if (member.randomized) {
+                    callback_on(member.handle, "post_randomize");
+                }
+            }
         } catch (...) {
             object.properties = prior_properties;
+            for (auto& [member_handle, properties] : prior_members) {
+                class_heap.object(member_handle).properties
+                    = std::move(properties);
+            }
+            for (auto& [key, prior] : prior_containers) {
+                if (prior) {
+                    class_value_containers.insert_or_assign(
+                        key, std::move(*prior));
+                } else {
+                    class_value_containers.erase(key);
+                }
+            }
             return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
         }
     }
@@ -433,11 +715,54 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         32, result.language_result(), 0);
 }
 
+[[nodiscard]] bool Simulation::Impl::static_constraint(
+    const std::string_view identity)
+{
+    if (!static_constraint_identities) {
+        auto& identities = static_constraint_identities.emplace();
+        for (const auto& declaration : built.systemverilog_hir.classes()) {
+            for (const auto& constraint : declaration.constraints) {
+                if (constraint.static_constraint) {
+                    identities.insert(constraint.canonical_identity);
+                }
+            }
+        }
+    }
+    return static_constraint_identities->contains(identity);
+}
+
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomization_mode(
     const runtime::SystemVerilogClassHandle handle,
     const std::string_view method,
     const std::span<const runtime::PackedLogic4> actuals)
 {
+    // A static constraint's mode belongs to its class (IEEE 1800-2017
+    // 18.9): every object reads and updates the same mode.
+    constexpr std::string_view constraint_prefix { "@builtin-constraint-mode:" };
+    if (method.starts_with(constraint_prefix)
+        && static_constraint(method.substr(constraint_prefix.size()))) {
+        const auto identity = method.substr(constraint_prefix.size());
+        if (actuals.size() > 1U) {
+            throw std::invalid_argument {
+                "randomization mode method accepts zero or one argument"
+            };
+        }
+        if (!actuals.empty()) {
+            const auto value = actuals.front().low_word();
+            if (value.bval != 0 || (value.aval != 0 && value.aval != 1)) {
+                throw std::invalid_argument {
+                    "randomization mode update requires a known zero or one"
+                };
+            }
+            static_constraint_modes.insert_or_assign(
+                std::string { identity }, value.aval != 0);
+        }
+        const auto mode = static_constraint_modes.find(identity);
+        const bool enabled = mode == static_constraint_modes.end()
+            || mode->second;
+        return runtime::PackedLogic4::from_aval_bval(
+            32, enabled ? 1U : 0U, 0);
+    }
     return class_execution.invoke_source_randomization_mode(
         handle, method, actuals);
 }

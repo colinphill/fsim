@@ -112,6 +112,9 @@ resolve_vhdl_vital_named_constant(
 struct SvContainerMethodCall {
     bool pop_front { };
     std::string_view container;
+    // `sum`, `product`, `and`, `or` or `xor` for an array reduction (7.12.3),
+    // whose result has the element type.
+    std::string_view reduction;
 
     [[nodiscard]] std::size_t result_width() const noexcept
     {
@@ -136,10 +139,21 @@ sv_container_method_call(const std::string_view text) noexcept
     const auto operation = text.substr(prefix.size());
     if (operation.starts_with(pop_front)) {
         return SvContainerMethodCall { true,
-            operation.substr(pop_front.size()) };
+            operation.substr(pop_front.size()), { } };
     }
     if (operation.starts_with(size)) {
-        return SvContainerMethodCall { false, operation.substr(size.size()) };
+        return SvContainerMethodCall { false, operation.substr(size.size()),
+            { } };
+    }
+    for (const auto reduction : { std::string_view { "sum" },
+             std::string_view { "product" }, std::string_view { "and" },
+             std::string_view { "or" }, std::string_view { "xor" } }) {
+        if (operation.size() > reduction.size()
+            && operation.starts_with(reduction)
+            && operation[reduction.size()] == ':') {
+            return SvContainerMethodCall { false,
+                operation.substr(reduction.size() + 1U), reduction };
+        }
     }
     return std::nullopt;
 }

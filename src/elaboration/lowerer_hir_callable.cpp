@@ -2803,6 +2803,66 @@ Lowerer::hir_inline_constraints(
         return true;
     };
 
+    // `with (names)` binds only the listed names to the object; the others
+    // resolve in the calling scope (IEEE 1800-2017 18.7).
+    std::optional<std::set<std::string, std::less<>>> member_names;
+    if (const auto names = std::ranges::find(
+            expression->systemverilog->associations,
+            "@sv-inline-constraint-names",
+            &semantic::sv::AssignmentPatternAssociation::choice_spelling);
+        names != expression->systemverilog->associations.end()) {
+        auto& listed = member_names.emplace();
+        for (const auto choice : names->choices) {
+            const auto name = specialized_hir_unit_->find_expression(choice);
+            if (!name || name->systemverilog == nullptr) {
+                continue;
+            }
+            auto text = name->systemverilog->text;
+            if (text.size() >= 2U && text.front() == '"' && text.back() == '"') {
+                text = text.substr(1U, text.size() - 2U);
+            }
+            if (!text.empty()) {
+                listed.insert(std::move(text));
+            }
+        }
+    }
+    // The handle whose object the call randomizes.
+    const auto randomized_object
+        = expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::class_method_call
+            && !expression->systemverilog->operands.empty()
+        ? std::optional { expression->systemverilog->operands.front() }
+        : std::nullopt;
+    // A placeholder for the value an expression has in the calling scope,
+    // filled from the matching `@inline-value:` actual at the call.
+    const auto caller_value = [&](const semantic::ExpressionId id)
+        -> std::optional<Template> {
+        if (runtime_values == nullptr) {
+            return std::nullopt;
+        }
+        const auto width = hir_expression_width(id, process_scope);
+        const auto domain = hir_expression_domain(id, process_scope);
+        if (!width || *width == 0U || *width > 64U || !domain
+            || (*domain != frontend::ValueDomain::Bit2
+                && *domain != frontend::ValueDomain::Logic4
+                && *domain != frontend::ValueDomain::Integer)) {
+            return std::nullopt;
+        }
+        Template value;
+        value.kind = TemplateKind::Constant;
+        value.text = "@inline-value:" + std::to_string(runtime_values->size());
+        value.constant = PackedLogic4::from_aval_bval(*width, 0U, 0U);
+        value.profile = {
+            *domain == frontend::ValueDomain::Integer
+                ? DomainKind::Integer : DomainKind::BitVector,
+            *width,
+            hir_expression_signed(id),
+            "$inline-value",
+            *domain == frontend::ValueDomain::Logic4,
+        };
+        runtime_values->push_back(id);
+        return value;
+    };
     std::function<std::optional<Template>(semantic::ExpressionId)> lower;
     lower = [&](const semantic::ExpressionId id) -> std::optional<Template> {
         const auto record = specialized_hir_unit_->find_expression(id);
@@ -2821,6 +2881,18 @@ Lowerer::hir_inline_constraints(
                 output.text = identity;
                 return output;
             }
+        }
+        // `obj.m` through the randomized object's own handle names its
+        // member (IEEE 1800-2017 18.7).
+        constexpr std::string_view property_prefix = "@sv-property:";
+        if (source.kind == semantic::sv::ExpressionKind::class_property
+            && source.text.starts_with(property_prefix)
+            && source.operands.size() == 1U && randomized_object
+            && same_lvalue(same_lvalue, source.operands.front(),
+                *randomized_object, 0U)) {
+            output.kind = TemplateKind::Name;
+            output.text = source.text.substr(property_prefix.size());
+            return output;
         }
         if (source.kind == semantic::sv::ExpressionKind::class_null) {
             output.kind = TemplateKind::Constant;
@@ -2846,11 +2918,13 @@ Lowerer::hir_inline_constraints(
                 : std::nullopt;
             const auto width = hir_expression_width(id, process_scope);
             const auto domain = hir_expression_domain(id, process_scope);
+            // A property of the calling object (`this.i`) is read as well.
             if (declaration && width && *width != 0U && *width <= 64U
                 && domain
                 && (hir_local_registers_.contains(declaration->value())
                     || hir_runtime_binding(
-                        *declaration, process_scope, true))) {
+                        *declaration, process_scope, true)
+                    || hir_class_property_profile(id))) {
                 Template value;
                 value.kind = TemplateKind::Constant;
                 value.text = "@inline-value:"
@@ -2871,6 +2945,13 @@ Lowerer::hir_inline_constraints(
                 output.operands.push_back(std::move(value));
                 runtime_values->push_back(id);
             }
+            if (member_names && output.operands.size() == 1U) {
+                const auto root = std::string_view { source.text }.substr(
+                    0, source.text.find('.'));
+                if (!member_names->contains(root)) {
+                    return std::move(output.operands.front());
+                }
+            }
             return output;
         }
         if (source.kind
@@ -2884,6 +2965,25 @@ Lowerer::hir_inline_constraints(
         const auto special_kind = [&]() -> std::optional<TemplateKind> {
             if (source.kind == semantic::sv::ExpressionKind::unary) {
                 return TemplateKind::Unary;
+            }
+            // Array elements, loops and methods (IEEE 1800-2017 18.5.8).
+            if (source.kind == semantic::sv::ExpressionKind::index
+                && source.operands.size() == 2U) {
+                return TemplateKind::Index;
+            }
+            if (source.kind == semantic::sv::ExpressionKind::call
+                && (source.text == ".size" || source.text == ".sum"
+                    || source.text == ".product" || source.text == ".and"
+                    || source.text == ".or" || source.text == ".xor"
+                    || source.text.starts_with("@sv-cast:")
+                    || source.text == "$countones"
+                    || source.text == "$onehot"
+                    || source.text == "$onehot0")) {
+                return TemplateKind::Method;
+            }
+            if (source.kind == semantic::sv::ExpressionKind::call
+                && source.text == "@constraint-foreach") {
+                return TemplateKind::Foreach;
             }
             if (source.kind == semantic::sv::ExpressionKind::binary) {
                 return TemplateKind::Binary;
@@ -2931,7 +3031,26 @@ Lowerer::hir_inline_constraints(
             return std::nullopt;
         }();
         if (!special_kind) {
-            return constant(id, source.nominal_type);
+            if (auto folded = constant(id, source.nominal_type)) {
+                return folded;
+            }
+            // A function of the calling scope is called there (IEEE
+            // 1800-2017 18.7): a plain function, or a method of an object
+            // other than the randomized one.
+            const bool caller_function
+                = (source.kind == semantic::sv::ExpressionKind::call
+                      && !source.text.starts_with('@')
+                      && !source.text.starts_with('$')
+                      && !source.text.starts_with('.'))
+                || (source.kind
+                        == semantic::sv::ExpressionKind::class_method_call
+                    && !source.operands.empty()
+                    && source.class_member_identity.find('@')
+                        == std::string::npos
+                    && (!randomized_object
+                        || !same_lvalue(same_lvalue, source.operands.front(),
+                            *randomized_object, 0U)));
+            return caller_function ? caller_value(id) : std::nullopt;
         }
         output.kind = *special_kind;
         output.operands.reserve(source.operands.size());
@@ -2941,6 +3060,46 @@ Lowerer::hir_inline_constraints(
                 return std::nullopt;
             }
             output.operands.push_back(std::move(*lowered));
+        }
+        // An element of an array of the calling scope is passed as its
+        // value for use when the randomized object has no array of that
+        // name.
+        if (output.kind == TemplateKind::Index && output.operands.size() == 2U
+            && output.operands.front().kind == TemplateKind::Name
+            && output.operands.front().operands.empty()
+            && (hir_resolver().resolve_systemverilog_expression(
+                    source.operands.front()).unique().has_value()
+                || hir_class_property_profile(source.operands.front()))) {
+            if (auto value = caller_value(id)) {
+                output.operands.push_back(std::move(*value));
+            }
+        }
+        // The size of an array of the calling scope is passed as its value
+        // for use when the randomized object has no array of that name.
+        if (output.kind == TemplateKind::Method && output.text == ".size"
+            && output.operands.size() == 1U
+            && output.operands.front().kind == TemplateKind::Name
+            && output.operands.front().operands.empty()
+            && runtime_values != nullptr) {
+            const auto receiver = specialized_hir_unit_->find_expression(
+                source.operands.front());
+            const bool caller_array = receiver
+                && receiver->systemverilog != nullptr
+                && hir_resolver().resolve_systemverilog_expression(
+                       source.operands.front()).unique().has_value();
+            const bool caller_member = hir_class_property_profile(
+                source.operands.front()).has_value();
+            if (caller_array || caller_member) {
+                Template value;
+                value.kind = TemplateKind::Constant;
+                value.text = "@inline-value:"
+                    + std::to_string(runtime_values->size());
+                value.constant = PackedLogic4::from_aval_bval(32U, 0U, 0U);
+                value.profile = { DomainKind::Integer, 32U, true, "int",
+                    false };
+                output.operands.push_back(std::move(value));
+                runtime_values->push_back(id);
+            }
         }
         return output;
     };
@@ -2986,6 +3145,19 @@ Lowerer::hir_class_method_profile(
         = std::string_view { "@builtin-rand-mode:" };
     constexpr auto constraint_mode_prefix
         = std::string_view { "@builtin-constraint-mode:" };
+    if (call.class_member_identity == "@builtin-get-randstate") {
+        if (!instance_call || call.operands.size() != 1U) {
+            return std::nullopt;
+        }
+        HirClassMethodProfile result;
+        result.identity = call.class_member_identity;
+        result.receiver = call.operands.front();
+        result.result_width = 1U;
+        result.result_domain = frontend::ValueDomain::Bit2;
+        result.virtual_dispatch = false;
+        result.string_result = true;
+        return result;
+    }
     const auto builtin_randomize
         = call.class_member_identity == randomize_identity;
     const auto builtin_mode
@@ -3666,9 +3838,39 @@ bool Lowerer::lower_hir_class_property_initializers(
     const auto saved_receiver = hir_class_receiver_register_;
     hir_class_receiver_register_ = receiver;
     const auto restore = [&] { hir_class_receiver_register_ = saved_receiver; };
+    bool containers_written { };
     for (const auto& property : declaration.properties) {
         if (property.static_storage || property.parameter
-            || !property.initializer || property.type.container_form) {
+            || !property.initializer) {
+            continue;
+        }
+        // An array of values starts as its initializer pattern (IEEE
+        // 1800-2017 8.5, 10.9).
+        if (property.type.container_form) {
+            const auto pattern = specialized_hir_unit_->find_expression(
+                *property.initializer);
+            if (!property.type.class_identity.empty() || !pattern
+                || pattern->systemverilog == nullptr
+                || pattern->systemverilog->kind
+                    != semantic::sv::ExpressionKind::assignment_pattern) {
+                continue;
+            }
+            const auto type = hir_systemverilog_container_type(property.type);
+            if (!type) {
+                continue;
+            }
+            const HirContainerObjectBinding target {
+                property.declaration, property.name, { }, std::nullopt,
+                &*type, false
+            };
+            const auto value = lower_hir_container_assignment_pattern(
+                *property.initializer, target);
+            if (!value) {
+                continue;
+            }
+            process_.operations.emplace_back(ClassPropertyContainerWrite {
+                receiver, *value, property.canonical_identity });
+            containers_written = true;
             continue;
         }
         const auto initializer = specialized_hir_unit_->find_expression(
@@ -3726,6 +3928,11 @@ bool Lowerer::lower_hir_class_property_initializers(
             receiver, *value, property.canonical_identity });
     }
     restore();
+    // A constructor's cached copies of the containers take the initial
+    // values.
+    if (containers_written) {
+        reload_hir_class_container_caches();
+    }
     return true;
 }
 
@@ -4065,12 +4272,13 @@ void Lowerer::cache_hir_class_container_properties(
          && visited.insert(current->canonical_identity).second;) {
         for (const auto& property : current->properties) {
             // Containers of class handles keep the object's handle storage.
-            if (property.static_storage || !property.type.container_form
+            if (property.static_storage
                 || !property.type.class_identity.empty()) {
                 continue;
             }
             const auto type = hir_systemverilog_container_type(property.type);
-            if (!type) {
+            if (!type
+                || (!property.type.container_form && type->aggregate_value)) {
                 continue;
             }
             const auto value = allocate_container_register(*type);
@@ -4097,11 +4305,16 @@ std::optional<ContainerType> Lowerer::hir_class_value_container_type(
     const auto* property = resolver.resolve_systemverilog_class_property(
         std::string { identity }, false).unique();
     if (property == nullptr || property->static_storage
-        || !property->type.container_form
         || !property->type.class_identity.empty()) {
         return std::nullopt;
     }
-    return hir_systemverilog_container_type(property->type);
+    // A typedef can name the array type (`int_arr_t arr`); a non-array
+    // property's type yields only a boxed aggregate profile.
+    auto type = hir_systemverilog_container_type(property->type);
+    if (type && !property->type.container_form && type->aggregate_value) {
+        return std::nullopt;
+    }
+    return type;
 }
 
 std::optional<Lowerer::HirClassContainerAccess>
@@ -4623,6 +4836,8 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     }
     const auto destination = allocate_register(
         profile->result_width, profile->result_domain);
+    // The method sees, and may change, this object's container properties.
+    flush_hir_class_container_caches();
     if (profile->static_method) {
         process_.operations.emplace_back(ClassStaticMethodCall {
             destination,
@@ -4648,6 +4863,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         operation.inline_constraints = std::move(*inline_constraints);
         process_.operations.emplace_back(std::move(operation));
     }
+    reload_hir_class_container_caches();
     for (std::size_t index { }; index < profile->actuals.size(); ++index) {
         const auto& actual = profile->actuals[index];
         if (!class_method_copy_out(actual.direction)) {
@@ -5087,6 +5303,9 @@ bool Lowerer::lower_hir_class_task_call(
                 actual_kinds,
             });
         } else {
+            // A runtime method sees, and may change, this object's container
+            // properties.
+            flush_hir_class_container_caches();
             process_.operations.emplace_back(ClassMethodCall {
                 destination,
                 *receiver,
@@ -5098,6 +5317,7 @@ bool Lowerer::lower_hir_class_task_call(
                 true,
                 actual_kinds,
             });
+            reload_hir_class_container_caches();
         }
         for (std::size_t index { };
             index < profile->actuals.size(); ++index) {
@@ -5427,6 +5647,9 @@ bool Lowerer::lower_hir_class_task_invocation(
             : type->domain;
         const auto destination = allocate_register(
             result_width, result_domain);
+        // A runtime method sees, and may change, this object's container
+        // properties.
+        flush_hir_class_container_caches();
         process_.operations.emplace_back(ClassMethodCall {
             destination,
             *receiver,
@@ -5438,6 +5661,7 @@ bool Lowerer::lower_hir_class_task_invocation(
             virtual_dispatch,
             actual_kinds,
         });
+        reload_hir_class_container_caches();
         for (std::size_t index { }; index < profile.actuals.size(); ++index) {
             const auto& actual = profile.actuals[index];
             if (!class_method_copy_out(actual.direction)) {

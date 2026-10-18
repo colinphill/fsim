@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/class_randomize.hpp"
+#include "fsim/runtime/class_randomize_graph.hpp"
 
 #include "constraint_bounds_internal.hpp"
 
@@ -8,6 +9,7 @@
 #include <map>
 #include <new>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -21,6 +23,7 @@ struct SelectedProperty {
   SystemVerilogConstraintVariableId variable{};
   std::vector<PackedLogic4> base_domain;
   std::optional<SystemVerilogClassRandomState> randc_state;
+  bool randc_committed{};
 };
 
 [[nodiscard]] std::uint64_t mixed(const std::uint64_t input) noexcept {
@@ -138,30 +141,47 @@ struct SelectedProperty {
 }
 
 // Whether the request gives a property an exact (enumerated) domain.
-[[nodiscard]] bool has_exact_domain(
-    const SystemVerilogClassRandomizeRequest& request,
+using PropertyDomains
+    = std::map<std::string, std::vector<PackedLogic4>, std::less<>>;
+
+// An element `a[i]` of a container takes the container's domain.
+[[nodiscard]] std::string_view element_container(
     const std::string_view canonical_identity) {
-  if (request.property_domains.contains(canonical_identity)) return true;
+  if (!canonical_identity.ends_with(']')) return canonical_identity;
+  const auto open = canonical_identity.rfind('[');
+  if (open == std::string_view::npos) return canonical_identity;
+  const auto index = canonical_identity.substr(
+      open + 1U, canonical_identity.size() - open - 2U);
+  return !index.empty() && std::ranges::all_of(index, [](const char digit) {
+           return digit >= '0' && digit <= '9';
+         })
+      ? canonical_identity.substr(0, open) : canonical_identity;
+}
+
+[[nodiscard]] bool has_exact_domain(
+    const PropertyDomains& domains,
+    std::string_view canonical_identity) {
+  canonical_identity = element_container(canonical_identity);
+  if (domains.contains(canonical_identity)) return true;
   const auto separator = canonical_identity.rfind("::");
   return separator != std::string_view::npos
-      && request.property_domains.contains(
-          canonical_identity.substr(separator + 2U));
+      && domains.contains(canonical_identity.substr(separator + 2U));
 }
 
 [[nodiscard]] std::vector<PackedLogic4> exact_domain(
-    const SystemVerilogClassRandomizeRequest& request,
-    const std::string_view canonical_identity,
+    const PropertyDomains& domains,
+    std::string_view canonical_identity,
     const SystemVerilogClassPropertyValue& property,
     const std::size_t available_values) {
-  auto found = request.property_domains.find(canonical_identity);
-  if (found == request.property_domains.end()) {
+  canonical_identity = element_container(canonical_identity);
+  auto found = domains.find(canonical_identity);
+  if (found == domains.end()) {
     const auto separator = canonical_identity.rfind("::");
     if (separator != std::string_view::npos) {
-      found = request.property_domains.find(canonical_identity.substr(
-          separator + 2U));
+      found = domains.find(canonical_identity.substr(separator + 2U));
     }
   }
-  if (found == request.property_domains.end()) {
+  if (found == domains.end()) {
     return complete_domain(property.packed.width(), available_values);
   }
   if (found->second.empty() || found->second.size() > available_values) {
@@ -182,6 +202,50 @@ struct SelectedProperty {
   return found->second;
 }
 
+// Whether `left` orders before `right` as known values of one width.
+[[nodiscard]] bool value_less(const PackedLogic4& left,
+                              const PackedLogic4& right,
+                              const bool signed_value) {
+  for (std::size_t bit = left.width(); bit-- > 0U;) {
+    auto a = left.get(bit) == Logic4::one;
+    auto b = right.get(bit) == Logic4::one;
+    if (signed_value && bit + 1U == left.width()) std::swap(a, b);
+    if (a != b) return b;
+  }
+  return false;
+}
+
+// The least and greatest values of a domain in the variable's order.
+[[nodiscard]] std::pair<PackedLogic4, PackedLogic4> domain_bounds(
+    const std::span<const PackedLogic4> domain, const bool signed_value) {
+  auto lowest = domain.front();
+  auto highest = domain.front();
+  for (const auto& value : domain) {
+    if (value.width() != lowest.width()) continue;
+    if (value_less(value, lowest, signed_value)) lowest = value;
+    if (value_less(highest, value, signed_value)) highest = value;
+  }
+  return {std::move(lowest), std::move(highest)};
+}
+
+// A uniformly chosen two-state value of any width.
+[[nodiscard]] PackedLogic4 random_packed(
+    SystemVerilogClassRandomStream& stream, const std::size_t width) {
+  if (width <= 64U) {
+    auto value = stream.next_u64();
+    if (width < 64U) value &= (std::uint64_t{1} << width) - 1U;
+    return PackedLogic4::from_aval_bval(width, value, 0);
+  }
+  PackedLogic4 result(width, Logic4::zero);
+  for (std::size_t base = 0; base < width; base += 64U) {
+    const auto word = stream.next_u64();
+    for (std::size_t bit = 0; bit < 64U && base + bit < width; ++bit) {
+      if (((word >> bit) & 1U) != 0U) result.set(base + bit, Logic4::one);
+    }
+  }
+  return result;
+}
+
 [[nodiscard]] SystemVerilogClassRandomizeResult exhausted(
     const SystemVerilogConstraintResource resource) {
   return {
@@ -195,18 +259,103 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
     SystemVerilogClassHeap& heap,
     const SystemVerilogClassHandle handle,
     const SystemVerilogClassRandomizeRequest& request) {
+  return randomize_systemverilog_class_graph(heap, handle, request, {});
+}
+
+std::vector<SystemVerilogClassRandomizeMember>
+systemverilog_class_randomize_members(
+    const SystemVerilogClassHeap& heap,
+    const SystemVerilogClassHandle root) {
+  std::vector<SystemVerilogClassRandomizeMember> members;
+  std::set<SystemVerilogClassHandle> visited{root};
+  struct Pending {
+    SystemVerilogClassHandle handle{};
+    std::string path;
+    bool randomized{};
+  };
+  // Pre-order: each object before the objects it refers to.
+  std::vector<Pending> stack{{root, std::string{}, true}};
+  while (!stack.empty()) {
+    auto current = std::move(stack.back());
+    stack.pop_back();
+    if (current.handle != root) {
+      members.push_back({current.handle, current.path, current.randomized,
+          {}, {}});
+    }
+    const auto& object = heap.object(current.handle);
+    std::vector<Pending> children;
+    for (std::size_t index = 0; index < object.properties.size(); ++index) {
+      const auto& property = object.properties[index];
+      if (property.kind != SystemVerilogClassPropertyKind::ClassHandle
+          || property.handle == 0 || property.handle_container
+          || !visited.insert(property.handle).second) {
+        continue;
+      }
+      // Only rand handles extend randomization to their objects
+      // (IEEE 1800-2017 18.5.9); other referenced objects are state.
+      const bool rand_handle = property.random_state
+          && property.random_state->enabled
+          && property.random_state->kind == SystemVerilogClassRandomKind::Rand;
+      children.push_back({property.handle,
+          current.path + object.property_names[index] + ".",
+          current.randomized && rand_handle});
+    }
+    for (auto child = children.rbegin(); child != children.rend(); ++child) {
+      stack.push_back(std::move(*child));
+    }
+  }
+  return members;
+}
+
+SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
+    SystemVerilogClassHeap& heap,
+    const SystemVerilogClassHandle handle,
+    const SystemVerilogClassRandomizeRequest& request,
+    const std::span<const SystemVerilogClassRandomizeMember> members,
+    const std::span<SystemVerilogClassRandomizeContainer> containers) {
   if (request.call_identity.empty()) {
     throw std::invalid_argument{
         "class randomize call identity must not be empty"};
   }
-  auto& object = heap.object(handle);
-  std::set<std::size_t> selected_indices;
+  // The root and each member object take part in one solve.
+  struct Node {
+    SystemVerilogClassHandle handle{};
+    SystemVerilogClassObject* object{};
+    std::string path;
+    std::set<std::size_t> selected;
+    const PropertyDomains* domains{};
+    const SystemVerilogClassConstraintConfigurator* constraints{};
+  };
+  std::vector<Node> nodes;
+  nodes.reserve(members.size() + 1U);
+  nodes.push_back({handle, &heap.object(handle), std::string{}, {},
+      &request.property_domains, &request.class_constraints});
+  for (const auto& member : members) {
+    nodes.push_back({member.handle, &heap.object(member.handle), member.path,
+        {}, &member.property_domains, &member.class_constraints});
+    if (!member.randomized) continue;
+    auto& node = nodes.back();
+    for (std::size_t index = 0; index < node.object->properties.size();
+         ++index) {
+      const auto& property = node.object->properties[index];
+      const auto& random = property.random_state;
+      if (random && random->enabled
+          && random->kind != SystemVerilogClassRandomKind::None
+          && (!property.packed.empty()
+              || property.kind == SystemVerilogClassPropertyKind::Container)) {
+        node.selected.insert(index);
+      }
+    }
+  }
+  auto& object = *nodes.front().object;
+  auto& selected_indices = nodes.front().selected;
   if (request.selection
           == SystemVerilogClassRandomizeSelection::NoProperties) {
     if (!request.variable_list.empty()) {
       throw std::invalid_argument{
           "class randomize checker mode cannot select properties"};
     }
+    for (auto& node : nodes) node.selected.clear();
   } else if (request.variable_list.empty()) {
     for (std::size_t index = 0; index < object.properties.size(); ++index) {
       const auto& random = object.properties[index].random_state;
@@ -216,6 +365,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
       }
     }
   } else {
+    // randomize(a, b) selects the root's named properties only (18.11).
+    for (std::size_t node = 1; node < nodes.size(); ++node) {
+      nodes[node].selected.clear();
+    }
     for (const auto& name : request.variable_list) {
       const auto index = property_index(object, name);
       if (!index) {
@@ -247,12 +400,18 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
             {}};
       }
       const auto& random = property.random_state;
-      if (!random) {
+      const bool listed_container
+          = property.kind == SystemVerilogClassPropertyKind::Container
+          && std::ranges::any_of(containers, [&](const auto& container) {
+               return container.node == 0U
+                   && container.name == object.property_names[*index];
+             });
+      if (!random && !listed_container) {
         throw std::invalid_argument{
             "SystemVerilog class randomize property '" + name
             + "' is not randomizable"};
       }
-      if (!random->enabled) {
+      if (random && !random->enabled) {
         throw std::invalid_argument{
             "SystemVerilog class randomize property '" + name
             + "' is disabled"};
@@ -264,57 +423,206 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
       }
     }
   }
-
-  // A random property that no constraint references takes a uniformly
-  // chosen value (IEEE 1800-2017 18.5); a wide one is drawn directly
-  // instead of enumerating its complete domain.
-  std::set<std::size_t> direct_indices;
-  std::map<std::size_t, std::vector<PackedLogic4>> bounded;
-  {
-    std::vector<std::size_t> wide;
-    for (const auto index : selected_indices) {
-      const auto& property = object.properties[index];
-      const auto width = property.packed.width();
-      if (property.packed.empty() || property.packed.is_logic9()
-          || width > 64U || !property.random_state
-          || property.random_state->kind == SystemVerilogClassRandomKind::Randc
-          || width <= 16U
-          || request.property_domains.contains(object.property_names[index])) {
-        continue;
+  const auto identity_of = [&](const Node& node, const std::size_t index) {
+    return node.path + node.object->property_names[index];
+  };
+  // Each object's constraints see its own names and, through `h.m`
+  // paths, those of the objects it refers to.
+  const auto view_of = [](const Node& node,
+                          const SystemVerilogClassRandomizeVariables& all) {
+    if (node.path.empty()) return all;
+    SystemVerilogClassRandomizeVariables view;
+    for (const auto& [identity, id] : all) {
+      if (identity.starts_with(node.path)) {
+        view.emplace(identity.substr(node.path.size()), id);
       }
-      wide.push_back(index);
+    }
+    return view;
+  };
+  const auto configure = [&](SystemVerilogConstraintSolver& solver,
+                             const SystemVerilogClassRandomizeVariables& all) {
+    for (const auto& node : nodes) {
+      if (node.constraints != nullptr && *node.constraints) {
+        (*node.constraints)(solver, view_of(node, all));
+      }
+    }
+    if (request.inline_constraints) {
+      request.inline_constraints(solver, all);
+    }
+  };
+  using Key = std::pair<std::size_t, std::size_t>;
+
+  // Container elements and sizes take part as properties of their objects
+  // for the duration of the call: element `name[i]`, the materialized
+  // element count `name[]`, and, while sizes are solved, `name.size()`.
+  std::vector<std::size_t> original_counts;
+  original_counts.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    original_counts.push_back(node.object->properties.size());
+  }
+  // Random size properties that no constraint references keep their size.
+  std::set<Key> preserved;
+  const auto strip = [&] {
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+      auto& node = nodes[n];
+      node.object->properties.resize(original_counts[n]);
+      node.object->property_names.resize(original_counts[n]);
+      std::erase_if(node.selected, [&](const std::size_t index) {
+        return index >= original_counts[n];
+      });
+    }
+    preserved.clear();
+  };
+  struct StripOnExit {
+    const decltype(strip)& run;
+    explicit StripOnExit(const decltype(strip)& action) : run(action) {}
+    StripOnExit(const StripOnExit&) = delete;
+    StripOnExit& operator=(const StripOnExit&) = delete;
+    ~StripOnExit() { run(); }
+  } strip_on_exit{strip};
+  std::vector<bool> randomized_container(containers.size());
+  for (std::size_t c = 0; c < containers.size(); ++c) {
+    const auto& container = containers[c];
+    if (container.node >= nodes.size()) {
+      throw std::invalid_argument{
+          "class randomize container belongs to no object of the call"};
+    }
+    const auto& node = nodes[container.node];
+    const auto found = std::ranges::find(
+        node.object->property_names, container.name);
+    if (found == node.object->property_names.end()) {
+      throw std::invalid_argument{
+          "class randomize container '" + container.name
+          + "' is not a property of its object"};
+    }
+    randomized_container[c] = node.selected.contains(static_cast<std::size_t>(
+        std::distance(node.object->property_names.begin(), found)));
+  }
+  const auto synthetic = [&](const std::size_t n, std::string name,
+                             SystemVerilogClassPropertyValue value,
+                             const bool chosen) {
+    auto& node = nodes[n];
+    const auto index = node.object->properties.size();
+    node.object->property_names.push_back(std::move(name));
+    node.object->properties.push_back(std::move(value));
+    if (chosen) node.selected.insert(index);
+    return index;
+  };
+  const auto count_property = [](const std::size_t count, const bool random) {
+    SystemVerilogClassPropertyValue value;
+    value.kind = SystemVerilogClassPropertyKind::Bit2;
+    value.packed = PackedLogic4::from_aval_bval(32, count, 0);
+    value.random_state = SystemVerilogClassRandomState{
+        random ? SystemVerilogClassRandomKind::Rand
+               : SystemVerilogClassRandomKind::None,
+        32, true, "int", true, 0, 0, 0, 0, {}};
+    return value;
+  };
+  const auto materialize = [&](const std::size_t c,
+                               const std::size_t count) {
+    const auto& container = containers[c];
+    const bool chosen = randomized_container[c];
+    for (std::size_t index = 0; index < count; ++index) {
+      auto element = container.element;
+      if (index < container.values.size()) {
+        element.packed = container.values[index];
+      } else {
+        element.packed = PackedLogic4(
+            element.packed.width(), Logic4::zero);
+      }
+      if (element.random_state) {
+        element.random_state->kind = chosen
+            ? SystemVerilogClassRandomKind::Rand
+            : SystemVerilogClassRandomKind::None;
+        element.random_state->enabled = true;
+      }
+      (void)synthetic(container.node,
+          container.name + "[" + std::to_string(index) + "]",
+          std::move(element), chosen);
+    }
+    (void)synthetic(container.node, container.name + "[]",
+        count_property(count, false), false);
+  };
+  // Phase one gives each random resizable container a size; phase two
+  // materializes every container's elements.
+  const auto add_sizes = [&] {
+    for (std::size_t c = 0; c < containers.size(); ++c) {
+      const auto& container = containers[c];
+      if (container.resizable && randomized_container[c]) {
+        const auto index = synthetic(container.node,
+            container.name + ".size()",
+            count_property(container.values.size(), true), true);
+        preserved.emplace(container.node, index);
+      } else {
+        materialize(c, container.values.size());
+      }
+    }
+  };
+
+  struct SelectedNodeProperty {
+    std::size_t node{};
+    SelectedProperty property;
+  };
+  struct Outcome {
+    SystemVerilogClassRandomizeResult result;
+    std::vector<SelectedNodeProperty> selected;
+    std::vector<PackedLogic4> values;
+  };
+  const auto solve = [&]() -> Outcome {
+    // A random property that no constraint references takes a uniformly
+    // chosen value (IEEE 1800-2017 18.5); a wide one is drawn directly
+    // instead of enumerating its complete domain.
+    std::set<Key> direct_indices;
+    std::map<Key, std::vector<PackedLogic4>> bounded;
+    std::vector<Key> wide;
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+      const auto& node = nodes[n];
+      for (const auto index : node.selected) {
+        const auto& property = node.object->properties[index];
+        const auto width = property.packed.width();
+        if (property.packed.empty() || property.packed.is_logic9()
+            || !property.random_state
+            || property.random_state->kind
+                == SystemVerilogClassRandomKind::Randc
+            || width <= 16U
+            || has_exact_domain(
+                *node.domains, node.object->property_names[index])) {
+          continue;
+        }
+        wide.emplace_back(n, index);
+      }
     }
     if (!wide.empty()) {
       try {
         SystemVerilogConstraintSolver probe;
         SystemVerilogClassRandomizeVariables probe_variables;
-        std::map<SystemVerilogConstraintVariableId, std::size_t> owners;
-        for (std::size_t index = 0; index < object.properties.size();
-             ++index) {
-          const auto& property = object.properties[index];
-          if (property.packed.empty() || property.packed.is_logic9()) {
-            continue;
+        std::map<SystemVerilogConstraintVariableId, Key> owners;
+        for (std::size_t n = 0; n < nodes.size(); ++n) {
+          const auto& node = nodes[n];
+          for (std::size_t index = 0;
+               index < node.object->properties.size(); ++index) {
+            const auto& property = node.object->properties[index];
+            if (property.packed.empty() || property.packed.is_logic9()) {
+              continue;
+            }
+            SystemVerilogConstraintVariable variable;
+            variable.canonical_identity = identity_of(node, index);
+            variable.profile = profile(property);
+            if (has_exact_domain(
+                    *node.domains, node.object->property_names[index])) {
+              // An enumerated property's constraints use the enumeration
+              // profile (IEEE 1800-2017 18.4).
+              variable.profile.kind
+                  = SystemVerilogConstraintDomainKind::Enumeration;
+            }
+            variable.domain.push_back(property.packed);
+            const auto id = probe.add_variable(std::move(variable));
+            probe_variables.emplace(identity_of(node, index), id);
+            owners.emplace(id, Key{n, index});
           }
-          SystemVerilogConstraintVariable variable;
-          variable.canonical_identity = object.property_names[index];
-          variable.profile = profile(property);
-          if (has_exact_domain(request, object.property_names[index])) {
-            // An enumerated property's constraints use the enumeration
-            // profile (IEEE 1800-2017 18.4).
-            variable.profile.kind = SystemVerilogConstraintDomainKind::Enumeration;
-          }
-          variable.domain.push_back(property.packed);
-          const auto id = probe.add_variable(std::move(variable));
-          probe_variables.emplace(object.property_names[index], id);
-          owners.emplace(id, index);
         }
-        if (request.class_constraints) {
-          request.class_constraints(probe, probe_variables);
-        }
-        if (request.inline_constraints) {
-          request.inline_constraints(probe, probe_variables);
-        }
-        std::set<std::size_t> referenced;
+        configure(probe, probe_variables);
+        std::set<Key> referenced;
         for (const auto& clause : probe.clauses()) {
           for (const auto id : clause.variables) {
             if (const auto owner = owners.find(id); owner != owners.end()) {
@@ -327,45 +635,140 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
             referenced.insert(owner);
           }
         }
-        for (const auto index : wide) {
-          if (!referenced.contains(index)) {
-            direct_indices.insert(index);
+        // A wide variable whose bounded domain is a single value fixes the
+        // variables compared with it in later passes.
+        std::map<SystemVerilogConstraintVariableId, PackedLogic4> derived;
+        const auto passes = std::min<std::size_t>(64U, wide.size() + 1U);
+        for (std::size_t pass = 0U; pass < passes; ++pass) {
+        const auto derived_before = derived.size();
+        for (const auto& key : wide) {
+          if (!referenced.contains(key)) {
+            if (preserved.contains(key)) {
+              nodes[key.first].selected.erase(key.second);
+            } else {
+              direct_indices.insert(key);
+            }
             continue;
           }
+          const auto& node = nodes[key.first];
           // A constrained wide property draws from the values its hard
           // clauses' comparisons with constants allow, and from the ranges
           // of its distributions (IEEE 1800-2017 18.5.4).
-          const auto id = probe_variables.at(object.property_names[index]);
-          auto stream = heap.random_stream(handle,
-              request.call_identity + "::" + object.property_names[index]
-                  + "::$bounded");
+          const auto id = probe_variables.at(identity_of(node, key.second));
+          auto stream = heap.random_stream(node.handle,
+              request.call_identity + "::"
+                  + node.object->property_names[key.second] + "::$bounded");
           const auto& profile = probe.variables()[id].profile;
+          if (profile.width > 64U) {
+            // A value wider than 64 bits draws from the constants its
+            // clauses compare it with, and from uniform samples.
+            std::vector<PackedLogic4> values;
+            for (const auto& clause : probe.clauses()) {
+              if (!clause.expression
+                  || std::ranges::find(clause.variables, id)
+                      == clause.variables.end()) {
+                continue;
+              }
+              const auto& nodes_of = clause.expression->nodes;
+              for (const auto& node_of : nodes_of) {
+                if ((node_of.operation
+                        != SystemVerilogConstraintExpressionOperator::Equal
+                     && node_of.operation
+                        != SystemVerilogConstraintExpressionOperator::CaseEqual)
+                    || node_of.operands.size() != 2U) {
+                  continue;
+                }
+                for (std::size_t side = 0; side < 2U; ++side) {
+                  const auto& variable_node = nodes_of[node_of.operands[side]];
+                  const auto& constant_node
+                      = nodes_of[node_of.operands[1U - side]];
+                  if (variable_node.operation
+                          != SystemVerilogConstraintExpressionOperator::Variable
+                      || variable_node.variable != id
+                      || constant_node.operation
+                          != SystemVerilogConstraintExpressionOperator::Constant
+                      || constant_node.constant.is_logic9()) {
+                    continue;
+                  }
+                  const auto& constant = constant_node.constant;
+                  const auto extension = constant_node.profile.signed_value
+                          && !constant.empty()
+                      ? constant.get(constant.width() - 1U) : Logic4::zero;
+                  PackedLogic4 value(profile.width, extension);
+                  for (std::size_t bit = 0;
+                       bit < std::min(profile.width, constant.width()); ++bit) {
+                    value.set(bit, constant.get(bit));
+                  }
+                  values.push_back(std::move(value));
+                }
+              }
+            }
+            for (std::size_t sample = 0; sample < 16U; ++sample) {
+              values.push_back(random_packed(stream, profile.width));
+            }
+            std::vector<PackedLogic4> unique;
+            for (auto& value : values) {
+              if (std::ranges::find(unique, value) == unique.end()) {
+                unique.push_back(std::move(value));
+              }
+            }
+            bounded.insert_or_assign(key, std::move(unique));
+            continue;
+          }
           // State variables hold their current values during the call.
           std::map<SystemVerilogConstraintVariableId, PackedLogic4> fixed;
           for (const auto& [fixed_id, owner] : owners) {
-            if (!selected_indices.contains(owner)) {
-              fixed.emplace(fixed_id, object.properties[owner].packed);
+            if (!nodes[owner.first].selected.contains(owner.second)) {
+              fixed.emplace(fixed_id,
+                  nodes[owner.first].object->properties[owner.second].packed);
             }
+          }
+          for (const auto& [derived_id, value] : derived) {
+            if (derived_id != id) fixed.emplace(derived_id, value);
           }
           auto domain = systemverilog_constraint_variable_domain_with_fixed(
               probe.clauses(), id, profile,
               [&stream] { return stream.next_u64(); }, fixed);
+          // Ranges are walked in the variable's order: a signed value's
+          // key inverts its sign bit.
+          const auto mask = profile.width >= 64U
+              ? ~std::uint64_t{} : (std::uint64_t{1} << profile.width) - 1U;
+          const auto sign = profile.signed_value
+              ? std::uint64_t{1} << (profile.width - 1U) : std::uint64_t{};
           for (const auto& entry : probe.distribution_entries(id)) {
-            const auto low = entry.low.low_word().aval;
-            const auto high = entry.high.low_word().aval;
+            const auto low = (entry.low.low_word().aval & mask) ^ sign;
+            const auto high = (entry.high.low_word().aval & mask) ^ sign;
+            if (high < low) continue;
             const auto span = high - low;
+            const auto value_of = [&](const std::uint64_t key) {
+              return PackedLogic4::from_aval_bval(
+                  profile.width, (key ^ sign) & mask, 0U);
+            };
             if (span < 64U) {
               for (std::uint64_t value = 0U; value <= span; ++value) {
-                domain.push_back(PackedLogic4::from_aval_bval(
-                    profile.width, low + value, 0U));
+                domain.push_back(value_of(low + value));
               }
             } else {
-              domain.push_back(entry.low);
-              domain.push_back(entry.high);
+              domain.push_back(value_of(low));
+              domain.push_back(value_of(high));
               for (std::size_t sample = 0U; sample < 32U; ++sample) {
-                domain.push_back(PackedLogic4::from_aval_bval(profile.width,
-                    low + stream.next_u64() % (span + 1U), 0U));
+                domain.push_back(value_of(
+                    low + stream.next_u64() % (span + 1U)));
               }
+            }
+          }
+          // A sampled domain also offers the values of a simple bit
+          // structure, which counting and masking constraints select.
+          if (domain.size() > 64U && !preserved.contains(key)) {
+            domain.push_back(PackedLogic4::from_aval_bval(profile.width, 0U, 0U));
+            domain.push_back(
+                PackedLogic4::from_aval_bval(profile.width, mask, 0U));
+            for (std::size_t bit = 0; bit < profile.width; ++bit) {
+              const auto single = std::uint64_t{1} << bit;
+              domain.push_back(
+                  PackedLogic4::from_aval_bval(profile.width, single, 0U));
+              domain.push_back(PackedLogic4::from_aval_bval(
+                  profile.width, (single - 1U) & mask, 0U));
             }
           }
           // The domain lists each value once.
@@ -376,103 +779,158 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
               unique.push_back(std::move(value));
             }
           }
-          bounded.emplace(index, std::move(unique));
+          // The domain is ordered, so its first and last values bound the
+          // implicit uniform distribution.
+          {
+            std::ranges::sort(unique, [&](const auto& left, const auto& right) {
+              return (left.low_word().aval ^ sign)
+                  < (right.low_word().aval ^ sign);
+            });
+          }
+          if (preserved.contains(key)) {
+            // A size is not negative; a size bounded only from below takes
+            // one of the smallest allowed sizes.
+            const bool sampled = unique.size() > 64U;
+            std::vector<std::uint64_t> sizes;
+            bool below_zero{};
+            for (const auto& value : unique) {
+              const auto word = value.low_word().aval;
+              if (value.low_word().bval != 0U) continue;
+              if (word < (UINT64_C(1) << 31U)) {
+                sizes.push_back(word);
+              } else {
+                below_zero = true;
+              }
+            }
+            std::ranges::sort(sizes);
+            unique.clear();
+            if (!sizes.empty()) {
+              // A range reaching below zero starts the sizes at zero.
+              const auto lowest = sampled && below_zero
+                  ? std::uint64_t{} : sizes.front();
+              if (sampled) {
+                for (std::uint64_t size = lowest; size < lowest + 32U; ++size) {
+                  sizes.push_back(size);
+                }
+                std::ranges::sort(sizes);
+              }
+              for (const auto size : sizes) {
+                if (sampled && size > lowest + 256U) break;
+                const auto value = PackedLogic4::from_aval_bval(32, size, 0U);
+                if (std::ranges::find(unique, value) == unique.end()) {
+                  unique.push_back(value);
+                }
+              }
+            }
+          }
+          if (unique.size() == 1U) derived.insert_or_assign(id, unique.front());
+          bounded.insert_or_assign(key, std::move(unique));
+        }
+        if (derived.size() == derived_before) break;
         }
       } catch (const std::exception&) {
         direct_indices.clear();
         bounded.clear();
+        for (const auto& key : preserved) {
+          nodes[key.first].selected.erase(key.second);
+        }
       }
     }
-  }
 
-  try {
     SystemVerilogConstraintSolver solver{request.limits};
     SystemVerilogClassRandomizeVariables variables;
-    std::vector<SelectedProperty> selected;
+    std::vector<SelectedNodeProperty> selected;
     std::size_t domain_values{};
-    for (std::size_t index = 0; index < object.properties.size(); ++index) {
-      const auto& property = object.properties[index];
-      if (property.packed.empty() || property.packed.is_logic9()) continue;
-      SystemVerilogConstraintVariable variable;
-      variable.canonical_identity = object.property_names[index];
-      variable.profile = profile(property);
-      if (has_exact_domain(request, object.property_names[index])) {
-        variable.profile.kind = SystemVerilogConstraintDomainKind::Enumeration;
-      }
-      std::vector<PackedLogic4> base_domain;
-      std::optional<SystemVerilogClassRandomState> staged_randc;
-      if (selected_indices.contains(index)) {
-        const auto available = request.limits.maximum_domain_values
-                >= domain_values
-            ? request.limits.maximum_domain_values - domain_values
-            : 0;
-        if (direct_indices.contains(index)) {
-          const auto width = property.packed.width();
-          auto value = heap.random_stream(
-                  handle,
-                  request.call_identity + "::"
-                      + object.property_names[index])
-                           .next_u64();
-          if (width < 64U) value &= (std::uint64_t{1} << width) - 1U;
-          base_domain.push_back(
-              PackedLogic4::from_aval_bval(width, value, 0));
-        } else if (const auto found = bounded.find(index);
-                   found != bounded.end()) {
-          if (found->second.empty()) {
-            return {SystemVerilogConstraintSolveStatus::Unsatisfiable,
-                SystemVerilogConstraintResource::None, 0, 0};
-          }
-          base_domain = found->second;
-        } else {
-          base_domain = exact_domain(
-              request, object.property_names[index], property, available);
+    const auto finished = [&](const SystemVerilogConstraintSolveResult& solved) {
+      return SystemVerilogClassRandomizeResult{
+          solved.status,
+          solved.exhausted_resource,
+          solved.search_steps,
+          solved.clause_evaluations};
+    };
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+      const auto& node = nodes[n];
+      for (std::size_t index = 0; index < node.object->properties.size();
+           ++index) {
+        const auto& property = node.object->properties[index];
+        if (property.packed.empty() || property.packed.is_logic9()) continue;
+        const auto& name = node.object->property_names[index];
+        const auto identity = identity_of(node, index);
+        const bool chosen = node.selected.contains(index);
+        SystemVerilogConstraintVariable variable;
+        variable.canonical_identity = identity;
+        variable.profile = profile(property);
+        if (has_exact_domain(*node.domains, name)) {
+          variable.profile.kind = SystemVerilogConstraintDomainKind::Enumeration;
         }
-        if (property.random_state->kind
-            == SystemVerilogClassRandomKind::Randc) {
-          staged_randc = *property.random_state;
-          const auto signature = domain_signature(base_domain);
-          if (staged_randc->randc_domain_signature != signature) {
-            staged_randc->randc_domain_signature = signature;
-            staged_randc->randc_cycle = 0;
-            staged_randc->randc_used_values.clear();
-          }
-          if (staged_randc->randc_used_values.size() == base_domain.size()) {
-            if (staged_randc->randc_cycle
-                == std::numeric_limits<std::uint64_t>::max()) {
-              throw std::overflow_error{"randc cycle ordinal exhausted"};
+        std::vector<PackedLogic4> base_domain;
+        std::optional<SystemVerilogClassRandomState> staged_randc;
+        if (chosen) {
+          const auto available = request.limits.maximum_domain_values
+                  >= domain_values
+              ? request.limits.maximum_domain_values - domain_values
+              : 0;
+          if (direct_indices.contains(Key{n, index})) {
+            auto stream = heap.random_stream(
+                node.handle, request.call_identity + "::" + name);
+            base_domain.push_back(
+                random_packed(stream, property.packed.width()));
+          } else if (const auto found = bounded.find(Key{n, index});
+                     found != bounded.end()) {
+            if (found->second.empty()) {
+              return {{SystemVerilogConstraintSolveStatus::Unsatisfiable,
+                  SystemVerilogConstraintResource::None, 0, 0}, {}, {}};
             }
-            ++staged_randc->randc_cycle;
-            staged_randc->randc_used_values.clear();
+            base_domain = found->second;
+          } else {
+            base_domain = exact_domain(
+                *node.domains, name, property, available);
           }
-          variable.domain = randc_domain(base_domain, *staged_randc);
+          if (property.random_state->kind
+              == SystemVerilogClassRandomKind::Randc) {
+            staged_randc = *property.random_state;
+            const auto signature = domain_signature(base_domain);
+            if (staged_randc->randc_domain_signature != signature) {
+              staged_randc->randc_domain_signature = signature;
+              staged_randc->randc_cycle = 0;
+              staged_randc->randc_used_values.clear();
+            }
+            if (staged_randc->randc_used_values.size()
+                == base_domain.size()) {
+              if (staged_randc->randc_cycle
+                  == std::numeric_limits<std::uint64_t>::max()) {
+                throw std::overflow_error{"randc cycle ordinal exhausted"};
+              }
+              ++staged_randc->randc_cycle;
+              staged_randc->randc_used_values.clear();
+            }
+            variable.domain = randc_domain(base_domain, *staged_randc);
+          } else {
+            variable.domain = base_domain;
+          }
         } else {
-          variable.domain = base_domain;
+          variable.domain.push_back(property.packed);
         }
-      } else {
-        variable.domain.push_back(property.packed);
-      }
-      domain_values += variable.domain.size();
-      const auto id = solver.add_variable(std::move(variable));
-      variables.emplace(object.property_names[index], id);
-      if (selected_indices.contains(index)) {
-        const auto& retained = solver.variables()[id];
-        if (!staged_randc) {
-          solver.add_distribution({
-              retained.canonical_identity + "::$randomize",
-              id,
-              {{retained.domain.front(), retained.domain.back(), 1,
-                SystemVerilogConstraintDistributionWeight::PerValue}}});
+        domain_values += variable.domain.size();
+        const auto id = solver.add_variable(std::move(variable));
+        variables.emplace(identity, id);
+        if (chosen) {
+          const auto& retained = solver.variables()[id];
+          if (!staged_randc) {
+            const auto [lowest, highest] = domain_bounds(
+                retained.domain, retained.profile.signed_value);
+            solver.add_distribution({
+                retained.canonical_identity + "::$randomize",
+                id,
+                {{lowest, highest, 1,
+                  SystemVerilogConstraintDistributionWeight::PerValue}}});
+          }
+          selected.push_back({n,
+              {index, id, std::move(base_domain), std::move(staged_randc)}});
         }
-        selected.push_back({
-            index, id, std::move(base_domain), std::move(staged_randc)});
       }
     }
-    if (request.class_constraints) {
-      request.class_constraints(solver, variables);
-    }
-    if (request.inline_constraints) {
-      request.inline_constraints(solver, variables);
-    }
+    configure(solver, variables);
     const auto selection = request.selection
             == SystemVerilogClassRandomizeSelection::NoProperties
         ? std::uint64_t{}
@@ -480,41 +938,97 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
     auto solved = solver.solve(selection);
     if (solved.status == SystemVerilogConstraintSolveStatus::Unsatisfiable
         && std::ranges::any_of(selected, [](const auto& item) {
-          return item.randc_state
-              && !item.randc_state->randc_used_values.empty();
+          return item.property.randc_state
+              && !item.property.randc_state->randc_used_values.empty();
         })) {
       for (auto& item : selected) {
-        if (!item.randc_state) continue;
-        if (item.randc_state->randc_cycle
+        auto& entry = item.property;
+        if (!entry.randc_state) continue;
+        if (entry.randc_state->randc_cycle
             == std::numeric_limits<std::uint64_t>::max()) {
           throw std::overflow_error{"randc cycle ordinal exhausted"};
         }
-        ++item.randc_state->randc_cycle;
-        item.randc_state->randc_used_values.clear();
+        ++entry.randc_state->randc_cycle;
+        entry.randc_state->randc_used_values.clear();
         solver.replace_domain(
-            item.variable,
-            randc_domain(item.base_domain, *item.randc_state));
+            entry.variable,
+            randc_domain(entry.base_domain, *entry.randc_state));
       }
       solved = solver.solve(selection);
     }
-    if (solved.status != SystemVerilogConstraintSolveStatus::Satisfied) {
-      return {
-          solved.status,
-          solved.exhausted_resource,
-          solved.search_steps,
-          solved.clause_evaluations};
+    auto result = finished(solved);
+    return {result, std::move(selected), std::move(solved.values)};
+  };
+
+  try {
+    const bool sized = std::ranges::any_of(
+        std::views::iota(std::size_t{}, containers.size()),
+        [&](const std::size_t c) {
+          return containers[c].resizable && randomized_container[c];
+        });
+    std::vector<std::size_t> sizes(containers.size());
+    for (std::size_t c = 0; c < containers.size(); ++c) {
+      sizes[c] = containers[c].values.size();
     }
-    for (auto& item : selected) {
-      const auto& property = object.properties[item.property_index];
-      if (item.variable >= solved.values.size()
-          || solved.values[item.variable].width() != property.packed.width()
-          || solved.values[item.variable].is_logic9()) {
+    Outcome outcome;
+    // A size that leaves the elements' constraints unsatisfiable is
+    // replaced by another (IEEE 1800-2017 18.5.8.1).
+    constexpr std::size_t size_attempts = 8U;
+    for (std::size_t attempt = 0; attempt < size_attempts; ++attempt) {
+      if (sized) {
+        add_sizes();
+        auto sizing = solve();
+        if (sizing.result.status
+            != SystemVerilogConstraintSolveStatus::Satisfied) {
+          return sizing.result;
+        }
+        for (std::size_t c = 0; c < containers.size(); ++c) {
+          if (!containers[c].resizable || !randomized_container[c]) continue;
+          auto& node = nodes[containers[c].node];
+          const auto name = containers[c].name + ".size()";
+          const auto found = std::ranges::find(
+              node.object->property_names, name);
+          const auto index = static_cast<std::size_t>(
+              std::distance(node.object->property_names.begin(), found));
+          const auto chosen = std::ranges::find_if(
+              sizing.selected, [&](const auto& item) {
+                return item.node == containers[c].node
+                    && item.property.property_index == index;
+              });
+          if (chosen == sizing.selected.end()) continue;
+          const auto& value = sizing.values.at(chosen->property.variable);
+          sizes[c] = static_cast<std::size_t>(value.low_word().aval);
+        }
+        strip();
+      }
+      for (std::size_t c = 0; c < containers.size(); ++c) {
+        materialize(c, sizes[c]);
+      }
+      outcome = solve();
+      if (!sized || outcome.result.status
+              != SystemVerilogConstraintSolveStatus::Unsatisfiable) {
+        break;
+      }
+      strip();
+    }
+    if (outcome.result.status
+        != SystemVerilogConstraintSolveStatus::Satisfied) {
+      return outcome.result;
+    }
+    auto& solved_values = outcome.values;
+    for (auto& item : outcome.selected) {
+      auto& entry = item.property;
+      const auto& property
+          = nodes[item.node].object->properties[entry.property_index];
+      if (entry.variable >= solved_values.size()
+          || solved_values[entry.variable].width() != property.packed.width()
+          || solved_values[entry.variable].is_logic9()) {
         throw std::logic_error{
             "class randomize solver returned an invalid assignment"};
       }
       if (property.kind == SystemVerilogClassPropertyKind::Bit2
           && std::ranges::any_of(
-              solved.values[item.variable].bval_words(),
+              solved_values[entry.variable].bval_words(),
               [](const auto word) { return word != 0; })) {
         throw std::logic_error{
             "class randomize solver returned an unknown two-state assignment"};
@@ -528,40 +1042,65 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
         throw std::overflow_error{
             "class random property revision exhausted"};
       }
-      if (item.randc_state) {
+      if (entry.randc_state) {
         const auto selected_value = std::ranges::find(
-            item.base_domain, solved.values[item.variable]);
-        if (selected_value == item.base_domain.end()) {
+            entry.base_domain, solved_values[entry.variable]);
+        if (selected_value == entry.base_domain.end()) {
           throw std::logic_error{
               "randc solver assignment is outside the exact domain"};
         }
-        item.randc_state->randc_used_values.push_back(
+        entry.randc_state->randc_used_values.push_back(
             static_cast<std::uint64_t>(std::distance(
-                item.base_domain.begin(), selected_value)));
-        item.randc_state->revision = property.random_state->revision + 1U;
+                entry.base_domain.begin(), selected_value)));
+        entry.randc_state->revision = property.random_state->revision + 1U;
       }
     }
-    std::vector<SystemVerilogClassRandcStateUpdate> randc_updates;
-    randc_updates.reserve(selected.size());
-    for (auto& item : selected) {
-      if (item.randc_state) {
-        randc_updates.push_back({
-            item.property_index, std::move(*item.randc_state)});
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+      std::vector<SystemVerilogClassRandcStateUpdate> randc_updates;
+      for (auto& item : outcome.selected) {
+        if (item.node == n && item.property.randc_state) {
+          randc_updates.push_back({
+              item.property.property_index,
+              std::move(*item.property.randc_state)});
+          item.property.randc_state.reset();
+          item.property.randc_committed = true;
+        }
+      }
+      if (!randc_updates.empty() || n == 0U) {
+        heap.commit_randc_states(nodes[n].handle, randc_updates);
       }
     }
-    heap.commit_randc_states(handle, randc_updates);
-    for (const auto& item : selected) {
-      auto& property = object.properties[item.property_index];
-      std::swap(property.packed, solved.values[item.variable]);
-      if (!item.randc_state) {
+    for (const auto& item : outcome.selected) {
+      auto& property
+          = nodes[item.node].object->properties[item.property.property_index];
+      std::swap(property.packed, solved_values[item.property.variable]);
+      if (!item.property.randc_committed) {
         ++property.random_state->revision;
       }
     }
-    return {
-        solved.status,
-        solved.exhausted_resource,
-        solved.search_steps,
-        solved.clause_evaluations};
+    // The containers take their elements from the committed properties.
+    for (std::size_t c = 0; c < containers.size(); ++c) {
+      auto& container = containers[c];
+      if (!randomized_container[c]) continue;
+      const auto& node = nodes[container.node];
+      std::vector<PackedLogic4> values;
+      values.reserve(sizes[c]);
+      for (std::size_t index = 0; index < sizes[c]; ++index) {
+        const auto name = container.name + "[" + std::to_string(index) + "]";
+        const auto found = std::ranges::find(
+            node.object->property_names, name);
+        if (found == node.object->property_names.end()) {
+          throw std::logic_error{
+              "class randomize container element was not materialized"};
+        }
+        values.push_back(node.object->properties[static_cast<std::size_t>(
+            std::distance(node.object->property_names.begin(), found))]
+            .packed);
+      }
+      container.values = std::move(values);
+      container.committed = true;
+    }
+    return outcome.result;
   } catch (const SystemVerilogConstraintResourceError& error) {
     return exhausted(error.resource());
   } catch (const std::bad_alloc&) {

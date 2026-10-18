@@ -351,11 +351,23 @@ private:
     [[nodiscard]] bool specializes_or_derives(
         const frontend::SystemVerilogClassSpecialization& specialization,
         std::string_view declaration_identity) const;
+    [[nodiscard]] std::optional<sv::ConstraintBinding> dotted_property_binding(
+        const frontend::SystemVerilogClassSpecialization& specialization,
+        std::string_view spelling,
+        semantic::SourceSpanId binding_source);
     [[nodiscard]] std::optional<sv::ConstraintBinding> property_binding(
         const frontend::SystemVerilogClassDeclaration& declaration,
         const frontend::SystemVerilogClassSpecialization& specialization,
         std::string spelling,
         semantic::SourceSpanId binding_source);
+    /// A value parameter of a module, package or compilation unit that a
+    /// class constraint names (IEEE 1800-2017 18.5).
+    [[nodiscard]] std::optional<sv::ConstraintBinding> unit_parameter_binding(
+        const frontend::SystemVerilogClassDeclaration& declaration,
+        const frontend::SystemVerilogClassSpecialization& specialization,
+        std::string_view spelling,
+        semantic::SourceSpanId binding_source);
+    void collect_unit_parameters(const frontend::ParsedDesign& parsed);
     [[nodiscard]] std::optional<sv::ConstraintBinding> parameter_binding(
         const frontend::SystemVerilogClassDeclaration& declaration,
         const frontend::SystemVerilogClassSpecialization& specialization,
@@ -625,6 +637,12 @@ private:
         expressions_;
     std::unordered_map<std::string, semantic::TypeId>
         anonymous_aggregate_types_;
+    struct UnitParameter {
+        std::string unit;
+        frontend::Type type;
+        std::uint64_t value { };
+    };
+    std::multimap<std::string, UnitParameter, std::less<>> unit_parameters_;
 };
 
 } // namespace fsim::app::application_detail::systemverilog_hir_detail

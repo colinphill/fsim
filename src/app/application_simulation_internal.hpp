@@ -472,6 +472,17 @@ struct Simulation::Impl {
     std::map<std::pair<std::uint64_t, std::string>,
         runtime::simir::ContainerValue>
         class_value_containers;
+    // The types class constraints give the properties they name, by
+    // canonical property identity; built at the first class randomize.
+    std::optional<std::map<std::string, semantic::sv::TypeReference,
+        std::less<>>>
+        class_constraint_property_types;
+    // A static constraint's mode is shared by every object of its class
+    // (IEEE 1800-2017 18.9), by canonical constraint identity.
+    std::map<std::string, bool, std::less<>> static_constraint_modes;
+    std::optional<std::set<std::string, std::less<>>>
+        static_constraint_identities;
+    [[nodiscard]] bool static_constraint(std::string_view identity);
     // Exact enclosing module/interface parameter values and owner process
     // captured by class objects. Declaration identity distinguishes same-name
     // parameters; the process recovers the exact unit and instance path.

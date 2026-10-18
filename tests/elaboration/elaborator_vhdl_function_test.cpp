@@ -2707,16 +2707,17 @@ void test_vhdl_runtime_for_loop_iteration_cap()
         over_limit.design,
         "vhdl:work.runtime_for_loop_iteration_cap(rtl)");
     assert(over_elaborated.ok());
+    // A for-loop always ends (IEEE 1076-2008 10.10); a run-time loop of
+    // more than a million iterations completes rather than stopping at a
+    // fixed limit.
+    const auto over_result
+        = over_elaborated.design->find_signal("result_value");
+    assert(over_result);
     auto over_interpreter = over_elaborated.design->create_interpreter();
-    bool saw_iteration_limit = false;
-    try {
-        (void)over_interpreter->run();
-    } catch (const fsim::runtime::simir::AssertionError& error) {
-        saw_iteration_limit = std::string_view { error.what() }.find(
-                                  "one-million-iteration limit")
-            != std::string_view::npos;
-    }
-    assert(saw_iteration_limit);
+    assert(over_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    assert(over_interpreter->signal_value(*over_result).low_word().aval
+        == 1000000U);
 }
 
 void test_vhdl_large_static_for_loops_use_counted_lowering()
@@ -2837,7 +2838,7 @@ end architecture;
             redundant_cap_reports += report != nullptr
                 && report->message
                     == "runtime VHDL for-loop exceeds the "
-                       "one-million-iteration limit";
+                       "iteration limit";
             const auto* jump = fsim::runtime::simir::operation_get_if<
                 fsim::runtime::simir::Jump>(&operation);
             backward_jumps += jump != nullptr && jump->target < index;
@@ -2923,7 +2924,7 @@ end architecture;
                 counts.first += report != nullptr
                     && report->message
                         == "runtime VHDL for-loop exceeds the "
-                           "one-million-iteration limit";
+                           "iteration limit";
                 const auto* jump = fsim::runtime::simir::operation_get_if<
                     fsim::runtime::simir::Jump>(&operation);
                 counts.second += jump != nullptr && jump->target < index;
@@ -2971,7 +2972,7 @@ end architecture;
             at_limit_reports += report != nullptr
                 && report->message
                     == "runtime VHDL for-loop exceeds the "
-                       "one-million-iteration limit";
+                       "iteration limit";
             const auto* jump = fsim::runtime::simir::operation_get_if<
                 fsim::runtime::simir::Jump>(&operation);
             at_limit_backward_jumps += jump != nullptr
@@ -3001,7 +3002,10 @@ end architecture;
     const auto over_limit_elaboration = compile_and_elaborate(
         over_limit.design,
         "vhdl:work.large_static_for_loop_over_limit(rtl)");
-    assert(has_diagnostic(over_limit_elaboration, "FSIM-ELAB-073"));
+    // A for-loop always ends (IEEE 1076-2008 10.10): a static loop of more
+    // than a million iterations lowers to a counted run-time loop.
+    assert(over_limit_elaboration.ok());
+    assert(!has_diagnostic(over_limit_elaboration, "FSIM-ELAB-073"));
 }
 
 void test_vhdl_static_for_threshold_preserves_array_values_and_visits()
@@ -3130,7 +3134,7 @@ end architecture;
             redundant_cap_reports += report != nullptr
                 && report->message
                     == "runtime VHDL for-loop exceeds the "
-                       "one-million-iteration limit";
+                       "iteration limit";
             const auto* jump = fsim::runtime::simir::operation_get_if<
                 fsim::runtime::simir::Jump>(&operation);
             backward_jumps += jump != nullptr

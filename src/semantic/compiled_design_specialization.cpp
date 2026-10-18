@@ -12232,6 +12232,179 @@ private:
         return std::nullopt;
     }
 
+    // Whether a $sformatf argument has a signed type; nothing when the
+    // type is not known here.
+    [[nodiscard]] std::optional<bool> format_argument_signed(
+        const ExpressionId id)
+    {
+        const auto view = unit_.find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& record = *view->systemverilog;
+        const auto signed_type = [](const sv::TypeReference& type) {
+            const auto& spelling = type.target.spelling;
+            return type.signed_value || spelling == "int"
+                || spelling == "integer" || spelling == "byte"
+                || spelling == "shortint" || spelling == "longint";
+        };
+        if (record.kind == sv::ExpressionKind::integer_literal) {
+            return true;
+        }
+        if (record.kind == sv::ExpressionKind::logic_literal) {
+            const auto quote = record.text.find('\'');
+            return quote != std::string::npos && quote + 1U < record.text.size()
+                && (record.text[quote + 1U] == 's'
+                    || record.text[quote + 1U] == 'S');
+        }
+        if (record.kind == sv::ExpressionKind::unary
+            && record.operands.size() == 1U
+            && (record.text == "-" || record.text == "+")) {
+            return format_argument_signed(record.operands.front());
+        }
+        if (record.kind == sv::ExpressionKind::name) {
+            const auto declaration = expression_declaration(id);
+            const auto found = declaration
+                ? unit_.find_declaration(*declaration) : std::nullopt;
+            if (!found || found->systemverilog == nullptr
+                || !found->systemverilog->type) {
+                return std::nullopt;
+            }
+            return signed_type(*found->systemverilog->type);
+        }
+        if (record.kind == sv::ExpressionKind::call) {
+            const auto callable = callable_declaration(record);
+            const auto found = callable
+                ? unit_.find_declaration(*callable) : std::nullopt;
+            if (!found || found->systemverilog == nullptr
+                || !found->systemverilog->callable) {
+                return std::nullopt;
+            }
+            return signed_type(found->systemverilog->callable->return_type);
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string> format_constant_string(
+        const sv::Expression& expression)
+    {
+        const auto format = evaluate_string(expression.operands.front());
+        if (!format) {
+            return std::nullopt;
+        }
+        std::string result;
+        std::size_t argument = 1U;
+        for (std::size_t index = 0; index < format->size(); ++index) {
+            const auto character = (*format)[index];
+            if (character != '%') {
+                result.push_back(character);
+                continue;
+            }
+            ++index;
+            std::optional<std::size_t> field;
+            std::size_t digits { };
+            while (index < format->size()
+                && std::isdigit(static_cast<unsigned char>(
+                    (*format)[index]))) {
+                digits = digits * 10U
+                    + static_cast<std::size_t>((*format)[index] - '0');
+                field = digits;
+                ++index;
+            }
+            if (index >= format->size()) {
+                return std::nullopt;
+            }
+            const auto conversion = static_cast<char>(std::tolower(
+                static_cast<unsigned char>((*format)[index])));
+            if (conversion == '%') {
+                result.push_back('%');
+                continue;
+            }
+            if (argument >= expression.operands.size()) {
+                return std::nullopt;
+            }
+            const auto operand = expression.operands[argument++];
+            if (conversion == 's') {
+                auto text = evaluate_string(operand);
+                if (!text) {
+                    return std::nullopt;
+                }
+                if (field && text->size() < *field) {
+                    text->insert(0, *field - text->size(), ' ');
+                }
+                result += *text;
+                continue;
+            }
+            const auto value = evaluate(operand);
+            if (!value) {
+                return std::nullopt;
+            }
+            std::set<ExpressionId> active;
+            const auto width = static_cast<std::size_t>(std::clamp<std::uint64_t>(
+                systemverilog_expression_width(unit_, operand, active)
+                    .value_or(32U), 1U, 64U));
+            const auto mask = width >= 64U ? ~std::uint64_t { 0 }
+                : (std::uint64_t { 1 } << width) - 1U;
+            const auto bits = static_cast<std::uint64_t>(*value) & mask;
+            const auto signedness = format_argument_signed(operand);
+            if (!signedness) {
+                return std::nullopt;
+            }
+            const bool is_signed = *signedness;
+            std::string text;
+            std::size_t natural { };
+            if (conversion == 'c') {
+                result.push_back(static_cast<char>(bits & 0xffU));
+                continue;
+            }
+            if (conversion == 'd') {
+                if (is_signed && width < 64U
+                    && ((bits >> (width - 1U)) & 1U) != 0U) {
+                    text = std::to_string(static_cast<std::int64_t>(
+                        bits | ~mask));
+                } else if (is_signed && width == 64U) {
+                    text = std::to_string(static_cast<std::int64_t>(bits));
+                } else {
+                    text = std::to_string(bits);
+                }
+                // The default field holds the largest value of the width
+                // (IEEE 1800-2017 21.2.1.3).
+                const auto largest = is_signed
+                    ? std::to_string(width >= 64U
+                          ? std::numeric_limits<std::uint64_t>::max() / 2U + 1U
+                          : std::uint64_t { 1 } << (width - 1U))
+                    : std::to_string(mask);
+                natural = largest.size() + (is_signed ? 1U : 0U);
+            } else if (conversion == 'h' || conversion == 'x'
+                || conversion == 'b' || conversion == 'o') {
+                const unsigned shift = conversion == 'b' ? 1U
+                    : conversion == 'o' ? 3U : 4U;
+                natural = (width + shift - 1U) / shift;
+                auto remaining = bits;
+                do {
+                    text.insert(text.begin(),
+                        "0123456789abcdef"[remaining & ((1U << shift) - 1U)]);
+                    remaining >>= shift;
+                } while (remaining != 0U);
+                if (!field && text.size() < natural) {
+                    text.insert(0, natural - text.size(), '0');
+                }
+            } else {
+                return std::nullopt;
+            }
+            const auto target = field ? *field : natural;
+            if (text.size() < target) {
+                text.insert(0, target - text.size(),
+                    conversion == 'd' ? ' ' : '0');
+            }
+            result += text;
+        }
+        if (argument != expression.operands.size()) {
+            return std::nullopt;
+        }
+        return result;
+    }
+
     template <typename Expression>
     [[nodiscard]] std::optional<std::string> evaluate_string_expression(
         const Expression& expression)
@@ -12420,6 +12593,13 @@ private:
                     *literals, *value);
                 // A value outside the enumeration has an empty name.
                 return index ? (*literals)[*index].name : std::string { };
+            }
+            // $sformatf in a constant expression (IEEE 1800-2017 21.3.3),
+            // for the integral and string conversions.
+            if (expression.kind == Kind::call
+                && expression.text == "$sformatf"
+                && !expression.operands.empty()) {
+                return format_constant_string(expression);
             }
             // A constant function returning a string (13.4.3).
             if (expression.kind == Kind::call) {

@@ -236,6 +236,29 @@ void SystemVerilogConstraintSolver::discard_soft_clauses(
   });
 }
 
+std::optional<bool> SystemVerilogConstraintSolver::fixed_truth(
+    const SystemVerilogConstraintExpression& predicate) const {
+  std::vector<std::optional<PackedLogic4>> values(variables_.size());
+  for (const auto& node : predicate.nodes) {
+    if (node.operation != SystemVerilogConstraintExpressionOperator::Variable) {
+      continue;
+    }
+    if (node.variable >= variables_.size()
+        || variables_[node.variable].domain.size() != 1U) {
+      return std::nullopt;
+    }
+    values[node.variable] = variables_[node.variable].domain.front();
+  }
+  const SystemVerilogConstraintAssignment assignment{variables_, values};
+  const auto result = evaluate_systemverilog_constraint_expression(
+      predicate, assignment);
+  if (result.width() != 1U || result.get(0) == Logic4::x
+      || result.get(0) == Logic4::z) {
+    return std::nullopt;
+  }
+  return result.get(0) == Logic4::one;
+}
+
 void SystemVerilogConstraintSolver::add_clause(
     SystemVerilogConstraintClause clause) {
   if (clauses_.size() >= limits_.maximum_clauses) {
@@ -356,7 +379,8 @@ void SystemVerilogConstraintSolver::add_distribution(
       std::move(distribution.canonical_identity),
       distribution.variable,
       std::move(weights),
-      std::move(distribution.entries)});
+      std::move(distribution.entries),
+      std::move(distribution.guard)});
 }
 
 std::vector<SystemVerilogConstraintDistributionEntry>
@@ -467,10 +491,10 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       variables_.size());
   const SystemVerilogConstraintAssignment assignment{
       variables_, assigned_values};
+  using State = SystemVerilogConstraintClauseState;
   struct Evaluation {
-    SystemVerilogConstraintClauseState hard{
-        SystemVerilogConstraintClauseState::Satisfied};
-    std::vector<SystemVerilogConstraintClauseState> soft;
+    State hard{State::Satisfied};
+    std::vector<State> soft;
   };
   const auto evaluate = [&]() {
     Evaluation result;
@@ -481,11 +505,11 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
         result.soft.push_back(clause_state);
         continue;
       }
-      if (clause_state == SystemVerilogConstraintClauseState::Violated) {
+      if (clause_state == State::Violated) {
         result.hard = clause_state;
         return result;
       }
-      if (clause_state == SystemVerilogConstraintClauseState::Undetermined) {
+      if (clause_state == State::Undetermined) {
         result.hard = clause_state;
       }
     }
@@ -518,13 +542,33 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
         clause_evaluations};
   }
 
-  const auto variable_order = search_order();
-  std::vector<std::vector<std::size_t>> domain_order(variables_.size());
-  for (std::size_t variable = 0; variable < variables_.size(); ++variable) {
+  // A variable's values in search order: drawn without replacement, each in
+  // proportion to the product of its distribution weights. A guarded
+  // distribution contributes only where its guard holds under the current
+  // assignment.
+  const auto guard_holds = [&](const RetainedDistribution& distribution) {
+    if (!distribution.guard) return true;
+    for (const auto& node : distribution.guard->nodes) {
+      if (node.operation == SystemVerilogConstraintExpressionOperator::Variable
+          && (node.variable >= assigned_values.size()
+              || !assigned_values[node.variable])) {
+        return false;
+      }
+    }
+    const auto value = evaluate_systemverilog_constraint_expression(
+        *distribution.guard, assignment);
+    return value.width() == 1U && value.get(0) == Logic4::one;
+  };
+  const auto value_order = [&](const std::size_t variable,
+                               const bool guarded) {
+    std::vector<std::size_t> order;
     std::vector<std::uint64_t> weights(variables_[variable].domain.size(), 1);
     bool weighted{};
     for (const auto& distribution : distributions_) {
       if (distribution.variable != variable) continue;
+      if (distribution.guard && (!guarded || !guard_holds(distribution))) {
+        continue;
+      }
       weighted = true;
       for (std::size_t index = 0; index < weights.size(); ++index) {
         if (weights[index] != 0 && distribution.weights[index]
@@ -536,135 +580,296 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       }
     }
     if (!weighted) {
-      domain_order[variable].resize(weights.size());
-      std::iota(
-          domain_order[variable].begin(),
-          domain_order[variable].end(), 0U);
-      continue;
+      order.resize(weights.size());
+      std::iota(order.begin(), order.end(), 0U);
+      return order;
     }
-    std::vector<std::size_t> remaining;
-    for (std::size_t index = 0; index < weights.size(); ++index) {
-      if (weights[index] != 0) remaining.push_back(index);
+    // A Fenwick tree over the weights finds each draw in logarithmic time.
+    const auto count = weights.size();
+    std::vector<std::uint64_t> tree(count + 1U);
+    std::uint64_t total{};
+    std::size_t remaining{};
+    for (std::size_t index = 0; index < count; ++index) {
+      if (weights[index] == 0) continue;
+      if (weights[index] > std::numeric_limits<std::uint64_t>::max() - total) {
+        throw std::overflow_error{
+            "constraint distribution total weight overflows"};
+      }
+      total += weights[index];
+      ++remaining;
+      for (auto node = index + 1U; node <= count; node += node & (~node + 1U)) {
+        tree[node] += weights[index];
+      }
     }
+    std::size_t top = 1U;
+    while (top * 2U <= count) top *= 2U;
     auto state = mixed(
         selection ^ identity_hash(variables_[variable].canonical_identity));
-    while (!remaining.empty()) {
-      std::uint64_t total{};
-      for (const auto index : remaining) {
-        if (weights[index]
-            > std::numeric_limits<std::uint64_t>::max() - total) {
-          throw std::overflow_error{
-              "constraint distribution total weight overflows"};
-        }
-        total += weights[index];
-      }
+    order.reserve(remaining);
+    for (; remaining > 0U; --remaining) {
       auto target = state % total;
-      auto selected = remaining.begin();
-      for (; selected != remaining.end(); ++selected) {
-        if (target < weights[*selected]) break;
-        target -= weights[*selected];
+      std::size_t position{};
+      for (auto step = top; step > 0U; step /= 2U) {
+        if (position + step <= count && tree[position + step] <= target) {
+          position += step;
+          target -= tree[position];
+        }
       }
-      domain_order[variable].push_back(*selected);
-      remaining.erase(selected);
+      order.push_back(position);
+      const auto weight = weights[position];
+      total -= weight;
+      weights[position] = 0;
+      for (auto node = position + 1U; node <= count;
+           node += node & (~node + 1U)) {
+        tree[node] -= weight;
+      }
       state = mixed(state + UINT64_C(0x9e3779b97f4a7c15));
     }
+    return order;
+  };
+  std::vector<std::vector<std::size_t>> domain_order(variables_.size());
+  std::vector<bool> guarded_variable(variables_.size());
+  for (std::size_t variable = 0; variable < variables_.size(); ++variable) {
+    domain_order[variable] = value_order(variable, false);
   }
-  std::vector<std::size_t> next_domain_index(variables_.size());
-  std::vector<PackedLogic4> best_values;
-  std::vector<SystemVerilogConstraintClauseState> best_soft;
-  bool has_best{};
+  for (const auto& distribution : distributions_) {
+    if (distribution.guard && distribution.variable < variables_.size()) {
+      guarded_variable[distribution.variable] = true;
+    }
+  }
+  // Assigning a variable can change only the clauses that read it; a clause
+  // with no recorded variables is checked at every step.
+  std::vector<std::vector<std::size_t>> clauses_of(variables_.size());
+  std::vector<std::size_t> unbound_clauses;
+  for (std::size_t index = 0; index < clauses_.size(); ++index) {
+    const auto& clause = clauses_[index];
+    if (clause.variables.empty()) {
+      unbound_clauses.push_back(index);
+      continue;
+    }
+    for (const auto variable : clause.variables) {
+      if (variable < variables_.size()
+          && (clauses_of[variable].empty()
+              || clauses_of[variable].back() != index)) {
+        clauses_of[variable].push_back(index);
+      }
+    }
+  }
+  // The values a variable may take: a hard clause of that variable alone
+  // rejects the others before the search. The search visits the remaining
+  // values in the same order, so it finds the same assignment.
+  auto candidates = std::move(domain_order);
+  for (const auto& clause : clauses_) {
+    if (clause.soft || clause.variables.empty()
+        || clause.variables.front() >= variables_.size()
+        || !std::ranges::all_of(clause.variables, [&](const auto variable) {
+             return variable == clause.variables.front();
+           })) {
+      continue;
+    }
+    const auto variable = clause.variables.front();
+    std::erase_if(candidates[variable], [&](const std::size_t index) {
+      assigned_values[variable] = variables_[variable].domain[index];
+      ++clause_evaluations;
+      const bool rejected = clause.evaluate(assignment) == State::Violated;
+      assigned_values[variable].reset();
+      return rejected;
+    });
+  }
+  // A variable left one value is assigned first; that changes no other
+  // variable's order, so the search finds the same assignment.
+  auto variable_order = search_order();
+  std::ranges::stable_partition(variable_order, [&](const auto variable) {
+    return candidates[variable].size() == 1U;
+  });
+  // A variable with a guarded distribution follows the guard's variables,
+  // so its weights are known when it is assigned.
+  for (const auto& distribution : distributions_) {
+    if (!distribution.guard) continue;
+    const auto variable = distribution.variable;
+    auto position = std::ranges::find(variable_order, variable);
+    if (position == variable_order.end()) continue;
+    std::ptrdiff_t last = -1;
+    for (const auto& node : distribution.guard->nodes) {
+      if (node.operation != SystemVerilogConstraintExpressionOperator::Variable) {
+        continue;
+      }
+      const auto guard_position = std::ranges::find(
+          variable_order, node.variable);
+      last = std::max(last, std::distance(
+          variable_order.begin(), guard_position));
+    }
+    const auto index = std::distance(variable_order.begin(), position);
+    if (last > index) {
+      variable_order.erase(position);
+      variable_order.insert(variable_order.begin() + last, variable);
+    }
+  }
+  // The values a guarded variable may take, for reordering during search.
+  std::vector<std::vector<bool>> allowed(variables_.size());
+  for (std::size_t variable = 0; variable < variables_.size(); ++variable) {
+    if (!guarded_variable[variable]) continue;
+    allowed[variable].assign(variables_[variable].domain.size(), false);
+    for (const auto index : candidates[variable]) {
+      allowed[variable][index] = true;
+    }
+  }
+
+  // Clauses the search enforces: every hard clause, and the soft clauses
+  // already found satisfiable together with them.
+  std::vector<bool> enforced(clauses_.size());
+  for (std::size_t index = 0; index < clauses_.size(); ++index) {
+    enforced[index] = !clauses_[index].soft;
+  }
+  // A clause left with one unassigned variable must allow one of its
+  // values; otherwise no completion of the assignment satisfies it.
+  constexpr std::size_t forward_check_values = 4096U;
+  const auto supported = [&](const SystemVerilogConstraintClause& clause) {
+    std::optional<SystemVerilogConstraintVariableId> open;
+    for (const auto variable : clause.variables) {
+      if (variable >= variables_.size() || assigned_values[variable]) {
+        continue;
+      }
+      if (open && *open != variable) return true;
+      open = variable;
+    }
+    if (!open || candidates[*open].size() > forward_check_values) {
+      return true;
+    }
+    bool found{};
+    for (const auto index : candidates[*open]) {
+      assigned_values[*open] = variables_[*open].domain[index];
+      ++clause_evaluations;
+      if (clause.evaluate(assignment) != State::Violated) {
+        found = true;
+        break;
+      }
+    }
+    assigned_values[*open].reset();
+    return found;
+  };
+  const auto violated_after = [&](const SystemVerilogConstraintVariableId
+                                      assigned) {
+    for (const auto index : unbound_clauses) {
+      if (!enforced[index]) continue;
+      ++clause_evaluations;
+      if (clauses_[index].evaluate(assignment) == State::Violated) {
+        return true;
+      }
+    }
+    for (const auto index : clauses_of[assigned]) {
+      if (!enforced[index]) continue;
+      const auto& clause = clauses_[index];
+      ++clause_evaluations;
+      const auto state = clause.evaluate(assignment);
+      if (state == State::Violated) return true;
+      if (state == State::Undetermined && !supported(clause)) return true;
+    }
+    return false;
+  };
+  enum class Outcome : std::uint8_t { Found, Unsatisfiable, Exhausted };
+  auto exhausted_resource = SystemVerilogConstraintResource::None;
+  // The first assignment, in search order, meeting every enforced clause.
+  const auto search = [&]() -> Outcome {
+    for (auto& value : assigned_values) value.reset();
+    std::vector<std::size_t> next_index(variables_.size());
+    std::size_t depth{};
+    while (true) {
+      if (elapsed(limits_, clock_, start)) {
+        exhausted_resource = SystemVerilogConstraintResource::ElapsedWork;
+        return Outcome::Exhausted;
+      }
+      const auto variable = variable_order[depth];
+      if (next_index[depth] == 0U && guarded_variable[variable]) {
+        auto order = value_order(variable, true);
+        std::erase_if(order, [&](const std::size_t index) {
+          return !allowed[variable][index];
+        });
+        candidates[variable] = std::move(order);
+      }
+      if (next_index[depth] >= candidates[variable].size()) {
+        next_index[depth] = 0;
+        assigned_values[variable].reset();
+        if (depth == 0) return Outcome::Unsatisfiable;
+        --depth;
+        continue;
+      }
+      if (search_steps >= limits_.maximum_search_steps) {
+        exhausted_resource = SystemVerilogConstraintResource::SearchSteps;
+        return Outcome::Exhausted;
+      }
+      assigned_values[variable] = variables_[variable].domain[
+          candidates[variable][next_index[depth]++]];
+      ++search_steps;
+      if (violated_after(variable)) continue;
+      if (depth + 1U < variables_.size()) {
+        ++depth;
+        continue;
+      }
+      bool satisfied = true;
+      for (std::size_t index = 0; index < clauses_.size(); ++index) {
+        ++clause_evaluations;
+        const auto state = clauses_[index].evaluate(assignment);
+        if (state == State::Undetermined) {
+          throw std::logic_error{
+              "constraint clause remained undetermined for a complete "
+              "assignment"};
+        }
+        if (enforced[index] && state == State::Violated) satisfied = false;
+      }
+      if (satisfied) return Outcome::Found;
+    }
+  };
   const auto retain_values = [&]() {
     std::vector<PackedLogic4> values;
     values.reserve(assigned_values.size());
     for (const auto& value : assigned_values) values.push_back(*value);
     return values;
   };
-  const auto better_soft = [&](const auto& candidate) {
-    if (!has_best) return true;
-    for (std::size_t offset = 0; offset < candidate.size(); ++offset) {
-      const auto index = candidate.size() - offset - 1U;
-      const auto candidate_satisfied = candidate[index]
-          == SystemVerilogConstraintClauseState::Satisfied;
-      const auto retained_satisfied = best_soft[index]
-          == SystemVerilogConstraintClauseState::Satisfied;
-      if (candidate_satisfied != retained_satisfied) {
-        return candidate_satisfied;
-      }
+  const auto finish = [&](const Outcome outcome,
+                          std::vector<PackedLogic4> values)
+      -> SystemVerilogConstraintSolveResult {
+    if (outcome == Outcome::Exhausted) {
+      return exhausted(exhausted_resource, search_steps, clause_evaluations);
     }
-    return false;
+    return {
+        outcome == Outcome::Found
+            ? SystemVerilogConstraintSolveStatus::Satisfied
+            : SystemVerilogConstraintSolveStatus::Unsatisfiable,
+        SystemVerilogConstraintResource::None,
+        std::move(values),
+        search_steps,
+        clause_evaluations};
   };
-  std::size_t depth{};
-  while (true) {
-    if (elapsed(limits_, clock_, start)) {
-      return exhausted(
-          SystemVerilogConstraintResource::ElapsedWork,
-          search_steps,
-          clause_evaluations);
+  auto outcome = search();
+  if (outcome != Outcome::Found) return finish(outcome, {});
+  auto best = retain_values();
+  // Soft constraints are met in priority order, the later declared first
+  // (IEEE 1800-2017 18.5.14.1): each joins the enforced set when the
+  // set stays satisfiable. The first assignment meeting the final set is
+  // the first one meeting the most preferred soft constraints.
+  for (std::size_t offset = 0; offset < clauses_.size(); ++offset) {
+    const auto index = clauses_.size() - offset - 1U;
+    if (!clauses_[index].soft) continue;
+    for (std::size_t variable = 0; variable < variables_.size(); ++variable) {
+      assigned_values[variable] = best[variable];
     }
-    const auto variable = variable_order[depth];
-    if (next_domain_index[depth] >= domain_order[variable].size()) {
-      next_domain_index[depth] = 0;
-      assigned_values[variable].reset();
-      if (depth == 0) {
-        if (has_best) {
-          return {
-              SystemVerilogConstraintSolveStatus::Satisfied,
-              SystemVerilogConstraintResource::None,
-              std::move(best_values),
-              search_steps,
-              clause_evaluations};
-        }
-        return {
-            SystemVerilogConstraintSolveStatus::Unsatisfiable,
-            SystemVerilogConstraintResource::None,
-            {},
-            search_steps,
-            clause_evaluations};
-      }
-      --depth;
+    ++clause_evaluations;
+    if (clauses_[index].evaluate(assignment) == State::Satisfied) {
+      enforced[index] = true;
       continue;
     }
-    if (search_steps >= limits_.maximum_search_steps) {
-      return exhausted(
-          SystemVerilogConstraintResource::SearchSteps,
-          search_steps,
-          clause_evaluations);
+    enforced[index] = true;
+    outcome = search();
+    if (outcome == Outcome::Found) {
+      best = retain_values();
+    } else if (outcome == Outcome::Unsatisfiable) {
+      enforced[index] = false;
+    } else {
+      return finish(outcome, {});
     }
-    assigned_values[variable] =
-        variables_[variable].domain[
-            domain_order[variable][next_domain_index[depth]++]];
-    ++search_steps;
-    const auto evaluation = evaluate();
-    if (evaluation.hard == SystemVerilogConstraintClauseState::Violated) {
-      continue;
-    }
-    if (depth + 1U == variables_.size()) {
-      if (evaluation.hard
-              == SystemVerilogConstraintClauseState::Undetermined
-          || std::ranges::find(
-                 evaluation.soft,
-                 SystemVerilogConstraintClauseState::Undetermined)
-              != evaluation.soft.end()) {
-        throw std::logic_error{
-            "constraint clause remained undetermined for a complete assignment"};
-      }
-      if (evaluation.soft.empty()) {
-        return {
-            SystemVerilogConstraintSolveStatus::Satisfied,
-            SystemVerilogConstraintResource::None,
-            retain_values(),
-            search_steps,
-            clause_evaluations};
-      }
-      if (better_soft(evaluation.soft)) {
-        best_values = retain_values();
-        best_soft = evaluation.soft;
-        has_best = true;
-      }
-      continue;
-    }
-    ++depth;
   }
+  return finish(Outcome::Found, std::move(best));
 }
 
 }  // namespace fsim::runtime

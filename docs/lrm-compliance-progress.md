@@ -253,6 +253,159 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 67: global constraints, randomized arrays, solver search, constraint operators
+
+Closes the global-constraint plan (`.local-artifacts/lrm-closure/triage/b67-global-constraints.md`)
+and corpus cases from the Batch 66 index. Every change is SystemVerilog except
+the VHDL for-loop limit.
+
+Randomization (IEEE 1800-2017 clause 18):
+
+- Objects reached through `rand` class handles join the root's solve (global
+  constraints, 18.5.9). The solve is one transaction:
+  - pre_randomize and post_randomize run in order (18.6.1);
+  - constraints may name `h.m` paths;
+  - each object's clause identities stay distinct.
+- Unpacked arrays, dynamic arrays and queues of packed values are randomized
+  element by element (18.4). A random dynamic array or queue is resized when
+  its `size()` is constrained, and otherwise keeps its size. Constraints
+  support:
+  - `foreach`;
+  - `size()`, including `a.size` without parentheses;
+  - `sum`/`product`/`and`/`or`/`xor`, with an optional `with` clause and `item.index`;
+  - constant or random element indexes;
+  - `unique` over arrays;
+  - `inside` over arrays.
+
+  Enumeration arrays take only their values.
+- Inline `randomize() with {...}` accepts the same array forms, and accepts
+  these names:
+  - `obj.m` through the randomized handle;
+  - `local::` names in the calling scope (18.7.1);
+  - `with (names)` lists, which bind only the listed names to the object
+    (18.7);
+  - calling-scope arrays, elements and functions, which are read when the
+    call runs.
+- New constraint operators:
+  - bit and part selects;
+  - shifts;
+  - concatenation;
+  - casts (`int'`, `N'`, `signed'`);
+  - reductions (`&`, `|`, `^` and their negations);
+  - `$countones`, `$countbits`, `$onehot`, `$onehot0`, `$clog2`;
+  - unsized based literals;
+  - unit and package parameters;
+  - parameters of other specializations.
+- `dist`:
+  - Under `if`, `->` or `foreach`, a `dist` weights its variable where the
+    guards hold, including random guards (18.5.4).
+  - Array items expand to their elements.
+  - Range bounds may be negative or state variables.
+- Guarded `disable soft` and static constraint modes:
+  - `disable soft` under a state-variable guard applies where the guard holds
+    (18.5.14.2).
+  - A static constraint's `constraint_mode` is shared by all objects of the
+    class (18.9).
+- Objects: `get_randstate`/`set_randstate` (18.13.4-5). `randomize()` and
+  `rand_mode`/`constraint_mode` work when called from method bodies that run
+  in the class interpreter.
+
+Solver: same solutions, found faster.
+
+- Speed-ups that keep the same first solution:
+  - each step re-checks only the clauses that read the variable just assigned;
+  - forward checking for clauses with one unassigned variable;
+  - values excluded by unary clauses are removed before the search;
+  - fixed variables are searched first;
+  - weighted value order is computed in O(n log n).
+- Soft constraints are added greedily in priority order instead of searching
+  every solution. The first assignment found is the same as before.
+- Wide variables:
+  - Bounded domains are ordered.
+  - Sampled domains also offer power-of-two values.
+  - Variables wider than 64 bits draw from the constants their clauses compare
+    them with.
+  - Equality chains propagate across all wide variables.
+- Fixes:
+  - The implicit uniform distribution of signed variables uses the true
+    minimum and maximum. This fixes every `rand byte`.
+  - Constant guards no longer defeat domain bounds.
+
+Language fixes found on the way:
+
+- An element of an object's array of values read through a handle has the
+  element's width, sign and domain. It is no longer a 64-bit handle value.
+- Class array properties take their initializer patterns (8.5).
+- A typedef can name a class array property.
+- Runtime method calls see the method's cached array properties.
+- Constant string functions may use `$sformatf` (21.3.3). Signedness comes
+  from the declared types and return types.
+
+VHDL:
+
+- A sequential for-loop is never limited by an iteration count (10.10). Loops
+  too long to unroll run at run time.
+
+Runner: `dist` inside parentheses is out of scope (A.1.10 makes `dist` a
+constraint item). An nvc `guut.` generic is a hierarchical override.
+
+Measurement:
+- All six suites were run in full on the frozen `b67w6` and compared with
+  Batch 66 (`b66w10`): **50 new passes, zero regressions**.
+- The labelled ctest ends with the same 27 known failures.
+- No diagnostic codes were added or retired (2965 codes).
+
+| Suite | Batch66 passes / in scope | Batch67 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2514 / 2570 | 2514 / 2570 | 256 |
+| sv-tests | 1434 / 1497 | 1438 / 1497 | 0 |
+| verilator | 1541 / 2137 | 1586 / 2138 | 277 |
+| vests | 3578 / 3646 | 3578 / 3646 | 2 |
+| nvc | 877 / 1261 | 878 / 1260 | 222 |
+| vhdl-compliance | 41 / 72 | 41 / 72 | 0 |
+
+Scope changes:
+- verilator t_constraint_dist_foreach_if and t_constraint_dist_if_foreach
+  are now excluded (`dist` inside parentheses).
+- nvc toplevel3 is now excluded (`guut.` hierarchical generic override).
+- verilator t_const_string_func, t_display_string and t_display_string_noopt
+  were excluded only while constant `$sformatf` failed to elaborate. They now
+  pass and count as in scope.
+
+Architecture: the next set is planned in
+`.local-artifacts/lrm-closure/ARCH-PLAN-b68.md` (pillars R1-R8, Batches
+68-75). The plan has per-batch removal lists for the Batch 64-67 one-offs it
+supersedes. Several Batch 67 additions are removal targets of that plan:
+- array support duplicated in the runtime inline-constraint lowerer;
+- `@inline-value` caller placeholders;
+- the property-binding fallback across class specializations;
+- typedef-by-spelling element widths;
+- the cache reload around runtime class method calls.
+
+Owner rule from 2026-10-18: no further one-off fixes that a plan step
+supersedes.
+
+Deferred to plan steps:
+- randomizing structs, unions, associative arrays and arrays of class handles
+  (R6);
+- `with` clauses inside interpreted methods and `std::randomize` with arrays
+  (R6);
+- sum and count constraints that need propagation (R6);
+- class methods of parameterized specializations (R1, R5);
+- packed signedness through typedefs (R2).
+
+Batch-close cleanup (owner rule):
+- Removed `build/release` and `build/ci-repair-20260928`, with owner approval.
+- Removed 106 unreferenced intermediate binaries from
+  `.local-artifacts/fsim-archive`.
+- Pruned the corpus result and rerun work directories to their logs. The
+  pruned directories are `.local-artifacts/lrm-corpora/results/*/work` and
+  `.local-artifacts/lrm-closure/reruns/*/work`. Each run keeps its
+  `results.jsonl`, `meta.json` and `summary.md`.
+- Disk use went from 542G to 440G.
+- Kept the frozen baselines, the `b67w6` workspaces and the earlier
+  cleanup archive.
+
 ### Batch 66: protected objects, global constants, per-element resolution, Verilog net rules
 
 Closes corpus cases from the Batch 66 triage indexes

@@ -1959,7 +1959,7 @@ scheduler.
 | `FSIM-ELAB-070` | error | A dynamic VHDL packed shift or rotate count does not have the executable base `integer` subtype. |
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
-| `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |
+| `FSIM-ELAB-073` | error | A sequential SystemVerilog loop exceeds the bounded one-million-iteration elaboration limit (a VHDL for-loop too long to unroll runs at run time). |
 | `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
 | `FSIM-ELAB-075` | error | A runtime Verilog/SystemVerilog repeat count is not a supported integral value. |
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |

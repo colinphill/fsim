@@ -83,8 +83,23 @@ literal(const sv::ConstraintExpression& expression) {
             runtime::SystemVerilogConstraintDomainKind::BitVector,
             1, false, "logic", true}};
   }
-  const auto width_value = decimal(
-      std::string_view{spelling}.substr(0, apostrophe));
+  // An unsized based literal (`'hDEADBEEF`) is at least 32 bits wide
+  // (IEEE 1800-2017 5.7.1).
+  auto width_value = apostrophe == 0U
+      ? std::optional<std::uint64_t>{32U}
+      : decimal(std::string_view{spelling}.substr(0, apostrophe));
+  if (apostrophe == 0U && suffix.size() >= 2U) {
+    const auto base_index = suffix.front() == 's' || suffix.front() == 'S'
+        ? 1U : 0U;
+    if (base_index < suffix.size()) {
+      const auto base = static_cast<char>(std::tolower(
+          static_cast<unsigned char>(suffix[base_index])));
+      const auto digits = suffix.size() - base_index - 1U;
+      const std::uint64_t bits = base == 'b' ? digits
+          : base == 'o' ? digits * 3U : base == 'h' ? digits * 4U : 0U;
+      if (bits > 32U) width_value = bits;
+    }
+  }
   if (!width_value || *width_value == 0
       || *width_value > std::numeric_limits<std::size_t>::max()) {
     return std::nullopt;
@@ -194,10 +209,13 @@ class Lowerer final {
       const std::map<std::string, std::vector<
           runtime::SystemVerilogConstraintVariableId>>& container_variables,
       std::vector<runtime::SystemVerilogConstraintVariableId>& dependencies,
-      std::string& error)
+      std::string& error,
+      std::span<const runtime::SystemVerilogConstraintVariable>
+          solver_variables = {})
       : specialization_(specialization), variables_(variables),
         container_variables_(container_variables),
-        dependencies_(dependencies), error_(error) {}
+        dependencies_(dependencies), error_(error),
+        solver_variables_(solver_variables) {}
 
   [[nodiscard]] std::optional<ExpressionId> lower(
       const sv::ConstraintExpression& expression) {
@@ -206,17 +224,28 @@ class Lowerer final {
           retained_literal->first, retained_literal->second);
     }
     if (expression.kind == sv::ConstraintExpressionKind::name) {
-      if (foreach_element_ && expression.text == foreach_iterator_) {
-        return builder_.constant(
-            low_value(32, foreach_index_),
-            runtime::SystemVerilogConstraintVariableProfile{
-                runtime::SystemVerilogConstraintDomainKind::Integer,
-                32, true, "integer", true});
+      if (const auto* frame = iterator(expression.text)) {
+        // A foreach loop variable is its index; a with-clause item is its
+        // element (IEEE 1800-2017 18.5.8.1, 7.12.4).
+        if (!frame->item) {
+          return builder_.constant(
+              low_value(32, frame->index), index_profile());
+        }
+        use(*frame->element);
+        return variable_node(*frame->element, frame->profile);
       }
-      const auto binding = std::ranges::find(
-          expression.bindings, specialization_,
-          &sv::ConstraintBinding::specialization_identity);
-      if (binding == expression.bindings.end()) {
+      if (const auto dot = expression.text.rfind('.');
+          dot != std::string::npos
+          && expression.text.substr(dot) == ".index") {
+        if (const auto* frame = iterator(
+                std::string_view{expression.text}.substr(0, dot));
+            frame != nullptr && frame->item) {
+          return builder_.constant(
+              low_value(32, frame->index), index_profile());
+        }
+      }
+      const auto* binding = exact_binding(expression);
+      if (binding == nullptr) {
         error_ = "constraint name has no binding for specialization '"
             + std::string{specialization_} + "'";
         return std::nullopt;
@@ -227,68 +256,401 @@ class Lowerer final {
           error_ = "constraint parameter value is not a bounded integer";
           return std::nullopt;
         }
-        const auto profile = systemverilog_constraint_profile(*binding);
+        const auto profile = binding_profile(*binding);
         return builder_.constant(
             low_value(profile.width, *value), profile);
       }
       const auto variable = variables_.find(binding->canonical_identity);
       if (variable == variables_.end()) {
+        (void)container(binding->canonical_identity);
         error_ = "constraint property '" + binding->canonical_identity
             + "' has no solver variable";
         return std::nullopt;
       }
-      if (std::ranges::find(dependencies_, variable->second)
-          == dependencies_.end()) {
-        dependencies_.push_back(variable->second);
+      use(variable->second);
+      return variable_node(
+          variable->second, binding_profile(*binding));
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text == ".size" && expression.operands.size() == 1U) {
+      const auto* binding = exact_binding(expression.operands.front());
+      if (binding == nullptr) {
+        error_ = "constraint size() receiver has no exact binding";
+        return std::nullopt;
       }
-      return builder_.variable(
-          variable->second, systemverilog_constraint_profile(*binding));
+      if (const auto* elements = container(binding->canonical_identity)) {
+        return builder_.constant(
+            low_value(32, elements->size()), index_profile());
+      }
+      // While sizes are solved a random container's size is a variable
+      // (IEEE 1800-2017 18.4).
+      const auto size = variables_.find(
+          binding->canonical_identity + ".size()");
+      if (size == variables_.end()) {
+        error_ = "constraint container '" + binding->canonical_identity
+            + "' has no size";
+        return std::nullopt;
+      }
+      use(size->second);
+      return variable_node(size->second, size_profile());
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && (expression.text == ".sum" || expression.text == ".product"
+            || expression.text == ".and" || expression.text == ".or"
+            || expression.text == ".xor")
+        && !expression.operands.empty() && expression.operands.size() <= 3U) {
+      // Array reduction methods, optionally through a with-clause (IEEE
+      // 1800-2017 7.12.3, 18.5.8.2).
+      const auto* binding = exact_binding(expression.operands.front());
+      if (binding == nullptr) {
+        error_ = "constraint reduction receiver has no exact binding";
+        return std::nullopt;
+      }
+      const auto* elements = container(binding->canonical_identity);
+      if (elements == nullptr) {
+        error_ = "constraint container '" + binding->canonical_identity
+            + "' has no element solver variables";
+        return std::nullopt;
+      }
+      const auto profile = binding_profile(*binding);
+      const auto* with = expression.operands.size() >= 2U
+          ? &expression.operands.back() : nullptr;
+      const std::string item = expression.operands.size() == 3U
+          ? expression.operands[1].text : std::string{"item"};
+      const auto operation = expression.text == ".sum" ? Operator::Add
+          : expression.text == ".product" ? Operator::Multiply
+          : expression.text == ".and" ? Operator::BitwiseAnd
+          : expression.text == ".or" ? Operator::BitwiseOr
+          : Operator::BitwiseXor;
+      std::optional<ExpressionId> result;
+      for (std::size_t index = 0; index < elements->size(); ++index) {
+        std::optional<ExpressionId> value;
+        if (with != nullptr) {
+          iterators_.push_back({item, index, (*elements)[index], profile, true});
+          value = lower(*with);
+          iterators_.pop_back();
+          if (!value) return std::nullopt;
+        } else {
+          use((*elements)[index]);
+          value = variable_node((*elements)[index], profile);
+        }
+        result = result
+            ? builder_.binary(operation, *result, *value) : *value;
+      }
+      if (result) return result;
+      // An empty array reduces to the operation's identity.
+      runtime::PackedLogic4 identity(profile.width,
+          operation == Operator::BitwiseAnd ? runtime::Logic4::one
+                                            : runtime::Logic4::zero);
+      if (operation == Operator::Multiply) identity.set(0, runtime::Logic4::one);
+      return builder_.constant(std::move(identity), profile);
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text.starts_with("@sv-cast:")
+        && expression.operands.size() == 1U) {
+      const auto operand = lower(expression.operands.front());
+      if (!operand) return std::nullopt;
+      const auto target = std::string_view{expression.text}.substr(9U);
+      auto profile = builder_.profile(*operand);
+      if (target == "signed" || target == "unsigned") {
+        profile.signed_value = target == "signed";
+      } else if (const auto width = decimal(target)) {
+        if (*width == 0U || *width > 4096U) {
+          error_ = "constraint cast width is out of range";
+          return std::nullopt;
+        }
+        profile.width = static_cast<std::size_t>(*width);
+      } else if (const auto scalar = integral_cast(target)) {
+        profile = *scalar;
+      } else {
+        error_ = "unsupported constraint cast '" + std::string{target} + "'";
+        return std::nullopt;
+      }
+      return builder_.resize(*operand, profile);
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::unary
+        && expression.operands.size() == 1U
+        && (expression.text == "&" || expression.text == "|"
+            || expression.text == "^" || expression.text == "~&"
+            || expression.text == "~|" || expression.text == "~^"
+            || expression.text == "^~")) {
+      // Reduction operators (IEEE 1800-2017 11.4.9).
+      const auto operand = lower(expression.operands.front());
+      if (!operand) return std::nullopt;
+      auto profile = builder_.profile(*operand);
+      if (profile.width == 0U || profile.width > 64U) {
+        error_ = "constraint reduction requires a 1- to 64-bit operand";
+        return std::nullopt;
+      }
+      profile.signed_value = false;
+      const auto value = builder_.resize(*operand, profile);
+      const auto width = profile.width;
+      ExpressionId reduced{};
+      if (expression.text == "|" || expression.text == "~|") {
+        reduced = builder_.binary(Operator::NotEqual, value,
+            builder_.constant(low_value(width, 0), profile));
+      } else if (expression.text == "&" || expression.text == "~&") {
+        reduced = builder_.binary(Operator::Equal, value,
+            builder_.constant(low_value(width, width == 64U ? ~std::uint64_t{}
+                : (std::uint64_t{1} << width) - 1U), profile));
+      } else {
+        const auto count = count_ones(value, profile);
+        reduced = builder_.binary(Operator::NotEqual,
+            builder_.binary(Operator::BitwiseAnd, count,
+                builder_.constant(low_value(32, 1), index_profile())),
+            builder_.constant(low_value(32, 0), index_profile()));
+      }
+      return expression.text.starts_with('~') || expression.text == "^~"
+          ? builder_.unary(Operator::LogicalNot, reduced) : reduced;
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text == "$countbits" && expression.operands.size() >= 2U) {
+      // $countbits counts the bits equal to any control bit (20.9); a
+      // two-state variable has only '0 and '1 bits.
+      const auto operand = lower(expression.operands.front());
+      if (!operand) return std::nullopt;
+      auto profile = builder_.profile(*operand);
+      if (profile.width == 0U || profile.width > 64U) {
+        error_ = "constraint bit count requires a 1- to 64-bit operand";
+        return std::nullopt;
+      }
+      profile.signed_value = false;
+      bool ones{};
+      bool zeros{};
+      for (std::size_t index = 1; index < expression.operands.size(); ++index) {
+        const auto control = literal(expression.operands[index]);
+        if (!control || control->first.width() == 0U) {
+          error_ = "constraint $countbits control is not a constant bit";
+          return std::nullopt;
+        }
+        const auto bit = control->first.get(0);
+        ones = ones || bit == runtime::Logic4::one;
+        zeros = zeros || bit == runtime::Logic4::zero;
+      }
+      const auto value = builder_.resize(*operand, profile);
+      const auto set = count_ones(value, profile);
+      if (ones && zeros) {
+        return builder_.constant(low_value(32, profile.width), index_profile());
+      }
+      if (ones) return set;
+      if (zeros) {
+        return builder_.binary(Operator::Subtract,
+            builder_.constant(low_value(32, profile.width), index_profile()),
+            set);
+      }
+      return builder_.constant(low_value(32, 0), index_profile());
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text == "$clog2" && expression.operands.size() == 1U) {
+      // $clog2 counts the powers of two below its argument (20.8.1).
+      const auto operand = lower(expression.operands.front());
+      if (!operand) return std::nullopt;
+      auto profile = builder_.profile(*operand);
+      if (profile.width == 0U || profile.width > 64U) {
+        error_ = "constraint $clog2 requires a 1- to 64-bit operand";
+        return std::nullopt;
+      }
+      profile.signed_value = false;
+      const auto value = builder_.resize(*operand, profile);
+      std::optional<ExpressionId> count;
+      for (std::size_t bit = 0; bit < profile.width; ++bit) {
+        const auto above = builder_.resize(builder_.binary(Operator::Greater,
+            value, builder_.constant(low_value(profile.width,
+                std::uint64_t{1} << bit), profile)), index_profile());
+        count = count ? builder_.binary(Operator::Add, *count, above) : above;
+      }
+      return count;
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && (expression.text == "$countones" || expression.text == "$onehot"
+            || expression.text == "$onehot0")
+        && expression.operands.size() == 1U) {
+      // Bit-count functions (IEEE 1800-2017 20.9).
+      const auto operand = lower(expression.operands.front());
+      if (!operand) return std::nullopt;
+      const auto width = builder_.profile(*operand).width;
+      if (width == 0U || width > 64U) {
+        error_ = "constraint bit count requires a 1- to 64-bit operand";
+        return std::nullopt;
+      }
+      auto bit_profile = builder_.profile(*operand);
+      bit_profile.signed_value = false;
+      const auto unsigned_operand = builder_.resize(*operand, bit_profile);
+      std::optional<ExpressionId> count;
+      for (std::size_t bit = 0; bit < width; ++bit) {
+        const auto mask = builder_.constant(
+            low_value(width, std::uint64_t{1} << bit), bit_profile);
+        const auto set = builder_.binary(Operator::NotEqual,
+            builder_.binary(Operator::BitwiseAnd, unsigned_operand, mask),
+            builder_.constant(low_value(width, 0), bit_profile));
+        const auto counted = builder_.resize(set, index_profile());
+        count = count ? builder_.binary(Operator::Add, *count, counted)
+                      : counted;
+      }
+      if (expression.text == "$countones") return count;
+      return builder_.binary(
+          expression.text == "$onehot" ? Operator::Equal : Operator::LessEqual,
+          *count, builder_.constant(low_value(32, 1), index_profile()));
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::concatenation
+        && !expression.operands.empty()) {
+      // {a, b} is a * 2^width(b) + b over the concatenated width.
+      std::vector<ExpressionId> parts;
+      std::size_t total{};
+      for (const auto& operand : expression.operands) {
+        const auto part = lower(operand);
+        if (!part) return std::nullopt;
+        parts.push_back(*part);
+        total += builder_.profile(*part).width;
+      }
+      if (total == 0U || total > 64U) {
+        error_ = "constraint concatenation requires a 1- to 64-bit result";
+        return std::nullopt;
+      }
+      const runtime::SystemVerilogConstraintVariableProfile result_profile{
+          runtime::SystemVerilogConstraintDomainKind::BitVector,
+          total, false, "logic", false};
+      std::optional<ExpressionId> result;
+      for (const auto part : parts) {
+        auto part_profile = builder_.profile(part);
+        part_profile.signed_value = false;
+        const auto widened = builder_.resize(
+            builder_.resize(part, part_profile), result_profile);
+        if (result) {
+          const auto shift = builder_.profile(part).width;
+          const auto scale = builder_.constant(
+              low_value(total, shift >= 64U ? 0U : std::uint64_t{1} << shift),
+              result_profile);
+          result = builder_.binary(Operator::Add,
+              builder_.binary(Operator::Multiply, *result, scale), widened);
+        } else {
+          result = widened;
+        }
+      }
+      return result;
+    }
+    if ((expression.kind == sv::ConstraintExpressionKind::index
+            && expression.operands.size() == 2U)
+        || (expression.kind == sv::ConstraintExpressionKind::slice
+            && expression.operands.size() == 3U)) {
+      // A bit- or part-select of a packed value (IEEE 1800-2017 11.5.1).
+      const auto* binding = exact_binding(expression.operands[0]);
+      const bool packed = binding == nullptr
+          || (!container_variables_.contains(binding->canonical_identity)
+              && !variables_.contains(
+                  binding->canonical_identity + ".size()"));
+      if (packed) {
+        if (const auto selected = packed_select(expression)) return selected;
+        if (!error_.empty()) return std::nullopt;
+      }
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::binary
+        && expression.operands.size() == 2U
+        && (expression.text == "<<" || expression.text == ">>"
+            || expression.text == "<<<" || expression.text == ">>>")) {
+      // A shift is a product or quotient by a power of two; the result
+      // keeps the shifted operand's width (IEEE 1800-2017 11.4.10).
+      const auto value = lower(expression.operands[0]);
+      if (!value) return std::nullopt;
+      const auto amount = lower(expression.operands[1]);
+      if (!amount) return std::nullopt;
+      const auto profile = builder_.profile(*value);
+      auto unsigned_profile = profile;
+      unsigned_profile.signed_value = false;
+      if (expression.text == ">>>" && profile.signed_value) {
+        error_ = "constraint arithmetic right shift of a signed value is "
+            "not supported";
+        return std::nullopt;
+      }
+      runtime::PackedLogic4 two(profile.width, runtime::Logic4::zero);
+      if (profile.width > 1U) two.set(1, runtime::Logic4::one);
+      const auto factor = builder_.binary(Operator::Power,
+          builder_.constant(std::move(two), unsigned_profile),
+          builder_.resize(*amount, index_profile()));
+      const auto shifted = expression.text.starts_with("<<")
+          ? builder_.binary(Operator::Multiply, *value, factor)
+          : builder_.binary(Operator::Divide,
+                builder_.resize(*value, unsigned_profile), factor);
+      return builder_.resize(shifted, profile);
     }
     if (expression.kind == sv::ConstraintExpressionKind::index
         && expression.operands.size() == 2U
         && expression.operands[0].kind
             == sv::ConstraintExpressionKind::name) {
-      const auto& base = expression.operands[0];
-      const auto binding = std::ranges::find(
-          base.bindings, specialization_,
-          &sv::ConstraintBinding::specialization_identity);
-      if (binding == base.bindings.end()) {
+      const auto* binding = exact_binding(expression.operands[0]);
+      if (binding == nullptr) {
         error_ = "constraint element selection has no exact binding";
         return std::nullopt;
       }
-      const auto elements = container_variables_.find(
-          binding->canonical_identity);
-      if (elements == container_variables_.end()) {
+      const auto* elements = container(binding->canonical_identity);
+      if (elements == nullptr) {
         error_ = "constraint container '" + binding->canonical_identity
             + "' has no element solver variables";
         return std::nullopt;
       }
-      std::optional<std::size_t> index;
-      if (foreach_element_
-          && expression.operands[1].text == foreach_iterator_) {
-        index = foreach_index_;
-      } else if (const auto retained = literal(expression.operands[1])) {
-          const auto value = retained->first.known_unsigned_value();
-          if (value
-              && *value <= std::numeric_limits<std::size_t>::max()) {
-              index = static_cast<std::size_t>(*value);
-          }
+      const auto profile = binding_profile(*binding);
+      const auto outside = [&] {
+        // A selection outside the array occurs only where a guard keeps
+        // it from constraining (IEEE 1800-2017 18.5.8.1).
+        return builder_.constant(
+            runtime::PackedLogic4(profile.width, runtime::Logic4::zero),
+            profile);
+      };
+      if (const auto position = constant_value(expression.operands[1])) {
+        if (*position < 0
+            || static_cast<std::uint64_t>(*position) >= elements->size()) {
+          return outside();
+        }
+        const auto element = (*elements)[static_cast<std::size_t>(*position)];
+        use(element);
+        return variable_node(element, profile);
       }
-      if (!index || *index >= elements->second.size()) {
-        error_ = "constraint container index is outside its materialized bounds";
-        return std::nullopt;
+      // A random index selects among the elements.
+      const auto selector = lower(expression.operands[1]);
+      if (!selector) return std::nullopt;
+      auto result = outside();
+      for (std::size_t index = elements->size(); index-- > 0U;) {
+        use((*elements)[index]);
+        result = builder_.conditional(
+            builder_.binary(Operator::Equal, *selector,
+                builder_.constant(low_value(32, index), index_profile())),
+            variable_node((*elements)[index], profile), result);
       }
-      const auto element = elements->second[*index];
-      if (std::ranges::find(dependencies_, element)
-          == dependencies_.end()) {
-        dependencies_.push_back(element);
-      }
-      return builder_.variable(
-          element, systemverilog_constraint_profile(*binding));
+      return result;
     }
     if (expression.kind == sv::ConstraintExpressionKind::soft
         && expression.operands.size() == 1U) {
       return lower(expression.operands.front());
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::distribution
+        && expression.operands.size() >= 2U) {
+      // A dist below a guard or loop keeps its hard part: membership in
+      // the items of nonzero weight (IEEE 1800-2017 18.5.4).
+      sv::ConstraintExpression membership;
+      membership.kind = sv::ConstraintExpressionKind::inside_set;
+      membership.text = "inside";
+      membership.source = expression.source;
+      membership.operands.push_back(expression.operands.front());
+      for (std::size_t index = 1; index < expression.operands.size(); ++index) {
+        const auto& item = expression.operands[index];
+        if (item.kind != sv::ConstraintExpressionKind::distribution_item
+            || item.operands.size() != 2U) {
+          error_ = "dist list contains an invalid weighted item";
+          return std::nullopt;
+        }
+        if (const auto weight = constant_value(item.operands[1]);
+            weight && *weight == 0) {
+          continue;
+        }
+        membership.operands.push_back(item.operands[0]);
+      }
+      if (membership.operands.size() == 1U) {
+        return builder_.constant(low_value(1, 0),
+            runtime::SystemVerilogConstraintVariableProfile{
+                runtime::SystemVerilogConstraintDomainKind::BitVector,
+                1, false, "bit", false});
+      }
+      return lower(membership);
     }
     if (expression.kind == sv::ConstraintExpressionKind::inside_set
         && expression.operands.size() >= 2U) {
@@ -309,6 +671,28 @@ class Lowerer final {
               Operator::LessEqual, *subject, *high);
           selected = builder_.binary(
               Operator::LogicalAnd, above_low, below_high);
+        } else if (const auto* binding = item.kind
+                           == sv::ConstraintExpressionKind::name
+                       ? exact_binding(item) : nullptr;
+                   binding != nullptr
+                   && container(binding->canonical_identity) != nullptr) {
+          // An unpacked array in the set contributes its elements (IEEE
+          // 1800-2017 11.4.13).
+          const auto profile = binding_profile(*binding);
+          for (const auto element : *container(binding->canonical_identity)) {
+            use(element);
+            const auto equal = builder_.binary(Operator::Equal, *subject,
+                variable_node(element, profile));
+            selected = selected
+                ? builder_.binary(Operator::LogicalOr, *selected, equal)
+                : equal;
+          }
+          if (!selected) {
+            selected = builder_.constant(low_value(1, 0),
+                runtime::SystemVerilogConstraintVariableProfile{
+                    runtime::SystemVerilogConstraintDomainKind::BitVector,
+                    1, false, "bit", false});
+          }
         } else {
           const auto choice = lower(item);
           if (!choice) return std::nullopt;
@@ -334,35 +718,33 @@ class Lowerer final {
         error_ = "constraint foreach requires one named container index";
         return std::nullopt;
       }
-      const auto binding = std::ranges::find(
-          selection.operands[0].bindings, specialization_,
-          &sv::ConstraintBinding::specialization_identity);
-      if (binding == selection.operands[0].bindings.end()) {
+      const auto* binding = exact_binding(selection.operands[0]);
+      if (binding == nullptr) {
         error_ = "constraint foreach container has no exact binding";
         return std::nullopt;
       }
-      const auto elements = container_variables_.find(
-          binding->canonical_identity);
-      if (elements == container_variables_.end()) {
+      const auto* elements = container(binding->canonical_identity);
+      if (elements == nullptr) {
         error_ = "constraint foreach container has no materialized elements";
         return std::nullopt;
       }
-      const auto saved_iterator = foreach_iterator_;
-      const auto saved_index = foreach_index_;
-      const auto saved_element = foreach_element_;
-      foreach_iterator_ = selection.operands[1].text;
       std::vector<ExpressionId> predicates;
-      predicates.reserve(elements->second.size());
-      for (std::size_t index = 0; index < elements->second.size(); ++index) {
-        foreach_index_ = index;
-        foreach_element_ = elements->second[index];
+      predicates.reserve(elements->size());
+      for (std::size_t index = 0; index < elements->size(); ++index) {
+        iterators_.push_back({selection.operands[1].text, index,
+            (*elements)[index], binding_profile(*binding),
+            false});
         const auto predicate = lower(expression.operands[1]);
+        iterators_.pop_back();
         if (!predicate) return std::nullopt;
         predicates.push_back(*predicate);
       }
-      foreach_iterator_ = saved_iterator;
-      foreach_index_ = saved_index;
-      foreach_element_ = saved_element;
+      if (predicates.empty()) {
+        return builder_.constant(low_value(1, 1),
+            runtime::SystemVerilogConstraintVariableProfile{
+                runtime::SystemVerilogConstraintDomainKind::BitVector,
+                1, false, "bit", false});
+      }
       return builder_.conjunction(predicates);
     }
     if (expression.kind == sv::ConstraintExpressionKind::unique_constraint) {
@@ -382,16 +764,14 @@ class Lowerer final {
             error_ = "unique constraint item has no exact binding";
             return std::nullopt;
           }
-          if (const auto elements = container_variables_.find(
-                  binding->canonical_identity);
-              elements != container_variables_.end()) {
-            const auto profile = systemverilog_constraint_profile(*binding);
-            for (const auto element : elements->second) {
+          if (const auto* elements = container(binding->canonical_identity)) {
+            const auto profile = binding_profile(*binding);
+            for (const auto element : *elements) {
               if (std::ranges::find(dependencies_, element)
                   == dependencies_.end()) {
                 dependencies_.push_back(element);
               }
-              values.push_back(builder_.variable(element, profile));
+              values.push_back(variable_node(element, profile));
             }
             continue;
           }
@@ -473,7 +853,580 @@ class Lowerer final {
     return std::move(builder_).finish(root);
   }
 
+  /// The expression names a random container whose size is still being
+  /// solved; it constrains the elements once they exist.
+  [[nodiscard]] bool deferred() const noexcept { return deferred_; }
+
+  struct Clause {
+    runtime::SystemVerilogConstraintExpression expression;
+    std::vector<runtime::SystemVerilogConstraintVariableId> dependencies;
+    bool soft{};
+    /// `disable soft` of `discarded` where `expression` (its guard) holds.
+    bool discard{};
+    std::vector<runtime::SystemVerilogConstraintVariableId> discarded;
+    /// A distribution that applies where `expression` (its guard) holds;
+    /// the next clause is its membership for a guard that is not fixed.
+    std::optional<runtime::SystemVerilogConstraintDistribution> distribution;
+  };
+
+  /// Lower a constraint as separate clauses: the members of a block, the
+  /// iterations of a foreach, the pairs of a unique constraint, each under
+  /// its guards, so the solver checks each as soon as its own variables
+  /// are assigned. A clause naming a container whose size is still being
+  /// solved is left out. False reports an error.
+  [[nodiscard]] bool lower_clauses(
+      const sv::ConstraintExpression& expression,
+      std::vector<Clause>& clauses) {
+    return split(expression, clauses, false);
+  }
+
  private:
+  struct Guard {
+    const sv::ConstraintExpression* condition{};
+    bool holds{};
+  };
+
+  [[nodiscard]] bool leaf(
+      const std::function<std::optional<ExpressionId>()>& body,
+      std::vector<Clause>& clauses, const bool soft) {
+    builder_ = {};
+    dependencies_.clear();
+    deferred_ = false;
+    auto root = body();
+    for (auto guard = guards_.rbegin(); root && guard != guards_.rend();
+         ++guard) {
+      auto condition = lower(*guard->condition);
+      if (!condition) {
+        root.reset();
+        break;
+      }
+      if (!guard->holds) {
+        condition = builder_.unary(Operator::LogicalNot, *condition);
+      }
+      root = builder_.implication(*condition, *root);
+    }
+    if (!root) return deferred_;
+    clauses.push_back({std::move(builder_).finish(*root),
+        dependencies_, soft, false, {}, std::nullopt});
+    builder_ = {};
+    return true;
+  }
+
+  [[nodiscard]] bool split(const sv::ConstraintExpression& expression,
+                           std::vector<Clause>& clauses, const bool soft) {
+    using Kind = sv::ConstraintExpressionKind;
+    if (expression.kind == Kind::constraint_block) {
+      return std::ranges::all_of(expression.operands,
+          [&](const auto& item) { return split(item, clauses, soft); });
+    }
+    if (expression.kind == Kind::soft && expression.operands.size() == 1U) {
+      return split(expression.operands.front(), clauses, true);
+    }
+    if (expression.kind == Kind::implication
+        && expression.operands.size() == 2U) {
+      guards_.push_back({&expression.operands[0], true});
+      const bool lowered = split(expression.operands[1], clauses, soft);
+      guards_.pop_back();
+      return lowered;
+    }
+    if (expression.kind == Kind::conditional_constraint
+        && (expression.operands.size() == 2U
+            || expression.operands.size() == 3U)) {
+      guards_.push_back({&expression.operands[0], true});
+      bool lowered = split(expression.operands[1], clauses, soft);
+      guards_.pop_back();
+      if (lowered && expression.operands.size() == 3U) {
+        guards_.push_back({&expression.operands[0], false});
+        lowered = split(expression.operands[2], clauses, soft);
+        guards_.pop_back();
+      }
+      return lowered;
+    }
+    if (expression.kind == Kind::foreach_constraint
+        && expression.operands.size() == 2U
+        && expression.operands[0].kind == Kind::index
+        && expression.operands[0].operands.size() == 2U
+        && expression.operands[0].operands[1].kind == Kind::name) {
+      const auto& selection = expression.operands[0];
+      const auto* binding = exact_binding(selection.operands[0]);
+      if (binding == nullptr) {
+        error_ = "constraint foreach container has no exact binding";
+        return false;
+      }
+      deferred_ = false;
+      const auto* elements = container(binding->canonical_identity);
+      if (elements == nullptr) {
+        error_ = "constraint foreach container has no materialized elements";
+        return deferred_;
+      }
+      const auto profile = binding_profile(*binding);
+      for (std::size_t index = 0; index < elements->size(); ++index) {
+        iterators_.push_back({selection.operands[1].text, index,
+            (*elements)[index], profile, false});
+        const bool lowered = split(expression.operands[1], clauses, soft);
+        iterators_.pop_back();
+        if (!lowered) return false;
+      }
+      return true;
+    }
+    if (expression.kind == Kind::unique_constraint) {
+      // Each pair of the unique items differs (IEEE 1800-2017 18.5.5).
+      std::vector<std::pair<const sv::ConstraintExpression*,
+          std::optional<std::pair<runtime::SystemVerilogConstraintVariableId,
+              runtime::SystemVerilogConstraintVariableProfile>>>> items;
+      for (const auto& item : expression.operands) {
+        const auto* binding = exact_binding(item);
+        deferred_ = false;
+        const auto* elements = binding == nullptr
+            ? nullptr : container(binding->canonical_identity);
+        if (deferred_) return true;
+        if (elements == nullptr) {
+          items.push_back({&item, std::nullopt});
+          continue;
+        }
+        const auto profile = binding_profile(*binding);
+        for (const auto element : *elements) {
+          items.push_back({nullptr, std::pair{element, profile}});
+        }
+      }
+      const auto value = [&](const auto& item) -> std::optional<ExpressionId> {
+        if (item.second) {
+          use(item.second->first);
+          return variable_node(item.second->first, item.second->second);
+        }
+        return lower(*item.first);
+      };
+      for (std::size_t left = 0; left < items.size(); ++left) {
+        for (std::size_t right = left + 1U; right < items.size(); ++right) {
+          if (!leaf([&]() -> std::optional<ExpressionId> {
+                const auto first = value(items[left]);
+                if (!first) return std::nullopt;
+                const auto second = value(items[right]);
+                if (!second) return std::nullopt;
+                return builder_.binary(Operator::NotEqual, *first, *second);
+              }, clauses, soft)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+    if (expression.kind == Kind::call && expression.text == "@disable-soft"
+        && expression.operands.size() == 1U) {
+      // `disable soft v` under guards applies where the guards hold (IEEE
+      // 1800-2017 18.5.14.2).
+      builder_ = {};
+      dependencies_.clear();
+      deferred_ = false;
+      if (!lower(expression.operands.front())) return deferred_;
+      auto discarded = dependencies_;
+      builder_ = {};
+      dependencies_.clear();
+      auto holds = builder_.constant(low_value(1, 1),
+          runtime::SystemVerilogConstraintVariableProfile{
+              runtime::SystemVerilogConstraintDomainKind::BitVector,
+              1, false, "bit", false});
+      for (const auto& guard : guards_) {
+        auto condition = lower(*guard.condition);
+        if (!condition) return deferred_;
+        if (!guard.holds) {
+          condition = builder_.unary(Operator::LogicalNot, *condition);
+        }
+        holds = builder_.binary(Operator::LogicalAnd, holds, *condition);
+      }
+      clauses.push_back({std::move(builder_).finish(holds), dependencies_,
+          false, true, std::move(discarded), std::nullopt});
+      builder_ = {};
+      return true;
+    }
+    if (expression.kind == Kind::distribution
+        && expression.operands.size() >= 2U && !soft) {
+      // A dist below guards or in a loop weights its variable where the
+      // guards hold (IEEE 1800-2017 18.5.4).
+      if (auto weighted = guarded_distribution(expression)) {
+        clauses.push_back(std::move(*weighted));
+      }
+    }
+    return leaf([&] { return lower(expression); }, clauses, soft);
+  }
+
+  [[nodiscard]] std::optional<Clause> guarded_distribution(
+      const sv::ConstraintExpression& expression) {
+    builder_ = {};
+    dependencies_.clear();
+    deferred_ = false;
+    error_.clear();
+    const auto subject = lower(expression.operands.front());
+    if (!subject || dependencies_.size() != 1U
+        || dependencies_.front() >= solver_variables_.size()) {
+      error_.clear();
+      return std::nullopt;
+    }
+    const auto variable = dependencies_.front();
+    const auto width = solver_variables_[variable].profile.width;
+    if (width == 0U || width > 64U) return std::nullopt;
+    runtime::SystemVerilogConstraintDistribution distribution;
+    distribution.variable = variable;
+    const auto value = [&](const sv::ConstraintExpression& item)
+        -> std::optional<runtime::PackedLogic4> {
+      const auto constant = constant_value(item);
+      if (!constant) return std::nullopt;
+      return low_value(width, static_cast<std::uint64_t>(*constant)
+          & (width == 64U ? ~std::uint64_t{} : (std::uint64_t{1} << width) - 1U));
+    };
+    for (std::size_t index = 1; index < expression.operands.size(); ++index) {
+      const auto& item = expression.operands[index];
+      if (item.kind != sv::ConstraintExpressionKind::distribution_item
+          || item.operands.size() != 2U) {
+        return std::nullopt;
+      }
+      const auto weight = constant_value(item.operands[1]);
+      if (!weight || *weight < 0) return std::nullopt;
+      runtime::SystemVerilogConstraintDistributionEntry entry;
+      entry.weight = static_cast<std::uint64_t>(*weight);
+      entry.weight_kind = item.text == "@dist-:/"
+          ? runtime::SystemVerilogConstraintDistributionWeight::AcrossRange
+          : runtime::SystemVerilogConstraintDistributionWeight::PerValue;
+      const auto& choice = item.operands[0];
+      if (choice.kind == sv::ConstraintExpressionKind::inside_range
+          && choice.operands.size() == 2U) {
+        auto low = value(choice.operands[0]);
+        auto high = value(choice.operands[1]);
+        if (!low || !high) return std::nullopt;
+        entry.low = std::move(*low);
+        entry.high = std::move(*high);
+      } else {
+        auto single = value(choice);
+        if (!single) return std::nullopt;
+        entry.low = *single;
+        entry.high = std::move(*single);
+      }
+      distribution.entries.push_back(std::move(entry));
+    }
+    // The guard: the conjunction of the enclosing conditions.
+    builder_ = {};
+    dependencies_.clear();
+    auto holds = builder_.constant(low_value(1, 1),
+        runtime::SystemVerilogConstraintVariableProfile{
+            runtime::SystemVerilogConstraintDomainKind::BitVector,
+            1, false, "bit", false});
+    for (const auto& guard : guards_) {
+      auto condition = lower(*guard.condition);
+      if (!condition) {
+        error_.clear();
+        return std::nullopt;
+      }
+      if (!guard.holds) {
+        condition = builder_.unary(Operator::LogicalNot, *condition);
+      }
+      holds = builder_.binary(Operator::LogicalAnd, holds, *condition);
+    }
+    Clause clause{std::move(builder_).finish(holds), dependencies_, false,
+        false, {}, std::move(distribution)};
+    builder_ = {};
+    return clause;
+  }
+
+  struct Iterator {
+    std::string name;
+    std::size_t index{};
+    std::optional<runtime::SystemVerilogConstraintVariableId> element;
+    runtime::SystemVerilogConstraintVariableProfile profile;
+    bool item{};
+  };
+
+  [[nodiscard]] static runtime::SystemVerilogConstraintVariableProfile
+  index_profile() {
+    return {runtime::SystemVerilogConstraintDomainKind::Integer,
+        32, true, "int", false};
+  }
+
+  /// The class randomizer's size variables are two-state `int`s.
+  [[nodiscard]] static runtime::SystemVerilogConstraintVariableProfile
+  size_profile() {
+    return index_profile();
+  }
+
+  [[nodiscard]] static std::optional<
+      runtime::SystemVerilogConstraintVariableProfile>
+  integral_cast(const std::string_view type) {
+    using Kind = runtime::SystemVerilogConstraintDomainKind;
+    if (type == "int") return {{Kind::Integer, 32, true, "int", false}};
+    if (type == "integer") return {{Kind::Integer, 32, true, "integer", true}};
+    if (type == "shortint") return {{Kind::Integer, 16, true, "shortint", false}};
+    if (type == "longint") return {{Kind::Integer, 64, true, "longint", false}};
+    if (type == "byte") return {{Kind::Integer, 8, true, "byte", false}};
+    if (type == "bit") return {{Kind::BitVector, 1, false, "bit", false}};
+    if (type == "logic" || type == "reg") {
+      return {{Kind::BitVector, 1, false, "logic", true}};
+    }
+    return std::nullopt;
+  }
+
+  /// A variable read with the declared profile of its binding. The solver
+  /// may hold a state variable with another profile; the read converts it.
+  [[nodiscard]] ExpressionId variable_node(
+      const runtime::SystemVerilogConstraintVariableId variable,
+      const runtime::SystemVerilogConstraintVariableProfile& profile) {
+    if (variable < solver_variables_.size()) {
+      const auto& held = solver_variables_[variable].profile;
+      if (held.kind != profile.kind || held.width != profile.width
+          || held.signed_value != profile.signed_value
+          || held.nominal_type != profile.nominal_type
+          || held.four_state != profile.four_state) {
+        return builder_.resize(builder_.variable(variable, held), profile);
+      }
+    }
+    return builder_.variable(variable, profile);
+  }
+
+  [[nodiscard]] const Iterator* iterator(const std::string_view name) const {
+    for (auto frame = iterators_.rbegin(); frame != iterators_.rend();
+         ++frame) {
+      if (frame->name == name) return &*frame;
+    }
+    return nullptr;
+  }
+
+  void use(const runtime::SystemVerilogConstraintVariableId variable) {
+    if (std::ranges::find(dependencies_, variable) == dependencies_.end()) {
+      dependencies_.push_back(variable);
+    }
+  }
+
+  /// The name's binding in this specialization. A specialization made after
+  /// the constraints were bound (`C#(16)`) reuses another specialization's
+  /// property binding: a property's identity is the same in all of them,
+  /// and its profile comes from the solver (see binding_profile).
+  [[nodiscard]] const sv::ConstraintBinding* exact_binding(
+      const sv::ConstraintExpression& expression) const {
+    if (expression.kind != sv::ConstraintExpressionKind::name) return nullptr;
+    const auto binding = std::ranges::find(
+        expression.bindings, specialization_,
+        &sv::ConstraintBinding::specialization_identity);
+    if (binding != expression.bindings.end()) return &*binding;
+    const auto property = std::ranges::find(expression.bindings,
+        sv::ConstraintReferenceKind::property, &sv::ConstraintBinding::kind);
+    return property == expression.bindings.end() ? nullptr : &*property;
+  }
+
+  /// A binding's declared profile; a binding of another specialization
+  /// takes the profile of the solver variable it names.
+  [[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
+  binding_profile(const sv::ConstraintBinding& binding) const {
+    if (binding.specialization_identity != specialization_) {
+      auto variable = variables_.find(binding.canonical_identity);
+      if (variable == variables_.end()) {
+        variable = variables_.find(binding.canonical_identity + "[0]");
+      }
+      if (variable != variables_.end()
+          && variable->second < solver_variables_.size()) {
+        return solver_variables_[variable->second].profile;
+      }
+    }
+    return systemverilog_constraint_profile(binding);
+  }
+
+  /// The element variables of a materialized container. A container whose
+  /// size is still a variable defers the expression.
+  [[nodiscard]] const std::vector<runtime::SystemVerilogConstraintVariableId>*
+  container(const std::string& identity) {
+    const auto found = container_variables_.find(identity);
+    if (found != container_variables_.end()) return &found->second;
+    if (variables_.contains(identity + ".size()")) deferred_ = true;
+    return nullptr;
+  }
+
+  /// The number of set bits of an unsigned 1- to 64-bit value, as an int.
+  [[nodiscard]] ExpressionId count_ones(
+      const ExpressionId value,
+      const runtime::SystemVerilogConstraintVariableProfile& profile) {
+    std::optional<ExpressionId> count;
+    for (std::size_t bit = 0; bit < profile.width; ++bit) {
+      const auto set = builder_.binary(Operator::NotEqual,
+          builder_.binary(Operator::BitwiseAnd, value,
+              builder_.constant(low_value(profile.width,
+                  std::uint64_t{1} << bit), profile)),
+          builder_.constant(low_value(profile.width, 0), profile));
+      const auto counted = builder_.resize(set, index_profile());
+      count = count ? builder_.binary(Operator::Add, *count, counted)
+                    : counted;
+    }
+    return *count;
+  }
+
+  /// `width` bits of `value` starting at bit `low`.
+  [[nodiscard]] ExpressionId extract(const ExpressionId value,
+                                     const std::size_t low,
+                                     const std::size_t width) {
+    auto profile = builder_.profile(value);
+    profile.signed_value = false;
+    auto shifted = builder_.resize(value, profile);
+    if (low > 0U && low < profile.width) {
+      runtime::PackedLogic4 scale(profile.width, runtime::Logic4::zero);
+      scale.set(low, runtime::Logic4::one);
+      shifted = builder_.binary(Operator::Divide, shifted,
+          builder_.constant(std::move(scale), profile));
+    }
+    auto result = profile;
+    result.kind = runtime::SystemVerilogConstraintDomainKind::BitVector;
+    result.width = width;
+    result.nominal_type = profile.four_state ? "logic" : "bit";
+    return builder_.resize(shifted, result);
+  }
+
+  /// A constant bit- or part-select of a packed operand.
+  [[nodiscard]] std::optional<ExpressionId> packed_select(
+      const sv::ConstraintExpression& expression) {
+    const auto value = lower(expression.operands[0]);
+    if (!value) return std::nullopt;
+    const auto width = builder_.profile(*value).width;
+    // Bit positions count from the declared range's least significant
+    // index.
+    std::int64_t right = 0;
+    bool descending = true;
+    if (const auto* binding = exact_binding(expression.operands[0]);
+        binding != nullptr && binding->type.packed_range
+        && binding->type.packed_range->left
+        && binding->type.packed_range->right) {
+      right = *binding->type.packed_range->right;
+      descending = *binding->type.packed_range->left
+          >= *binding->type.packed_range->right;
+    }
+    const auto position = [&](const std::int64_t index) {
+      return descending ? index - right : right - index;
+    };
+    std::int64_t low{};
+    std::int64_t high{};
+    if (expression.kind == sv::ConstraintExpressionKind::index) {
+      const auto index = constant_value(expression.operands[1]);
+      if (!index) {
+        error_ = "constraint bit-select index is not constant";
+        return std::nullopt;
+      }
+      low = high = position(*index);
+    } else {
+      const auto first = constant_value(expression.operands[1]);
+      const auto second = constant_value(expression.operands[2]);
+      if (!first || !second) {
+        error_ = "constraint part-select bounds are not constant";
+        return std::nullopt;
+      }
+      if (expression.text == "+:" || expression.text == "-:") {
+        const auto start = position(*first);
+        const auto span = *second;
+        if (span <= 0) {
+          error_ = "constraint part-select width is not positive";
+          return std::nullopt;
+        }
+        const bool upward = (expression.text == "+:") == descending;
+        low = upward ? start : start - span + 1;
+        high = upward ? start + span - 1 : start;
+      } else {
+        low = std::min(position(*first), position(*second));
+        high = std::max(position(*first), position(*second));
+      }
+    }
+    if (low < 0 || high < low
+        || static_cast<std::uint64_t>(high) >= width) {
+      error_ = "constraint select is outside its operand";
+      return std::nullopt;
+    }
+    return extract(*value, static_cast<std::size_t>(low),
+        static_cast<std::size_t>(high - low + 1));
+  }
+
+  /// The value of an index expression known while lowering: literals,
+  /// parameters, loop indices and materialized sizes.
+  [[nodiscard]] std::optional<std::int64_t> constant_value(
+      const sv::ConstraintExpression& expression) {
+    if (const auto retained = literal(expression)) {
+      const auto value = retained->first.known_unsigned_value();
+      if (!value || *value > static_cast<std::uint64_t>(
+              std::numeric_limits<std::int64_t>::max())) {
+        return std::nullopt;
+      }
+      return static_cast<std::int64_t>(*value);
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::name) {
+      if (const auto* frame = iterator(expression.text);
+          frame != nullptr && !frame->item) {
+        return static_cast<std::int64_t>(frame->index);
+      }
+      if (const auto dot = expression.text.rfind('.');
+          dot != std::string::npos
+          && expression.text.substr(dot) == ".index") {
+        if (const auto* frame = iterator(
+                std::string_view{expression.text}.substr(0, dot));
+            frame != nullptr && frame->item) {
+          return static_cast<std::int64_t>(frame->index);
+        }
+      }
+      const auto* binding = exact_binding(expression);
+      if (binding == nullptr) return std::nullopt;
+      // A state variable holds its value during the call.
+      if (binding->constant_value.empty()) {
+        const auto variable = variables_.find(binding->canonical_identity);
+        if (variable == variables_.end()
+            || variable->second >= solver_variables_.size()
+            || solver_variables_[variable->second].domain.size() != 1U) {
+          return std::nullopt;
+        }
+        const auto& held = solver_variables_[variable->second];
+        const auto& state = held.domain.front();
+        if (state.width() == 0U || state.width() > 64U || state.is_logic9()
+            || state.low_word().bval != 0U) {
+          return std::nullopt;
+        }
+        auto word = state.low_word().aval;
+        if (held.profile.signed_value && state.width() < 64U
+            && ((word >> (state.width() - 1U)) & 1U) != 0U) {
+          word |= ~((std::uint64_t{1} << state.width()) - 1U);
+        }
+        return static_cast<std::int64_t>(word);
+      }
+      const auto value = decimal(binding->constant_value);
+      if (!value || *value > static_cast<std::uint64_t>(
+              std::numeric_limits<std::int64_t>::max())) {
+        return std::nullopt;
+      }
+      return static_cast<std::int64_t>(*value);
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text == ".size" && expression.operands.size() == 1U) {
+      const auto* binding = exact_binding(expression.operands.front());
+      if (binding == nullptr) return std::nullopt;
+      const auto found = container_variables_.find(binding->canonical_identity);
+      if (found == container_variables_.end()) return std::nullopt;
+      return static_cast<std::int64_t>(found->second.size());
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::unary
+        && expression.operands.size() == 1U
+        && (expression.text == "-" || expression.text == "+")) {
+      const auto value = constant_value(expression.operands.front());
+      if (!value) return std::nullopt;
+      return expression.text == "-" ? -*value : *value;
+    }
+    if (expression.kind == sv::ConstraintExpressionKind::binary
+        && expression.operands.size() == 2U) {
+      const auto left = constant_value(expression.operands[0]);
+      const auto right = constant_value(expression.operands[1]);
+      if (!left || !right) return std::nullopt;
+      constexpr std::int64_t bound = std::int64_t{1} << 40;
+      if (*left > bound || *left < -bound || *right > bound
+          || *right < -bound) {
+        return std::nullopt;
+      }
+      if (expression.text == "+") return *left + *right;
+      if (expression.text == "-") return *left - *right;
+      if (expression.text == "*") return *left * *right;
+      if ((expression.text == "/" || expression.text == "%") && *right != 0) {
+        return expression.text == "/" ? *left / *right : *left % *right;
+      }
+    }
+    return std::nullopt;
+  }
+
   std::string_view specialization_;
   const std::map<std::string,
                  runtime::SystemVerilogConstraintVariableId>& variables_;
@@ -481,9 +1434,10 @@ class Lowerer final {
       runtime::SystemVerilogConstraintVariableId>>& container_variables_;
   std::vector<runtime::SystemVerilogConstraintVariableId>& dependencies_;
   std::string& error_;
-  std::string foreach_iterator_;
-  std::size_t foreach_index_{};
-  std::optional<runtime::SystemVerilogConstraintVariableId> foreach_element_;
+  std::vector<Iterator> iterators_;
+  std::vector<Guard> guards_;
+  bool deferred_{};
+  std::span<const runtime::SystemVerilogConstraintVariable> solver_variables_;
   runtime::SystemVerilogConstraintExpressionBuilder builder_;
 };
 
@@ -620,6 +1574,44 @@ lower_systemverilog_constraint_distribution(
         error = "dist weight is not a known host-representable sampling integer";
         return std::nullopt;
     }
+    // An unpacked array item contributes each element's value with the
+    // item's weight (IEEE 1800-2017 18.5.4, 11.4.13).
+    if (item.operands[0].kind
+            == semantic::sv::ConstraintExpressionKind::name) {
+      const auto array_binding = std::ranges::find(
+          item.operands[0].bindings, specialization_identity,
+          &semantic::sv::ConstraintBinding::specialization_identity);
+      if (array_binding != item.operands[0].bindings.end()
+          && variables.contains(array_binding->canonical_identity + "[]")) {
+        for (std::size_t element = 0;; ++element) {
+          const auto found = variables.find(array_binding->canonical_identity
+              + "[" + std::to_string(element) + "]");
+          if (found == variables.end()) break;
+          if (found->second >= solver_variables.size()
+              || solver_variables[found->second].domain.size() != 1U) {
+            error = "dist array item is not a state array";
+            return std::nullopt;
+          }
+          const auto& value = solver_variables[found->second].domain.front();
+          runtime::PackedLogic4 resized(profile.width,
+              solver_variables[found->second].profile.signed_value
+                      && !value.empty()
+                  ? value.get(value.width() - 1U) : runtime::Logic4::zero);
+          for (std::size_t bit = 0;
+               bit < std::min(profile.width, value.width()); ++bit) {
+            resized.set(bit, value.get(bit));
+          }
+          runtime::SystemVerilogConstraintDistributionEntry entry;
+          entry.weight = *sampled_weight;
+          entry.weight_kind
+              = runtime::SystemVerilogConstraintDistributionWeight::PerValue;
+          entry.low = resized;
+          entry.high = std::move(resized);
+          distribution.entries.push_back(std::move(entry));
+        }
+        continue;
+      }
+    }
     runtime::SystemVerilogConstraintDistributionEntry retained;
     retained.weight = *sampled_weight;
     retained.weight_kind = item.text == "@dist-:/"
@@ -710,7 +1702,8 @@ void configure_class_constraints(
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
-    const std::function<bool(std::string_view)>& constraint_enabled) {
+    const std::function<bool(std::string_view)>& constraint_enabled,
+    const std::string_view identity_prefix) {
   const auto declaration = std::ranges::find(
       hir.classes(), specialization.declaration_identity,
       &semantic::sv::ClassDeclaration::canonical_identity);
@@ -725,6 +1718,21 @@ void configure_class_constraints(
     }
     return nullptr;
   };
+  // The class randomizer materializes container `c` as `c[]` and its
+  // elements `c[0]`, `c[1]`, ...
+  std::map<std::string, std::vector<runtime::SystemVerilogConstraintVariableId>>
+      container_variables;
+  for (const auto& [identity, id] : variables) {
+    if (!identity.ends_with("[]")) continue;
+    const auto base = identity.substr(0, identity.size() - 2U);
+    auto& elements = container_variables[base];
+    for (std::size_t index = 0;; ++index) {
+      const auto element = variables.find(
+          base + "[" + std::to_string(index) + "]");
+      if (element == variables.end()) break;
+      elements.push_back(element->second);
+    }
+  }
   for (const auto& composed : declaration->composed_constraints) {
     if (!composed.mode_enabled || !composed.override_legal
         || (constraint_enabled
@@ -739,21 +1747,21 @@ void configure_class_constraints(
     for (std::size_t index = 0; index < constraint->expressions.size();
          ++index) {
       const auto& expression = constraint->expressions[index];
-      const auto identity = constraint->canonical_identity + "::"
-          + std::to_string(index);
+      // Objects of one class reached along different paths each add their
+      // constraints; the path keeps the clause identities distinct.
+      const auto identity = std::string{identity_prefix}
+          + constraint->canonical_identity + "::" + std::to_string(index);
       std::string error;
       if (expression.kind
           == semantic::sv::ConstraintExpressionKind::distribution) {
         auto distribution = lower_systemverilog_constraint_distribution(
             expression, specialization.specialization_identity, variables,
             solver.variables(), identity, error);
-        if (!distribution) {
-          throw std::invalid_argument{
-              "cannot lower class distribution '" + identity
-              + "': " + error};
+        // Other subjects and bounds take the general path below.
+        if (distribution) {
+          solver.add_distribution(std::move(*distribution));
+          continue;
         }
-        solver.add_distribution(std::move(*distribution));
-        continue;
       }
       if (expression.kind
           == semantic::sv::ConstraintExpressionKind::solve_before) {
@@ -784,19 +1792,56 @@ void configure_class_constraints(
         solver.discard_soft_clauses(dependencies);
         continue;
       }
-      auto lowered = lower_systemverilog_constraint_expression(
-          expression, specialization.specialization_identity, variables,
-          dependencies, error);
-      if (!lowered) {
+      Lowerer lowerer{specialization.specialization_identity, variables,
+          container_variables, dependencies, error, solver.variables()};
+      std::vector<Lowerer::Clause> clauses;
+      if (!lowerer.lower_clauses(expression, clauses)) {
         throw std::invalid_argument{
             "cannot lower class constraint '" + identity
             + "': " + error};
       }
-      auto clause = runtime::systemverilog_constraint_expression_clause(
-          identity, std::move(dependencies), std::move(*lowered));
-      clause.soft = expression.kind
-          == semantic::sv::ConstraintExpressionKind::soft;
-      solver.add_clause(std::move(clause));
+      for (std::size_t part = 0; part < clauses.size(); ++part) {
+        if (clauses[part].distribution) {
+          // A guard fixed by state variables decides the distribution and
+          // its membership; another guard keeps only the membership.
+          const auto holds = solver.fixed_truth(clauses[part].expression);
+          if (!holds) {
+            // A random guard weights the variable where it holds; the
+            // guarded membership clause follows.
+            auto distribution = std::move(*clauses[part].distribution);
+            distribution.canonical_identity
+                = identity + "::" + std::to_string(part);
+            distribution.guard = std::make_shared<
+                const runtime::SystemVerilogConstraintExpression>(
+                std::move(clauses[part].expression));
+            solver.add_distribution(std::move(distribution));
+            continue;
+          }
+          if (*holds) {
+            clauses[part].distribution->canonical_identity
+                = identity + "::" + std::to_string(part);
+            solver.add_distribution(std::move(*clauses[part].distribution));
+          }
+          ++part;
+          continue;
+        }
+        if (clauses[part].discard) {
+          const auto holds = solver.fixed_truth(clauses[part].expression);
+          if (!holds) {
+            throw std::invalid_argument{
+                "cannot lower class constraint '" + identity
+                + "': a disable soft guard depends on random variables"};
+          }
+          if (*holds) solver.discard_soft_clauses(clauses[part].discarded);
+          continue;
+        }
+        auto clause = runtime::systemverilog_constraint_expression_clause(
+            part == 0U ? identity : identity + "::" + std::to_string(part),
+            std::move(clauses[part].dependencies),
+            std::move(clauses[part].expression));
+        clause.soft = clauses[part].soft;
+        solver.add_clause(std::move(clause));
+      }
     }
   }
 }
@@ -806,9 +1851,11 @@ void configure_systemverilog_class_constraints(
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
-    const std::function<bool(std::string_view)>& constraint_enabled) {
+    const std::function<bool(std::string_view)>& constraint_enabled,
+    const std::string_view identity_prefix) {
   configure_class_constraints(
-      solver, variables, hir, specialization, constraint_enabled);
+      solver, variables, hir, specialization, constraint_enabled,
+      identity_prefix);
 }
 
 }  // namespace fsim::app::application_detail

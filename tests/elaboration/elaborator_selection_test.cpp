@@ -1307,10 +1307,13 @@ end architecture;
             "vhdl:work.invalid_sequential_loops(rtl)");
     assert(!rejected_vhdl_loops.ok());
     for (const auto code :
-         {"FSIM-ELAB-071", "FSIM-ELAB-072",
-          "FSIM-ELAB-073", "FSIM-ELAB-074"}) {
+         {"FSIM-ELAB-071", "FSIM-ELAB-072", "FSIM-ELAB-074"}) {
         assert(has_diagnostic(rejected_vhdl_loops, code));
     }
+    // A for-loop always ends (IEEE 1076-2008 10.10): a loop too long to
+    // unroll, such as `0 to 1000000`, runs at run time instead of being
+    // rejected.
+    assert(!has_diagnostic(rejected_vhdl_loops, "FSIM-ELAB-073"));
 
     const auto systemverilog_procedural_loops =
         fsim::frontend::parse_text(

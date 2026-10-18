@@ -155,12 +155,29 @@ Expression VerilogParser::parse_postfix(Expression expression)
             // `with (x, y)` names the identifiers that denote members of the
             // randomized object (IEEE 1800-2017 18.7); unqualified names
             // resolve to members first, so the list is accepted.
+            // Only the listed names bind to the object; the others resolve
+            // in the calling scope. The list is kept as string literals so
+            // the names are not resolved where the call is made.
+            // An empty list holds one empty name.
+            std::optional<std::vector<Expression>> member_names;
             if (match(TokenKind::LeftParen)) {
+                std::vector<Expression> names;
+                const auto list_span = previous().span;
                 while (!at_end() && !at(TokenKind::RightParen)) {
-                    (void)advance();
+                    const auto token = advance();
+                    if (token.kind == TokenKind::Identifier) {
+                        names.push_back(Expression {
+                            ExpressionKind::StringLiteral, token.text, { },
+                            token.span });
+                    }
                 }
                 expect(TokenKind::RightParen, "')' after randomize with identifiers",
                     "FSIM-SV-PARSE-334");
+                if (names.empty()) {
+                    names.push_back(Expression {
+                        ExpressionKind::StringLiteral, "", { }, list_span });
+                }
+                member_names = std::move(names);
             }
             if (!match(TokenKind::LeftBrace)) {
                 error(
@@ -175,6 +192,12 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     "@sv-inline-constraint");
                 expression.aggregate_choice_expressions.push_back(
                     std::move(constraints));
+                if (member_names) {
+                    expression.aggregate_choices.push_back(
+                        "@sv-inline-constraint-names");
+                    expression.aggregate_choice_expressions.push_back(
+                        std::move(*member_names));
+                }
                 expression.span = cover(expression.span, previous().span);
             }
             continue;

@@ -54,6 +54,13 @@ void validate_constraint_templates(
             case Kind::Unique:
                 return !expression->text.empty()
                     && !expression->operands.empty();
+            case Kind::Index:
+                return operand_count == 2 || operand_count == 3;
+            case Kind::Foreach:
+                return operand_count == 2;
+            case Kind::Method:
+                return !expression->text.empty() && operand_count >= 1
+                    && operand_count <= 3;
             }
             return false;
         }();

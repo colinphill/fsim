@@ -270,6 +270,7 @@ namespace systemverilog_hir_detail {
                 add_unit(unit, semantic::UnitId::from_index(static_cast<std::uint32_t>(index)));
             }
         }
+        collect_unit_parameters(parsed);
         for (const auto& unit : parsed.units) {
             if (unit.language == frontend::Language::SystemVerilog2017) {
                 add_classes(unit.systemverilog_classes);
@@ -636,6 +637,29 @@ namespace systemverilog_hir_detail {
                     if (const auto constraint_id = expression(
                             constraint, scope, expression_origin)) {
                         association.choices.push_back(*constraint_id);
+                    }
+                }
+                if (!association.choices.empty()) {
+                    association.value = association.choices.front();
+                    output.associations.push_back(std::move(association));
+                }
+            }
+        }
+        // `randomize() with (names)`: the names bound to the object.
+        const auto names_marker = std::ranges::find(
+            input.aggregate_choices, "@sv-inline-constraint-names");
+        if (names_marker != input.aggregate_choices.end()) {
+            const auto index = static_cast<std::size_t>(std::distance(
+                input.aggregate_choices.begin(), names_marker));
+            if (index < input.aggregate_choice_expressions.size()) {
+                sv::AssignmentPatternAssociation association;
+                association.choice_spelling = "@sv-inline-constraint-names";
+                association.source = span;
+                for (const auto& name :
+                    input.aggregate_choice_expressions[index]) {
+                    if (const auto name_id = expression(
+                            name, scope, expression_origin)) {
+                        association.choices.push_back(*name_id);
                     }
                 }
                 if (!association.choices.empty()) {

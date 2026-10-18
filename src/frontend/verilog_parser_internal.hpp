@@ -884,6 +884,8 @@ class VerilogParser final : private detail::ParserBase {
   Expression parse_primary_impl();
 
   Expression parse_postfix(Expression expression);
+  // `subject dist { ... }` after its subject (IEEE 1800-2017 18.5.4).
+  Expression parse_dist_list(Expression subject);
 
   Language language_;
   StandardRevision standard_revision_;

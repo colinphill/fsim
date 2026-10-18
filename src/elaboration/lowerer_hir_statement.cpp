@@ -15,8 +15,10 @@
 namespace fsim::elaboration {
 namespace {
 
+    // A VHDL for-loop always ends (IEEE 1076-2008 10.10); a loop too long to
+    // unroll runs at run time with 64-bit counters.
     constexpr std::uint64_t maximum_runtime_vhdl_for_iterations
-        = 1'000'000U;
+        = std::uint64_t { 1 } << 62U;
     constexpr std::size_t minimum_static_vhdl_for_runtime_iterations = 8U;
 
     class HirDebugScopeGuard final {
@@ -16045,7 +16047,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto failure = static_cast<InstructionIndex>(
                     process_.operations.size());
                 process_.operations.emplace_back(Report {
-                    "runtime VHDL for-loop exceeds the one-million-iteration limit",
+                    "runtime VHDL for-loop exceeds the iteration limit",
                     runtime::simir::AssertionSeverity::failure,
                     runtime_source_location(span),
                 });
@@ -18176,6 +18178,26 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(ClassMethodCall {
                     ignored, *receiver, "@object-srandom", { *seed },
                     { std::string { } }, { 0U }, 1U, false });
+                return true;
+            }
+            // `obj.set_randstate(state)` restores the object's random
+            // number generator (IEEE 1800-2017 18.13.5).
+            if (input.task.spelling == "@sv-object-set-randstate"
+                && input.task_arguments.size() == 2U
+                && input.task_arguments[0].actual
+                && input.task_arguments[1].actual) {
+                const auto receiver = lower_hir_expression(
+                    *input.task_arguments[0].actual, 64U);
+                const auto state = lower_hir_string_expression(
+                    *input.task_arguments[1].actual);
+                if (!receiver || register_width(*receiver) != 64U || !state) {
+                    return false;
+                }
+                const auto ignored = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ClassMethodCall {
+                    ignored, *receiver, "@object-set-randstate", { *state },
+                    { std::string { } }, { 0U }, 1U, false, { 1U } });
                 return true;
             }
             return lower_hir_class_task_call(statement_id);

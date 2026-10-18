@@ -426,6 +426,7 @@ include/fsim/runtime/acc_user.h
 include/fsim/runtime/class_heap.hpp
 include/fsim/runtime/class_methods.hpp
 include/fsim/runtime/class_randomize.hpp
+include/fsim/runtime/class_randomize_graph.hpp
 include/fsim/runtime/class_static.hpp
 include/fsim/runtime/code_coverage.hpp
 include/fsim/runtime/constraint_solver.hpp

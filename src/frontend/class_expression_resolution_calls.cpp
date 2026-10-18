@@ -759,6 +759,17 @@ void Resolver::retain_task_profile(
       retain_result_type(expression, result);
       return result;
     }
+    // `obj.get_randstate()` returns the object's random number generator
+    // state (IEEE 1800-2017 18.13.4).
+    if (name == "get_randstate" && expression.operands.size() == 1U) {
+      expression.text = "@sv-method:@builtin-get-randstate";
+      expression.call_argument_names.resize(expression.operands.size());
+      expression.call_argument_directions.assign(
+          expression.operands.size(), PortDirection::Input);
+      Type result{ValueDomain::String, "string", std::nullopt, false};
+      retain_result_type(expression, result);
+      return result;
+    }
     const auto match = select_method(
         *class_identity(*receiver_type),
         name,
@@ -1212,6 +1223,16 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
     }
     if (receiver_type && class_identity(*receiver_type)) {
       const auto name = statement.task_name.substr(dot + 1U);
+      // `obj.set_randstate(state)` (IEEE 1800-2017 18.13.5).
+      if (name == "set_randstate" && statement.task_arguments.size() == 1U) {
+        statement.task_name = "@sv-object-set-randstate";
+        statement.task_arguments.insert(
+            statement.task_arguments.begin(), std::move(receiver));
+        statement.task_argument_names.insert(
+            statement.task_argument_names.begin(), std::string{});
+        resolve_expression(statement.task_arguments.back(), scope);
+        return;
+      }
       if (name == "srandom" && statement.task_arguments.size() == 1U) {
         statement.task_name = "@sv-object-srandom";
         statement.task_arguments.insert(

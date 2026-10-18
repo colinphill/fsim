@@ -1378,15 +1378,29 @@ private:
                 return false;
             }
             if (binding.kind == ConstraintReferenceKind::property) {
-                const auto found = std::ranges::any_of(
-                    hir_.classes(), [&](const ClassDeclaration& declaration) {
-                        return std::ranges::any_of(
-                            declaration.properties,
-                            [&](const ClassProperty& property) {
-                                return property.canonical_identity
-                                    == binding.canonical_identity;
-                            });
-                    });
+                // A path through class-handle properties (`h.m`, IEEE
+                // 1800-2017 18.5.9) names one property per component.
+                const auto property_exists = [&](const std::string_view identity) {
+                    return std::ranges::any_of(
+                        hir_.classes(), [&](const ClassDeclaration& declaration) {
+                            return std::ranges::any_of(
+                                declaration.properties,
+                                [&](const ClassProperty& property) {
+                                    return property.canonical_identity
+                                        == identity;
+                                });
+                        });
+                };
+                std::string_view rest { binding.canonical_identity };
+                bool found = true;
+                while (found) {
+                    const auto separator = rest.find('.');
+                    found = property_exists(rest.substr(0U, separator));
+                    if (separator == std::string_view::npos) {
+                        break;
+                    }
+                    rest.remove_prefix(separator + 1U);
+                }
                 if (!found) {
                     return false;
                 }

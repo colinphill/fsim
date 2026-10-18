@@ -17,6 +17,16 @@ namespace fsim::app {
         actual_references,
     const std::optional<runtime::simir::ProcessId> report_process)
 {
+    // The built-in randomization methods, called from a method body (IEEE
+    // 1800-2017 18.6, 18.8).
+    if (canonical_identity == "@builtin-randomize") {
+        return invoke_source_randomize(handle, actual_names, actuals, { });
+    }
+    if (canonical_identity.starts_with("@builtin-rand-mode:")
+        || canonical_identity.starts_with("@builtin-constraint-mode:")) {
+        return invoke_source_randomization_mode(
+            handle, canonical_identity, actuals);
+    }
     const auto method_separator = canonical_identity.rfind("::");
     const auto method_name = method_separator == std::string_view::npos
         ? canonical_identity

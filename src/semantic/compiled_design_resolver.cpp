@@ -2127,6 +2127,14 @@ CompiledDesignResolver::resolve_systemverilog(
     const std::optional<ScopeId> stop_scope,
     const std::uint64_t source_order) const
 {
+    // `local::` names the scope of the randomize call in an inline
+    // constraint (IEEE 1800-2017 18.7.1).
+    constexpr std::string_view local_scope = "local::";
+    if (name.starts_with(local_scope)) {
+        return resolve_systemverilog(name.substr(local_scope.size()),
+            use_scope, predicate, same_library_fallback, stop_scope,
+            source_order);
+    }
     const auto reference = design_ != nullptr
         ? systemverilog_scoped_reference(
               *design_, selected_unit_, name, use_scope)

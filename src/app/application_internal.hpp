@@ -367,7 +367,8 @@ void configure_systemverilog_class_constraints(
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
-    const std::function<bool(std::string_view)>& constraint_enabled = { });
+    const std::function<bool(std::string_view)>& constraint_enabled = { },
+    std::string_view identity_prefix = { });
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,

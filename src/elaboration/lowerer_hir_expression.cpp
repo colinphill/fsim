@@ -13826,6 +13826,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         const auto destination = allocate_register(
             64U, frontend::ValueDomain::Bit2);
+        // A runtime method sees, and may change, this object's container
+        // properties.
+        flush_hir_class_container_caches();
         process_.operations.emplace_back(ClassMethodCall {
             destination,
             *original,
@@ -13836,6 +13839,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             64U,
             false,
         });
+        reload_hir_class_container_caches();
         result = destination;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
@@ -14283,6 +14287,64 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             "@sv-container-method:")) {
         const auto& call = *expression->systemverilog;
         const auto method = sv_container_method_call(call.text);
+        // A reduction of an object's array of values, optionally through a
+        // with-clause (IEEE 1800-2017 7.12.3).
+        if (method && !method->reduction.empty()
+            && !call.operands.empty() && call.operands.size() <= 3U) {
+            const auto container = hir_class_value_container_type(
+                    method->container)
+                ? lower_hir_class_value_container(
+                      call.operands.front(), method->container)
+                : std::nullopt;
+            if (!container
+                || (container->container.type.element_kind
+                        != ContainerElementKind::Packed
+                    && container->container.type.element_kind
+                        != ContainerElementKind::Scalar)) {
+                return std::nullopt;
+            }
+            const auto& type = container->container.type;
+            std::vector<ContainerPredicateNode> transformation;
+            if (call.operands.size() >= 2U) {
+                std::string iterator_name { "item" };
+                if (call.operands.size() == 3U) {
+                    const auto iterator = specialized_hir_unit_
+                        ->find_expression(call.operands[1]);
+                    if (!iterator || iterator->systemverilog == nullptr) {
+                        return std::nullopt;
+                    }
+                    iterator_name = iterator->systemverilog->text;
+                }
+                auto lowered = lower_hir_container_expression_graph(
+                    call.operands.back(), iterator_name, type,
+                    HirContainerExpressionPurpose::reduction_transformation);
+                if (!lowered) {
+                    return std::nullopt;
+                }
+                transformation = std::move(*lowered);
+            }
+            auto operation = ContainerReductionOperator::sum;
+            if (method->reduction == "product") {
+                operation = ContainerReductionOperator::product;
+            } else if (method->reduction == "and") {
+                operation = ContainerReductionOperator::bit_and;
+            } else if (method->reduction == "or") {
+                operation = ContainerReductionOperator::bit_or;
+            } else if (method->reduction == "xor") {
+                operation = ContainerReductionOperator::bit_xor;
+            }
+            const auto destination = allocate_register(type.element_width,
+                type.two_state ? frontend::ValueDomain::Bit2
+                               : frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ContainerReduction {
+                operation, destination, container->container.value,
+                std::move(transformation) });
+            return expected_width != 0U
+                    && expected_width != type.element_width
+                ? std::optional { resize_register(
+                      destination, expected_width, type.signed_elements) }
+                : std::optional { destination };
+        }
         if (!method || call.operands.size() != 1U) {
             return std::nullopt;
         }

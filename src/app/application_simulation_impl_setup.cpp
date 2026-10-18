@@ -580,6 +580,68 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     return std::move(built.design).create_interpreter(options, built.seed);
 }
 
+// Restore an object's random number generator from a get_randstate
+// string; a string of another form leaves the state unchanged (IEEE
+// 1800-2017 18.13.5).
+void restore_random_state(runtime::SystemVerilogClassObject& object,
+    const std::string_view state)
+{
+    constexpr std::string_view prefix { "fsim-randstate:" };
+    if (!state.starts_with(prefix)) {
+        return;
+    }
+    auto rest = state.substr(prefix.size());
+    const auto parse_number = [](const std::string_view text)
+        -> std::optional<std::uint64_t> {
+        std::uint64_t value { };
+        const auto parsed = std::from_chars(
+            text.data(), text.data() + text.size(), value);
+        if (parsed.ec != std::errc { }
+            || parsed.ptr != text.data() + text.size()) {
+            return std::nullopt;
+        }
+        return value;
+    };
+    const auto seed_end = rest.find(';');
+    if (seed_end == std::string_view::npos) {
+        return;
+    }
+    const auto seed = parse_number(rest.substr(0, seed_end));
+    if (!seed) {
+        return;
+    }
+    rest.remove_prefix(seed_end + 1U);
+    std::map<std::string, std::uint64_t, std::less<>> ordinals;
+    while (!rest.empty()) {
+        const auto colon = rest.find(':');
+        if (colon == std::string_view::npos) {
+            return;
+        }
+        const auto length = parse_number(rest.substr(0, colon));
+        if (!length || *length > rest.size() - colon - 1U) {
+            return;
+        }
+        const auto name = rest.substr(colon + 1U,
+            static_cast<std::size_t>(*length));
+        rest.remove_prefix(colon + 1U + static_cast<std::size_t>(*length));
+        if (!rest.starts_with('=')) {
+            return;
+        }
+        const auto end = rest.find(';');
+        if (end == std::string_view::npos) {
+            return;
+        }
+        const auto ordinal = parse_number(rest.substr(1U, end - 1U));
+        if (!ordinal) {
+            return;
+        }
+        ordinals.emplace(std::string { name }, *ordinal);
+        rest.remove_prefix(end + 1U);
+    }
+    object.random_object_seed = *seed;
+    object.random_call_ordinals = std::move(ordinals);
+}
+
 } // namespace
 
 Simulation::Impl::Impl(
@@ -1292,6 +1354,17 @@ Simulation::Impl::Impl(
                 class_value_containers.insert_or_assign(key, value);
             } else if (const auto found = class_value_containers.find(key);
                        found != class_value_containers.end()) {
+                // Elements a randomize call created keep the declared type
+                // the reading process gives them.
+                if (found->second.type != value.type
+                    && found->second.type.element_kind
+                        == value.type.element_kind
+                    && found->second.type.element_width
+                        == value.type.element_width
+                    && found->second.type.element_kind
+                        == runtime::simir::ContainerElementKind::Packed) {
+                    found->second.type = value.type;
+                }
                 value = found->second;
             }
         });
@@ -1364,6 +1437,31 @@ Simulation::Impl::Impl(
                         : actuals.front().low_word().aval;
                     class_heap.reseed_random(handle, seed);
                     return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+                }
+                // The object's random number generator state (IEEE
+                // 1800-2017 18.13.4, 18.13.5).
+                if (method == "@builtin-get-randstate"
+                    || method == "@object-set-randstate") {
+                    if (handle == 0U || string_actuals.empty()) {
+                        throw std::invalid_argument {
+                            "random state access requires an object and a "
+                            "string"
+                        };
+                    }
+                    auto& object = class_heap.object(handle);
+                    if (method == "@builtin-get-randstate") {
+                        auto state = "fsim-randstate:"
+                            + std::to_string(object.random_object_seed) + ";";
+                        for (const auto& [call, ordinal] :
+                            object.random_call_ordinals) {
+                            state += std::to_string(call.size()) + ":" + call
+                                + "=" + std::to_string(ordinal) + ";";
+                        }
+                        string_actuals.back() = std::move(state);
+                    } else {
+                        restore_random_state(object, string_actuals.front());
+                    }
+                    return runtime::PackedLogic4(1U, runtime::Logic4::zero);
                 }
                 if (method.starts_with(string_property_prefix)) {
                     auto result = access_string_property(

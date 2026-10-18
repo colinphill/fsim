@@ -238,8 +238,88 @@ systemverilog_constraint_key_ranges(
   const auto operand = [&](const SystemVerilogConstraintExpressionId id) {
     return id < results.size() && results[id] ? *results[id] : full;
   };
+  // A predicate over constants only (`!(10 > 0)` from a guard) is
+  // decided: every key or none.
+  std::vector<std::optional<std::uint64_t>> known(expression.nodes.size());
+  std::vector<std::optional<bool>> truth(expression.nodes.size());
+  const auto signed_key = [](const std::uint64_t value, const std::size_t bits,
+                             const bool signed_value) {
+    return signed_value && bits < 64U && ((value >> (bits - 1U)) & 1U) != 0U
+        ? value | ~((std::uint64_t{1} << bits) - 1U) : value;
+  };
   for (std::size_t index = 0; index < expression.nodes.size(); ++index) {
     const auto& node = expression.nodes[index];
+    const auto operand_known = [&](const std::size_t position) {
+      return position < node.operands.size()
+              && node.operands[position] < index
+          ? known[node.operands[position]] : std::nullopt;
+    };
+    const auto operand_truth = [&](const std::size_t position) {
+      return position < node.operands.size()
+              && node.operands[position] < index
+          ? truth[node.operands[position]] : std::nullopt;
+    };
+    if (node.operation == Operator::Constant && node.constant.width() <= 64U
+        && !node.constant.is_logic9() && node.constant.low_word().bval == 0U
+        && node.constant.width() > 0U) {
+      known[index] = node.constant.low_word().aval;
+      truth[index] = known[index] != 0U;
+    } else if (node.operation == Operator::LogicalNot) {
+      if (const auto value = operand_truth(0)) truth[index] = !*value;
+    } else if (node.operation == Operator::LogicalAnd
+               || node.operation == Operator::LogicalOr) {
+      const auto left = operand_truth(0);
+      const auto right = operand_truth(1);
+      const bool conjunction = node.operation == Operator::LogicalAnd;
+      if ((left && *left != conjunction) || (right && *right != conjunction)) {
+        truth[index] = !conjunction;
+      } else if (left && right) {
+        truth[index] = conjunction;
+      }
+    } else if (node.operation >= Operator::Equal
+               && node.operation <= Operator::GreaterEqual
+               && node.operation != Operator::CaseEqual
+               && node.operation != Operator::CaseNotEqual) {
+      const auto left = operand_known(0);
+      const auto right = operand_known(1);
+      if (left && right) {
+        const auto& left_profile = expression.nodes[node.operands[0]].profile;
+        const auto& right_profile = expression.nodes[node.operands[1]].profile;
+        const auto bits = std::max(left_profile.width, right_profile.width);
+        const bool signed_compare
+            = left_profile.signed_value && right_profile.signed_value;
+        if (bits <= 64U) {
+          const auto a = signed_key(*left, left_profile.width,
+              left_profile.signed_value);
+          const auto b = signed_key(*right, right_profile.width,
+              right_profile.signed_value);
+          const auto less = signed_compare
+              ? static_cast<std::int64_t>(a) < static_cast<std::int64_t>(b)
+              : a < b;
+          const auto equal = a == b;
+          switch (node.operation) {
+          case Operator::Equal: truth[index] = equal; break;
+          case Operator::NotEqual: truth[index] = !equal; break;
+          case Operator::Less: truth[index] = less; break;
+          case Operator::LessEqual: truth[index] = less || equal; break;
+          case Operator::Greater: truth[index] = !less && !equal; break;
+          case Operator::GreaterEqual: truth[index] = !less; break;
+          default: break;
+          }
+        }
+      }
+    }
+  }
+  for (std::size_t index = 0; index < expression.nodes.size(); ++index) {
+    const auto& node = expression.nodes[index];
+    if (truth[index]
+        && (node.operation == Operator::LogicalNot
+            || (node.operation >= Operator::Equal
+                && node.operation <= Operator::LogicalOr))) {
+      results[index] = Analysis{
+          *truth[index] ? Ranges{{0U, maximum_key}} : Ranges{}, true};
+      continue;
+    }
     switch (node.operation) {
     case Operator::LogicalAnd:
     case Operator::LogicalOr: {

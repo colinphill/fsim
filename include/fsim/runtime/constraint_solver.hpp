@@ -103,10 +103,15 @@ struct SystemVerilogConstraintDistributionEntry {
       SystemVerilogConstraintDistributionWeight::PerValue};
 };
 
+struct SystemVerilogConstraintExpression;
+
 struct SystemVerilogConstraintDistribution {
   std::string canonical_identity;
   SystemVerilogConstraintVariableId variable{};
   std::vector<SystemVerilogConstraintDistributionEntry> entries;
+  /// A predicate over other variables: the weights apply only where it holds
+  /// (a dist under a random `if` or implication, IEEE 1800-2017 18.5.4).
+  std::shared_ptr<const SystemVerilogConstraintExpression> guard{};
 };
 
 enum class SystemVerilogConstraintResource : std::uint8_t {
@@ -212,6 +217,14 @@ enum class SystemVerilogConstraintTemplateKind : std::uint8_t {
     SolveBefore,
     SolveList,
     Unique,
+    /// `a[i]`: operands are the array name and the index.
+    Index,
+    /// `foreach (a[i]) body`: operands are Index(a, i) and the body.
+    Foreach,
+    /// A method or built-in call on an operand list: `.size`, the array
+    /// reductions (whose optional trailing operands are an iterator name and
+    /// a with-expression), `@sv-cast:` conversions and bit counts.
+    Method,
 };
 
 struct SystemVerilogConstraintTemplate {
@@ -270,6 +283,13 @@ class SystemVerilogConstraintExpressionBuilder final {
           std::nullopt);
   [[nodiscard]] SystemVerilogConstraintExpressionId conjunction(
       std::span<const SystemVerilogConstraintExpressionId> predicates);
+  /// The operand converted to `profile`: truncated, or extended by its own
+  /// signedness (a cast, IEEE 1800-2017 6.24.1).
+  [[nodiscard]] SystemVerilogConstraintExpressionId resize(
+      SystemVerilogConstraintExpressionId operand,
+      SystemVerilogConstraintVariableProfile profile);
+  [[nodiscard]] const SystemVerilogConstraintVariableProfile& profile(
+      SystemVerilogConstraintExpressionId expression) const;
   [[nodiscard]] SystemVerilogConstraintExpression finish(
       SystemVerilogConstraintExpressionId root) &&;
 
@@ -339,6 +359,10 @@ class SystemVerilogConstraintSolver final {
   // `disable soft v` (IEEE 1800-2017 18.5.14.2): drops the soft clauses
   // added so far that depend on one of the variables.
   void discard_soft_clauses(std::span<const SystemVerilogConstraintVariableId> variables);
+  /// The predicate's value when every variable it reads has one value in
+  /// its domain (state variables); nothing when one is random.
+  [[nodiscard]] std::optional<bool> fixed_truth(
+      const SystemVerilogConstraintExpression& predicate) const;
   void add_distribution(SystemVerilogConstraintDistribution distribution);
   void add_solve_before(
       SystemVerilogConstraintVariableId earlier,
@@ -379,6 +403,7 @@ class SystemVerilogConstraintSolver final {
     SystemVerilogConstraintVariableId variable{};
     std::vector<std::uint64_t> weights;
     std::vector<SystemVerilogConstraintDistributionEntry> entries;
+    std::shared_ptr<const SystemVerilogConstraintExpression> guard{};
   };
   std::vector<RetainedDistribution> distributions_;
   std::vector<std::pair<SystemVerilogConstraintVariableId,

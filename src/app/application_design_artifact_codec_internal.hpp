@@ -598,7 +598,7 @@ namespace codec_detail {
             std::same_as<T, runtime::SystemVerilogConstraintTemplateKind>) {
             return value >= runtime::SystemVerilogConstraintTemplateKind::Name
                 && value
-                <= runtime::SystemVerilogConstraintTemplateKind::Unique;
+                <= runtime::SystemVerilogConstraintTemplateKind::Method;
         } else if constexpr (std::same_as<T, semantic::vhdl::UnitKind>) {
             return value >= semantic::vhdl::UnitKind::entity
                 && value <= semantic::vhdl::UnitKind::psl_verification_unit;

@@ -95,7 +95,10 @@ std::optional<std::uint64_t> class_constant_value(
         }
         return *left + *right;
     }
-    if (expression.kind != frontend::ExpressionKind::IntegerLiteral) {
+    // A sized literal (`2'd1`) may be a logic literal; x and z digits
+    // still fail below.
+    if (expression.kind != frontend::ExpressionKind::IntegerLiteral
+        && expression.kind != frontend::ExpressionKind::LogicLiteral) {
         return std::nullopt;
     }
     std::string digits;
@@ -453,6 +456,14 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
     binding.specialization_identity = specialization.specialization_identity;
     binding.canonical_identity = found->owner_identity + "::" + found->name;
     binding.type = class_property_type(found->type, binding_source);
+    // The elements of an array of an enumeration are enumerated values.
+    if (found->type.systemverilog_container
+        && (!found->type.enumeration_literals.empty()
+            || (found->type.systemverilog_container->element_types.size() == 1U
+                && !found->type.systemverilog_container->element_types.front()
+                        .enumeration_literals.empty()))) {
+        binding.type.value_form = sv::TypeForm::enumeration;
+    }
     // A property of this class keeps its declared type, as its runtime
     // descriptor does, so an enumeration keeps its nominal type.
     if (found->owner_identity == declaration.canonical_identity) {
@@ -476,6 +487,77 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
         }
     }
     return binding;
+}
+
+// `h.m` through a class-handle property names property m of the object h
+// refers to; a constraint may name the members of a random handle's object
+// (IEEE 1800-2017 18.5.9). Its identity joins each property's canonical
+// identity with '.', the key the randomizer gives that object's variable.
+std::optional<sv::ConstraintBinding>
+SystemVerilogHirBuilder::dotted_property_binding(
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    std::string_view spelling,
+    const semantic::SourceSpanId binding_source)
+{
+    if (spelling.starts_with("this.")) {
+        spelling.remove_prefix(5U);
+    }
+    if (spelling.find('.') == std::string_view::npos
+        || spelling.find("::") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto* current = &specialization;
+    std::string identity;
+    while (true) {
+        const auto dot = spelling.find('.');
+        const auto segment = spelling.substr(0U, dot);
+        const auto found = std::ranges::find_if(
+            current->properties.rbegin(), current->properties.rend(),
+            [&](const frontend::SystemVerilogClassPropertyLayout& property) {
+                return property.name == segment;
+            });
+        if (found == current->properties.rend() || found->is_static) {
+            return std::nullopt;
+        }
+        if (!identity.empty()) {
+            identity += '.';
+        }
+        identity += found->owner_identity + "::" + found->name;
+        if (dot == std::string_view::npos) {
+            sv::ConstraintBinding binding;
+            binding.kind = sv::ConstraintReferenceKind::property;
+            binding.specialization_identity
+                = specialization.specialization_identity;
+            binding.canonical_identity = std::move(identity);
+            binding.type = class_property_type(found->type, binding_source);
+            return binding;
+        }
+        const auto& type = found->type;
+        if (type.systemverilog_class_declaration.empty()
+            || type.systemverilog_container) {
+            return std::nullopt;
+        }
+        const frontend::SystemVerilogClassSpecialization* next = nullptr;
+        std::size_t matches { };
+        for (const auto& candidate : class_specializations_) {
+            if (candidate.specialization_identity
+                == type.systemverilog_class_name) {
+                next = &candidate;
+                matches = 1U;
+                break;
+            }
+            if (candidate.declaration_identity
+                == type.systemverilog_class_declaration) {
+                next = &candidate;
+                ++matches;
+            }
+        }
+        if (next == nullptr || matches != 1U) {
+            return std::nullopt;
+        }
+        current = next;
+        spelling.remove_prefix(dot + 1U);
+    }
 }
 
 std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::parameter_binding(
@@ -503,6 +585,67 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::parameter_binding(
         + "::" + std::string { spelling };
     binding.type = class_property_type(formal->type, binding_source);
     binding.constant_value = value->second;
+    return binding;
+}
+
+void SystemVerilogHirBuilder::collect_unit_parameters(
+    const frontend::ParsedDesign& parsed)
+{
+    unit_parameters_.clear();
+    for (const auto& unit : parsed.units) {
+        if (unit.language == frontend::Language::Vhdl2008) {
+            continue;
+        }
+        for (const auto& parameter : unit.parameters) {
+            if (parameter.kind == frontend::ParameterKind::Type
+                || parameter.type.domain == frontend::ValueDomain::String) {
+                continue;
+            }
+            if (const auto value = class_constant_value(
+                    parameter.default_value)) {
+                unit_parameters_.emplace(parameter.name,
+                    UnitParameter { unit.name, parameter.type, *value });
+            }
+        }
+    }
+}
+
+std::optional<sv::ConstraintBinding>
+SystemVerilogHirBuilder::unit_parameter_binding(
+    const frontend::SystemVerilogClassDeclaration& declaration,
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    const std::string_view spelling,
+    const semantic::SourceSpanId binding_source)
+{
+    // The class's own unit first; otherwise a name only one unit declares.
+    const auto [first, last] = unit_parameters_.equal_range(spelling);
+    const UnitParameter* selected = nullptr;
+    std::size_t candidates { };
+    for (auto entry = first; entry != last; ++entry) {
+        ++candidates;
+        const auto& unit = entry->second.unit;
+        if (!unit.empty()
+            && declaration.canonical_identity.find("::" + unit + "::")
+                != std::string::npos) {
+            selected = &entry->second;
+            candidates = 1U;
+            break;
+        }
+        selected = &entry->second;
+    }
+    if (selected == nullptr || candidates != 1U) {
+        return std::nullopt;
+    }
+    sv::ConstraintBinding binding;
+    binding.kind = sv::ConstraintReferenceKind::parameter;
+    binding.specialization_identity = specialization.specialization_identity;
+    binding.canonical_identity = selected->unit + "::" + std::string { spelling };
+    binding.type = class_property_type(selected->type, binding_source);
+    if (!binding.type.executable_width) {
+        binding.type.executable_width = 32U;
+        binding.type.signed_value = true;
+    }
+    binding.constant_value = std::to_string(selected->value);
     return binding;
 }
 
@@ -536,6 +679,34 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
     const frontend::SystemVerilogClassDeclaration& declaration,
     const std::optional<std::string_view> enclosing_foreach)
 {
+    // `a.size` without parentheses calls the size method of array `a`
+    // (IEEE 1800-2017 13.4.5).
+    if (expression.kind == sv::ConstraintExpressionKind::name
+        && expression.text.ends_with(".size")
+        && expression.text.size() > 5U) {
+        const auto array = expression.text.substr(
+            0, expression.text.size() - 5U);
+        const bool container = std::ranges::any_of(class_specializations_,
+            [&](const frontend::SystemVerilogClassSpecialization& candidate) {
+                return specializes_or_derives(
+                           candidate, declaration.canonical_identity)
+                    && std::ranges::any_of(candidate.properties,
+                        [&](const frontend::SystemVerilogClassPropertyLayout&
+                                property) {
+                            return property.name == array
+                                && property.type.systemverilog_container;
+                        });
+            });
+        if (container) {
+            sv::ConstraintExpression receiver;
+            receiver.kind = sv::ConstraintExpressionKind::name;
+            receiver.text = array;
+            receiver.source = expression.source;
+            expression.kind = sv::ConstraintExpressionKind::call;
+            expression.text = ".size";
+            expression.operands = { std::move(receiver) };
+        }
+    }
     auto foreach_iterator = enclosing_foreach;
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U
@@ -574,7 +745,16 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                     declaration, specialization, expression.text,
                     expression.source);
                 if (!binding) {
+                    binding = dotted_property_binding(
+                        specialization, expression.text, expression.source);
+                }
+                if (!binding) {
                     binding = parameter_binding(
+                        declaration, specialization, expression.text,
+                        expression.source);
+                }
+                if (!binding) {
+                    binding = unit_parameter_binding(
                         declaration, specialization, expression.text,
                         expression.source);
                 }
@@ -621,6 +801,45 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                             type, expression.source);
                         constant.type.target = declared_type.target;
                         constant.type.value_form = declared_type.value_form;
+                        constant.constant_value
+                            = std::to_string(values[index]);
+                        binding = std::move(constant);
+                        break;
+                    }
+                }
+                // Likewise a literal of the element type of an array, or of
+                // an inherited property's type.
+                if (!binding) {
+                    for (const auto& layout : specialization.properties) {
+                        const frontend::Type* type = &layout.type;
+                        if (type->enumeration_literals.empty()
+                            && type->systemverilog_container
+                            && type->systemverilog_container->element_types
+                                    .size() == 1U) {
+                            type = &type->systemverilog_container
+                                        ->element_types.front();
+                        }
+                        const auto literal = std::ranges::find(
+                            type->enumeration_literals, expression.text);
+                        if (literal == type->enumeration_literals.end()) {
+                            continue;
+                        }
+                        const auto values = enumeration_values(*type);
+                        const auto index = static_cast<std::size_t>(
+                            literal - type->enumeration_literals.begin());
+                        if (index >= values.size()) {
+                            continue;
+                        }
+                        sv::ConstraintBinding constant;
+                        constant.kind = sv::ConstraintReferenceKind::parameter;
+                        constant.specialization_identity
+                            = specialization.specialization_identity;
+                        constant.canonical_identity
+                            = layout.owner_identity + "::" + expression.text;
+                        constant.type = class_property_type(
+                            *type, expression.source);
+                        constant.type.container_form.reset();
+                        constant.type.value_form = sv::TypeForm::enumeration;
                         constant.constant_value
                             = std::to_string(values[index]);
                         binding = std::move(constant);
@@ -908,6 +1127,34 @@ void SystemVerilogHirBuilder::add_class(
         // previous one (IEEE 1800-2017 6.19).
         retained.enumeration_domain = enumeration_values(
             property.declaration.type);
+        // An array of an enumeration: its elements' values, from the
+        // layout's alias-expanded element type.
+        if (retained.enumeration_domain.empty()
+            && property.declaration.type.systemverilog_container) {
+            for (const auto& specialization : class_specializations_) {
+                const auto layout = std::ranges::find_if(
+                    specialization.properties,
+                    [&](const frontend::SystemVerilogClassPropertyLayout&
+                            candidate) {
+                        return candidate.name == property.declaration.name
+                            && candidate.owner_identity == owner_identity;
+                    });
+                if (layout == specialization.properties.end()
+                    || !layout->type.systemverilog_container
+                    || layout->type.systemverilog_container
+                           ->element_types.size() != 1U) {
+                    continue;
+                }
+                retained.enumeration_domain = enumeration_values(
+                    layout->type.systemverilog_container
+                        ->element_types.front());
+                if (retained.enumeration_domain.empty()) {
+                    retained.enumeration_domain = enumeration_values(
+                        layout->type);
+                }
+                break;
+            }
+        }
         retained.source = retained_declaration.source;
         retained.origin = retained_declaration.origin;
         output.properties.push_back(std::move(retained));

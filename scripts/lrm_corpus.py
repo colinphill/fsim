@@ -614,6 +614,14 @@ VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
 VERILATOR_NONSTANDARD = {
+    # A dist is a constraint item (IEEE 1800-2017 A.1.10 expression_or_dist),
+    # not an operator, so it cannot appear inside parentheses.
+    "t_constraint_dist_foreach_if": "writes a dist inside parentheses, "
+        "which IEEE 1800-2017 A.1.10 does not allow (dist is a constraint "
+        "item, not an expression)",
+    "t_constraint_dist_if_foreach": "writes a dist inside parentheses, "
+        "which IEEE 1800-2017 A.1.10 does not allow (dist is a constraint "
+        "item, not an expression)",
     # IEEE 1800-2017 21.3.5 positions files with $rewind; $frewind is a
     # Verilator spelling.
     "t_sys_file_basic": "calls $frewind, which is not an IEEE system task "
@@ -1427,6 +1435,8 @@ def nvc_cases(root: Path) -> list[Case]:
                 verilog = True
             elif key == "stop-time":
                 stop_time = value
+            elif key.startswith("guut."):
+                skip = skip or "hierarchical generic override"
             elif key.startswith("g") and value and len(key) > 1:
                 generics.append(f"{key[1:]}={value}")
             elif key in ("seed", "slow", "!windows", "O0", "O2", "no-collapse",
@@ -1444,8 +1454,6 @@ def nvc_cases(root: Path) -> list[Case]:
                 skip = skip or f"nvc option {flag}"
             elif key in NVC_SKIP_FLAGS:
                 skip = skip or f"nvc-specific test kind {key}"
-            elif key.startswith("guut."):
-                skip = skip or "hierarchical generic override"
         if name in NVC_NONSTANDARD:
             skip = skip or "out of scope: " + NVC_NONSTANDARD[name]
         if verilog:

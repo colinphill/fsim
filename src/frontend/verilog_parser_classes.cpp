@@ -361,6 +361,87 @@ SystemVerilogClassMethod VerilogParser::parse_class_out_of_block_method(
   return method;
 }
 
+Expression VerilogParser::parse_dist_list(Expression subject)
+{
+    const auto dist = advance();
+    expect(
+        TokenKind::LeftBrace,
+        "'{' after dist",
+        "FSIM-SV-PARSE-268");
+    std::vector<Expression> operands;
+    operands.push_back(std::move(subject));
+    while (!at_end() && !at(TokenKind::RightBrace)) {
+        Expression choice;
+        if (match(TokenKind::LeftBracket)) {
+            const auto range_start = previous();
+            auto low = parse_expression();
+            expect(
+                TokenKind::Colon,
+                "':' in dist range",
+                "FSIM-SV-PARSE-269");
+            auto high = parse_expression();
+            expect(
+                TokenKind::RightBracket,
+                "']' after dist range",
+                "FSIM-SV-PARSE-270");
+            choice = Expression {
+                ExpressionKind::Call,
+                "@inside-range",
+                { std::move(low), std::move(high) },
+                cover(range_start.span, previous().span)
+            };
+        } else {
+            choice = parse_expression();
+        }
+        std::string weight_kind;
+        std::optional<Expression> weight;
+        if (match(TokenKind::ColonEqual)) {
+            weight_kind = "@dist-:=";
+        } else if (match(TokenKind::Colon)) {
+            expect(
+                TokenKind::Slash,
+                "'/' after ':' in dist weight",
+                "FSIM-SV-PARSE-271");
+            weight_kind = "@dist-:/";
+        } else if (at(TokenKind::Comma)
+            || at(TokenKind::RightBrace)) {
+            // An item without a weight has weight `:= 1` (IEEE
+            // 1800-2017 18.5.4).
+            weight_kind = "@dist-:=";
+            weight = Expression {
+                ExpressionKind::IntegerLiteral, "1", { },
+                choice.span };
+        } else {
+            error(
+                current(),
+                "FSIM-SV-PARSE-272",
+                "a dist item requires ':=' or ':/' weight syntax");
+            weight_kind = "@dist-:=";
+        }
+        if (!weight) {
+            weight = parse_expression();
+        }
+        const auto item_span = cover(dist.span, weight->span);
+        operands.push_back(Expression {
+            ExpressionKind::Call,
+            std::move(weight_kind),
+            { std::move(choice), std::move(*weight) },
+            item_span });
+        if (!match(TokenKind::Comma))
+            break;
+    }
+    expect(
+        TokenKind::RightBrace,
+        "'}' after dist list",
+        "FSIM-SV-PARSE-273");
+    return Expression {
+        ExpressionKind::Call,
+        "dist",
+        std::move(operands),
+        cover(dist.span, previous().span)
+    };
+}
+
 std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
     const std::string_view close_message,
     std::string close_code)
@@ -399,83 +480,7 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
         }
         auto expression = parse_expression();
         if (keyword("dist")) {
-            const auto dist = advance();
-            expect(
-                TokenKind::LeftBrace,
-                "'{' after dist",
-                "FSIM-SV-PARSE-268");
-            std::vector<Expression> operands;
-            operands.push_back(std::move(expression));
-            while (!at_end() && !at(TokenKind::RightBrace)) {
-                Expression choice;
-                if (match(TokenKind::LeftBracket)) {
-                    const auto range_start = previous();
-                    auto low = parse_expression();
-                    expect(
-                        TokenKind::Colon,
-                        "':' in dist range",
-                        "FSIM-SV-PARSE-269");
-                    auto high = parse_expression();
-                    expect(
-                        TokenKind::RightBracket,
-                        "']' after dist range",
-                        "FSIM-SV-PARSE-270");
-                    choice = Expression {
-                        ExpressionKind::Call,
-                        "@inside-range",
-                        { std::move(low), std::move(high) },
-                        cover(range_start.span, previous().span)
-                    };
-                } else {
-                    choice = parse_expression();
-                }
-                std::string weight_kind;
-                std::optional<Expression> weight;
-                if (match(TokenKind::ColonEqual)) {
-                    weight_kind = "@dist-:=";
-                } else if (match(TokenKind::Colon)) {
-                    expect(
-                        TokenKind::Slash,
-                        "'/' after ':' in dist weight",
-                        "FSIM-SV-PARSE-271");
-                    weight_kind = "@dist-:/";
-                } else if (at(TokenKind::Comma)
-                    || at(TokenKind::RightBrace)) {
-                    // An item without a weight has weight `:= 1` (IEEE
-                    // 1800-2017 18.5.4).
-                    weight_kind = "@dist-:=";
-                    weight = Expression {
-                        ExpressionKind::IntegerLiteral, "1", { },
-                        choice.span };
-                } else {
-                    error(
-                        current(),
-                        "FSIM-SV-PARSE-272",
-                        "a dist item requires ':=' or ':/' weight syntax");
-                    weight_kind = "@dist-:=";
-                }
-                if (!weight) {
-                    weight = parse_expression();
-                }
-                const auto item_span = cover(dist.span, weight->span);
-                operands.push_back(Expression {
-                    ExpressionKind::Call,
-                    std::move(weight_kind),
-                    { std::move(choice), std::move(*weight) },
-                    item_span });
-                if (!match(TokenKind::Comma))
-                    break;
-            }
-            expect(
-                TokenKind::RightBrace,
-                "'}' after dist list",
-                "FSIM-SV-PARSE-273");
-            expression = Expression {
-                ExpressionKind::Call,
-                "dist",
-                std::move(operands),
-                cover(dist.span, previous().span)
-            };
+            expression = parse_dist_list(std::move(expression));
         }
         if (soft_token) {
             const auto soft_span = cover(soft_token->span, expression.span);

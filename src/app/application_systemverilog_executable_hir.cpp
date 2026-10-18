@@ -869,6 +869,31 @@ namespace {
                     }
                 }
             }
+            // `randomize() with (names)`: the names bound to the object.
+            const auto names_marker = std::ranges::find(
+                input.aggregate_choices, "@sv-inline-constraint-names");
+            if (names_marker != input.aggregate_choices.end()) {
+                const auto index = static_cast<std::size_t>(std::distance(
+                    input.aggregate_choices.begin(), names_marker));
+                if (index < input.aggregate_choice_expressions.size()) {
+                    sv::AssignmentPatternAssociation association;
+                    association.choice_spelling
+                        = "@sv-inline-constraint-names";
+                    association.source = expression_source;
+                    for (const auto& name :
+                        input.aggregate_choice_expressions[index]) {
+                        if (const auto name_id = expression(
+                                name, scope, expression_origin)) {
+                            association.choices.push_back(*name_id);
+                        }
+                    }
+                    if (!association.choices.empty()) {
+                        association.value = association.choices.front();
+                        output.associations.push_back(
+                            std::move(association));
+                    }
+                }
+            }
             // The expression identity was claimed above. Keeping this append
             // out of the one-time candidate index therefore preserves the
             // original claimed-ID predicate for every later lookup.
