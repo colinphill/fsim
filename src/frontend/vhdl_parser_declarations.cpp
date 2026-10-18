@@ -82,6 +82,7 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
 
   std::vector<VariableDeclaration> variables;
   std::vector<SignalAliasDeclaration> method_aliases;
+  std::vector<ParameterDeclaration> body_constants;
   while (!at_end() &&
          !(keyword("end", 0, true) && keyword("protected", 1, true))) {
     if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
@@ -215,6 +216,28 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       continue;
     }
 
+    // A protected body may declare types, subtypes, constants, files,
+    // aliases, attributes and use clauses (IEEE 1076-2008 5.6.3).
+    if (body && match_keyword("file", true)) {
+      parse_vhdl_file_declaration(variables, previous());
+      continue;
+    }
+    if (keyword("use", 0, true)) {
+      if (auto use_item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*use_item));
+      }
+      continue;
+    }
+    if (body &&
+        parse_vhdl_local_nonobject_declaration(
+            body_constants, protected_region.type_aliases,
+            protected_region.signal_aliases, variables,
+            protected_region.package_instances, protected_region.functions,
+            protected_region.procedures, protected_region.vhdl_attributes,
+            protected_region.vhdl_groups)) {
+      continue;
+    }
+
     const auto item = advance();
     error(item, "FSIM-VHDL-UNSUPPORTED-055",
           "unsupported protected type declarative item '" + item.text + "'");
@@ -244,6 +267,9 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
   protected_info->functions = std::move(protected_region.functions);
   protected_info->procedures = std::move(protected_region.procedures);
   protected_info->method_aliases = std::move(method_aliases);
+  protected_info->constants = std::move(body_constants);
+  protected_info->type_aliases = std::move(protected_region.type_aliases);
+  protected_info->object_aliases = std::move(protected_region.signal_aliases);
   protected_info->span = span_from(start, previous());
   return protected_info;
 }
@@ -1044,6 +1070,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
           cover(member_start.span, previous().span),
           member_type.named_type.empty() && !member_type.integer_range
                   && !member_type.integer_range_expression
+                  && !member_type.discrete_range_expression
+                  && !member_type.enumeration_range_expression
               ? std::vector<Type>{}
               : std::vector<Type>{member_type},
           std::nullopt});

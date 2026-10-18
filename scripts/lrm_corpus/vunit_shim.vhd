@@ -52,6 +52,9 @@ package vunit_shim_pkg is
   procedure check(constant expr : in boolean; constant msg : in string := "");
   procedure check_true(constant expr : in boolean; constant msg : in string := "");
   procedure check_false(constant expr : in boolean; constant msg : in string := "");
+  -- VUnit check_pkg: record an unconditional pass or failure.
+  procedure check_passed(constant msg : in string := "");
+  procedure check_failed(constant msg : in string := "");
 
   procedure check_equal(constant got : in integer; constant expected : in integer; constant msg : in string := "");
   procedure check_equal(constant got : in boolean; constant expected : in boolean; constant msg : in string := "");
@@ -243,6 +246,16 @@ package body vunit_shim_pkg is
   procedure check(constant expr : in boolean; constant msg : in string := "") is
   begin
     check_result(expr, "check", msg);
+  end procedure;
+
+  procedure check_passed(constant msg : in string := "") is
+  begin
+    check_result(true, "check_passed", msg);
+  end procedure;
+
+  procedure check_failed(constant msg : in string := "") is
+  begin
+    check_result(false, "check_failed", msg);
   end procedure;
 
   procedure check_true(constant expr : in boolean; constant msg : in string := "") is

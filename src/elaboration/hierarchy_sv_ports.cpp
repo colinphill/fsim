@@ -1148,6 +1148,76 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             && actual_expression->systemverilog != nullptr
             && actual_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::name;
+        // In Verilog an output or inout port connects to a net expression,
+        // never a variable (IEEE 1364-2005 12.3.9.2); SystemVerilog relaxes
+        // this for output ports (IEEE 1800-2017 23.3.3.2).
+        if ((direction == frontend::PortDirection::Output
+                || direction == frontend::PortDirection::Inout)
+            && binding.expression
+            && working_specialization.language()
+                == semantic::Language::verilog) {
+            const auto variable_operand = [&](const auto& self,
+                                              const semantic::ExpressionId id)
+                -> std::optional<std::string> {
+                const auto operand = working_specialization.find_expression(id);
+                if (!operand || operand->systemverilog == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& source = *operand->systemverilog;
+                if (source.kind == semantic::sv::ExpressionKind::concatenation) {
+                    for (const auto part : source.operands) {
+                        if (auto found = self(self, part)) {
+                            return found;
+                        }
+                    }
+                    return std::nullopt;
+                }
+                if ((source.kind == semantic::sv::ExpressionKind::index
+                        || source.kind == semantic::sv::ExpressionKind::slice)
+                    && !source.operands.empty()) {
+                    return self(self, source.operands.front());
+                }
+                if (source.kind != semantic::sv::ExpressionKind::name
+                    || !source.referenced_name
+                    || !source.referenced_name->selected) {
+                    return std::nullopt;
+                }
+                const auto declaration = working_specialization.find_declaration(
+                    *source.referenced_name->selected);
+                if (!declaration || declaration->systemverilog == nullptr
+                    || declaration->systemverilog->form
+                        != semantic::sv::DeclarationForm::variable
+                    || !declaration->systemverilog->type
+                    || !declaration->systemverilog->type
+                            ->systemverilog_net_type.empty()) {
+                    return std::nullopt;
+                }
+                // Net arrays are kept as containers; only Verilog variable
+                // types are variables here (IEEE 1364-2005 4.2).
+                auto spelling = declaration->systemverilog->type->target.spelling;
+                for (auto& character : spelling) {
+                    character = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(character)));
+                }
+                return spelling == "reg" || spelling == "integer"
+                        || spelling == "time" || spelling == "real"
+                        || spelling == "realtime"
+                    ? std::optional { declaration->systemverilog->name }
+                    : std::nullopt;
+            };
+            if (const auto variable
+                = variable_operand(variable_operand, *binding.expression)) {
+                report(
+                    "FSIM-ELAB-SVPORT-013",
+                    "Verilog " + std::string {
+                        direction == frontend::PortDirection::Output
+                            ? "output" : "inout" }
+                        + " port actual must be a net, not variable '"
+                        + *variable + "'",
+                    compiled_source_span(*compiled_, binding.source));
+                return false;
+            }
+        }
         struct ScalarArrayOutputElement {
             ContainerObjectId object { };
             std::int32_t index { };

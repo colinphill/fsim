@@ -1175,6 +1175,7 @@ src/runtime/class_randomize.cpp
 src/runtime/class_static.cpp
 src/runtime/code_coverage.cpp
 src/runtime/constraint_bounds.cpp
+src/runtime/constraint_bounds_internal.hpp
 src/runtime/constraint_expression.cpp
 src/runtime/constraint_solver.cpp
 src/runtime/coverage_aggregation.cpp
@@ -2006,7 +2007,6 @@ tests/fixtures/compliance/analysis_errors/missing_body.vhd
 tests/fixtures/compliance/analysis_errors/mixed_range_bounds.vhd
 tests/fixtures/compliance/analysis_errors/nonstatic_port_actual.vhd
 tests/fixtures/compliance/analysis_errors/nonstatic_type_range.vhd
-tests/fixtures/compliance/analysis_errors/physical_unit_range.vhd
 tests/fixtures/compliance/analysis_errors/procedure_in_expression.vhd
 tests/fixtures/compliance/analysis_errors/real_loop_bound.vhd
 tests/fixtures/compliance/analysis_errors/record_addition.vhd
@@ -2036,6 +2036,7 @@ tests/fixtures/compliance/b57_textio_dynamic_string_read.vhd
 tests/fixtures/compliance/b57_textio_ho_codecs.vhd
 tests/fixtures/compliance/b57_textio_radix_slices.vhd
 tests/fixtures/compliance/b58_nonansi_empty_selected_ports_20261013.sv
+tests/fixtures/compliance/physical_unit_range.vhd
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_array_equality_bounds_20261013.sv
 tests/fixtures/compliance/sv_array_query_class_handles_batch57.sv

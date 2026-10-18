@@ -59,6 +59,36 @@ inline void lowercase_ascii(std::string& text) noexcept
     return result;
 }
 
+// The position of a named CHARACTER literal such as NUL, DEL or C128
+// (IEEE 1076-2008 16.3).
+[[nodiscard]] inline std::optional<std::uint64_t>
+vhdl_character_control_literal_code(const std::string_view name)
+{
+    static constexpr std::array<std::string_view, 32U> low {
+        "nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+        "bs", "ht", "lf", "vt", "ff", "cr", "so", "si",
+        "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+        "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
+    };
+    const auto lower = lowercase_ascii_copy(name);
+    if (const auto found = std::ranges::find(low, lower); found != low.end()) {
+        return static_cast<std::uint64_t>(found - low.begin());
+    }
+    if (lower == "del") {
+        return 127U;
+    }
+    if (lower.size() == 4U && lower.front() == 'c'
+        && std::ranges::all_of(lower.substr(1U), [](const char digit) {
+               return digit >= '0' && digit <= '9';
+           })) {
+        const auto code = std::stoul(lower.substr(1U));
+        if (code >= 128U && code <= 159U) {
+            return code;
+        }
+    }
+    return std::nullopt;
+}
+
 // The lower-case last '.'-separated part of a VHDL selected name.
 [[nodiscard]] inline std::string lowercase_vhdl_simple_name(
     const std::string_view name)

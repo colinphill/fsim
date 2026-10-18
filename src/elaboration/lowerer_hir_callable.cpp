@@ -2288,6 +2288,14 @@ Lowerer::hir_class_property_profile(
         result.receiver = access.operands.front();
     }
     result.width = *property_width;
+    // A property sized by class value parameters takes the width of the
+    // receiver's specialization (IEEE 1800-2017 8.25), not the defaults'.
+    if (instance) {
+        if (const auto specialized = hir_class_property_specialized_width(
+                *selected, access.operands.front())) {
+            result.width = *specialized;
+        }
+    }
     result.domain = selected->type.four_state
         ? frontend::ValueDomain::Logic4
         : frontend::ValueDomain::Bit2;
@@ -2295,6 +2303,92 @@ Lowerer::hir_class_property_profile(
     result.static_storage = selected->static_storage;
     result.writable = !selected->constant && !selected->parameter;
     return result;
+}
+
+std::optional<std::size_t> Lowerer::hir_class_property_specialized_width(
+    const semantic::sv::ClassProperty& property,
+    const semantic::ExpressionId receiver) const
+{
+    const auto& range = property.type.packed_range;
+    if (!range || (!range->left_expression && !range->right_expression)
+        || !property.type.packed_dimensions.empty()) {
+        return std::nullopt;
+    }
+    const auto receiver_id = hir_referenced_declaration(receiver);
+    const auto receiver_declaration = receiver_id
+        ? specialized_hir_unit_->find_declaration(*receiver_id)
+        : std::nullopt;
+    if (!receiver_declaration || receiver_declaration->systemverilog == nullptr
+        || !receiver_declaration->systemverilog->type) {
+        return std::nullopt;
+    }
+    const auto& handle = *receiver_declaration->systemverilog->type;
+    if (handle.class_identity.empty()
+        || handle.interface_parameter_actuals.empty()
+        || !property.canonical_identity.starts_with(
+            handle.class_identity + "::")) {
+        return std::nullopt;
+    }
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const auto owner = std::ranges::find(classes, handle.class_identity,
+        &semantic::sv::ClassDeclaration::canonical_identity);
+    if (owner == classes.end()) {
+        return std::nullopt;
+    }
+    // Associate the actuals with the class parameters by name or position.
+    std::unordered_map<std::uint32_t, semantic::ExpressionId> actuals;
+    std::size_t position { };
+    for (const auto& actual : handle.interface_parameter_actuals) {
+        if (actual.kind != semantic::sv::ActualKind::expression
+            || !actual.expression) {
+            ++position;
+            continue;
+        }
+        const auto parameter = actual.formal
+            ? std::ranges::find(owner->parameters, *actual.formal,
+                  &semantic::sv::ClassParameter::name)
+            : position < owner->parameters.size()
+            ? owner->parameters.begin() + static_cast<std::ptrdiff_t>(position)
+            : owner->parameters.end();
+        ++position;
+        if (parameter != owner->parameters.end()
+            && !parameter->type_parameter) {
+            actuals.emplace(parameter->declaration.value(), *actual.expression);
+        }
+    }
+    if (actuals.empty()) {
+        return std::nullopt;
+    }
+    const semantic::SpecializedHirIntegralBinding binding
+        = [&](const semantic::DeclarationId declaration)
+        -> std::optional<semantic::ExpressionId> {
+        const auto found = actuals.find(declaration.value());
+        return found != actuals.end() ? std::optional { found->second }
+                                      : std::nullopt;
+    };
+    const auto bound = [&](const std::optional<std::int64_t>& value,
+                           const std::optional<semantic::ExpressionId>& expression)
+        -> std::optional<std::int64_t> {
+        if (expression) {
+            if (const auto evaluated
+                = specialized_hir_unit_->evaluate_integral_expression(
+                    *expression, binding)) {
+                return evaluated;
+            }
+        }
+        return value;
+    };
+    const auto left = bound(range->left, range->left_expression);
+    const auto right = bound(range->right, range->right_expression);
+    if (!left || !right) {
+        return std::nullopt;
+    }
+    const auto distance = index_distance(*left, *right);
+    if (distance >= std::numeric_limits<std::uint32_t>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(distance + 1U);
 }
 
 std::optional<Lowerer::HirClassPropertyMember>
@@ -2638,6 +2732,77 @@ Lowerer::hir_inline_constraints(
         return output;
     };
 
+    const auto same_lvalue = [&](const auto& self,
+                                 const semantic::ExpressionId left,
+                                 const semantic::ExpressionId right,
+                                 const std::size_t depth) -> bool {
+        if (left == right) {
+            return true;
+        }
+        const auto a = specialized_hir_unit_->find_expression(left);
+        const auto b = specialized_hir_unit_->find_expression(right);
+        if (depth > 32U || !a || !b || a->systemverilog == nullptr
+            || b->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& x = *a->systemverilog;
+        const auto& y = *b->systemverilog;
+        // An element of a class array property appears both as
+        // index(@sv-property:P(r), i) and as @sv-container-index:P(r, i).
+        constexpr std::string_view property_prefix = "@sv-property:";
+        constexpr std::string_view element_prefix = "@sv-container-index:";
+        const auto property_element = [&](const semantic::sv::Expression& raw,
+                                          const semantic::sv::Expression& lowered)
+            -> std::optional<bool> {
+            if (raw.kind != semantic::sv::ExpressionKind::index
+                || raw.operands.size() != 2U
+                || !lowered.text.starts_with(element_prefix)
+                || lowered.operands.size() != 2U) {
+                return std::nullopt;
+            }
+            const auto base = specialized_hir_unit_->find_expression(
+                raw.operands.front());
+            if (!base || base->systemverilog == nullptr
+                || !base->systemverilog->text.starts_with(property_prefix)
+                || base->systemverilog->operands.size() != 1U
+                || std::string_view { base->systemverilog->text }.substr(
+                       property_prefix.size())
+                    != std::string_view { lowered.text }.substr(
+                        element_prefix.size())) {
+                return false;
+            }
+            return self(self, base->systemverilog->operands.front(),
+                       lowered.operands.front(), depth + 1U)
+                && self(self, raw.operands.back(), lowered.operands.back(),
+                    depth + 1U);
+        };
+        if (const auto matched = property_element(x, y)) {
+            return *matched;
+        }
+        if (const auto matched = property_element(y, x)) {
+            return *matched;
+        }
+        if (x.kind != y.kind || x.text != y.text
+            || x.operands.size() != y.operands.size()) {
+            return false;
+        }
+        const auto selected = [](const semantic::sv::Expression& value) {
+            return value.referenced_name && value.referenced_name->selected
+                ? std::optional { *value.referenced_name->selected }
+                : std::nullopt;
+        };
+        if (selected(x) != selected(y)) {
+            return false;
+        }
+        for (std::size_t index { }; index < x.operands.size(); ++index) {
+            if (!self(self, x.operands[index], y.operands[index],
+                    depth + 1U)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     std::function<std::optional<Template>(semantic::ExpressionId)> lower;
     lower = [&](const semantic::ExpressionId id) -> std::optional<Template> {
         const auto record = specialized_hir_unit_->find_expression(id);
@@ -2647,6 +2812,16 @@ Lowerer::hir_inline_constraints(
         const auto& source = *record->systemverilog;
         Template output;
         output.text = source.text;
+        // A std::randomize argument named again in its with-clause is that
+        // solver variable (IEEE 1800-2017 18.12).
+        for (const auto& [argument, identity] :
+            hir_scope_randomize_arguments_) {
+            if (same_lvalue(same_lvalue, id, argument, 0U)) {
+                output.kind = TemplateKind::Name;
+                output.text = identity;
+                return output;
+            }
+        }
         if (source.kind == semantic::sv::ExpressionKind::class_null) {
             output.kind = TemplateKind::Constant;
             output.constant = PackedLogic4::from_aval_bval(64U, 0U, 0U);
@@ -5611,6 +5786,8 @@ Lowerer::lower_hir_class_callable_invocation(
     // The callee sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
     transfer_hir_static_formals(frame, true);
+    // The callee may run a method on this protected object.
+    flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -5618,6 +5795,7 @@ Lowerer::lower_hir_class_callable_invocation(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    reload_hir_vhdl_protected_caches();
     transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
@@ -10458,6 +10636,25 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             && formal_declaration->vhdl->subtype
         ? hir_effective_vhdl_subtype(*formal_declaration->vhdl->subtype)
         : std::nullopt;
+    // A protected-type formal takes an object of the same protected type
+    // (IEEE 1076-2008 4.2.2.1, 5.6.1).
+    if (const auto* formal_protected = formal_subtype
+            ? hir_vhdl_subtype_protected_type(*formal_subtype)
+            : nullptr) {
+        auto actual_subtype = hir_vhdl_expression_subtype(actual_id);
+        if (actual_subtype) {
+            if (auto effective = hir_effective_vhdl_subtype(*actual_subtype)) {
+                actual_subtype = std::move(effective);
+            }
+        }
+        const auto* actual_protected = actual_subtype
+            ? hir_vhdl_subtype_protected_type(*actual_subtype)
+            : nullptr;
+        return actual_protected != nullptr
+            && (actual_protected == formal_protected
+                || equal_ignoring_ascii_case(
+                    actual_protected->name, formal_protected->name));
+    }
     // STD.TEXTIO.LINE is an access-to-STRING type, but it is not a STRING
     // array. Preserve its nominal access identity before applying STRING's
     // array-profile check to values such as ordinary quoted literals.
@@ -11134,6 +11331,11 @@ Lowerer::resolve_hir_vhdl_function_call(
     auto candidates = hir_vhdl_callable_resolutions(
         *expression->vhdl->referenced_name,
         expression->vhdl->scope);
+    if (candidates.empty()) {
+        candidates = hir_vhdl_protected_method_resolutions(
+            *expression->vhdl->referenced_name,
+            expression->vhdl->scope, true);
+    }
     std::optional<HirCallableResolution> checker_resolution;
     const auto& referenced_name = *expression->vhdl->referenced_name;
     if (referenced_name.selected) {
@@ -11267,6 +11469,10 @@ Lowerer::resolve_hir_vhdl_procedure_call(
 
     auto candidates = hir_vhdl_callable_resolutions(
         statement->vhdl->procedure, statement->vhdl->scope);
+    if (candidates.empty()) {
+        candidates = hir_vhdl_protected_method_resolutions(
+            statement->vhdl->procedure, statement->vhdl->scope, false);
+    }
     std::optional<HirCallableResolution> checker_resolution;
     if (statement->vhdl->procedure.selected) {
         checker_resolution = hir_callable_resolution(
@@ -12027,6 +12233,19 @@ Lowerer::lower_hir_function_call_value(
                 destination, std::nullopt
             };
         }
+        return std::nullopt;
+    }
+    // A protected method runs on the object its call selects.
+    const auto protected_members = expression && expression->vhdl != nullptr
+            && expression->vhdl->referenced_name
+        ? hir_vhdl_protected_call_members(
+              expression->vhdl->referenced_name->text(),
+              expression->vhdl->scope, resolution->body)
+        : std::nullopt;
+    if (protected_members
+        && !check_hir_vhdl_protected_call(resolution->body,
+            expression->vhdl->referenced_name->text(),
+            expression->vhdl->source)) {
         return std::nullopt;
     }
     hir_generic_binding_frames_.push_back(
@@ -13107,6 +13326,12 @@ Lowerer::lower_hir_function_call_value(
         callable_key += "|vhdl-element:" + std::to_string(index) + "=";
         append_vhdl_element_constraint_key(callable_key, constraints);
     }
+    if (protected_members) {
+        callable_key += "|protected:";
+        for (const auto& member : *protected_members) {
+            callable_key += std::to_string(member.storage) + ",";
+        }
+    }
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
     if (interface_callable) {
@@ -13133,6 +13358,9 @@ Lowerer::lower_hir_function_call_value(
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = *scope;
+        if (protected_members) {
+            frame.vhdl_protected_members = *protected_members;
+        }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
         frame.enclosing_callable_invocation_identity = lexical_parent;
@@ -13528,6 +13756,8 @@ Lowerer::lower_hir_function_call_value(
         }
     }
     transfer_hir_static_formals(frame, true);
+    // The callee may run a method on this protected object.
+    flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -13535,6 +13765,7 @@ Lowerer::lower_hir_function_call_value(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    reload_hir_vhdl_protected_caches();
     transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
@@ -13722,6 +13953,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
         formal_record && formal_record->vhdl != nullptr
         && formal_record->vhdl->subtype) {
         auto type_id = formal_record->vhdl->subtype->type_mark.target;
+        if (!type_id.valid()) {
+            if (const auto effective = hir_effective_vhdl_subtype(
+                    *formal_record->vhdl->subtype)) {
+                type_id = effective->type_mark.target;
+            }
+        }
         std::unordered_set<std::uint32_t> visiting;
         const semantic::vhdl::TypeDefinition* array = nullptr;
         while (type_id.valid() && visiting.insert(type_id.value()).second) {
@@ -13833,6 +14070,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
     });
     process_.operations.emplace_back(CopyRegister {
         frame.arguments.front(), driving_values });
+    // The callee may run a method on this protected object.
+    flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -13840,6 +14079,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    reload_hir_vhdl_protected_caches();
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }
@@ -14722,6 +14962,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         }
     }
     transfer_hir_static_formals(frame, true);
+    // The callee may run a method on this protected object.
+    flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -14729,6 +14971,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    reload_hir_vhdl_protected_caches();
     transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
@@ -14880,13 +15123,22 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         return lower_hir_vhdl_vital_timing_call(statement_id);
     }
     if (is_hir_vhdl_file_statement(statement_id)) {
-        return lower_hir_vhdl_file_statement(statement_id);
+        std::vector<semantic::ExpressionId> actuals;
+        if (const auto file_statement
+            = specialized_hir_unit_->find_statement(statement_id);
+            file_statement && file_statement->vhdl != nullptr) {
+            for (const auto& argument :
+                file_statement->vhdl->procedure_arguments) {
+                actuals.push_back(argument.actual);
+            }
+        }
+        const auto files = bind_hir_vhdl_global_files(actuals);
+        const bool lowered = lower_hir_vhdl_file_statement(statement_id);
+        release_hir_vhdl_global_files(files);
+        return lowered;
     }
     if (is_hir_vhdl_access_deallocation(statement_id)) {
         return lower_hir_vhdl_access_deallocation(statement_id);
-    }
-    if (is_hir_vhdl_protected_statement(statement_id)) {
-        return lower_hir_vhdl_protected_statement(statement_id);
     }
     const auto statement = specialized_hir_unit_->find_statement(
         statement_id);
@@ -15092,13 +15344,48 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         }
         const auto actual = specialized_hir_unit_->find_expression(
             (*actuals)[index]);
-        const auto target = actual && actual->vhdl != nullptr
-                && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
-            ? hir_target_declaration((*actuals)[index])
+        // An element or slice of a signal with static bounds is a signal
+        // actual too (IEEE 1076-2008 4.2.2.3, 8.1).
+        auto actual_root_id = (*actuals)[index];
+        auto actual_root = actual;
+        bool selected_actual { };
+        while (actual_root && actual_root->vhdl != nullptr
+            && (actual_root->vhdl->kind == semantic::vhdl::ExpressionKind::index
+                || actual_root->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::slice)
+            && !actual_root->vhdl->operands.empty()) {
+            selected_actual = true;
+            actual_root_id = actual_root->vhdl->operands.front();
+            actual_root = specialized_hir_unit_->find_expression(actual_root_id);
+        }
+        const auto target = actual_root && actual_root->vhdl != nullptr
+                && actual_root->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            ? hir_target_declaration(actual_root_id)
             : std::nullopt;
         auto binding = target
             ? hir_runtime_binding(*target, hir_process_scope_, false)
             : std::nullopt;
+        if (binding && selected_actual) {
+            const auto selection = hir_root_constant_selection(
+                (*actuals)[index], hir_process_scope_);
+            const auto width = hir_expression_width(
+                (*actuals)[index], hir_process_scope_);
+            const auto domain = hir_expression_domain(
+                (*actuals)[index], hir_process_scope_);
+            if (!selection || !width || !domain
+                || selection->width != *width || selection->width == 0U
+                || selection->offset > binding->width
+                || selection->width > binding->width - selection->offset) {
+                binding.reset();
+            } else {
+                binding->signal_selection = *selection;
+                binding->signal_selection_expression = (*actuals)[index];
+                binding->signal_storage_width = binding->width;
+                binding->signal_storage_domain = binding->domain;
+                binding->width = *width;
+                binding->domain = *domain;
+            }
+        }
         if (!binding || binding->kind != HirRuntimeBindingKind::signal
             || !binding->signal) {
             report(
@@ -15119,8 +15406,43 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         }
         signal_actuals[index] = std::move(binding);
     }
+    // A protected-type formal denotes its actual object (IEEE 1076-2008
+    // 4.2.2.1): the frame is specialized per actual object.
+    std::vector<std::optional<ContainerObjectId>> protected_actuals(
+        formals.size());
+    std::string protected_actual_key;
     for (std::size_t index { }; index < formals.size(); ++index) {
-        if (signal_actuals[index]) {
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        const auto subtype = formal && formal->vhdl != nullptr
+                && formal->vhdl->subtype
+            ? hir_effective_vhdl_subtype(*formal->vhdl->subtype)
+            : std::nullopt;
+        if (!subtype || hir_vhdl_subtype_protected_type(*subtype) == nullptr) {
+            continue;
+        }
+        const auto actual = specialized_hir_unit_->find_expression(
+            (*actuals)[index]);
+        const auto anchor = actual && actual->vhdl != nullptr
+                && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            ? hir_vhdl_protected_anchor(actual->vhdl->text, actual->vhdl->scope)
+            : std::nullopt;
+        if (!anchor) {
+            report(
+                "FSIM-ELAB-VHPROC-022",
+                "protected-type procedure formal '" + formal->vhdl->name
+                    + "' requires a protected object name actual",
+                actual && actual->vhdl != nullptr
+                    ? hir_source_span(actual->vhdl->source)
+                    : hir_source_span(statement->vhdl->source));
+            return true;
+        }
+        protected_actuals[index] = *anchor;
+        protected_actual_key += "|p" + std::to_string(index) + ":"
+            + std::to_string(*anchor);
+    }
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(
@@ -15243,7 +15565,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     std::vector<std::optional<StringRegisterId>> string_copy_out(
         formals.size());
     for (std::size_t index { }; index < formals.size(); ++index) {
-        if (signal_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(
@@ -15282,7 +15604,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     // later call would observe the first call's value.
     std::string constant_actual_key;
     for (std::size_t index { }; index < formals.size(); ++index) {
-        if (signal_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(
@@ -15305,7 +15627,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         procedure_element_constraints;
     std::string range_actual_key;
     for (std::size_t index { }; index < formals.size(); ++index) {
-        if (signal_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(formals[index]);
@@ -15553,7 +15875,23 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     const auto callable_key = vhdl_procedure_callable_key(
         resolution->key);
     auto callable_key_text = std::to_string(callable_key)
-        + signal_actual_key + constant_actual_key + range_actual_key;
+        + signal_actual_key + protected_actual_key + constant_actual_key
+        + range_actual_key;
+    // A protected method runs on the object its call selects.
+    const auto protected_members = hir_vhdl_protected_call_members(
+        statement->vhdl->procedure.text(), statement->vhdl->scope,
+        resolution->body);
+    if (protected_members) {
+        if (!check_hir_vhdl_protected_call(resolution->body,
+                statement->vhdl->procedure.text(),
+                statement->vhdl->source)) {
+            return true;
+        }
+        callable_key_text += "|protected:";
+        for (const auto& member : *protected_members) {
+            callable_key_text += std::to_string(member.storage) + ",";
+        }
+    }
     if (lexical_parent) {
         callable_key_text += "|lexical-parent:"
             + std::to_string(*lexical_parent);
@@ -15567,6 +15905,9 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = scope;
+        if (protected_members) {
+            frame.vhdl_protected_members = *protected_members;
+        }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
         frame.enclosing_callable_invocation_identity = lexical_parent;
@@ -15636,6 +15977,23 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 continue;
             }
             frame.string_arguments.push_back({ });
+            if (protected_actuals[index]) {
+                frame.vhdl_protected_formals.emplace(
+                    formal.value(), *protected_actuals[index]);
+                if (frame.profile_formals.size() == formals.size()
+                    && frame.profile_formals[index] != formal) {
+                    frame.vhdl_protected_formals.emplace(
+                        frame.profile_formals[index].value(),
+                        *protected_actuals[index]);
+                }
+                frame.arguments.push_back(allocate_register(
+                    1U, frontend::ValueDomain::Bit2));
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
+                frame.directions.push_back(
+                    frontend::PortDirection::Input);
+                continue;
+            }
             if (signal_actuals[index]) {
                 // No frame storage: the formal names the actual signal. A
                 // placeholder register keeps argument positions aligned.
@@ -15695,7 +16053,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     std::vector<std::optional<HirPackedUpdateTarget>>
         copy_out_targets(actuals->size());
     for (std::size_t index { }; index < actuals->size(); ++index) {
-        if (signal_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         if (string_formals[index] && string_copy_out[index]) {
@@ -15786,7 +16144,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 frame.arguments[index], *lowered_actuals[index] });
             continue;
         }
-        if (signal_actuals[index]) {
+        if (signal_actuals[index] || protected_actuals[index]) {
             continue;
         }
         if (string_formals[index]) {
@@ -15807,6 +16165,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             callable_default_value(formal->width, formal->domain),
         });
     }
+    // The callee may run a method on this protected object.
+    flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -15814,6 +16174,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    reload_hir_vhdl_protected_caches();
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }
@@ -16423,11 +16784,14 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const auto saved_active = active_hir_callable_;
     const auto saved_class_receiver = hir_class_receiver_register_;
     auto saved_container_caches = std::move(hir_class_container_caches_);
+    auto saved_protected_caches = std::move(hir_vhdl_protected_caches_);
+    hir_vhdl_protected_caches_.clear();
     const auto saved_captured_scalar_range_count
         = hir_vhdl_captured_scalar_ranges_.size();
     hir_class_container_caches_.clear();
     const auto restore_context = [&] {
         hir_class_container_caches_ = std::move(saved_container_caches);
+        hir_vhdl_protected_caches_ = std::move(saved_protected_caches);
         active_hir_callable_ = saved_active;
         loop_controls_ = std::move(saved_loops);
         string_locals_ = std::move(saved_string_locals);
@@ -16879,6 +17243,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             hir_callable_frames_[callable_index].declaration,
             *initial_frame->class_receiver);
     }
+    if (declarations_ready
+        && !initial_frame->vhdl_protected_members.empty()) {
+        const auto members = initial_frame->vhdl_protected_members;
+        load_hir_vhdl_protected_caches(members);
+    }
     const auto lowered = declarations_ready
         && lower_hir_constructor_prologue(
             hir_callable_frames_[callable_index].declaration, statements)
@@ -16891,6 +17260,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             process_.operations[jump] = Jump { epilogue };
         }
         flush_hir_class_container_caches();
+        flush_hir_vhdl_protected_caches();
         if (task_declaration != nullptr) {
             emit_disable_scope_marker(DebugPointKind::block_exit,
                 task_declaration->name,

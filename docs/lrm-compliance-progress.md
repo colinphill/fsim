@@ -253,6 +253,96 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 66: protected objects, global constants, per-element resolution, Verilog net rules
+
+Closes corpus cases from the Batch 66 triage indexes
+(`.local-artifacts/lrm-closure/triage/b66-INDEX.md`, `b66-protected.md`,
+`b66-nvc-hir001.md`, `b66-verilator-hir001.md`).
+
+VHDL:
+
+- Protected types are lowered as objects: each shared, process or nested
+  object is an anchor whose private variables are created on first use and
+  initialized lazily; methods are ordinary callables with a frame per object,
+  overloaded through normal resolution, and may call other methods, pass
+  protected formals, and declare body-local constants, types, aliases and
+  files (5.6.2, 6.5.2). This replaces the bounded inline path.
+- Constants outside processes whose values need run time (function results,
+  composites) are elaborated by their first reader and shared (6.4.2.2);
+  architecture and package file objects share one handle opened by their
+  first user (6.4.2.5).
+- A composite whose element subtype is resolved resolves each scalar
+  subelement on its own (14.7.3.2); resolution formals indexed from POSITIVE
+  start at 1.
+- Character and boolean literals take their type from context: a literal of
+  a user enumeration in a comparison, assignment, case choice, initializer or
+  record aggregate is that enumeration's literal (5.2.2.1); `'POS` of
+  TRUE/FALSE redeclared by a user type.
+- `??` returns BOOLEAN and is TRUE only for '1' and 'H' (9.2.9);
+  `std_logic'(...)` qualification; implicit condition operator.
+- Constant evaluation: REAL expressions and MATH_REAL functions, INTEGER(x)
+  of a REAL, `C.e` of a record constant and `C(i)` of an array constant with
+  aggregate values, TIME'LEFT/'HIGH, physical values times or divided by a
+  REAL (9.2.7), lazily evaluated generate constants of type STRING.
+- Static rules: initial values of objects of a ranged integer or physical
+  type are checked against the type's range at analysis (5.2.1); a unit name
+  is hidden by an object of the same name (12.3); sensitivity lists accept
+  names indexed by globally static expressions (8.1); the physical unit
+  position check is retired (5.2.4.1 allows units outside the range).
+- Recursive instantiation through generate statements with changing generic
+  values (14.5.3); NUMERIC_STD MINIMUM/MAXIMUM of UNSIGNED/SIGNED (G.2);
+  STRING aggregates with named and OTHERS choices; CHARACTER control-name
+  indexes (NUL, SOH, ...); BOOLEAN loop parameters in conditions; record
+  elements of ranged REAL subtypes default to the range's left bound; BIT
+  literal expressions as two-state aggregate elements; an unbound component
+  instance's out ports drive their defaults (14.7.3.2).
+
+SystemVerilog and Verilog:
+
+- `std::randomize` accepts any writable packed lvalue (class properties,
+  struct members, unpacked and class-array elements); with-clauses name the
+  same lvalues and read calling-scope values when the call executes (18.12).
+- Verilog (IEEE 1364-2005) rejects a variable as a continuous-assignment
+  target (6.1) and as an output or inout port actual (12.3.9.2), new
+  FSIM-ELAB-SVPORT-013; SystemVerilog keeps its relaxations.
+- A function may return an anonymous enumeration, whose literals join the
+  enclosing scope (6.19, 13.4); a macro's formal argument list may span lines
+  (22.5.1).
+- Runner: VUnit shim check_passed/check_failed; nvc `--shuffle` cases and
+  Verilator `$frewind` cases are out of scope (non-IEEE); SDF files without
+  SDFVERSION are out of scope (IEEE 1497-2001 5.2).
+
+Measurement: all six suites were run in full on frozen `b66w10` and compared
+with Batch 65 (`b65w8`): **51 new passes, zero regressions**. Batch 65 is
+shown on the same in-scope set; none of the newly excluded cases passed
+before.
+
+| Suite | Batch65 passes / in scope | Batch66 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2511 / 2570 | 2514 / 2570 | 256 |
+| sv-tests | 1434 / 1497 | 1434 / 1497 | 0 |
+| verilator | 1539 / 2137 | 1541 / 2137 | 278 |
+| vests | 3559 / 3646 | 3578 / 3646 | 2 |
+| nvc | 852 / 1261 | 877 / 1261 | 221 |
+| vhdl-compliance | 39 / 72 | 41 / 72 | 0 |
+
+The labelled ctest run ends with the same 27 known failures. Tests that
+encoded non-LRM behaviour were changed to the LRM rule: protected objects
+are initialized on first use and may call procedures (5.6.2), a module
+variable is a legal std::randomize argument (18.12), and a null slice's
+bounds need not lie in the index range (8.5). The physical-unit fixture moved
+from the analysis-error set to the passing compliance fixtures.
+FSIM-ELAB-VHPROTECTED-012 to -016, -018, -019 and -021 are retired and
+FSIM-ELAB-SVPORT-013 added (2965 codes).
+
+Deferred (recorded in `.local-artifacts/lrm-closure/triage/b66-INDEX.md`):
+port conversion functions at initialization (nvc conv*), global constraints
+through rand class handles (planned for Batch 67), port aliasing across
+hierarchy levels, context-typed character literals for enumeration subtype
+bounds and defaults (tc1724), STD_ULOGIC type attributes, signature aliases
+of procedures, record values in the constant evaluator, implicit-signal
+attributes of attributes, and procedural concurrent assertions.
+
 ### Batch 65: nested packages, generic subprograms, inline constraint scope, loop ranges
 
 Continues the unified architecture plan (`.local-artifacts/lrm-closure/ARCH-PLAN-b64.md`,

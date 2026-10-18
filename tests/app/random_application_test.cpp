@@ -528,13 +528,15 @@ void test_invalid_scope_randomize(
         std::ofstream output(source);
         output << R"(
 module invalid_scope_randomize;
-  logic module_value;
+  real module_real;
   initial begin
     logic local_value;
     int result;
     result = std::randomize();
     result = std::randomize(local_value + 1);
-    result = std::randomize(module_value);
+    // A module variable is a legal std::randomize argument (IEEE 1800-2017
+    // 18.12); a real variable has no integral domain to randomize.
+    result = std::randomize(module_real);
     $srandom();
     result = $dist_uniform(1, 0, 10);
   end

@@ -409,6 +409,8 @@ private:
   // Units of physical types declared so far in this design file; a unit
   // name alone denotes one unit (IEEE 1076-2008 5.2.4.1).
   std::unordered_set<std::string> vhdl_physical_unit_names_;
+  // Objects whose names hide a physical unit name in a nested region.
+  std::unordered_set<std::string> vhdl_unit_hiding_object_names_;
   // Component names declared so far: `label : name;` in a block or generate
   // body instantiates such a component (IEEE 1076-2008 11.7.1).
   std::unordered_set<std::string> vhdl_component_names_;

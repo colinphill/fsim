@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/class_randomize.hpp"
 
+#include "constraint_bounds_internal.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -338,9 +340,16 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
               request.call_identity + "::" + object.property_names[index]
                   + "::$bounded");
           const auto& profile = probe.variables()[id].profile;
-          auto domain = systemverilog_constraint_variable_domain(
+          // State variables hold their current values during the call.
+          std::map<SystemVerilogConstraintVariableId, PackedLogic4> fixed;
+          for (const auto& [fixed_id, owner] : owners) {
+            if (!selected_indices.contains(owner)) {
+              fixed.emplace(fixed_id, object.properties[owner].packed);
+            }
+          }
+          auto domain = systemverilog_constraint_variable_domain_with_fixed(
               probe.clauses(), id, profile,
-              [&stream] { return stream.next_u64(); });
+              [&stream] { return stream.next_u64(); }, fixed);
           for (const auto& entry : probe.distribution_entries(id)) {
             const auto low = entry.low.low_word().aval;
             const auto high = entry.high.low_word().aval;

@@ -5805,6 +5805,27 @@ namespace {
                     8U, *position, 0U);
             }
         }
+        // A vector value (`"0101" and "0111"`, `not s`) is evaluated as the
+        // array it is; the integral evaluator would read the logical
+        // operators as boolean ones (IEEE 1076-2008 9.2.2).
+        if (width > 1U
+            && (domain == frontend::ValueDomain::Bit2
+                || domain == frontend::ValueDomain::Logic4
+                || domain == frontend::ValueDomain::Logic9)
+            && (source.kind == semantic::vhdl::ExpressionKind::binary
+                || source.kind == semantic::vhdl::ExpressionKind::unary)) {
+            if (const auto value
+                = specialization.evaluate_vhdl_constant_expression(
+                    expression_id)) {
+                if (const auto* bits
+                    = std::get_if<semantic::SpecializedHirVhdlPackedValue>(
+                        &*value)) {
+                    if (const auto result = packed(bits->bits, width)) {
+                        return result;
+                    }
+                }
+            }
+        }
         if (const auto integral
             = specialization.evaluate_integral_expression(expression_id)) {
             return compiled_vhdl_integral_value(
@@ -18995,11 +19016,29 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             return true;
         }
         auto target_name = declaration.alias_target->text();
+        // An alias of overloaded subprograms (`alias f is g [T return U]`).
+        if (std::ranges::any_of(declaration.alias_target->overloads,
+                [&](const semantic::DeclarationId overload) {
+                    const auto candidate
+                        = working_specialization.find_declaration(overload);
+                    return candidate && candidate->vhdl != nullptr
+                        && candidate->vhdl->callable;
+                })) {
+            return true;
+        }
         if (declaration.alias_target->selected) {
             const auto selected
                 = working_specialization.find_declaration(
                     *declaration.alias_target->selected);
             if (selected && selected->vhdl != nullptr) {
+                // An alias of a subprogram or of a non-signal object needs
+                // no signal storage; references resolve through it.
+                const auto form = selected->vhdl->form;
+                if (selected->vhdl->callable
+                    || (form != Form::signal && form != Form::port
+                        && form != Form::alias)) {
+                    return true;
+                }
                 target_name = selected->vhdl->name;
             }
         }
@@ -19037,10 +19076,28 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         const auto object_subtype = compiled_vhdl_link_subtype(
             working_specialization, *declaration.subtype,
             declaration.scope);
-        const auto object_type = object_subtype.type_mark.target.valid()
+        auto object_type = object_subtype.type_mark.target.valid()
             ? working_specialization.find_type(
                   object_subtype.type_mark.target)
             : std::nullopt;
+        // In a package body the mark can denote the protected body; the
+        // object is of the protected type it completes (IEEE 1076-2008 5.6).
+        if (object_type && object_type->vhdl != nullptr
+            && object_type->vhdl->form
+                == semantic::vhdl::TypeForm::protected_body) {
+            for (const auto& stored : compiled_->vhdl_hir.types()) {
+                const auto candidate
+                    = working_specialization.find_type(stored.id);
+                if (candidate && candidate->vhdl != nullptr
+                    && candidate->vhdl->form
+                        == semantic::vhdl::TypeForm::protected_type
+                    && compiled_vhdl_name_equal(
+                        candidate->vhdl->name, object_type->vhdl->name)) {
+                    object_type = candidate;
+                    break;
+                }
+            }
+        }
         if (object_type && object_type->vhdl != nullptr
             && object_type->vhdl->form
                 == semantic::vhdl::TypeForm::protected_type) {
@@ -19172,169 +19229,46 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 return false;
             }
 
-            auto protected_members
-                = object_type->vhdl->protected_members;
-            const auto has_private_members = std::ranges::any_of(
-                protected_members,
-                [&](const semantic::DeclarationId member) {
-                    const auto record
-                        = working_specialization.find_declaration(
-                            member);
-                    return record && record->vhdl != nullptr
-                        && record->vhdl->form == Form::variable;
-                });
-            if (!has_private_members) {
-                protected_members.insert(
-                    protected_members.end(),
-                    protected_body->protected_members.begin(),
-                    protected_body->protected_members.end());
+            // The object's anchor holds whether its private variables have
+            // been initialized; the lowerer creates their storage and runs
+            // their initializers before the first method call
+            // (IEEE 1076-2008 5.6.2, 14.4.2.4).
+            ContainerType anchor_type;
+            anchor_type.element_width = 1U;
+            anchor_type.two_state = true;
+            anchor_type.fixed = true;
+            anchor_type.index_left = 0;
+            anchor_type.index_right = 0;
+            anchor_type.dimensions.push_back({ 0, 0 });
+            const auto storage_index = design_.container_objects_.size();
+            const auto storage_id
+                = static_cast<ContainerObjectId>(storage_index);
+            if (static_cast<std::size_t>(storage_id) != storage_index) {
+                throw std::length_error(
+                    "too many elaborated container objects");
             }
-
-            std::size_t member_offset { };
-            for (const auto member_id : protected_members) {
-                const auto member
-                    = working_specialization.find_declaration(
-                        member_id);
-                if (!member || member->vhdl == nullptr
-                    || member->vhdl->form != Form::variable) {
-                    continue;
-                }
-                const auto& member_declaration = *member->vhdl;
-                if (!member_declaration.subtype) {
-                    report(
-                        "FSIM-ELAB-VHPROTECTED-017",
-                        "protected private storage for '"
-                            + object.name + "."
-                            + member_declaration.name
-                            + "' has no retained subtype",
-                        compiled_source_span(
-                            *compiled_, member_declaration.source));
-                    return false;
-                }
-                const auto member_layout
-                    = compiled_vhdl_named_signal_layout(
-                        working_specialization,
-                        *member_declaration.subtype,
-                        member_declaration.scope);
-                const auto member_type = compiled_vhdl_signal_type(
-                    working_specialization,
-                    *member_declaration.subtype,
-                    member_declaration.scope);
-                if (!member_layout || !member_type
-                    || member_layout->width == 0U
-                    || member_layout->width
-                        > std::numeric_limits<
-                            std::uint32_t>::max()
-                    || member_layout->width
-                        > std::numeric_limits<std::size_t>::max()
-                            - member_offset) {
-                    report(
-                        "FSIM-ELAB-VHPROTECTED-017",
-                        "protected private storage for '"
-                            + object.name + "."
-                            + member_declaration.name
-                            + "' exceeds the executable container "
-                              "representation",
-                        compiled_source_span(
-                            *compiled_, member_declaration.source));
-                    return false;
-                }
-                ContainerType storage_type;
-                storage_type.element_width
-                    = static_cast<std::uint32_t>(
-                        member_layout->width);
-                storage_type.element_nominal_type
-                    = member_type->nominal_type;
-                storage_type.two_state = is_two_state_domain(
-                    member_layout->domain);
-                storage_type.signed_elements
-                    = member_type->is_signed;
-                storage_type.fixed = true;
-                storage_type.index_left = 0;
-                storage_type.index_right = 0;
-                storage_type.dimensions.push_back({ 0, 0 });
-                auto initial = default_container_value(storage_type);
-                initial.elements.front()
-                    = default_compiled_packed_value(
-                        *member_type, member_layout->width);
-                if (member_declaration.initializer) {
-                    const auto value = working_specialization
-                                           .evaluate_integral_expression(
-                                               *member_declaration.initializer);
-                    if (!value || member_layout->width > 64U) {
-                        report(
-                            "FSIM-ELAB-VHPROTECTED-011",
-                            "protected private initializer for '"
-                                + object.name + "."
-                                + member_declaration.name
-                                + "' is not a static value "
-                                  "compatible with its declared "
-                                  "subtype",
-                            compiled_source_span(*compiled_,
-                                member_declaration.source));
-                        return false;
-                    }
-                    initial.elements.front()
-                        = compiled_vhdl_integral_value(
-                            *value, member_layout->domain,
-                            member_layout->width);
-                }
-                const auto storage_index
-                    = design_.container_objects_.size();
-                const auto storage_id
-                    = static_cast<ContainerObjectId>(
-                        storage_index);
-                if (static_cast<std::size_t>(storage_id)
-                    != storage_index) {
-                    throw std::length_error(
-                        "too many elaborated container objects");
-                }
-                const auto member_name
-                    = object.name + "."
-                    + member_declaration.name;
-                design_.container_object_info_.push_back(
-                    ContainerObjectInfo {
-                        storage_id,
-                        member_name,
-                        storage_type,
-                        compiled_source_span(*compiled_,
-                            member_declaration.source),
-                        false,
-                        frontend::PortDirection::Unknown,
-                        std::nullopt,
-                    });
-                design_.container_objects_.push_back(
-                    ContainerObject {
-                        member_name,
-                        std::move(initial),
-                        std::nullopt,
-                    });
-                container_objects.emplace(
-                    declaration.name + "."
-                        + member_declaration.name,
-                    storage_id);
-                container_objects.emplace(member_name, storage_id);
-                design_.container_by_name_.emplace(
-                    member_name, storage_id);
-                if (design_.roots_.size() == 1U
-                    && working_path == active_root_) {
-                    design_.container_by_name_.emplace(
-                        declaration.name + "."
-                            + member_declaration.name,
-                        storage_id);
-                }
-                object.members.push_back(
-                    VhdlProtectedMemberInfo {
-                        member_declaration.name,
-                        member_type->is_signed,
-                        member_offset,
-                        member_layout->width,
-                        storage_id,
-                        compiled_source_span(*compiled_,
-                            member_declaration.source),
-                    });
-                member_offset += member_layout->width;
-            }
+            const auto anchor_name = object.name + ".@protected";
+            design_.container_object_info_.push_back(ContainerObjectInfo {
+                storage_id,
+                anchor_name,
+                anchor_type,
+                object.declaration_span,
+                false,
+                frontend::PortDirection::Unknown,
+                std::nullopt,
+            });
+            design_.container_objects_.push_back(ContainerObject {
+                anchor_name,
+                default_container_value(anchor_type),
+                std::nullopt,
+            });
+            container_objects.emplace(
+                declaration.name + ".@protected", storage_id);
+            container_objects.emplace(anchor_name, storage_id);
+            design_.container_by_name_.emplace(anchor_name, storage_id);
+            object.members.push_back(VhdlProtectedMemberInfo {
+                "@protected", false, 0U, 1U, storage_id,
+                object.declaration_span });
             design_.vhdl_protected_object_info_.push_back(
                 std::move(object));
             return true;
@@ -19361,9 +19295,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             compiled_source_span(*compiled_, declaration.source));
         return false;
     }
-    if ((declaration.form == Form::variable
-            && !shared_variable)
-        || declaration.form == Form::file) {
+    // A file object's handle is shared storage created by its first user
+    // (Lowerer::bind_hir_vhdl_global_files).
+    if (declaration.form == Form::file) {
+        return true;
+    }
+    if (declaration.form == Form::variable
+        && !shared_variable) {
         report(
             "FSIM-ELAB-HIR-001",
             "compiled VHDL declaration '" + declaration.name
@@ -26181,7 +26119,16 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
     const auto applied_component_declaration_source
         = active_compiled_vhdl_component_declaration_source_;
     const auto identity = unit_identity(root);
-    if (std::ranges::find(stack_, identity) != stack_.end()) {
+    // A design entity may instantiate itself through a generate statement
+    // with different generic values; only a repeat with the same actuals
+    // never terminates (IEEE 1076-2008 14.5.3).
+    auto stack_key = identity;
+    for (const auto& actual : actuals) {
+        stack_key += ";" + std::to_string(actual.declaration.value()) + "="
+            + actual.identity;
+    }
+    if (std::ranges::find(stack_, stack_key) != stack_.end()
+        || stack_.size() >= maximum_instance_depth) {
         report(
             "FSIM-ELAB-HIER-002",
             "recursive instantiation of '" + identity + "' at '"
@@ -26189,7 +26136,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             compiled_source_span(*compiled_, architecture.source));
         return false;
     }
-    CompiledHierarchyStackGuard stack_guard { stack_, identity };
+    CompiledHierarchyStackGuard stack_guard { stack_, stack_key };
     const auto report_entity_interface_failure
         = [&](const bool ambiguous) {
         const bool component_target
@@ -26709,6 +26656,74 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             });
         if (child_selection.status
             == CompiledVhdlChildSelectionResult::Status::unbound) {
+            // An unbound component instance has no statements; an out or
+            // inout port with no source drives its default value, so its
+            // actual starts with that value (IEEE 1076-2008 14.7.3.2).
+            const auto component = record.target.selected
+                ? working_specialization.find_declaration(
+                      *record.target.selected)
+                : std::nullopt;
+            if (component && component->vhdl != nullptr
+                && component->vhdl->component) {
+                const auto& ports = component->vhdl->component->ports;
+                for (std::size_t index { }; index < ports.size(); ++index) {
+                    const auto port = working_specialization.find_declaration(
+                        ports[index]);
+                    if (!port || port->vhdl == nullptr
+                        || !port->vhdl->initializer
+                        || (port->vhdl->direction
+                                != semantic::vhdl::Direction::output
+                            && port->vhdl->direction
+                                != semantic::vhdl::Direction::inout)) {
+                        continue;
+                    }
+                    const semantic::vhdl::Association* association = nullptr;
+                    std::size_t position { };
+                    for (const auto& candidate : record.port_map) {
+                        if (candidate.formal
+                                ? compiled_vhdl_name_equal(
+                                      candidate.formal->text(),
+                                      port->vhdl->name)
+                                : position == index) {
+                            association = &candidate;
+                            break;
+                        }
+                        if (!candidate.formal) {
+                            ++position;
+                        }
+                    }
+                    const auto actual = association != nullptr
+                            && association->expression
+                        ? working_specialization.find_expression(
+                              *association->expression)
+                        : std::nullopt;
+                    if (!actual || actual->vhdl == nullptr
+                        || actual->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::name) {
+                        continue;
+                    }
+                    const auto signal = std::ranges::find_if(
+                        working_signals, [&](const auto& entry) {
+                            return compiled_vhdl_name_equal(
+                                entry.first, actual->vhdl->text);
+                        });
+                    const auto value
+                        = working_specialization.evaluate_integral_expression(
+                            *port->vhdl->initializer);
+                    if (signal == working_signals.end() || !value
+                        || signal->second >= design_.signals_.size()) {
+                        continue;
+                    }
+                    auto& driven = design_.signals_[signal->second];
+                    const auto& info = design_.signal_info_[signal->second];
+                    if (driven.initial_value.width() > 64U) {
+                        continue;
+                    }
+                    driven.initial_value = compiled_vhdl_integral_value(
+                        *value, info.source_domain,
+                        driven.initial_value.width());
+                }
+            }
             continue;
         }
         if (child_selection.status
@@ -27439,7 +27454,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_constants(
             if (specialization.evaluate_vhdl_packed_value_declaration(
                     declaration_id)
                 || specialization.evaluate_vhdl_packed_array_declaration(
-                    declaration_id)) {
+                    declaration_id)
+                || specialization.evaluate_string_expression(
+                    *declaration->vhdl->initializer)) {
                 continue;
             }
             report(

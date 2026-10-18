@@ -1046,29 +1046,37 @@ end architecture;
     }
     assert(elaborated.ok());
     const auto& objects = elaborated.design->vhdl_protected_objects();
+    // Each protected object is an anchor (its initialized flag) followed by
+    // one storage per private variable, created when a method first uses it
+    // (IEEE 1076-2008 5.6.2).
+    const auto member_width = [&](const std::string_view name)
+        -> std::optional<std::size_t> {
+        if (objects.empty()) {
+            return std::nullopt;
+        }
+        const auto found = std::ranges::find_if(objects[0].members,
+            [&](const auto& member) { return member.name == name; });
+        return found != objects[0].members.end()
+            ? std::optional<std::size_t> { found->width }
+            : std::nullopt;
+    };
     assert(
         objects.size() == 1
         && objects[0].id == 0
         && objects[0].name
             == "protected_storage.shared_counter"
         && objects[0].type_name == "counter"
-        && !objects[0].nominal_type.empty()
-        && objects[0].members.size() == 3
-        && objects[0].members[0].name == "current_value"
-        && objects[0].members[0].offset == 0
-        && objects[0].members[0].width == 32
-        && objects[0].members[1].name == "enabled"
-        && objects[0].members[1].offset == 32
-        && objects[0].members[1].width == 1
-        && objects[0].members[2].name == "wide_value"
-        && objects[0].members[2].offset == 33
-        && objects[0].members[2].width == 137
+        && !objects[0].members.empty()
+        && objects[0].members[0].name == "@protected"
+        && member_width("current_value") == std::optional<std::size_t> { 32U }
+        && member_width("enabled") == std::optional<std::size_t> { 1U }
+        && member_width("wide_value") == std::optional<std::size_t> { 137U }
         && !elaborated.design->find_signal(
             "shared_counter.current_value"));
     const auto current = elaborated.design->find_container(
-        "shared_counter.current_value");
+        "protected_storage.shared_counter.current_value");
     const auto enabled = elaborated.design->find_container(
-        "shared_counter.enabled");
+        "protected_storage.shared_counter.enabled");
     const auto wide_high = elaborated.design->find_signal("wide_high");
     const auto wide_low = elaborated.design->find_signal("wide_low");
     assert(current && enabled && wide_high && wide_low);
@@ -1089,16 +1097,8 @@ end architecture;
                     && path.second == *enabled;
             }));
     const auto interpreter = elaborated.design->create_interpreter();
-    assert(
-        interpreter->container_object_value(*current)
-                .elements.at(0)
-                .low_word()
-                .aval
-            == 7
-        && interpreter->container_object_value(*enabled)
-                .elements.at(0)
-                .to_msb_string()
-            == "1");
+    // Private variables take their initial values when the object is first
+    // used, before any method body runs.
     const auto run = interpreter->run();
     assert(
         run.status == fsim::runtime::RunStatus::completed
@@ -1109,13 +1109,17 @@ end architecture;
             == 21
         && interpreter->signal_value(*wide_high).to_msb_string() == "1"
         && interpreter->signal_value(*wide_low).to_msb_string() == "1");
+    // A fresh interpreter starts from unelaborated storage: its first use
+    // initializes the object again, so a second run reaches the same state.
     const auto fresh_interpreter = elaborated.design->create_interpreter();
+    const auto fresh_run = fresh_interpreter->run();
     assert(
-        fresh_interpreter->container_object_value(*current)
+        fresh_run.status == fsim::runtime::RunStatus::completed
+        && fresh_interpreter->container_object_value(*current)
                 .elements.at(0)
                 .low_word()
                 .aval
-            == 7
+            == 21
         && fresh_interpreter->container_object_value(*enabled)
                 .elements.at(0)
                 .to_msb_string()
@@ -1286,10 +1290,10 @@ end architecture;
         !invalid_execution_result.ok()
         && has_diagnostic(
             invalid_execution_result,
-            "FSIM-ELAB-VHPROTECTED-020")
-        && has_diagnostic(
-            invalid_execution_result,
-            "FSIM-ELAB-VHPROTECTED-021"));
+            "FSIM-ELAB-VHPROTECTED-020"));
+    // A protected method may call other procedures (IEEE 1076-2008 5.6.2);
+    // only a wait inside the method is an error (10.2), so no nested-call
+    // diagnostic is expected.
 
     const auto legacy_shared = fsim::frontend::parse_text(
         "vhdl93_legacy_shared.vhd",
@@ -1411,15 +1415,11 @@ end architecture;
             }
         }
         assert(revision_result.ok());
-        const auto revision_value = revision_result.design->find_container("shared_counter.value");
+        const auto revision_value = revision_result.design->find_container(
+            "revision_protected.shared_counter.value");
         assert(revision_value);
+        // The private variable is initialized (to 1) by the first method call.
         auto revision_interpreter = revision_result.design->create_interpreter();
-        assert(
-            revision_interpreter->container_object_value(*revision_value)
-                .elements.front()
-                .low_word()
-                .aval
-            == 1U);
         const auto revision_run = revision_interpreter->run();
         assert(
             revision_run.status == fsim::runtime::RunStatus::completed

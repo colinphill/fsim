@@ -8468,7 +8468,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *string_binding->object, *lowered });
             return true;
         }
-        const auto binding = direct_binding
+        auto binding = direct_binding
             ? direct_binding
             : hir_runtime_binding(
                   *declaration, hir_process_scope_, true);
@@ -8819,6 +8819,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             : target_is_selected && !vhdl_array_call
             ? hir_root_constant_selection(*target, hir_process_scope_)
             : std::nullopt;
+        // A signal formal bound to an element or slice of its actual writes
+        // that part of the actual signal (IEEE 1076-2008 4.2.2.3).
+        if (binding && binding->signal_selection
+            && binding->signal_storage_width) {
+            if (constant_selection) {
+                constant_selection->offset += binding->signal_selection->offset;
+            } else {
+                constant_selection = HirConstantSelection {
+                    binding->signal_selection->offset,
+                    binding->signal_selection->width,
+                };
+            }
+            binding->width = *binding->signal_storage_width;
+            if (binding->signal_storage_domain) {
+                binding->domain = *binding->signal_storage_domain;
+            }
+            binding->signal_selection.reset();
+        }
         if (member_offset && member_width) {
             if (*member_offset
                     > std::numeric_limits<std::uint32_t>::max()

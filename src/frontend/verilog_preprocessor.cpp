@@ -601,6 +601,36 @@ namespace {
                                 == TokenKind::Identifier) {
                             end = index + 3;
                         }
+                        // A function-like macro's formal argument list may
+                        // span lines; the macro text then starts after its
+                        // closing parenthesis (IEEE 1800-2017 22.5.1).
+                        if (directive == "define" && index + 3 < end
+                            && mapped_tokens[index + 2].kind
+                                == TokenKind::Identifier
+                            && mapped_tokens[index + 3].kind
+                                == TokenKind::LeftParen
+                            && mapped_tokens[index + 2].span.end.offset
+                                == mapped_tokens[index + 3].span.begin.offset) {
+                            std::size_t depth { };
+                            std::size_t at = index + 3;
+                            while (true) {
+                                for (; at < end; ++at) {
+                                    if (mapped_tokens[at].kind
+                                        == TokenKind::LeftParen) {
+                                        ++depth;
+                                    } else if (mapped_tokens[at].kind
+                                            == TokenKind::RightParen
+                                        && depth != 0U && --depth == 0U) {
+                                        break;
+                                    }
+                                }
+                                if (depth == 0U || end >= tokens.size()
+                                    || tokens[end].kind == TokenKind::EndOfFile) {
+                                    break;
+                                }
+                                end = line_end(tokens, end);
+                            }
+                        }
                         if (directive == "line" && active()) {
                             const auto next_physical_line = end == index
                                 ? tokens[index].span.end.line + 1

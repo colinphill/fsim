@@ -8,6 +8,7 @@
 #include "integral_identity_memo.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -1861,6 +1862,226 @@ public:
         }
     }
 
+    // `C(i)` of a one-dimensional constant array C with an aggregate value
+    // and a static index range (IEEE 1076-2008 9.4.2).
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_vhdl_array_constant_element(const vhdl::Expression& indexed)
+    {
+        const auto base = unit_.find_expression(indexed.operands.front());
+        if (!base || base->vhdl == nullptr
+            || base->vhdl->kind != vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        auto constant_id = base->vhdl->referenced_name
+            ? base->vhdl->referenced_name->selected
+            : std::nullopt;
+        if (!constant_id) {
+            vhdl::Name base_name;
+            base_name.spelling = base->vhdl->text;
+            constant_id = CompiledDesignResolver { unit_ }
+                              .resolve_vhdl(base_name, base->vhdl->scope)
+                              .unique();
+        }
+        if (!constant_id) {
+            return std::nullopt;
+        }
+        const auto constant = unit_.find_declaration(*constant_id);
+        if (!constant || constant->vhdl == nullptr
+            || constant->vhdl->form != vhdl::DeclarationForm::constant
+            || !constant->vhdl->initializer || !constant->vhdl->subtype) {
+            return std::nullopt;
+        }
+        const auto aggregate = unit_.find_expression(
+            *constant->vhdl->initializer);
+        if (!aggregate || aggregate->vhdl == nullptr
+            || aggregate->vhdl->kind != vhdl::ExpressionKind::aggregate) {
+            return std::nullopt;
+        }
+        // The index range: the object's constraint or its array type's.
+        const vhdl::RangeConstraint* range = nullptr;
+        for (const auto& constraint : constant->vhdl->subtype->constraints) {
+            if (constraint.kind == vhdl::RangeKind::array_index) {
+                range = &constraint;
+                break;
+            }
+        }
+        auto type_id = constant->vhdl->subtype->type_mark.target;
+        std::set<TypeId> visited;
+        while (range == nullptr && type_id.valid()
+            && visited.insert(type_id).second) {
+            const auto type = unit_.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                break;
+            }
+            if (type->vhdl->form == vhdl::TypeForm::array) {
+                if (type->vhdl->array_dimensions.size() == 1U
+                    && type->vhdl->array_dimensions.front().constraint) {
+                    range = &*type->vhdl->array_dimensions.front().constraint;
+                }
+                break;
+            }
+            for (const auto& constraint : type->vhdl->base.constraints) {
+                if (constraint.kind == vhdl::RangeKind::array_index) {
+                    range = &constraint;
+                    break;
+                }
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        const auto index = evaluate(indexed.operands.back());
+        if (range == nullptr || !index) {
+            return std::nullopt;
+        }
+        const auto left = range->left
+            ? range->left
+            : range->left_expression ? evaluate(*range->left_expression)
+                                     : std::nullopt;
+        if (!left) {
+            return std::nullopt;
+        }
+        const auto offset = range->descending ? *left - *index : *index - *left;
+        if (offset < 0) {
+            return std::nullopt;
+        }
+        std::int64_t positional { };
+        std::optional<ExpressionId> others;
+        for (const auto& association : aggregate->vhdl->associations) {
+            if (association.positional()) {
+                if (positional++ == offset) {
+                    return evaluate(association.value);
+                }
+                continue;
+            }
+            for (const auto choice : association.choices) {
+                const auto chosen = unit_.find_expression(choice);
+                if (!chosen || chosen->vhdl == nullptr) {
+                    continue;
+                }
+                if (chosen->vhdl->kind == vhdl::ExpressionKind::default_choice
+                    || (chosen->vhdl->kind == vhdl::ExpressionKind::name
+                        && support::equal_ignoring_ascii_case(
+                            std::string_view { chosen->vhdl->text },
+                            "others"))) {
+                    others = association.value;
+                } else if (chosen->vhdl->kind != vhdl::ExpressionKind::slice
+                    && evaluate(choice) == index) {
+                    return evaluate(association.value);
+                }
+            }
+        }
+        return others ? evaluate(*others) : std::nullopt;
+    }
+
+    // `C.e` of a constant C whose value is a record aggregate: the value of
+    // element e (IEEE 1076-2008 8.3, 9.4.2: a locally static primary).
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_vhdl_record_constant_element(const vhdl::Expression& name)
+    {
+        // `C(i)` may be retained as a call until overload resolution
+        // decides it names an element (IEEE 1076-2008 8.4).
+        if ((name.kind == vhdl::ExpressionKind::index
+                || (name.kind == vhdl::ExpressionKind::call
+                    && !name.text.starts_with("@")
+                    && !name.text.starts_with("'")))
+            && name.operands.size() == 2U) {
+            return evaluate_vhdl_array_constant_element(name);
+        }
+        if (name.kind != vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const auto dot = name.text.find_last_of('.');
+        if (dot == std::string::npos || dot + 1U >= name.text.size()) {
+            return std::nullopt;
+        }
+        const auto prefix = std::string_view { name.text }.substr(0U, dot);
+        const auto element = std::string_view { name.text }.substr(dot + 1U);
+        auto constant_id = name.referenced_name
+            ? name.referenced_name->selected
+            : std::nullopt;
+        if (!constant_id) {
+            vhdl::Name prefix_name;
+            prefix_name.spelling = std::string { prefix };
+            constant_id = CompiledDesignResolver { unit_ }
+                              .resolve_vhdl(prefix_name, name.scope)
+                              .unique();
+        }
+        if (!constant_id) {
+            return std::nullopt;
+        }
+        const auto constant = unit_.find_declaration(*constant_id);
+        if (!constant || constant->vhdl == nullptr
+            || constant->vhdl->form != vhdl::DeclarationForm::constant
+            || !constant->vhdl->initializer || !constant->vhdl->subtype
+            || !support::equal_ignoring_ascii_case(
+                std::string_view { constant->vhdl->name },
+                prefix.substr(prefix.find_last_of('.') == std::string_view::npos
+                        ? 0U
+                        : prefix.find_last_of('.') + 1U))) {
+            return std::nullopt;
+        }
+        const vhdl::TypeDefinition* record = nullptr;
+        auto type_id = constant->vhdl->subtype->type_mark.target;
+        std::set<TypeId> visited;
+        while (type_id.valid() && visited.insert(type_id).second) {
+            const auto type = unit_.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                break;
+            }
+            if (type->vhdl->form == vhdl::TypeForm::record) {
+                record = type->vhdl;
+                break;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        if (record == nullptr) {
+            return std::nullopt;
+        }
+        const auto position = std::ranges::find_if(record->record_elements,
+            [&](const vhdl::RecordElement& candidate) {
+                return support::equal_ignoring_ascii_case(
+                    std::string_view { candidate.name }, element);
+            });
+        if (position == record->record_elements.end()) {
+            return std::nullopt;
+        }
+        const auto index = static_cast<std::size_t>(
+            std::distance(record->record_elements.begin(), position));
+        const auto aggregate = unit_.find_expression(
+            *constant->vhdl->initializer);
+        if (!aggregate || aggregate->vhdl == nullptr
+            || aggregate->vhdl->kind != vhdl::ExpressionKind::aggregate) {
+            return std::nullopt;
+        }
+        std::size_t positional { };
+        std::optional<ExpressionId> others;
+        for (const auto& association : aggregate->vhdl->associations) {
+            if (association.positional()) {
+                if (positional++ == index) {
+                    return evaluate(association.value);
+                }
+                continue;
+            }
+            for (const auto choice : association.choices) {
+                const auto chosen = unit_.find_expression(choice);
+                if (!chosen || chosen->vhdl == nullptr) {
+                    continue;
+                }
+                if (chosen->vhdl->kind == vhdl::ExpressionKind::default_choice
+                    || (chosen->vhdl->kind == vhdl::ExpressionKind::name
+                        && support::equal_ignoring_ascii_case(
+                            std::string_view { chosen->vhdl->text },
+                            "others"))) {
+                    others = association.value;
+                } else if (chosen->vhdl->kind == vhdl::ExpressionKind::name
+                    && support::equal_ignoring_ascii_case(
+                        std::string_view { chosen->vhdl->text }, element)) {
+                    return evaluate(association.value);
+                }
+            }
+        }
+        return others ? evaluate(*others) : std::nullopt;
+    }
+
     [[nodiscard]] std::optional<std::int64_t> evaluate(
         const ExpressionId expression)
     {
@@ -1880,7 +2101,10 @@ public:
         if (view && view->systemverilog != nullptr) {
             result = evaluate_expression(*view->systemverilog);
         } else if (view && view->vhdl != nullptr) {
-            result = evaluate_expression(*view->vhdl);
+            result = evaluate_vhdl_record_constant_element(*view->vhdl);
+            if (!result) {
+                result = evaluate_expression(*view->vhdl);
+            }
         }
         active_expressions_.erase(active_key);
         if (call_frames_.empty()) {
@@ -5776,6 +6000,264 @@ private:
         return -static_cast<std::int64_t>(magnitude);
     }
 
+    // A static REAL value (IEEE 1076-2008 5.2.5): literals, conversions,
+    // arithmetic, named constants and the IEEE.MATH_REAL functions.
+    [[nodiscard]] std::optional<double> vhdl_real_expression(
+        const ExpressionId expression_id, const std::size_t depth = 0U)
+    {
+        const auto expression = unit_.find_expression(expression_id);
+        if (depth > 64U || !expression || expression->vhdl == nullptr
+            || !consume_constant_work_unit()) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->vhdl;
+        using Kind = vhdl::ExpressionKind;
+        if (source.kind == Kind::real_literal) {
+            std::string text;
+            for (const auto character : source.text) {
+                if (character != '_') {
+                    text.push_back(character);
+                }
+            }
+            if (text.find('#') != std::string::npos) {
+                return std::nullopt;
+            }
+            char* end = nullptr;
+            const auto value = std::strtod(text.c_str(), &end);
+            return end != nullptr && *end == '\0'
+                ? std::optional { value }
+                : std::nullopt;
+        }
+        if (source.kind == Kind::unary && source.operands.size() == 1U) {
+            const auto operand = vhdl_real_expression(
+                source.operands.front(), depth + 1U);
+            if (!operand) {
+                return std::nullopt;
+            }
+            if (source.text == "-") {
+                return -*operand;
+            }
+            if (source.text == "+") {
+                return operand;
+            }
+            if (support::equal_ignoring_ascii_case(source.text, "abs")) {
+                return std::fabs(*operand);
+            }
+            return std::nullopt;
+        }
+        if (source.kind == Kind::binary && source.operands.size() == 2U) {
+            const auto left = vhdl_real_expression(
+                source.operands[0], depth + 1U);
+            if (!left) {
+                return std::nullopt;
+            }
+            if (source.text == "**") {
+                const auto exponent = vhdl_integer_expression(
+                    source.operands[1]);
+                return exponent ? std::optional { std::pow(
+                                      *left, static_cast<double>(*exponent)) }
+                                : std::nullopt;
+            }
+            const auto right = vhdl_real_expression(
+                source.operands[1], depth + 1U);
+            if (!right) {
+                return std::nullopt;
+            }
+            if (source.text == "+") {
+                return *left + *right;
+            }
+            if (source.text == "-") {
+                return *left - *right;
+            }
+            if (source.text == "*") {
+                return *left * *right;
+            }
+            if (source.text == "/" && *right != 0.0) {
+                return *left / *right;
+            }
+            return std::nullopt;
+        }
+        if (source.kind == Kind::name && source.referenced_name) {
+            const auto selected = source.referenced_name->selected
+                ? source.referenced_name->selected
+                : source.referenced_name->overloads.size() == 1U
+                ? std::optional { source.referenced_name->overloads.front() }
+                : std::nullopt;
+            const auto declaration = selected
+                ? unit_.find_declaration(*selected)
+                : std::nullopt;
+            if (declaration && declaration->vhdl != nullptr
+                && (declaration->vhdl->form
+                        == vhdl::DeclarationForm::constant
+                    || declaration->vhdl->form
+                        == vhdl::DeclarationForm::generic_constant)
+                && declaration->vhdl->initializer) {
+                return vhdl_real_expression(
+                    *declaration->vhdl->initializer, depth + 1U);
+            }
+        }
+        if ((source.kind != Kind::call && source.kind != Kind::name)
+            || source.text.starts_with("'")) {
+            return std::nullopt;
+        }
+        auto name = normalized_token(source.text);
+        if (const auto separator = name.find_last_of(".:");
+            separator != std::string::npos) {
+            name.erase(0U, separator + 1U);
+        }
+        // REAL(x) converts an integer or real value (9.3.6).
+        if (name == "real" && source.operands.size() == 1U) {
+            if (const auto real = vhdl_real_expression(
+                    source.operands.front(), depth + 1U)) {
+                return real;
+            }
+            const auto integer = vhdl_integer_expression(
+                source.operands.front());
+            return integer ? std::optional { static_cast<double>(*integer) }
+                           : std::nullopt;
+        }
+        const auto math_real = [&] {
+            std::vector<DeclarationId> candidates;
+            if (source.referenced_name) {
+                candidates = source.referenced_name->overloads;
+                if (source.referenced_name->selected) {
+                    candidates.push_back(*source.referenced_name->selected);
+                }
+            }
+            if (candidates.empty() && source.referenced_name) {
+                const auto resolver = CompiledDesignResolver { unit_ };
+                for (const auto& resolution :
+                    resolver.resolve_vhdl_callables(
+                                *source.referenced_name, source.scope)
+                        .candidates) {
+                    candidates.push_back(resolution.body);
+                }
+                if (candidates.empty()) {
+                    candidates = resolver.resolve_vhdl(
+                        *source.referenced_name, source.scope,
+                        [](const CompiledDeclarationView&) { return true; })
+                                     .candidates;
+                }
+            }
+            if (candidates.empty()) {
+                // A name no user declaration claims is the IEEE.MATH_REAL
+                // member (IEEE 1076.2), whose package may not be linked
+                // into this specialization yet.
+                static constexpr std::array members {
+                    std::string_view { "ceil" }, std::string_view { "floor" },
+                    std::string_view { "round" }, std::string_view { "trunc" },
+                    std::string_view { "sqrt" }, std::string_view { "exp" },
+                    std::string_view { "log" }, std::string_view { "log2" },
+                    std::string_view { "log10" },
+                    std::string_view { "realmax" },
+                    std::string_view { "realmin" }, std::string_view { "sign" },
+                    std::string_view { "mathe" }, std::string_view { "mathpi" },
+                    std::string_view { "math2pi" },
+                    std::string_view { "mathpiover2" },
+                    std::string_view { "mathsqrt2" },
+                    std::string_view { "mathlog2ofe" },
+                    std::string_view { "mathlog10ofe" },
+                    std::string_view { "mathloge2" },
+                    std::string_view { "mathloge10" },
+                };
+                return std::ranges::find(members, name) != members.end();
+            }
+            return std::ranges::all_of(candidates,
+                    [&](const DeclarationId candidate) {
+                        const auto declaration
+                            = unit_.find_declaration(candidate);
+                        return declaration && declaration->vhdl != nullptr
+                            && unit_.design().vhdl_scope_in_package(
+                                declaration->vhdl->scope, "ieee",
+                                "math_real");
+                    });
+        }();
+        if (!math_real) {
+            return std::nullopt;
+        }
+        if (source.operands.empty()) {
+            static constexpr std::array constants {
+                std::pair { std::string_view { "mathe" }, 2.71828182845904523536 },
+                std::pair { std::string_view { "mathpi" }, 3.14159265358979323846 },
+                std::pair { std::string_view { "math2pi" }, 6.28318530717958647693 },
+                std::pair { std::string_view { "mathpiover2" }, 1.57079632679489661923 },
+                std::pair { std::string_view { "mathsqrt2" }, 1.41421356237309504880 },
+                std::pair { std::string_view { "mathlog2ofe" }, 1.44269504088896340736 },
+                std::pair { std::string_view { "mathlog10ofe" }, 0.43429448190325182765 },
+                std::pair { std::string_view { "mathloge2" }, 0.69314718055994530942 },
+                std::pair { std::string_view { "mathloge10" }, 2.30258509299404568402 },
+            };
+            const auto found = std::ranges::find(constants, name,
+                &std::pair<std::string_view, double>::first);
+            if (found != constants.end()) {
+                return found->second;
+            }
+        }
+        std::vector<double> arguments;
+        for (const auto operand : source.operands) {
+            const auto value = vhdl_real_expression(operand, depth + 1U);
+            if (!value) {
+                return std::nullopt;
+            }
+            arguments.push_back(*value);
+        }
+        const auto unary = [&](double (*function)(double))
+            -> std::optional<double> {
+            return arguments.size() == 1U
+                ? std::optional { function(arguments.front()) }
+                : std::nullopt;
+        };
+        if (name == "ceil") {
+            return unary(std::ceil);
+        }
+        if (name == "floor") {
+            return unary(std::floor);
+        }
+        if (name == "round") {
+            return unary(std::round);
+        }
+        if (name == "trunc") {
+            return unary(std::trunc);
+        }
+        if (name == "sqrt" && arguments.size() == 1U
+            && arguments.front() >= 0.0) {
+            return std::sqrt(arguments.front());
+        }
+        if (name == "exp") {
+            return unary(std::exp);
+        }
+        if ((name == "log2" || name == "log10" || name == "log")
+            && !arguments.empty() && arguments.front() > 0.0) {
+            if (name == "log2" && arguments.size() == 1U) {
+                return std::log2(arguments.front());
+            }
+            if (name == "log10" && arguments.size() == 1U) {
+                return std::log10(arguments.front());
+            }
+            if (name == "log" && arguments.size() == 1U) {
+                return std::log(arguments.front());
+            }
+            if (name == "log" && arguments.size() == 2U
+                && arguments.back() > 0.0 && arguments.back() != 1.0) {
+                return std::log(arguments.front())
+                    / std::log(arguments.back());
+            }
+            return std::nullopt;
+        }
+        if (name == "realmax" && arguments.size() == 2U) {
+            return std::max(arguments[0], arguments[1]);
+        }
+        if (name == "realmin" && arguments.size() == 2U) {
+            return std::min(arguments[0], arguments[1]);
+        }
+        if (name == "sign" && arguments.size() == 1U) {
+            return arguments.front() > 0.0 ? 1.0
+                : arguments.front() < 0.0 ? -1.0
+                                          : 0.0;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<VhdlConstantValue> evaluate_vhdl_call(
         const vhdl::Expression& expression)
     {
@@ -5789,6 +6271,23 @@ private:
         if (const auto separator = name.find_last_of(".:");
             separator != std::string::npos) {
             name.erase(0U, separator + 1U);
+        }
+        // INTEGER(x) of a REAL value rounds to the nearest integer
+        // (IEEE 1076-2008 9.3.6).
+        if ((name == "integer" || name == "natural" || name == "positive")
+            && expression.operands.size() == 1U) {
+            if (const auto real = vhdl_real_expression(
+                    expression.operands.front())) {
+                const auto rounded = std::round(*real);
+                if (std::isfinite(rounded)
+                    && rounded >= static_cast<double>(
+                        std::numeric_limits<std::int64_t>::min())
+                    && rounded < static_cast<double>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                    return vhdl_integer_value(
+                        static_cast<std::int64_t>(rounded));
+                }
+            }
         }
         if (name == "tointeger") {
             bool standard_callable { };
@@ -10681,6 +11180,25 @@ private:
                     prefix->vhdl->source,
                 };
             }
+            // TIME spans the 64-bit femtosecond count and DELAY_LENGTH is its
+            // nonnegative subtype (IEEE 1076-2008 16.3).
+            if (!range
+                && (support::equal_ignoring_ascii_case(predefined_name, "time")
+                    || support::equal_ignoring_ascii_case(
+                        predefined_name, "delay_length"))) {
+                range = vhdl::RangeConstraint {
+                    vhdl::RangeKind::integer,
+                    support::equal_ignoring_ascii_case(predefined_name, "time")
+                        ? std::numeric_limits<std::int64_t>::min()
+                        : 0,
+                    std::numeric_limits<std::int64_t>::max(),
+                    std::nullopt,
+                    std::nullopt,
+                    false,
+                    false,
+                    prefix->vhdl->source,
+                };
+            }
             // Predefined enumeration types without a HIR definition
             // (IEEE 1076-2008 16.3; IEEE 1164 STD_ULOGIC).
             std::optional<std::int64_t> last_ordinal;
@@ -10936,6 +11454,100 @@ private:
         using Kind = decltype(expression.kind);
         constexpr bool systemverilog
             = std::is_same_v<Expression, sv::Expression>;
+        if constexpr (!systemverilog) {
+            // INTEGER(x) of a REAL value rounds to the nearest integer
+            // (IEEE 1076-2008 9.3.6).
+            if ((expression.kind == Kind::call
+                    || expression.kind == Kind::index)
+                && !expression.operands.empty()) {
+                auto name = normalized_token(expression.text);
+                if (const auto separator = name.find_last_of(".:");
+                    separator != std::string::npos) {
+                    name.erase(0U, separator + 1U);
+                }
+                const auto operand = expression.kind == Kind::index
+                    ? (expression.operands.size() == 2U
+                            ? std::optional { expression.operands[1] }
+                            : std::nullopt)
+                    : (expression.operands.size() == 1U
+                            ? std::optional { expression.operands[0] }
+                            : std::nullopt);
+                if (expression.kind == Kind::index) {
+                    const auto designator = unit_.find_expression(
+                        expression.operands.front());
+                    name = designator && designator->vhdl != nullptr
+                        ? normalized_token(designator->vhdl->text)
+                        : std::string { };
+                }
+                if (operand
+                    && (name == "integer" || name == "natural"
+                        || name == "positive")) {
+                    if (const auto real = vhdl_real_expression(*operand)) {
+                        const auto rounded = std::round(*real);
+                        if (std::isfinite(rounded)
+                            && rounded >= static_cast<double>(
+                                std::numeric_limits<std::int64_t>::min())
+                            && rounded < static_cast<double>(
+                                std::numeric_limits<std::int64_t>::max())) {
+                            return static_cast<std::int64_t>(rounded);
+                        }
+                    }
+                }
+            }
+        }
+        if constexpr (!systemverilog) {
+            // A physical value multiplied or divided by a REAL is rounded to
+            // its primary unit (IEEE 1076-2008 9.2.7).
+            if (expression.kind == Kind::binary
+                && expression.operands.size() == 2U
+                && (expression.text == "*" || expression.text == "/")) {
+                const auto is_real_literal = [&](const ExpressionId id) {
+                    const auto operand = unit_.find_expression(id);
+                    return operand && operand->vhdl != nullptr
+                        && operand->vhdl->kind == Kind::real_literal;
+                };
+                // Elaboration folds a physical literal to its primary-unit
+                // count, keeping the physical type as its nominal type; an
+                // untyped integer literal is universal_integer (9.2.7).
+                const auto physical_literal = [&](const ExpressionId id) {
+                    const auto operand = unit_.find_expression(id);
+                    return operand && operand->vhdl != nullptr
+                        && ((operand->vhdl->kind == Kind::call
+                                && operand->vhdl->text.starts_with(
+                                    "@vhdl-physical:"))
+                            || (operand->vhdl->kind == Kind::integer_literal
+                                && !operand->vhdl->nominal_type.empty()));
+                };
+                const auto& left = expression.operands[0];
+                const auto& right = expression.operands[1];
+                std::optional<std::int64_t> physical;
+                std::optional<double> factor;
+                if (physical_literal(left) && is_real_literal(right)) {
+                    physical = evaluate(left);
+                    factor = vhdl_real_expression(right);
+                } else if (expression.text == "*" && is_real_literal(left)
+                    && physical_literal(right)) {
+                    physical = evaluate(right);
+                    factor = vhdl_real_expression(left);
+                }
+                if (physical && factor) {
+                    const auto scaled = expression.text == "*"
+                        ? static_cast<double>(*physical) * *factor
+                        : (*factor == 0.0
+                                ? std::numeric_limits<double>::infinity()
+                                : static_cast<double>(*physical) / *factor);
+                    const auto rounded = std::round(scaled);
+                    if (std::isfinite(rounded)
+                        && rounded >= static_cast<double>(
+                            std::numeric_limits<std::int64_t>::min())
+                        && rounded < static_cast<double>(
+                            std::numeric_limits<std::int64_t>::max())) {
+                        return static_cast<std::int64_t>(rounded);
+                    }
+                    return std::nullopt;
+                }
+            }
+        }
         if constexpr (systemverilog) {
             if (const auto dotted
                 = systemverilog_dotted_enumeration_method(expression)) {
@@ -11129,6 +11741,17 @@ private:
                 return parse_integral_identity(expression.text);
             }
             if (expression.referenced_name) {
+                // A binding substitutes the actual of a parameter the
+                // caller specializes (a class value parameter, 8.25).
+                if (binding_ != nullptr && expression.referenced_name->selected) {
+                    if (const auto actual = (*binding_)(
+                            *expression.referenced_name->selected)) {
+                        if (*actual == expression.id) {
+                            return std::nullopt;
+                        }
+                        return evaluate(*actual);
+                    }
+                }
                 if (expression.referenced_name->selected) {
                     // A member of a structure parameter (`P.m`, 7.2.1).
                     const auto selected_view = unit_.find_declaration(

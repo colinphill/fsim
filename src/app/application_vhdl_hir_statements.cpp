@@ -8,9 +8,35 @@ void VhdlHirBuilder::add_statement_regions(
     const semantic::ScopeId enclosing_scope,
     const semantic::OriginId enclosing_origin)
 {
+    // Whether a statement list contains a sequential block statement.
+    const auto contains_block = [](const auto& self,
+                                   const std::span<const frontend::Statement> list)
+        -> bool {
+        return std::ranges::any_of(list, [&](const frontend::Statement& item) {
+            return item.kind == frontend::StatementKind::Block
+                || self(self, std::span { item.statements })
+                || self(self, std::span { item.else_statements })
+                || std::ranges::any_of(item.case_alternatives,
+                    [&](const auto& alternative) {
+                        return self(self, std::span { alternative.statements });
+                    });
+        });
+    };
     for (const auto& statement : statements) {
         auto child_scope = enclosing_scope;
         auto child_origin = enclosing_origin;
+        // A block in a for loop is nested in the loop's parameter region
+        // (IEEE 1076-2019 10.13): create that region here so the block can
+        // see the parameter; the statement builder reuses it.
+        if (statement.kind == frontend::StatementKind::Loop
+            && !statement.loop_variable.empty()
+            && contains_block(contains_block, std::span { statement.statements })) {
+            const auto statement_source = source(statement.span);
+            child_origin = origin(statement_source, enclosing_origin,
+                statement.label.empty() ? "VHDL statement" : statement.label);
+            child_scope = nested_scope(
+                enclosing_scope, "<loop>", statement_source, child_origin);
+        }
         if (statement.kind == frontend::StatementKind::Block) {
             const auto statement_source = source(statement.span);
             const auto scope_name = statement.label.empty()

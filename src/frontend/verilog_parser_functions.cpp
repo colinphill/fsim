@@ -82,6 +82,13 @@ FunctionDeclaration VerilogParser::parse_function(
       const auto result = advance();
       function.return_type.spelling = result.text;
       function.return_type.named_type_span = result.span;
+    } else if (keyword("enum")) {
+      // An anonymous enumeration return type declares its literals in the
+      // enclosing scope (IEEE 1800-2017 6.19, 13.4).
+      std::vector<EnumLiteralDeclaration> literals;
+      function.return_type = parse_systemverilog_enum_type(&literals);
+      member_enumerations_.emplace_back(
+          function.return_type, std::move(literals));
     } else {
       function.return_type =
           !builtin_return_type && at(TokenKind::Identifier)

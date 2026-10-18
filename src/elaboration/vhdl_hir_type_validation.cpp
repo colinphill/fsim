@@ -2239,28 +2239,6 @@ private:
                     range->source.valid() ? range->source : type.source);
             }
         }
-        // IEEE 1076-1993 3.1.3: each unit's position number lies in the range
-        // of its physical type.
-        if (type.form == TypeForm::physical && type.scalar_range) {
-            const auto left = static_bound(type.scalar_range->left, type.scalar_range->left_expression);
-            const auto right = static_bound(type.scalar_range->right, type.scalar_range->right_expression);
-            if (left && right) {
-                const auto low = std::min(*left, *right);
-                const auto high = std::max(*left, *right);
-                for (const auto& unit : type.physical_units) {
-                    const auto position = unit.scale_factor ? unit.scale_factor
-                        : unit.scale ? specialization_.evaluate_integral_expression(*unit.scale)
-                                     : std::nullopt;
-                    if (position && (*position < low || *position > high)) {
-                        report("FSIM-ELAB-VHPHYSICAL-004",
-                            "the position number of VHDL physical unit '" + unit.name
-                                + "' lies outside the range of its type",
-                            unit.source.valid() ? unit.source : type.source);
-                        break;
-                    }
-                }
-            }
-        }
         // IEEE 1076-2008 5.3.1: an element of a composite type is not of a
         // file or protected type.
         const auto file_or_protected = [&](const SubtypeIndication& element) {
@@ -5603,11 +5581,52 @@ private:
                         || (value.kind == Kind::call
                             && value.text.starts_with("@vhdl-member:"));
                     if (value.kind == Kind::index || value.kind == Kind::slice) {
+                        // Index expressions of a static name are globally
+                        // static: literals, constants and generics, and
+                        // operators over them (IEEE 1076-2008 8.1, 9.4.3).
+                        const auto globally_static = [&](const auto& self,
+                                                         const semantic::ExpressionId id,
+                                                         const std::size_t depth) -> bool {
+                            if (specialization_.evaluate_integral_expression(id)) {
+                                return true;
+                            }
+                            const auto operand = specialization_.find_expression(id);
+                            if (depth > 16U || !operand || operand->vhdl == nullptr) {
+                                return false;
+                            }
+                            const auto& node = *operand->vhdl;
+                            if (node.kind == Kind::name && node.referenced_name
+                                && node.referenced_name->selected) {
+                                const auto declaration = specialization_.find_declaration(
+                                    *node.referenced_name->selected);
+                                if (!declaration || declaration->vhdl == nullptr) {
+                                    return false;
+                                }
+                                // A loop parameter is a constant that is not
+                                // globally static (IEEE 1076-2008 9.4.3).
+                                const auto& scopes
+                                    = specialization_.design().semantics.scopes();
+                                const auto scope = declaration->vhdl->scope;
+                                if (scope.valid() && scope.value() < scopes.size()
+                                    && scopes[scope.value()].name == "<loop>") {
+                                    return false;
+                                }
+                                return declaration->vhdl->form
+                                        == semantic::vhdl::DeclarationForm::generic_constant
+                                    || declaration->vhdl->form
+                                        == semantic::vhdl::DeclarationForm::constant;
+                            }
+                            return (node.kind == Kind::binary || node.kind == Kind::unary)
+                                && !node.operands.empty()
+                                && std::ranges::all_of(node.operands,
+                                    [&](const semantic::ExpressionId child) {
+                                        return self(self, child, depth + 1U);
+                                    });
+                        };
                         static_name = std::ranges::all_of(
                             std::span { value.operands }.subspan(1U),
                             [&](const semantic::ExpressionId operand) {
-                                return specialization_.evaluate_integral_expression(operand)
-                                    .has_value();
+                                return globally_static(globally_static, operand, 0U);
                             });
                     }
                     if (!static_name
@@ -7310,8 +7329,41 @@ private:
                               : std::nullopt;
         };
         const auto type = subtype_operand_type(subtype, 0U);
-        if (type.kind == OperandClass::integer && subtype.constraints.size() == 1U) {
-            const auto& range = subtype.constraints.front();
+        // A bare type mark takes its range from the nearest constrained
+        // subtype or the integer/physical type definition.
+        const semantic::vhdl::RangeConstraint* marked_range = nullptr;
+        if (subtype.constraints.empty()
+            && (type.kind == OperandClass::integer
+                || type.kind == OperandClass::physical)) {
+            auto link_type = subtype_type(subtype);
+            std::unordered_set<std::uint32_t> visiting;
+            while (link_type && visiting.insert(link_type->value()).second) {
+                const auto* link = type_definition(*link_type);
+                if (link == nullptr) {
+                    break;
+                }
+                if (link->form == TypeForm::subtype
+                    || link->form == TypeForm::alias) {
+                    if (link->base.constraints.size() == 1U) {
+                        marked_range = &link->base.constraints.front();
+                        break;
+                    }
+                    link_type = subtype_type(link->base);
+                    continue;
+                }
+                if ((link->form == TypeForm::scalar
+                        || link->form == TypeForm::physical)
+                    && link->scalar_range) {
+                    marked_range = &*link->scalar_range;
+                }
+                break;
+            }
+        }
+        if ((type.kind == OperandClass::integer && subtype.constraints.size() == 1U)
+            || marked_range != nullptr) {
+            const auto& range = marked_range != nullptr
+                ? *marked_range
+                : subtype.constraints.front();
             const auto left = bound_value(range.left, range.left_expression);
             const auto right = bound_value(range.right, range.right_expression);
             if (left && right) {
@@ -11648,7 +11700,12 @@ private:
                     ? bound(std::nullopt, operands[first + 1U])
                     : std::nullopt;
                 const auto descending = expression.text == "downto";
+                // A null slice need not lie within the index range
+                // (IEEE 1076-2008 8.5).
+                const bool null_slice = left && right
+                    && (descending ? *left < *right : *left > *right);
                 const auto outside = dimension.bounds_known && left && right
+                    && !null_slice
                     && ((dimension.minimum
                             && (std::min(*left, *right)
                                 < *dimension.minimum))

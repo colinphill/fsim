@@ -371,14 +371,61 @@ void Interpreter::Impl::execute_scope_randomize(
             &staged_targets[target_index] });
     }
 
+    // Calling-scope values named by the with-clause are read now
+    // (IEEE 1800-2017 18.7).
+    std::vector<SystemVerilogConstraintTemplate> bound_constraints;
+    constexpr std::string_view register_prefix = "@inline-register:";
+    const auto has_register = [&](const auto& self,
+                                  const SystemVerilogConstraintTemplate& node)
+        -> bool {
+        return node.text.starts_with(register_prefix)
+            || std::ranges::any_of(node.operands,
+                [&](const auto& operand) { return self(self, operand); });
+    };
+    if (std::ranges::any_of(operation.inline_constraints,
+            [&](const auto& node) { return has_register(has_register, node); })) {
+        bound_constraints.assign(operation.inline_constraints.begin(),
+            operation.inline_constraints.end());
+        const auto fill = [&](const auto& self,
+                              SystemVerilogConstraintTemplate& node) -> void {
+            if (node.kind == SystemVerilogConstraintTemplateKind::Constant
+                && node.text.starts_with(register_prefix)) {
+                const auto source = static_cast<RegisterId>(std::stoul(
+                    node.text.substr(register_prefix.size())));
+                const auto width = node.constant.width();
+                auto value = process.executor
+                    ? process.executor->read_register(source, width)
+                    : get_register(process, source);
+                if (value.width() != width || value.is_logic9()) {
+                    throw std::invalid_argument {
+                        "std::randomize inline value does not match its constraint"
+                    };
+                }
+                node.constant = std::move(value);
+                return;
+            }
+            for (auto& operand : node.operands) {
+                self(self, operand);
+            }
+        };
+        for (auto& node : bound_constraints) {
+            fill(fill, node);
+        }
+    }
     if (!operation.inline_constraints.empty()) {
-        request.inline_constraints = [&process, &operation, instruction](
+        request.inline_constraints = [&process, &operation, &bound_constraints,
+                                         instruction](
                                         auto& solver,
                                         const auto& variables) {
             configure_systemverilog_inline_constraints(
                 solver,
                 variables,
-                operation.inline_constraints,
+                bound_constraints.empty()
+                    ? std::span<const SystemVerilogConstraintTemplate> {
+                          operation.inline_constraints.begin(),
+                          operation.inline_constraints.end() }
+                    : std::span<const SystemVerilogConstraintTemplate> {
+                          bound_constraints },
                 process.program().name() + "::std::randomize@"
                     + std::to_string(instruction));
         };

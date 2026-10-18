@@ -651,6 +651,8 @@ private:
         semantic::ScopeId scope) const;
     // The enumeration type a VHDL for-loop parameter iterates over, when the
     // value names one; the parameter's runtime value is the ordinal.
+    [[nodiscard]] bool hir_vhdl_boolean_loop_parameter(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<semantic::TypeId>
     hir_vhdl_loop_parameter_enumeration(
         semantic::ExpressionId value) const;
@@ -867,43 +869,107 @@ private:
         std::optional<semantic::ExpressionId> expression,
         std::string_view formal, std::string_view fallback,
         std::string_view code, std::string_view label, bool& valid);
-    // Protected-method call lowering (lowerer_hir_vhdl_special.cpp).
-    // A call actual: its formal name (empty when positional) and value.
-    using HirVhdlProtectedActual
-        = std::pair<std::string_view, semantic::ExpressionId>;
-    struct HirVhdlProtectedCandidate {
-        const semantic::vhdl::Declaration* declaration { };
-        std::vector<semantic::ExpressionId> actuals;
+    // Protected objects (IEEE 1076-2008 5.6, lowerer_hir_vhdl_special.cpp):
+    // a method runs as an ordinary callable frame specialized per object.
+    // The object's private variables are global storage, loaded into the
+    // frame's locals on entry and stored on exit and around nested calls.
+    struct HirVhdlProtectedMember {
+        semantic::DeclarationId declaration;
+        ContainerObjectId storage { };
     };
-    struct HirVhdlProtectedStorage {
-        ContainerObjectId object { };
+    struct HirVhdlProtectedCache {
+        semantic::DeclarationId declaration;
+        ContainerObjectId storage { };
         ContainerRegisterId container { };
         RegisterId value { };
     };
-    class HirVhdlProtectedMethodScope;
     // The protected type of the object a method call is selected from.
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_protected_type(
         semantic::ScopeId scope, std::string_view object) const;
-    [[nodiscard]] std::optional<std::size_t> hir_vhdl_protected_formal_width(
-        semantic::DeclarationId formal) const;
-    // The defined public methods of `body` named `member_name` whose
-    // profile the call actuals match.
-    [[nodiscard]] std::vector<HirVhdlProtectedCandidate>
-    hir_vhdl_protected_candidates(const semantic::vhdl::TypeDefinition& body,
-        std::string_view member_name, bool function,
-        std::span<const HirVhdlProtectedActual> call) const;
-    [[nodiscard]] std::optional<std::vector<RegisterId>>
-    lower_hir_vhdl_protected_arguments(
-        const semantic::vhdl::Declaration& method,
+    // The defined methods of the protected body that `name`
+    // (`object.method`) selects when its prefix denotes a protected object.
+    [[nodiscard]] std::vector<semantic::CompiledVhdlCallableResolution>
+    hir_vhdl_protected_method_resolutions(const semantic::vhdl::Name& name,
+        semantic::ScopeId scope, bool function) const;
+    // The private-variable storage of the object a call of `method` named
+    // `call_name` runs on: the selected object, or the active method's own
+    // object for an unprefixed call of a sibling method.
+    [[nodiscard]] std::optional<std::vector<HirVhdlProtectedMember>>
+    hir_vhdl_protected_call_members(std::string_view call_name,
+        semantic::ScopeId scope, semantic::DeclarationId method) const;
+    // A constant of an architecture, block or package whose composite value
+    // the elaborator cannot fold is computed once at run time: its first
+    // reader runs the initializer (IEEE 1076-2008 14.4.2.2) into global
+    // storage that later readers load.
+    struct HirVhdlGlobalFile {
+        semantic::DeclarationId declaration;
+        ContainerObjectId storage { };
+        RegisterId handle { };
+    };
+    [[nodiscard]] bool hir_vhdl_design_level_declaration(
+        const semantic::vhdl::Declaration& declaration) const;
+    [[nodiscard]] std::vector<HirVhdlGlobalFile> bind_hir_vhdl_global_files(
         std::span<const semantic::ExpressionId> actuals);
-    // Reads the object's private variables into the method's locals and
-    // binds its formals to the lowered arguments.
-    [[nodiscard]] std::optional<std::vector<HirVhdlProtectedStorage>>
-    load_hir_vhdl_protected_storage(const semantic::vhdl::TypeDefinition& body,
-        std::string_view object, const semantic::vhdl::Declaration& method,
-        std::span<const RegisterId> arguments, RegisterId zero,
-        const frontend::SourceSpan& span);
+    void release_hir_vhdl_global_files(
+        std::span<const HirVhdlGlobalFile> files);
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    hir_vhdl_lazy_global_constant(semantic::ExpressionId expression) const;
+    [[nodiscard]] bool materialize_hir_vhdl_global_constant(
+        semantic::DeclarationId declaration);
+    bool materializing_hir_vhdl_global_constant_ { };
+    // std::randomize lvalue arguments and their solver identities; a
+    // with-clause expression structurally equal to one names that target.
+    std::vector<std::pair<semantic::ExpressionId, std::string>>
+        hir_scope_randomize_arguments_;
+    // The width of an instance property sized by class value parameters in
+    // the specialization the receiver's declared type names.
+    [[nodiscard]] std::optional<std::size_t>
+    hir_class_property_specialized_width(
+        const semantic::sv::ClassProperty& property,
+        semantic::ExpressionId receiver) const;
+    // Creates a protected object's anchor and registry entry.
+    ContainerObjectId create_hir_vhdl_protected_anchor(const std::string& name,
+        const std::string& type_name, const frontend::SourceSpan& source);
+    // The anchor of the protected object `object` names in `scope`.
+    [[nodiscard]] std::optional<ContainerObjectId> hir_vhdl_protected_anchor(
+        std::string_view object, semantic::ScopeId scope) const;
+    // The protected type a subtype denotes, if any.
+    [[nodiscard]] const semantic::vhdl::TypeDefinition*
+    hir_vhdl_subtype_protected_type(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // Reports a protected method that suspends (VHPROTECTED-020) and a pure
+    // function calling an impure method (VHPROTECTED-022); true when legal.
+    [[nodiscard]] bool check_hir_vhdl_protected_call(
+        semantic::DeclarationId method, std::string_view call_name,
+        semantic::SourceSpanId source);
+    // A function call selected from a protected object (`p.get`).
+    [[nodiscard]] bool is_hir_vhdl_protected_expression(
+        semantic::ExpressionId expression) const;
+    // Object members for the frame being created by the call in progress.
+    std::optional<std::vector<HirVhdlProtectedMember>>
+        pending_hir_vhdl_protected_members_;
+    std::vector<HirVhdlProtectedCache> hir_vhdl_protected_caches_;
+    // Storage of protected objects declared in processes and subprograms,
+    // keyed by hierarchy path and declaration.
+    std::unordered_map<std::string, ContainerObjectId>
+        hir_vhdl_local_protected_anchors_;
+    // The anchor first, then the private variables' storage, created on
+    // first use.
+    [[nodiscard]] std::optional<std::vector<HirVhdlProtectedMember>>
+    hir_vhdl_protected_object_storage(ContainerObjectId anchor,
+        const semantic::vhdl::TypeDefinition& body);
+    // Creates the object a variable of protected type declares and
+    // initializes its private variables; nullopt when not protected.
+    [[nodiscard]] std::optional<bool> initialize_hir_vhdl_protected_object(
+        semantic::DeclarationId declaration,
+        const semantic::vhdl::Declaration& variable);
+    [[nodiscard]] std::string hir_vhdl_local_protected_key(
+        semantic::DeclarationId declaration) const;
+    void load_hir_vhdl_protected_caches(
+        std::span<const HirVhdlProtectedMember> members);
+    void flush_hir_vhdl_protected_caches();
+    void reload_hir_vhdl_protected_caches();
     // Clears the register, local and control state of one lowered process.
     void reset_hir_process_state();
     // A resolver over the specialized unit that sees the generic bindings
@@ -973,6 +1039,11 @@ private:
     mutable std::uint64_t hir_vhdl_character_context_revision_ { };
     mutable std::unordered_set<std::uint32_t>
         hir_vhdl_character_context_literals_;
+    // Character literals with a visible user enumeration literal whose known
+    // context type (target, other operand, selector) is a different type:
+    // they denote the predefined type's literal (IEEE 1076-2008 9.3.2).
+    mutable std::unordered_set<std::uint32_t>
+        hir_vhdl_foreign_context_literals_;
     [[nodiscard]] std::optional<std::size_t>
     hir_vhdl_null_concatenation_operand(
         std::span<const semantic::ExpressionId> operands) const;
@@ -1032,6 +1103,7 @@ private:
         numeric_to_integer,
         numeric_resize,
         numeric_shift,
+        numeric_extremum,
         psl_query,
     };
     struct HirVhdlStandardFunctionProfile {
@@ -1572,16 +1644,6 @@ private:
     lower_hir_vhdl_vital_memory_expression(
         semantic::ExpressionId expression,
         std::size_t expected_width);
-    [[nodiscard]] bool is_hir_vhdl_protected_expression(
-        semantic::ExpressionId expression) const;
-    [[nodiscard]] bool is_hir_vhdl_protected_statement(
-        semantic::StatementId statement) const;
-    [[nodiscard]] std::optional<RegisterId>
-    lower_hir_vhdl_protected_expression(
-        semantic::ExpressionId expression,
-        std::size_t expected_width);
-    [[nodiscard]] bool lower_hir_vhdl_protected_statement(
-        semantic::StatementId statement);
     [[nodiscard]] bool is_hir_vhdl_environment_expression(
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool is_hir_vhdl_environment_status_literal(
@@ -2918,6 +2980,12 @@ private:
         std::optional<ContainerRegisterId> container_result_default;
         std::optional<RegisterId> class_receiver;
         std::optional<std::string> interface_receiver;
+        // The private variables of the protected object a method frame
+        // runs on; part of the frame key.
+        std::vector<HirVhdlProtectedMember> vhdl_protected_members;
+        // Protected-type formals and the anchors of their actual objects.
+        std::unordered_map<std::uint32_t, ContainerObjectId>
+            vhdl_protected_formals;
         std::vector<semantic::DeclarationId> formals;
         std::vector<semantic::DeclarationId> profile_formals;
         std::vector<RegisterId> arguments;
@@ -3013,7 +3081,6 @@ private:
         hir_interface_callable_indices_;
     std::deque<std::size_t> pending_hir_callables_;
     std::optional<std::size_t> active_hir_callable_;
-    bool active_hir_vhdl_protected_method_ { };
     struct HirVhdlAccessHeap {
         ContainerRegisterId objects { };
         ContainerRegisterId issued_handles { };

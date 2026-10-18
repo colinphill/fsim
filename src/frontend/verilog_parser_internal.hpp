@@ -312,7 +312,7 @@ class VerilogParser final : private detail::ParserBase {
   // a net (IEEE 1364-2005 7.1); report one that names a variable.
   void check_verilog_primitive_net_terminal(const Expression& terminal,
       const std::vector<SignalDeclaration>& signals, const Token& instance_start,
-      bool bidirectional = false);
+      bool bidirectional = false, bool continuous_assignment = false);
   // Names of every class declared so far; a class name is never a net.
   std::unordered_set<std::string> known_class_names_;
 

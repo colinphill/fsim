@@ -3245,10 +3245,13 @@ CompiledDesignResolver::vhdl_enumeration_literal_ordinal(
         return std::nullopt;
     }
     const auto candidate = find_expression(*design_, effective_, expression);
+    // TRUE and FALSE may be literals of a user enumeration too; the
+    // expected type selects the overload (IEEE 1076-2008 5.2.2.1, 12.5).
     if (!candidate || candidate->vhdl == nullptr
         || (candidate->vhdl->kind != vhdl::ExpressionKind::name
+            && candidate->vhdl->kind != vhdl::ExpressionKind::logic_literal
             && candidate->vhdl->kind
-                != vhdl::ExpressionKind::logic_literal)) {
+                != vhdl::ExpressionKind::boolean_literal)) {
         return std::nullopt;
     }
     const auto spelling = std::string_view { candidate->vhdl->text };

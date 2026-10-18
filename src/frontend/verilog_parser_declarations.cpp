@@ -2034,7 +2034,7 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
 
 void VerilogParser::check_verilog_primitive_net_terminal(const Expression& terminal,
     const std::vector<SignalDeclaration>& signals, const Token& instance_start,
-    const bool bidirectional)
+    const bool bidirectional, const bool continuous_assignment)
 {
   // SystemVerilog lets a variable take a primitive's output, but a
   // bidirectional switch connects nets (IEEE 1800-2017 28.8).
@@ -2047,8 +2047,8 @@ void VerilogParser::check_verilog_primitive_net_terminal(const Expression& termi
   }
   if (terminal.kind == ExpressionKind::Concatenation) {
     for (const auto& operand : terminal.operands) {
-      check_verilog_primitive_net_terminal(
-          operand, signals, instance_start, bidirectional);
+      check_verilog_primitive_net_terminal(operand, signals, instance_start,
+          bidirectional, continuous_assignment);
     }
     return;
   }
@@ -2073,6 +2073,13 @@ void VerilogParser::check_verilog_primitive_net_terminal(const Expression& termi
           && (spelling == "logic" || spelling == "bit" || spelling == "int"
               || spelling == "byte" || spelling == "shortint"
               || spelling == "longint"))) {
+    if (continuous_assignment) {
+      // IEEE 1364-2005 6.1: a continuous assignment drives a net.
+      error(instance_start, "FSIM-SV-SEM-412",
+          "a Verilog continuous assignment target must be a net, not variable '"
+              + root->text + "'");
+      return;
+    }
     error(instance_start, "FSIM-SV-SEM-412",
         "a Verilog primitive output or bidirectional terminal must be a net, "
         "not variable '" + root->text + "'");

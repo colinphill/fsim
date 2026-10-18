@@ -1188,6 +1188,7 @@ DesignUnit VerilogParser::parse_module(
         } else if (previous().text == "function" || match_keyword("function")) {
             module_has_non_time_item_ = true;
             auto function = parse_function(previous());
+            declare_member_enumerations(unit);
             const bool duplicate = std::ranges::any_of(
                                        unit.functions,
                                        [&](const FunctionDeclaration& existing) {
@@ -1365,7 +1366,12 @@ DesignUnit VerilogParser::parse_module(
                 unit.concurrent_statements, unit.signals, unit.ports);
         } else if (match_keyword("assign")) {
             module_has_non_time_item_ = true;
-            auto assignments = parse_continuous_assignments(previous());
+            const auto assign_token = previous();
+            auto assignments = parse_continuous_assignments(assign_token);
+            for (const auto& assignment : assignments) {
+                check_verilog_primitive_net_terminal(assignment.target,
+                    unit.signals, assign_token, false, true);
+            }
             unit.concurrent_statements.insert(
                 unit.concurrent_statements.end(),
                 std::make_move_iterator(assignments.begin()),

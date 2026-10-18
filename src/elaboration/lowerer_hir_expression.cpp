@@ -4291,13 +4291,37 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 domain = aggregate_storage_domain(*expected, residual_type);
             }
         }
+        // '0' and '1', and logical operators over only such literals, are
+        // overloaded and take BIT from a two-state context (IEEE 1076-2008
+        // 9.2.2, 12.5).
+        const auto bit_literal_tree = [&](const auto& self,
+                                          const semantic::ExpressionId id,
+                                          const std::size_t depth) -> bool {
+            const auto node = specialized_hir_unit_->find_expression(id);
+            if (depth > 32U || !node || node->vhdl == nullptr) {
+                return false;
+            }
+            const auto& value = *node->vhdl;
+            if (value.kind == semantic::vhdl::ExpressionKind::logic_literal) {
+                return value.text.size() == 3U
+                    && (value.text[1] == '0' || value.text[1] == '1');
+            }
+            const auto logical = value.text == "and" || value.text == "or"
+                || value.text == "xor" || value.text == "nand"
+                || value.text == "nor" || value.text == "xnor"
+                || value.text == "not";
+            return logical
+                && (value.kind == semantic::vhdl::ExpressionKind::binary
+                    || value.kind == semantic::vhdl::ExpressionKind::unary)
+                && !value.operands.empty()
+                && std::ranges::all_of(value.operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand, depth + 1U);
+                    });
+        };
         const auto context_compatible_bit_literal = source
             && source->vhdl != nullptr
-            && source->vhdl->kind
-                == semantic::vhdl::ExpressionKind::logic_literal
-            && source->vhdl->text.size() == 3U
-            && (source->vhdl->text[1] == '0'
-                || source->vhdl->text[1] == '1');
+            && bit_literal_tree(bit_literal_tree, value, 0U);
         if (is_two_state_domain(domain)
             && !is_two_state_domain(register_domain(*lowered))
             && !context_compatible_bit_literal) {
@@ -5005,6 +5029,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 return hir_constant_integer(expression_id);
             }
             return std::nullopt;
+        }
+        // A character literal indexes a CHARACTER dimension by its
+        // position (IEEE 1076-2008 16.3).
+        if (same_vhdl_identifier(
+                simple_name_of(index_subtype.spelling), "character")) {
+            const auto expression
+                = specialized_hir_unit_->find_expression(expression_id);
+            if (expression && expression->vhdl != nullptr
+                && expression->vhdl->text.size() == 3U
+                && expression->vhdl->text.front() == '\''
+                && expression->vhdl->text.back() == '\'') {
+                return static_cast<std::int64_t>(
+                    static_cast<unsigned char>(expression->vhdl->text[1]));
+            }
+            if (expression && expression->vhdl != nullptr
+                && expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name) {
+                if (const auto code = vhdl_character_control_literal_code(
+                        simple_name_of(expression->vhdl->text))) {
+                    return static_cast<std::int64_t>(*code);
+                }
+            }
         }
         return hir_constant_integer(expression_id);
     };
@@ -8584,6 +8630,39 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
         }
         return resized;
     }
+    if (profile.kind == HirVhdlStandardFunctionKind::numeric_extremum) {
+        const auto other_width = hir_expression_width(
+            source.operands[1], hir_process_scope_);
+        auto other = other_width
+            ? lower_hir_expression(source.operands[1], *other_width)
+            : std::nullopt;
+        if (!other) {
+            return std::nullopt;
+        }
+        // Both operands extend to the longer length (IEEE 1076-2008 G.2).
+        auto left = *value;
+        if (register_width(left) != profile.width) {
+            left = resize_register(left, profile.width, profile.signed_value);
+        }
+        if (register_width(*other) != profile.width) {
+            other = resize_register(
+                *other, profile.width, profile.signed_value);
+        }
+        const auto left_greater = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(Binary {
+            profile.signed_value ? BinaryOperator::greater_signed
+                                 : BinaryOperator::greater_unsigned,
+            left_greater, left, *other });
+        const auto destination = allocate_register(
+            profile.width, register_domain(left));
+        const bool maximum = profile.name == "maximum";
+        process_.operations.emplace_back(ConditionalSelect {
+            destination, left_greater,
+            maximum ? left : *other,
+            maximum ? *other : left });
+        return destination;
+    }
     if (profile.kind == HirVhdlStandardFunctionKind::numeric_shift) {
         const auto amount_width = hir_expression_width(
             source.operands[1], hir_process_scope_).value_or(32U);
@@ -9178,6 +9257,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         = lower_hir_vhdl_static_string_concatenation(
             expression_id, expected_width)) {
         return characters;
+    }
+    if (const auto constant = hir_vhdl_lazy_global_constant(expression_id)) {
+        if (materialize_hir_vhdl_global_constant(*constant)) {
+            const auto result = lower_hir_expression(expression_id,
+                expected_width, scalar_context, vhdl_array_context);
+            hir_local_registers_.erase(constant->value());
+            return result;
+        }
     }
     // The process class's state constants and status queries inside an
     // expression (IEEE 1800-2017 9.7).
@@ -10946,13 +11033,20 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto root_type = [&](const semantic::TypeId type) {
             return semantic::vhdl_root_type(*specialized_hir_unit_, type);
         };
-        const auto nominal_mismatch = target_type && operand_subtype
-            && operand_subtype->type_mark.target.valid()
-            && root_type(*target_type)
-                != root_type(operand_subtype->type_mark.target);
         const auto operand = operands.size() == 1U
             ? specialized_hir_unit_->find_expression(operands.front())
             : std::nullopt;
+        // An overloaded character literal takes its type from the type
+        // mark (IEEE 1076-2008 9.3.5), whatever subtype it reports alone.
+        const auto character_operand = operand
+            && operand->vhdl != nullptr
+            && operand->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal;
+        const auto nominal_mismatch = !character_operand && target_type
+            && operand_subtype
+            && operand_subtype->type_mark.target.valid()
+            && root_type(*target_type)
+                != root_type(operand_subtype->type_mark.target);
         const auto aggregate_operand = operand
             && operand->vhdl != nullptr
             && operand->vhdl->kind
@@ -11136,6 +11230,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         if (ambiguous) {
             selected = nullptr;
+        }
+        // A CHARACTER literal compared with a CHARACTER loop parameter held
+        // in a wider integer register is its position (IEEE 1076-2008 16.3).
+        if (selected == nullptr && !ambiguous && !exact_literal
+            && expected_width > 8U && expected_width <= 64U
+            && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && expression->vhdl->text.size() == 3U
+            && expression->vhdl->text.front() == '\''
+            && std::string_view { "UX01ZWLH-" }.find(static_cast<char>(
+                   std::toupper(static_cast<unsigned char>(
+                       expression->vhdl->text[1]))))
+                == std::string_view::npos) {
+            return load_constant(unsigned_value(static_cast<unsigned char>(
+                                     expression->vhdl->text[1]),
+                                     expected_width),
+                frontend::ValueDomain::Integer);
         }
         if (selected != nullptr) {
             const auto width = expected_width != 0U
@@ -15394,16 +15505,51 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 hir_source_span(call.source));
             return invalid_integral_result();
         }
-        auto inline_constraints = hir_inline_constraints(
-            expression_id, hir_process_scope_);
-        if (!inline_constraints) {
-            return std::nullopt;
-        }
         ScopeRandomize operation;
         operation.destination = allocate_register(
             32U, frontend::ValueDomain::Integer);
-        operation.inline_constraints = std::move(*inline_constraints);
         operation.maximum_domain_values = std::size_t { 1U } << 20U;
+        // Arguments other than packed locals are copied into a temporary
+        // target and copied back after the call (IEEE 1800-2017 18.12).
+        std::vector<std::pair<semantic::ExpressionId, RegisterId>> copy_out;
+        std::vector<std::pair<semantic::ExpressionId, std::string>>
+            arguments;
+        const auto general_target = [&](const semantic::ExpressionId operand)
+            -> bool {
+            const auto width = hir_expression_width(
+                operand, hir_process_scope_);
+            const auto domain = hir_expression_domain(
+                operand, hir_process_scope_);
+            if (!width || *width == 0U || *width > 64U || !domain
+                || (*domain != frontend::ValueDomain::Bit2
+                    && *domain != frontend::ValueDomain::Logic4
+                    && *domain != frontend::ValueDomain::Integer)
+                || hir_systemverilog_scalar_kind(operand)
+                    != frontend::SystemVerilogScalarKind::None) {
+                return false;
+            }
+            const auto current = lower_hir_expression(operand, *width);
+            if (!current) {
+                return false;
+            }
+            const auto temporary = allocate_register(*width, *domain);
+            process_.operations.emplace_back(
+                CopyRegister { temporary, *current });
+            ScopeRandomizeTarget target;
+            target.target = temporary;
+            target.canonical_identity = "@std-randomize-argument:"
+                + std::to_string(arguments.size());
+            target.width = static_cast<std::uint32_t>(*width);
+            target.signed_value = hir_expression_signed(operand);
+            target.nominal_type = "$std-randomize-argument";
+            target.domain_kind = *domain == frontend::ValueDomain::Integer
+                ? ScopeRandomizeDomainKind::integer
+                : ScopeRandomizeDomainKind::bit_vector;
+            arguments.emplace_back(operand, target.canonical_identity);
+            copy_out.emplace_back(operand, temporary);
+            operation.targets.push_back(std::move(target));
+            return true;
+        };
         for (const auto operand : call.operands) {
             const auto argument = specialized_hir_unit_->find_expression(
                 operand);
@@ -15412,6 +15558,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || argument->systemverilog->kind
                     != semantic::sv::ExpressionKind::name
                 || !declaration_id) {
+                if (general_target(operand)) {
+                    continue;
+                }
                 report(
                     "FSIM-ELAB-SVRAND-002",
                     "std::randomize arguments must be writable local "
@@ -15432,6 +15581,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || !binding
                 || binding->kind != HirRuntimeBindingKind::local
                 || !binding->local) {
+                if (general_target(operand)) {
+                    continue;
+                }
                 report(
                     "FSIM-ELAB-SVRAND-003",
                     "std::randomize argument '"
@@ -15485,8 +15637,136 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             operation.targets.push_back(std::move(target));
         }
+        hir_scope_randomize_arguments_ = std::move(arguments);
+        std::vector<semantic::ExpressionId> runtime_values;
+        auto inline_constraints = hir_inline_constraints(
+            expression_id, hir_process_scope_, &runtime_values);
+        hir_scope_randomize_arguments_.clear();
+        if (!inline_constraints) {
+            return std::nullopt;
+        }
+        // Calling-scope values in the with-clause are read when the call
+        // executes (IEEE 1800-2017 18.7).
+        std::vector<RegisterId> value_registers;
+        for (const auto value : runtime_values) {
+            const auto width = hir_expression_width(
+                value, hir_process_scope_);
+            const auto lowered = width
+                ? lower_hir_expression(value, *width)
+                : std::nullopt;
+            if (!lowered) {
+                return std::nullopt;
+            }
+            value_registers.push_back(*lowered);
+        }
+        constexpr std::string_view inline_value_prefix = "@inline-value:";
+        const auto bind_values = [&](const auto& self,
+                                     runtime::SystemVerilogConstraintTemplate&
+                                         node) -> void {
+            if (node.text.starts_with(inline_value_prefix)) {
+                const auto slot = std::stoull(
+                    node.text.substr(inline_value_prefix.size()));
+                if (slot < value_registers.size()) {
+                    node.text = "@inline-register:"
+                        + std::to_string(value_registers[slot]);
+                }
+            }
+            for (auto& operand : node.operands) {
+                self(self, operand);
+            }
+        };
+        for (auto& constraint : *inline_constraints) {
+            bind_values(bind_values, constraint);
+        }
+        operation.inline_constraints = std::move(*inline_constraints);
         const auto destination = operation.destination;
         process_.operations.emplace_back(std::move(operation));
+        const auto write_back = [&](const semantic::ExpressionId operand,
+                                    const RegisterId value) -> bool {
+            const auto access = specialized_hir_unit_->find_expression(
+                operand);
+            constexpr std::string_view element_prefix
+                = "@sv-container-index:";
+            if (access && access->systemverilog != nullptr
+                && access->systemverilog->text.starts_with(element_prefix)
+                && access->systemverilog->operands.size() == 2U) {
+                const auto& element_access = *access->systemverilog;
+                const auto identity = std::string_view {
+                    element_access.text
+                }.substr(element_prefix.size());
+                if (!hir_class_value_container_type(identity)) {
+                    return false;
+                }
+                const auto held = lower_hir_class_value_container(
+                    element_access.operands[0], identity);
+                if (!held || held->container.type.string_indices
+                    || (held->container.type.element_kind
+                            != ContainerElementKind::Packed
+                        && held->container.type.element_kind
+                            != ContainerElementKind::Scalar)) {
+                    return false;
+                }
+                const auto& type = held->container.type;
+                const auto index = lower_hir_expression(
+                    element_access.operands[1],
+                    type.associative ? type.index_width : 32U);
+                if (!index) {
+                    return false;
+                }
+                const auto element = register_width(value)
+                        == type.element_width
+                    ? value
+                    : resize_register(value, type.element_width, false);
+                process_.operations.emplace_back(ContainerWrite {
+                    held->container.value, *index, element,
+                    type.associative ? type.signed_indices : true, false,
+                    false });
+                store_hir_class_value_container(*held);
+                return true;
+            }
+            if (const auto member = hir_class_property_member(operand)) {
+                return member->profile.writable
+                    && lower_hir_class_property_member_write(
+                        *member,
+                        register_width(value) == member->member.width
+                            ? value
+                            : resize_register(
+                                  value, member->member.width, false));
+            }
+            if (const auto property = hir_class_property_profile(operand)) {
+                if (!property->writable) {
+                    return false;
+                }
+                const auto sized = register_width(value) == property->width
+                    ? value
+                    : resize_register(
+                          value, property->width, property->signed_value);
+                if (property->static_storage) {
+                    process_.operations.emplace_back(
+                        ClassStaticPropertyWrite {
+                            sized, property->identity });
+                    return true;
+                }
+                const auto receiver = lower_hir_expression(
+                    *property->receiver, 64U);
+                if (!receiver || register_width(*receiver) != 64U) {
+                    return false;
+                }
+                process_.operations.emplace_back(ClassPropertyWrite {
+                    *receiver, sized, property->identity });
+                return true;
+            }
+            return lower_hir_packed_copy_out(operand, value);
+        };
+        for (const auto& [operand, temporary] : copy_out) {
+            if (!write_back(operand, temporary)) {
+                report(
+                    "FSIM-ELAB-SVRAND-002",
+                    "std::randomize arguments must be writable",
+                    hir_source_span(call.source));
+                return invalid_integral_result();
+            }
+        }
         result = destination;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
@@ -18068,10 +18348,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         result = lower_hir_vhdl_physical_expression(
             expression_id, expected_width);
     } else if (is_hir_vhdl_protected_expression(expression_id)) {
-        result = lower_hir_vhdl_protected_expression(
-            expression_id, expected_width);
+        result = lower_hir_function_call(expression_id, expected_width);
     } else if (is_hir_vhdl_file_call(expression_id)) {
+        const auto files = bind_hir_vhdl_global_files(
+            expression->vhdl != nullptr
+                ? std::span<const semantic::ExpressionId> {
+                      expression->vhdl->operands }
+                : std::span<const semantic::ExpressionId> { });
         result = lower_hir_vhdl_file_call(expression_id);
+        release_hir_vhdl_global_files(files);
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
         && expression->systemverilog->text == "inside") {
@@ -19750,17 +20035,38 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
                 const auto destination = allocate_register(
                     1U, frontend::ValueDomain::Boolean);
-                const auto one = load_constant(
-                    PackedLogic4(1U, Logic4::one), register_domain(*operand));
-                process_.operations.emplace_back(Binary {
-                    register_domain(*operand)
-                            == frontend::ValueDomain::Logic9
-                        ? BinaryOperator::vhdl_match_equal
-                        : BinaryOperator::case_equal,
-                    destination,
-                    *operand,
-                    one,
-                });
+                if (register_domain(*operand)
+                    == frontend::ValueDomain::Logic9) {
+                    // STD_ULOGIC's ?? is TRUE only for '1' and 'H'
+                    // (IEEE 1076-2008 16.7).
+                    const auto is_one = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    const auto is_high = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, is_one, *operand,
+                        load_constant(
+                            PackedLogic4::from_logic9_msb_string("1"),
+                            frontend::ValueDomain::Logic9) });
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, is_high, *operand,
+                        load_constant(
+                            PackedLogic4::from_logic9_msb_string("H"),
+                            frontend::ValueDomain::Logic9) });
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::bit_or, destination, is_one,
+                        is_high });
+                } else {
+                    const auto one = load_constant(
+                        PackedLogic4(1U, Logic4::one),
+                        register_domain(*operand));
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal,
+                        destination,
+                        *operand,
+                        one,
+                    });
+                }
                 result = destination;
             } else if (source.text == "+") {
                 result = *operand;

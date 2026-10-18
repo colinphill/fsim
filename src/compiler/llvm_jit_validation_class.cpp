@@ -24,7 +24,9 @@ void validate_constraint_templates(
         const auto valid_shape = [&] {
             switch (expression->kind) {
             case Kind::Name:
-                return !expression->text.empty() && operand_count == 0;
+                // A name may carry the calling-scope value used when the
+                // randomized scope does not declare it (IEEE 1800-2017 18.7).
+                return !expression->text.empty() && operand_count <= 1;
             case Kind::Constant:
                 return !expression->constant.empty()
                     && expression->profile.width == expression->constant.width()

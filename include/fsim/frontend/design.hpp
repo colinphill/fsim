@@ -448,6 +448,11 @@ struct VhdlProtectedInfo {
     // Method aliases are untyped aliases whose targets and optional overload
     // signatures are resolved in the protected member scope.
     std::vector<SignalAliasDeclaration> method_aliases;
+    // Static declarations of a protected body (IEEE 1076-2008 5.6.3):
+    // types, subtypes, constants and object aliases of the member scope.
+    std::vector<ParameterDeclaration> constants;
+    std::vector<TypeAliasDeclaration> type_aliases;
+    std::vector<SignalAliasDeclaration> object_aliases;
     // Source-ordered packed offsets for private variables after resolution.
     // Each member remains independently stored at runtime; this layout is the
     // stable debugger/provenance view and validates the bounded representation.

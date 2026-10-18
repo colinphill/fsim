@@ -1157,6 +1157,19 @@ bool Lowerer::initialize_hir_declarations(
                 hir_source_span(local_source));
             continue;
         }
+        // A protected object owns its private variables (IEEE 1076-2008
+        // 5.6.2); it is created when its declaration is elaborated.
+        if (declaration->vhdl != nullptr
+            && declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::variable) {
+            if (const auto created = initialize_hir_vhdl_protected_object(
+                    declaration_id, *declaration->vhdl)) {
+                if (!*created) {
+                    return false;
+                }
+                continue;
+            }
+        }
         // An unpacked structure or union local is a singleton aggregate
         // container, as at module scope (IEEE 1800-2017 7.2).
         const auto aggregate_local = declaration->systemverilog != nullptr
@@ -1701,6 +1714,38 @@ bool Lowerer::initialize_hir_declarations(
                 contextual.signed_value = hir_expression_signed(
                     *declaration->vhdl->initializer);
                 binding = std::move(contextual);
+            }
+        }
+        // A global constant computed at run time is elaborated as a local
+        // of its first reader (materialize_hir_vhdl_global_constant).
+        if (materializing_hir_vhdl_global_constant_
+            && (!binding || binding->kind != HirRuntimeBindingKind::local)
+            && declaration->vhdl != nullptr
+            && declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::file) {
+            HirRuntimeBinding local;
+            local.declaration = declaration_id;
+            local.kind = HirRuntimeBindingKind::local;
+            local.name = declaration->vhdl->name;
+            local.width = 32U;
+            local.domain = frontend::ValueDomain::Bit2;
+            binding = std::move(local);
+        }
+        if (materializing_hir_vhdl_global_constant_
+            && (!binding || binding->kind != HirRuntimeBindingKind::local)
+            && declaration->vhdl != nullptr && declaration->vhdl->subtype) {
+            const auto declared = hir_effective_vhdl_subtype(
+                *declaration->vhdl->subtype);
+            if (declared && declared->executable_width
+                && *declared->executable_width != 0U) {
+                HirRuntimeBinding local;
+                local.declaration = declaration_id;
+                local.kind = HirRuntimeBindingKind::local;
+                local.name = declaration->vhdl->name;
+                local.width = *declared->executable_width;
+                local.domain = vhdl_value_domain(declared->domain);
+                local.signed_value = declared->signed_value;
+                binding = std::move(local);
             }
         }
         if (!binding || binding->kind != HirRuntimeBindingKind::local) {
@@ -3490,6 +3535,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     readonly_signal_write_operations_.clear();
     process_.id = static_cast<ProcessId>(design_.process_count());
     hir_process_scope_ = description.scope;
+    // Context-typed character literals are classified before any expression
+    // view is held; the scan may grow the specialization.
+    if (language == frontend::Language::Vhdl2008) {
+        collect_hir_vhdl_character_contexts();
+    }
     process_.scheduling_domain
         = (language == frontend::Language::SystemVerilog2017
             || language == frontend::Language::Verilog2005)
@@ -3753,16 +3803,75 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         const auto input = allocate_register(
             signal.width * std::max<std::size_t>(resolver.driver_count, 1U),
             signal.source_domain);
-        auto resolved = lower_hir_vhdl_resolution_call(
-            resolver.function, input, resolver.driver_count, signal.width);
-        if (!resolved || register_width(*resolved) != signal.width) {
-            process_ = { };
-            return std::nullopt;
-        }
+        // A composite whose element subtype is resolved resolves each
+        // scalar subelement on its own (IEEE 1076-2008 14.7.3.2).
+        const auto function_type = hir_callable_type(
+            resolver.function, signal.width);
+        const auto element_width = function_type
+            ? function_type->width
+            : std::size_t { };
+        const bool per_element = signal.vhdl_array != nullptr
+            && element_width != 0U && element_width < signal.width
+            && signal.width % element_width == 0U
+            && signal.width / element_width <= 4096U;
         const auto output = allocate_register(
             signal.width, signal.source_domain);
-        process_.operations.emplace_back(CopyRegister { output, *resolved });
-        hir_vhdl_resolver_registers_ = std::pair { input, output };
+        if (per_element) {
+            const auto drivers
+                = std::max<std::size_t>(resolver.driver_count, 1U);
+            const auto elements = signal.width / element_width;
+            process_.operations.emplace_back(CopyRegister {
+                output,
+                load_constant(unsigned_value(0U, signal.width),
+                    signal.source_domain) });
+            for (std::size_t element { }; element < elements; ++element) {
+                const auto offset = element * element_width;
+                auto driving = load_constant(
+                    unsigned_value(0U, element_width * drivers),
+                    signal.source_domain);
+                for (std::size_t driver { }; driver < drivers; ++driver) {
+                    const auto part = allocate_register(
+                        element_width, signal.source_domain);
+                    process_.operations.emplace_back(Extract {
+                        part, input,
+                        static_cast<std::uint32_t>(
+                            driver * signal.width + offset),
+                        static_cast<std::uint32_t>(element_width) });
+                    const auto updated = allocate_register(
+                        element_width * drivers, signal.source_domain);
+                    process_.operations.emplace_back(Insert {
+                        updated, driving, part,
+                        static_cast<std::uint32_t>(driver * element_width) });
+                    driving = updated;
+                }
+                const auto resolved = lower_hir_vhdl_resolution_call(
+                    resolver.function, driving, resolver.driver_count,
+                    element_width);
+                if (!resolved || register_width(*resolved) != element_width) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                const auto updated = allocate_register(
+                    signal.width, signal.source_domain);
+                process_.operations.emplace_back(Insert {
+                    updated, output, *resolved,
+                    static_cast<std::uint32_t>(offset) });
+                process_.operations.emplace_back(
+                    CopyRegister { output, updated });
+            }
+            hir_vhdl_resolver_registers_ = std::pair { input, output };
+        } else {
+            auto resolved = lower_hir_vhdl_resolution_call(
+                resolver.function, input, resolver.driver_count,
+                signal.width);
+            if (!resolved || register_width(*resolved) != signal.width) {
+                process_ = { };
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(
+                CopyRegister { output, *resolved });
+            hir_vhdl_resolver_registers_ = std::pair { input, output };
+        }
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
         const auto& signal = design_.signal_info_[destination];

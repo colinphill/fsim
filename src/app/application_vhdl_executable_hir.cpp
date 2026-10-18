@@ -574,12 +574,22 @@ class VhdlExecutableBuilder final {
         = input.kind == frontend::StatementKind::Loop
         && !input.loop_variable.empty();
     if (declares_loop_parameter) {
-      child_scope = model_.add_scope(
-          scope_unit(enclosing_scope),
-          enclosing_scope,
-          "<loop>",
-          statement_source,
-          statement_origin);
+      // The region builder already created the loop region of a loop that
+      // contains a block statement.
+      const auto existing = std::ranges::find_if(
+          model_.scopes(), [&](const semantic::Scope& candidate) {
+            return candidate.parent == enclosing_scope
+                && candidate.name == "<loop>"
+                && candidate.source == statement_source;
+          });
+      child_scope = existing != model_.scopes().end()
+          ? existing->id
+          : model_.add_scope(
+                scope_unit(enclosing_scope),
+                enclosing_scope,
+                "<loop>",
+                statement_source,
+                statement_origin);
       output.nested_scope = child_scope;
       output.declarations.push_back(loop_parameter(
           input.loop_variable,

@@ -421,11 +421,29 @@ void VhdlHirBuilder::add_protected_payload(
         output.protected_members,
         &VhdlHirBuilder::add_parameter);
     add_children(
+        input.vhdl_protected->constants,
+        member_scope,
+        parent_origin,
+        output.protected_members,
+        &VhdlHirBuilder::add_parameter);
+    add_children(
+        input.vhdl_protected->type_aliases,
+        member_scope,
+        parent_origin,
+        output.protected_members,
+        &VhdlHirBuilder::add_type_declaration);
+    add_children(
         input.vhdl_protected->variables,
         member_scope,
         parent_origin,
         output.protected_members,
         &VhdlHirBuilder::add_variable);
+    add_children(
+        input.vhdl_protected->object_aliases,
+        member_scope,
+        parent_origin,
+        output.protected_members,
+        &VhdlHirBuilder::add_alias);
     add_children(
         input.vhdl_protected->functions,
         member_scope,

@@ -1824,7 +1824,7 @@ scheduler.
 | `FSIM-SV-SEM-409` | error | A sized literal has size zero (IEEE 1800-2017 5.7.1). |
 | `FSIM-SV-SEM-410` | error | A Verilog (not SystemVerilog) ANSI input or inout port is declared with a variable data type (IEEE 1364-2005 12.3.4). |
 | `FSIM-SV-SEM-411` | error | A simple identifier is not declared and its context (not a port or terminal connection or continuous-assignment target) cannot declare an implicit net (IEEE 1364-2005 4.5, IEEE 1800-2017 6.10). |
-| `FSIM-SV-SEM-412` | error | A gate or switch primitive output terminal before SystemVerilog, or a bidirectional switch terminal in any revision, names a variable instead of a net (IEEE 1364-2005 7.1, IEEE 1800-2017 28.8). |
+| `FSIM-SV-SEM-412` | error | A gate or switch primitive output terminal before SystemVerilog, or a bidirectional switch terminal in any revision, names a variable instead of a net (IEEE 1364-2005 7.1, IEEE 1800-2017 28.8); also a Verilog continuous assignment whose target is a variable (IEEE 1364-2005 6.1). |
 | `FSIM-SV-SEM-413` | error | A Verilog concatenation has an unsized constant number operand (IEEE 1364-2005 5.1.14). |
 | `FSIM-SV-SEM-414` | error | A port named in a non-ANSI port list is not declared with a direction in the module body (IEEE 1364-2005 12.3.3, IEEE 1800-2017 23.2.2.1). |
 | `FSIM-SV-SEM-415` | error | `$signed` or `$unsigned` is applied to a real literal; its argument is integral (IEEE 1364-2005 5.5.1, IEEE 1800-2017 11.7). |
@@ -2371,7 +2371,7 @@ scheduler.
 | `FSIM-ELAB-VHPHYSICAL-001` | error | A VHDL physical type lacks its range or primary unit. |
 | `FSIM-ELAB-VHPHYSICAL-002` | error | A physical range is nonstatic or outside signed 32-bit primary-unit ticks. |
 | `FSIM-ELAB-VHPHYSICAL-003` | error | A physical primary unit incorrectly carries a secondary-unit scale. |
-| `FSIM-ELAB-VHPHYSICAL-004` | error | A secondary physical unit has a nonpositive, nonstatic, forward, or overflowing scale, or a position number outside the range of its type (IEEE 1076-1993 3.1.3). |
+| `FSIM-ELAB-VHPHYSICAL-004` | error | A secondary physical unit has a nonpositive, nonstatic, forward, or overflowing scale (IEEE 1076-1993 3.1.3). |
 | `FSIM-ELAB-VHPHYSICAL-005` | error | A bounded physical value does not use the signed 32-bit runtime representation. |
 | `FSIM-ELAB-VHPHYSICAL-006` | error | A physical literal uses an unknown unit, nonstatic magnitude, overflow, or out-of-range value. |
 | `FSIM-ELAB-VHPHYSICAL-007` | error | An unsupported operator is applied to a bounded physical value. |
@@ -2390,16 +2390,8 @@ scheduler.
 | `FSIM-ELAB-VHPROTECTED-009` | error | A shared protected object lacks one conforming protected body. |
 | `FSIM-ELAB-VHPROTECTED-010` | error | A shared protected object incorrectly carries an object initializer. |
 | `FSIM-ELAB-VHPROTECTED-011` | error | A protected private initializer is nonstatic or incompatible with its member. |
-| `FSIM-ELAB-VHPROTECTED-012` | error | A protected function call matches no public profile. |
-| `FSIM-ELAB-VHPROTECTED-013` | error | A protected function call ambiguously matches multiple public profiles. |
-| `FSIM-ELAB-VHPROTECTED-014` | error | A protected method re-enters protected execution. |
-| `FSIM-ELAB-VHPROTECTED-015` | error | A bounded protected function is not a single direct value return. |
-| `FSIM-ELAB-VHPROTECTED-016` | error | A protected function result is incompatible with its expression context. |
 | `FSIM-ELAB-VHPROTECTED-017` | error | Protected private member storage is unavailable or has an invalid bounded width. |
-| `FSIM-ELAB-VHPROTECTED-018` | error | A protected procedure call matches no supported public input profile. |
-| `FSIM-ELAB-VHPROTECTED-019` | error | A protected procedure call ambiguously matches multiple public profiles. |
 | `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
-| `FSIM-ELAB-VHPROTECTED-021` | error | A protected method makes a nested procedure call outside the bounded non-reentrant policy. |
 | `FSIM-ELAB-VHPROTECTED-022` | error | A pure VHDL function calls an impure protected function. |
 | `FSIM-ELAB-VHPROTECTED-023` | error | An unprotected shared variable in VHDL-1993 or explicit legacy compatibility mode lacks bounded executable storage or a compatible static initializer. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
@@ -2731,6 +2723,7 @@ scheduler.
 | `FSIM-ELAB-SVPORT-010` | error | A mutable string module port is unconnected, crosses a language boundary, or does not use a direct same-language string object actual. |
 | `FSIM-ELAB-SVPORT-011` | error | A mutable string input port is written directly or through a descendant output/inout port. |
 | `FSIM-ELAB-SVPORT-012` | error | Sibling output/inout mutable string ports drive the same object. |
+| `FSIM-ELAB-SVPORT-013` | error | A Verilog output or inout port is connected to a variable; IEEE 1364-2005 12.3.9.2 requires a net expression. |
 | `FSIM-ELAB-SVPROCASSIGN-001` | error | A procedural continuous assignment cannot allocate its activation state or does not target a visible process-external packed variable as a whole; an array element is not a valid target, while bit- and part-selects of a packed variable are accepted (IEEE 1800-2017 10.6.1). |
 | `FSIM-ELAB-SVPROCASSIGN-002` | error | A procedural continuous assignment cannot allocate its generated reactive driver process. |
 | `FSIM-ELAB-SVSCALAR-001` | error | A contextual SystemVerilog scalar literal cannot be converted to its required scalar kind. |

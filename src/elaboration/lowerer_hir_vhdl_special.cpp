@@ -303,66 +303,6 @@ const semantic::vhdl::Declaration* find_vhdl_declaration(
     return stored != declarations.end() ? &*stored : nullptr;
 }
 
-// A call actual: its formal name (empty when positional) and value; the
-// same type as Lowerer::HirVhdlProtectedActual.
-using ProtectedActual = std::pair<std::string_view, semantic::ExpressionId>;
-
-// Associates call actuals, given as (formal name or empty, actual), with a
-// protected method's formals by name or position and fills the rest from
-// the formals' defaults.
-std::optional<std::vector<semantic::ExpressionId>> bind_protected_actuals(
-    const semantic::SpecializedHirUnit& unit,
-    const std::span<const ProtectedActual> call,
-    const semantic::vhdl::Declaration& method)
-{
-    if (!method.callable || call.size() > method.callable->formals.size()) {
-        return std::nullopt;
-    }
-    const auto& formals = method.callable->formals;
-    std::vector<semantic::ExpressionId> result(formals.size());
-    std::size_t positional { };
-    for (const auto& [name, actual] : call) {
-        auto formal_index = positional;
-        if (name.empty()) {
-            while (formal_index < result.size()
-                && result[formal_index].valid()) {
-                ++formal_index;
-            }
-            positional = formal_index + 1U;
-        } else {
-            const auto found = std::ranges::find_if(
-                formals, [&](const semantic::DeclarationId formal_id) {
-                    const auto* formal = find_vhdl_declaration(
-                        unit, formal_id);
-                    return formal != nullptr
-                        && equal_ignoring_ascii_case(formal->name, name);
-                });
-            if (found == formals.end()) {
-                return std::nullopt;
-            }
-            formal_index = static_cast<std::size_t>(
-                std::distance(formals.begin(), found));
-        }
-        if (formal_index >= result.size()
-            || result[formal_index].valid()) {
-            return std::nullopt;
-        }
-        result[formal_index] = actual;
-    }
-    for (std::size_t index { }; index < result.size(); ++index) {
-        if (result[index].valid()) {
-            continue;
-        }
-        const auto* formal = find_vhdl_declaration(
-            unit, formals[index]);
-        if (formal == nullptr || !formal->initializer) {
-            return std::nullopt;
-        }
-        result[index] = *formal->initializer;
-    }
-    return result;
-}
-
 const semantic::vhdl::TypeDefinition* find_protected_body(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::TypeDefinition& public_type)
@@ -398,6 +338,11 @@ const semantic::vhdl::TypeDefinition* find_protected_type(
                     == semantic::vhdl::TypeForm::protected_body)) {
             return type->vhdl;
         }
+        // A resolved mark of another type is not protected, even when a
+        // protected type shares its simple name.
+        if (type && type->vhdl != nullptr) {
+            return nullptr;
+        }
     }
     const semantic::vhdl::TypeDefinition* selected = nullptr;
     for (const auto& stored : unit.design().vhdl_hir.types()) {
@@ -427,32 +372,6 @@ const semantic::vhdl::TypeDefinition* protected_body_of(
         return type;
     }
     return find_protected_body(unit, *type);
-}
-
-std::vector<ProtectedActual> protected_call_actuals(
-    const semantic::vhdl::Statement& statement)
-{
-    std::vector<ProtectedActual> result;
-    for (const auto& association : statement.procedure_arguments) {
-        result.emplace_back(association.formal
-                ? association.formal->text()
-                : std::string_view { },
-            association.actual);
-    }
-    return result;
-}
-
-std::vector<ProtectedActual> protected_call_actuals(
-    const semantic::vhdl::Expression& expression)
-{
-    std::vector<ProtectedActual> result;
-    for (std::size_t index { }; index < expression.operands.size(); ++index) {
-        result.emplace_back(index < expression.argument_names.size()
-                ? std::string_view { expression.argument_names[index] }
-                : std::string_view { },
-            expression.operands[index]);
-    }
-    return result;
 }
 
 std::optional<ContainerObjectId> find_protected_storage(
@@ -509,48 +428,6 @@ bool contains_hir_protected_call(
 
 } // namespace
 
-class Lowerer::HirVhdlProtectedMethodScope {
-public:
-    // Gives a protected method fresh locals and its own scope; the
-    // caller's are restored on destruction.
-    HirVhdlProtectedMethodScope(
-        Lowerer& lowerer, const semantic::vhdl::Declaration& method)
-        : lowerer_ { lowerer }
-        , registers_ { std::exchange(lowerer.hir_local_registers_, { }) }
-        , strings_ { std::exchange(lowerer.hir_local_string_registers_, { }) }
-        , containers_ {
-            std::exchange(lowerer.hir_local_container_registers_, { })
-        }
-        , container_types_ {
-            std::exchange(lowerer.hir_local_container_types_, { })
-        }
-        , scope_ { lowerer.hir_process_scope_ }
-    {
-        lowerer.hir_process_scope_ = method.nested_scope.value_or(method.scope);
-        lowerer.active_hir_vhdl_protected_method_ = true;
-    }
-    HirVhdlProtectedMethodScope(const HirVhdlProtectedMethodScope&) = delete;
-    HirVhdlProtectedMethodScope& operator=(
-        const HirVhdlProtectedMethodScope&) = delete;
-    ~HirVhdlProtectedMethodScope()
-    {
-        lowerer_.active_hir_vhdl_protected_method_ = false;
-        lowerer_.hir_process_scope_ = scope_;
-        lowerer_.hir_local_registers_ = std::move(registers_);
-        lowerer_.hir_local_string_registers_ = std::move(strings_);
-        lowerer_.hir_local_container_registers_ = std::move(containers_);
-        lowerer_.hir_local_container_types_ = std::move(container_types_);
-    }
-
-private:
-    Lowerer& lowerer_;
-    decltype(Lowerer::hir_local_registers_) registers_;
-    decltype(Lowerer::hir_local_string_registers_) strings_;
-    decltype(Lowerer::hir_local_container_registers_) containers_;
-    decltype(Lowerer::hir_local_container_types_) container_types_;
-    semantic::ScopeId scope_;
-};
-
 const semantic::vhdl::TypeDefinition* Lowerer::hir_vhdl_protected_type(
     const semantic::ScopeId scope, const std::string_view object) const
 {
@@ -567,134 +444,36 @@ const semantic::vhdl::TypeDefinition* Lowerer::hir_vhdl_protected_type(
                    : nullptr;
 }
 
-std::optional<std::size_t> Lowerer::hir_vhdl_protected_formal_width(
-    const semantic::DeclarationId formal_id) const
+std::vector<semantic::CompiledVhdlCallableResolution>
+Lowerer::hir_vhdl_protected_method_resolutions(
+    const semantic::vhdl::Name& name, const semantic::ScopeId scope,
+    const bool function) const
 {
-    const auto* formal = find_vhdl_declaration(
-        *specialized_hir_unit_, formal_id);
-    const auto subtype = formal != nullptr && formal->subtype
-        ? hir_effective_vhdl_subtype(*formal->subtype)
-        : std::nullopt;
-    return subtype ? vhdl_subtype_width(*subtype) : std::nullopt;
-}
-
-std::vector<Lowerer::HirVhdlProtectedCandidate>
-Lowerer::hir_vhdl_protected_candidates(
-    const semantic::vhdl::TypeDefinition& body,
-    const std::string_view member_name, const bool function,
-    const std::span<const HirVhdlProtectedActual> call) const
-{
-    std::vector<HirVhdlProtectedCandidate> matches;
-    for (const auto member_id : body.protected_members) {
+    std::vector<semantic::CompiledVhdlCallableResolution> result;
+    if (specialized_hir_unit_ == nullptr) {
+        return result;
+    }
+    const auto selected = selected_vhdl_name(name.text());
+    if (!selected) {
+        return result;
+    }
+    const auto* body = protected_body_of(*specialized_hir_unit_,
+        hir_vhdl_protected_type(scope, selected->object));
+    if (body == nullptr) {
+        return result;
+    }
+    for (const auto member_id : body->protected_members) {
         const auto* member = find_vhdl_declaration(
             *specialized_hir_unit_, member_id);
-        if (member == nullptr
-            || member->form
-                != (function ? semantic::vhdl::DeclarationForm::function
-                             : semantic::vhdl::DeclarationForm::procedure)
-            || !member->callable
+        if (member == nullptr || !member->callable
             || member->callable->function != function
             || !member->callable->defined
-            || !equal_ignoring_ascii_case(member->name, member_name)) {
+            || !equal_ignoring_ascii_case(member->name, selected->member)) {
             continue;
         }
-        const auto actuals = bind_protected_actuals(
-            *specialized_hir_unit_, call, *member);
-        if (!actuals) {
-            continue;
-        }
-        bool compatible
-            = member->callable->formals.size() == actuals->size();
-        for (std::size_t index { };
-            compatible && index < actuals->size(); ++index) {
-            const auto formal_id = member->callable->formals[index];
-            const auto width = hir_vhdl_protected_formal_width(formal_id);
-            const auto actual_width = hir_expression_width(
-                (*actuals)[index], hir_process_scope_);
-            // Protected procedures support only mode-in formals.
-            const auto* formal = find_vhdl_declaration(
-                *specialized_hir_unit_, formal_id);
-            compatible = width
-                && (function
-                    || formal->direction == semantic::vhdl::Direction::input)
-                && (!actual_width || *actual_width == *width);
-        }
-        if (compatible) {
-            matches.push_back({ member, *actuals });
-        }
+        result.push_back({ member_id, member_id, std::nullopt, { } });
     }
-    return matches;
-}
-
-std::optional<std::vector<RegisterId>>
-Lowerer::lower_hir_vhdl_protected_arguments(
-    const semantic::vhdl::Declaration& method,
-    const std::span<const semantic::ExpressionId> actuals)
-{
-    std::vector<RegisterId> arguments;
-    for (std::size_t index { }; index < actuals.size(); ++index) {
-        const auto width = hir_vhdl_protected_formal_width(
-            method.callable->formals[index]);
-        const auto value = width
-            ? lower_hir_expression(actuals[index], *width)
-            : std::nullopt;
-        if (!value) {
-            return std::nullopt;
-        }
-        arguments.push_back(*value);
-    }
-    return arguments;
-}
-
-std::optional<std::vector<Lowerer::HirVhdlProtectedStorage>>
-Lowerer::load_hir_vhdl_protected_storage(
-    const semantic::vhdl::TypeDefinition& body,
-    const std::string_view object,
-    const semantic::vhdl::Declaration& method,
-    const std::span<const RegisterId> arguments, const RegisterId zero,
-    const frontend::SourceSpan& span)
-{
-    std::vector<HirVhdlProtectedStorage> storage;
-    for (const auto member_id : body.protected_members) {
-        const auto* member = find_vhdl_declaration(
-            *specialized_hir_unit_, member_id);
-        if (member == nullptr
-            || member->form != semantic::vhdl::DeclarationForm::variable) {
-            continue;
-        }
-        const auto member_subtype = member->subtype
-            ? hir_effective_vhdl_subtype(*member->subtype)
-            : std::nullopt;
-        const auto width = member_subtype
-            ? vhdl_subtype_width(*member_subtype)
-            : std::nullopt;
-        const auto object_storage = find_protected_storage(
-            container_objects_, object, member->name);
-        if (!width || !object_storage
-            || *object_storage >= design_.container_object_info_.size()) {
-            report(
-                "FSIM-ELAB-VHPROTECTED-017",
-                "protected private storage for '" + std::string { object }
-                    + "." + member->name + "' is unavailable",
-                span);
-            return std::nullopt;
-        }
-        const auto container = allocate_container_register(
-            design_.container_object_info_[*object_storage].type);
-        const auto value = allocate_register(
-            *width, vhdl_value_domain(member_subtype->domain));
-        process_.operations.emplace_back(
-            ReadContainerObject { container, *object_storage });
-        process_.operations.emplace_back(
-            ContainerRead { value, container, zero, true, false });
-        hir_local_registers_.insert_or_assign(member_id.value(), value);
-        storage.push_back({ *object_storage, container, value });
-    }
-    for (std::size_t index { }; index < arguments.size(); ++index) {
-        hir_local_registers_.insert_or_assign(
-            method.callable->formals[index].value(), arguments[index]);
-    }
-    return storage;
+    return result;
 }
 
 bool Lowerer::is_hir_vhdl_protected_expression(
@@ -705,113 +484,659 @@ bool Lowerer::is_hir_vhdl_protected_expression(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->vhdl == nullptr) {
+    if (!expression || expression->vhdl == nullptr
+        || !expression->vhdl->referenced_name
+        || (expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::name
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::index)) {
         return false;
     }
-    auto* invocation = expression->vhdl;
-    if (invocation->kind == semantic::vhdl::ExpressionKind::index
-        && invocation->operands.size() >= 2U) {
-        const auto designator = specialized_hir_unit_->find_expression(
-            invocation->operands.front());
-        invocation = designator && designator->vhdl != nullptr
-            ? designator->vhdl
-            : nullptr;
-    }
-    if (invocation == nullptr
-        || (invocation->kind
-                != semantic::vhdl::ExpressionKind::call
-            && invocation->kind
-                != semantic::vhdl::ExpressionKind::name)) {
-        return false;
-    }
-    const auto selected = selected_vhdl_name(invocation->text);
-    if (!selected) {
-        return false;
-    }
-    return hir_vhdl_protected_type(invocation->scope, selected->object)
-        != nullptr;
+    return !hir_vhdl_protected_method_resolutions(
+        *expression->vhdl->referenced_name, expression->vhdl->scope, true)
+                .empty();
 }
 
-bool Lowerer::is_hir_vhdl_protected_statement(
-    const semantic::StatementId statement_id) const
+std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
+    const std::string_view object, const semantic::ScopeId scope) const
+{
+    std::optional<ContainerObjectId> anchor;
+    if (const auto object_id = find_vhdl_object(
+            *specialized_hir_unit_, scope, object)) {
+        // A protected-type formal denotes its actual object.
+        for (auto frame = active_hir_callable_; frame;) {
+            const auto& active = hir_callable_frames_[*frame];
+            const auto formal = active.vhdl_protected_formals.find(
+                object_id->value());
+            if (formal != active.vhdl_protected_formals.end()) {
+                return formal->second;
+            }
+            frame.reset();
+        }
+        const auto local = hir_vhdl_local_protected_anchors_.find(
+            hir_vhdl_local_protected_key(*object_id));
+        if (local != hir_vhdl_local_protected_anchors_.end()) {
+            anchor = local->second;
+        } else {
+            const auto prefix = hir_vhdl_local_protected_key(*object_id)
+                + ".";
+            const auto existing = std::ranges::find_if(
+                design_.vhdl_protected_object_info_,
+                [&](const VhdlProtectedObjectInfo& candidate) {
+                    return candidate.name.starts_with(prefix)
+                        && !candidate.members.empty();
+                });
+            if (existing != design_.vhdl_protected_object_info_.end()) {
+                anchor = existing->members.front().storage;
+            }
+        }
+    }
+    if (!anchor) {
+        anchor = find_protected_storage(
+            container_objects_, object, "@protected");
+    }
+    return anchor;
+}
+
+const semantic::vhdl::TypeDefinition*
+Lowerer::hir_vhdl_subtype_protected_type(
+    const semantic::vhdl::SubtypeIndication& subtype) const
+{
+    return specialized_hir_unit_ != nullptr
+        ? find_protected_type(*specialized_hir_unit_, subtype)
+        : nullptr;
+}
+
+std::optional<std::vector<Lowerer::HirVhdlProtectedMember>>
+Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
+    const semantic::ScopeId scope,
+    const semantic::DeclarationId method) const
 {
     if (specialized_hir_unit_ == nullptr) {
-        return false;
-    }
-    const auto statement = specialized_hir_unit_->find_statement(
-        statement_id);
-    if (!statement || statement->vhdl == nullptr
-        || statement->vhdl->kind
-            != semantic::vhdl::StatementKind::procedure_call) {
-        return false;
-    }
-    const auto selected = selected_vhdl_name(
-        statement->vhdl->procedure.text());
-    if (!selected) {
-        return false;
-    }
-    return hir_vhdl_protected_type(statement->vhdl->scope, selected->object)
-        != nullptr;
-}
-
-std::optional<RegisterId>
-Lowerer::lower_hir_vhdl_protected_expression(
-    const semantic::ExpressionId expression_id,
-    const std::size_t expected_width)
-{
-    const auto expression = specialized_hir_unit_->find_expression(
-        expression_id);
-    if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
     }
-    auto* invocation = expression->vhdl;
-    semantic::vhdl::Expression indexed_invocation;
-    if (invocation->kind == semantic::vhdl::ExpressionKind::index
-        && invocation->operands.size() >= 2U) {
-        const auto designator = specialized_hir_unit_->find_expression(
-            invocation->operands.front());
-        if (!designator || designator->vhdl == nullptr) {
+    const auto selected = selected_vhdl_name(call_name);
+    const auto* body = selected
+        ? protected_body_of(*specialized_hir_unit_,
+              hir_vhdl_protected_type(scope, selected->object))
+        : nullptr;
+    if (body == nullptr) {
+        // An unprefixed call of a sibling method runs on the active
+        // method's object (IEEE 1076-2008 5.6.2).
+        if (!active_hir_callable_) {
             return std::nullopt;
         }
-        indexed_invocation = *designator->vhdl;
-        indexed_invocation.kind = semantic::vhdl::ExpressionKind::call;
-        indexed_invocation.operands.assign(
-            std::next(invocation->operands.begin()),
-            invocation->operands.end());
-        indexed_invocation.argument_names = invocation->argument_names;
-        if (indexed_invocation.argument_names.size()
-            == invocation->operands.size()) {
-            indexed_invocation.argument_names.erase(
-                indexed_invocation.argument_names.begin());
+        const auto& frame = hir_callable_frames_[*active_hir_callable_];
+        if (frame.vhdl_protected_members.empty()) {
+            return std::nullopt;
         }
-        invocation = &indexed_invocation;
+        const auto* callee = find_vhdl_declaration(
+            *specialized_hir_unit_, method);
+        const auto* caller = find_vhdl_declaration(
+            *specialized_hir_unit_, frame.declaration);
+        if (callee == nullptr || caller == nullptr
+            || callee->scope != caller->scope) {
+            return std::nullopt;
+        }
+        return frame.vhdl_protected_members;
     }
-    const auto selected = selected_vhdl_name(invocation->text);
-    if (!selected) {
+    const auto anchor = hir_vhdl_protected_anchor(selected->object, scope);
+    if (!anchor) {
         return std::nullopt;
     }
-    const auto* body = protected_body_of(*specialized_hir_unit_,
-        hir_vhdl_protected_type(invocation->scope, selected->object));
+    return const_cast<Lowerer*>(this)->hir_vhdl_protected_object_storage(
+        *anchor, *body);
+}
+
+std::string Lowerer::hir_vhdl_local_protected_key(
+    const semantic::DeclarationId declaration) const
+{
+    return hierarchy_ + "@" + std::to_string(declaration.value());
+}
+
+ContainerObjectId Lowerer::create_hir_vhdl_protected_anchor(
+    const std::string& name, const std::string& type_name,
+    const frontend::SourceSpan& source)
+{
+    ContainerType type;
+    type.element_width = 1U;
+    type.two_state = true;
+    type.fixed = true;
+    type.index_left = 0;
+    type.index_right = 0;
+    type.dimensions.push_back({ 0, 0 });
+    const auto storage = static_cast<ContainerObjectId>(
+        design_.container_objects_.size());
+    design_.container_object_info_.push_back(ContainerObjectInfo {
+        storage, name + ".@protected", type, source, false,
+        frontend::PortDirection::Unknown, std::nullopt });
+    design_.container_objects_.push_back(ContainerObject {
+        name + ".@protected", default_container_value(type), std::nullopt });
+    design_.container_by_name_.emplace(name + ".@protected", storage);
+    VhdlProtectedObjectInfo object;
+    object.id = static_cast<VhdlProtectedObjectId>(
+        design_.vhdl_protected_object_info_.size());
+    object.name = name;
+    object.type_name = type_name;
+    object.declaration_span = source;
+    object.members.push_back(VhdlProtectedMemberInfo {
+        "@protected", false, 0U, 1U, storage, source });
+    design_.vhdl_protected_object_info_.push_back(std::move(object));
+    return storage;
+}
+
+std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_lazy_global_constant(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr
+        || materializing_hir_vhdl_global_constant_) {
+        return std::nullopt;
+    }
+    auto root_id = expression_id;
+    for (std::size_t depth { }; depth < 16U; ++depth) {
+        const auto expression = specialized_hir_unit_->find_expression(root_id);
+        if (!expression || expression->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto kind = expression->vhdl->kind;
+        if (kind == semantic::vhdl::ExpressionKind::name) {
+            break;
+        }
+        if ((kind != semantic::vhdl::ExpressionKind::index
+                && kind != semantic::vhdl::ExpressionKind::slice)
+            || expression->vhdl->operands.empty()) {
+            return std::nullopt;
+        }
+        root_id = expression->vhdl->operands.front();
+    }
+    const auto root = specialized_hir_unit_->find_expression(root_id);
+    if (!root || root->vhdl == nullptr
+        || root->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || !root->vhdl->referenced_name
+        || !root->vhdl->referenced_name->selected) {
+        return std::nullopt;
+    }
+    const auto declaration_id = *root->vhdl->referenced_name->selected;
+    if (hir_local_registers_.contains(declaration_id.value())) {
+        return std::nullopt;
+    }
+    const auto* declaration = find_vhdl_declaration(
+        *specialized_hir_unit_, declaration_id);
+    if (declaration == nullptr
+        || declaration->form != semantic::vhdl::DeclarationForm::constant
+        || !declaration->initializer
+        || !hir_vhdl_local_vector_constant(*declaration)) {
+        return std::nullopt;
+    }
+    // Container storage holds two- and four-state values only.
+    if (declaration->subtype) {
+        const auto effective = hir_effective_vhdl_subtype(
+            *declaration->subtype);
+        if (!effective
+            || effective->domain == semantic::vhdl::ValueDomain::logic9) {
+            return std::nullopt;
+        }
+    }
+    // A value the elaborator folds needs no run-time storage.
+    if (specialized_hir_unit_->evaluate_vhdl_constant_expression(
+            *declaration->initializer)) {
+        return std::nullopt;
+    }
+    // Only declarations outside processes and subprograms; their locals
+    // are initialized where they are declared.
+    if (!hir_vhdl_design_level_declaration(*declaration)) {
+        return std::nullopt;
+    }
+    return declaration_id;
+}
+
+bool Lowerer::hir_vhdl_design_level_declaration(
+    const semantic::vhdl::Declaration& declaration) const
+{
+    const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
+    for (auto scope = declaration.scope;
+         scope.valid() && scope.value() < scopes.size();) {
+        if (std::ranges::any_of(
+                specialized_hir_unit_->design().vhdl_hir.processes(),
+                [&](const auto& process) { return process.scope == scope; })
+            || std::ranges::any_of(
+                specialized_hir_unit_->design().vhdl_hir.declarations(),
+                [&](const semantic::vhdl::Declaration& candidate) {
+                    return candidate.callable && candidate.nested_scope
+                        && *candidate.nested_scope == scope;
+                })) {
+            return false;
+        }
+        const auto& parent = scopes[scope.value()].parent;
+        if (!parent) {
+            break;
+        }
+        scope = *parent;
+    }
+    return true;
+}
+
+std::vector<Lowerer::HirVhdlGlobalFile> Lowerer::bind_hir_vhdl_global_files(
+    const std::span<const semantic::ExpressionId> actuals)
+{
+    std::vector<HirVhdlGlobalFile> bound;
+    if (specialized_hir_unit_ == nullptr) {
+        return bound;
+    }
+    for (const auto actual : actuals) {
+        const auto declaration_id = hir_referenced_declaration(actual);
+        if (!declaration_id
+            || hir_local_registers_.contains(declaration_id->value())) {
+            continue;
+        }
+        const auto* declaration = find_vhdl_declaration(
+            *specialized_hir_unit_, *declaration_id);
+        if (declaration == nullptr
+            || declaration->form != semantic::vhdl::DeclarationForm::file
+            || !hir_vhdl_design_level_declaration(*declaration)) {
+            continue;
+        }
+        // A file object of an architecture, block or package is shared by
+        // its processes (IEEE 1076-2008 6.4.2.5); the first user opens it.
+        const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
+        const auto unit = declaration->scope.valid()
+                && declaration->scope.value() < scopes.size()
+            ? specialized_hir_unit_->design().find_unit(
+                  scopes[declaration->scope.value()].unit)
+            : std::nullopt;
+        const bool package = unit && unit->vhdl != nullptr
+            && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
+        const auto key = std::string { "@vhdl-file:" }
+            + (package ? std::string { "package" } : hierarchy_) + "@"
+            + std::to_string(declaration_id->value()) + "."
+            + declaration->name;
+        const auto storage_for = [&](const std::string& name,
+                                     const std::uint32_t width) {
+            auto found = design_.container_by_name_.find(name);
+            if (found == design_.container_by_name_.end()) {
+                ContainerType type;
+                type.element_width = width;
+                type.two_state = true;
+                type.fixed = true;
+                type.index_left = 0;
+                type.index_right = 0;
+                type.dimensions.push_back({ 0, 0 });
+                const auto storage = static_cast<ContainerObjectId>(
+                    design_.container_objects_.size());
+                design_.container_object_info_.push_back(ContainerObjectInfo {
+                    storage, name, type, hir_source_span(declaration->source),
+                    false, frontend::PortDirection::Unknown, std::nullopt });
+                design_.container_objects_.push_back(ContainerObject {
+                    name, default_container_value(type), std::nullopt });
+                found = design_.container_by_name_.emplace(name, storage)
+                            .first;
+            }
+            return found->second;
+        };
+        const auto flag_storage = storage_for(key + ".@opened", 1U);
+        const auto handle_storage = storage_for(key + ".@handle", 32U);
+        const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+        const auto flag_container = allocate_container_register(
+            design_.container_object_info_[flag_storage].type);
+        const auto opened = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            ReadContainerObject { flag_container, flag_storage });
+        process_.operations.emplace_back(ContainerRead {
+            opened, flag_container, zero, true, false });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            opened, 0U, 0U, UnknownBranchPolicy::when_false });
+        const auto initialize = static_cast<InstructionIndex>(
+            process_.operations.size());
+        materializing_hir_vhdl_global_constant_ = true;
+        const std::array declarations { *declaration_id };
+        const bool initialized = initialize_hir_declarations(declarations);
+        materializing_hir_vhdl_global_constant_ = false;
+        const auto local = hir_local_registers_.find(declaration_id->value());
+        if (!initialized || local == hir_local_registers_.end()
+            || register_width(local->second) != 32U) {
+            hir_local_registers_.erase(declaration_id->value());
+            continue;
+        }
+        const auto handle = local->second;
+        const auto handle_container = allocate_container_register(
+            design_.container_object_info_[handle_storage].type);
+        process_.operations.emplace_back(
+            ReadContainerObject { handle_container, handle_storage });
+        process_.operations.emplace_back(
+            ContainerWrite { handle_container, zero, handle, true, false });
+        process_.operations.emplace_back(WriteContainerObject {
+            handle_storage, handle_container, std::nullopt });
+        process_.operations.emplace_back(ContainerWrite {
+            flag_container, zero,
+            load_integer(1, 1U, frontend::ValueDomain::Bit2), true, false });
+        process_.operations.emplace_back(WriteContainerObject {
+            flag_storage, flag_container, std::nullopt });
+        const auto load = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[branch] = Branch {
+            opened, load, initialize, UnknownBranchPolicy::when_false };
+        process_.operations.emplace_back(
+            ReadContainerObject { handle_container, handle_storage });
+        process_.operations.emplace_back(ContainerRead {
+            handle, handle_container, zero, true, false });
+        bound.push_back({ *declaration_id, handle_storage, handle });
+    }
+    return bound;
+}
+
+void Lowerer::release_hir_vhdl_global_files(
+    const std::span<const HirVhdlGlobalFile> files)
+{
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+    for (const auto& file : files) {
+        // FILE_OPEN and FILE_CLOSE may have changed the handle.
+        const auto current = hir_local_registers_.find(
+            file.declaration.value());
+        const auto handle = current != hir_local_registers_.end()
+            ? current->second
+            : file.handle;
+        const auto container = allocate_container_register(
+            design_.container_object_info_[file.storage].type);
+        process_.operations.emplace_back(
+            ReadContainerObject { container, file.storage });
+        process_.operations.emplace_back(
+            ContainerWrite { container, zero, handle, true, false });
+        process_.operations.emplace_back(WriteContainerObject {
+            file.storage, container, std::nullopt });
+        hir_local_registers_.erase(file.declaration.value());
+    }
+}
+
+bool Lowerer::materialize_hir_vhdl_global_constant(
+    const semantic::DeclarationId declaration_id)
+{
+    const auto* declaration = find_vhdl_declaration(
+        *specialized_hir_unit_, declaration_id);
+    if (declaration == nullptr) {
+        return false;
+    }
+    const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
+    const auto unit = declaration->scope.valid()
+            && declaration->scope.value() < scopes.size()
+        ? specialized_hir_unit_->design().find_unit(
+              scopes[declaration->scope.value()].unit)
+        : std::nullopt;
+    const bool package = unit && unit->vhdl != nullptr
+        && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
+    const auto key = std::string { "@vhdl-constant:" }
+        + (package ? std::string { "package" } : hierarchy_) + "@"
+        + std::to_string(declaration_id.value()) + "." + declaration->name;
+    const auto flag_name = key + ".@initialized";
+    const auto value_name = key + ".@value";
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+
+    auto flag = design_.container_by_name_.find(flag_name);
+    if (flag == design_.container_by_name_.end()) {
+        ContainerType type;
+        type.element_width = 1U;
+        type.two_state = true;
+        type.fixed = true;
+        type.index_left = 0;
+        type.index_right = 0;
+        type.dimensions.push_back({ 0, 0 });
+        const auto storage = static_cast<ContainerObjectId>(
+            design_.container_objects_.size());
+        design_.container_object_info_.push_back(ContainerObjectInfo {
+            storage, flag_name, type, hir_source_span(declaration->source),
+            false, frontend::PortDirection::Unknown, std::nullopt });
+        design_.container_objects_.push_back(ContainerObject {
+            flag_name, default_container_value(type), std::nullopt });
+        flag = design_.container_by_name_.emplace(flag_name, storage).first;
+    }
+    const auto flag_storage = flag->second;
+    const auto flag_container = allocate_container_register(
+        design_.container_object_info_[flag_storage].type);
+    const auto initialized = allocate_register(
+        1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        ReadContainerObject { flag_container, flag_storage });
+    process_.operations.emplace_back(ContainerRead {
+        initialized, flag_container, zero, true, false });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        initialized, 0U, 0U, UnknownBranchPolicy::when_false });
+    const auto initialize = static_cast<InstructionIndex>(
+        process_.operations.size());
+    // The first reader elaborates the declaration.
+    materializing_hir_vhdl_global_constant_ = true;
+    const std::array declarations { declaration_id };
+    const bool initialized_here = initialize_hir_declarations(declarations);
+    materializing_hir_vhdl_global_constant_ = false;
+    const auto local = hir_local_registers_.find(declaration_id.value());
+    if (!initialized_here || local == hir_local_registers_.end()) {
+        hir_local_registers_.erase(declaration_id.value());
+        return false;
+    }
+    const auto value = local->second;
+    auto stored = design_.container_by_name_.find(value_name);
+    if (stored == design_.container_by_name_.end()) {
+        ContainerType type;
+        type.element_width
+            = static_cast<std::uint32_t>(register_width(value));
+        type.two_state = is_two_state_domain(register_domain(value));
+        type.fixed = true;
+        type.index_left = 0;
+        type.index_right = 0;
+        type.dimensions.push_back({ 0, 0 });
+        const auto storage = static_cast<ContainerObjectId>(
+            design_.container_objects_.size());
+        design_.container_object_info_.push_back(ContainerObjectInfo {
+            storage, value_name, type, hir_source_span(declaration->source),
+            false, frontend::PortDirection::Unknown, std::nullopt });
+        design_.container_objects_.push_back(ContainerObject {
+            value_name, default_container_value(type), std::nullopt });
+        stored = design_.container_by_name_.emplace(value_name, storage).first;
+    }
+    const auto value_storage = stored->second;
+    if (design_.container_object_info_[value_storage].type.element_width
+        != register_width(value)) {
+        hir_local_registers_.erase(declaration_id.value());
+        return false;
+    }
+    const auto value_container = allocate_container_register(
+        design_.container_object_info_[value_storage].type);
+    process_.operations.emplace_back(
+        ReadContainerObject { value_container, value_storage });
+    process_.operations.emplace_back(
+        ContainerWrite { value_container, zero, value, true, false });
+    process_.operations.emplace_back(WriteContainerObject {
+        value_storage, value_container, std::nullopt });
+    const auto set = load_integer(1, 1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        ContainerWrite { flag_container, zero, set, true, false });
+    process_.operations.emplace_back(
+        WriteContainerObject { flag_storage, flag_container, std::nullopt });
+    // Every reader loads the stored value.
+    const auto load = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = Branch {
+        initialized, load, initialize, UnknownBranchPolicy::when_false };
+    process_.operations.emplace_back(
+        ReadContainerObject { value_container, value_storage });
+    process_.operations.emplace_back(
+        ContainerRead { value, value_container, zero, true, false });
+    return true;
+}
+
+std::optional<std::vector<Lowerer::HirVhdlProtectedMember>>
+Lowerer::hir_vhdl_protected_object_storage(const ContainerObjectId anchor,
+    const semantic::vhdl::TypeDefinition& body)
+{
+    auto object = std::ranges::find_if(design_.vhdl_protected_object_info_,
+        [&](const VhdlProtectedObjectInfo& candidate) {
+            return !candidate.members.empty()
+                && candidate.members.front().storage == anchor;
+        });
+    if (object == design_.vhdl_protected_object_info_.end()) {
+        return std::nullopt;
+    }
+    std::vector<semantic::DeclarationId> member_ids;
+    for (const auto member_id : body.protected_members) {
+        const auto* member = find_vhdl_declaration(
+            *specialized_hir_unit_, member_id);
+        // Private variables and files are the object's state.
+        if (member != nullptr
+            && (member->form == semantic::vhdl::DeclarationForm::variable
+                || member->form == semantic::vhdl::DeclarationForm::file)) {
+            member_ids.push_back(member_id);
+        }
+    }
+    // Member storage is created the first time the object is used. A
+    // private variable of protected type is an object of its own.
+    if (object->members.size() == 1U) {
+        const auto object_name = object->name;
+        std::vector<VhdlProtectedMemberInfo> created;
+        for (const auto member_id : member_ids) {
+            const auto* member = find_vhdl_declaration(
+                *specialized_hir_unit_, member_id);
+            const auto subtype = member->subtype
+                ? hir_effective_vhdl_subtype(*member->subtype)
+                : std::nullopt;
+            const auto name = object_name + "." + member->name;
+            if (subtype && hir_vhdl_subtype_protected_type(*subtype)) {
+                const auto nested = create_hir_vhdl_protected_anchor(
+                    name, subtype->type_mark.spelling,
+                    hir_source_span(member->source));
+                created.push_back(VhdlProtectedMemberInfo {
+                    member->name, false, 0U, 0U, nested,
+                    hir_source_span(member->source) });
+                continue;
+            }
+            const bool file
+                = member->form == semantic::vhdl::DeclarationForm::file;
+            // A file object holds its runtime file handle.
+            const auto width = file ? std::optional<std::size_t> { 32U }
+                : subtype ? vhdl_subtype_width(*subtype)
+                          : std::nullopt;
+            if (!width || *width == 0U
+                || *width > std::numeric_limits<std::uint32_t>::max()) {
+                report("FSIM-ELAB-VHPROTECTED-017",
+                    "protected private variable '" + name
+                        + "' has no packed representation",
+                    hir_source_span(member->source));
+                return std::nullopt;
+            }
+            ContainerType type;
+            type.element_width = static_cast<std::uint32_t>(*width);
+            type.two_state = file
+                || is_two_state_domain(vhdl_value_domain(subtype->domain));
+            type.fixed = true;
+            type.index_left = 0;
+            type.index_right = 0;
+            type.dimensions.push_back({ 0, 0 });
+            const auto storage = static_cast<ContainerObjectId>(
+                design_.container_objects_.size());
+            design_.container_object_info_.push_back(ContainerObjectInfo {
+                storage, name, type, hir_source_span(member->source),
+                false, frontend::PortDirection::Unknown, std::nullopt });
+            design_.container_objects_.push_back(ContainerObject {
+                name, default_container_value(type), std::nullopt });
+            design_.container_by_name_.emplace(name, storage);
+            created.push_back(VhdlProtectedMemberInfo {
+                member->name, !file && subtype->signed_value, 0U, *width,
+                storage, hir_source_span(member->source) });
+        }
+        // Creating nested objects may have moved the registry.
+        object = std::ranges::find_if(design_.vhdl_protected_object_info_,
+            [&](const VhdlProtectedObjectInfo& candidate) {
+                return !candidate.members.empty()
+                    && candidate.members.front().storage == anchor;
+            });
+        object->members.insert(
+            object->members.end(), created.begin(), created.end());
+    }
+    if (object->members.size() != member_ids.size() + 1U) {
+        return std::nullopt;
+    }
+    std::vector<HirVhdlProtectedMember> members;
+    members.push_back({ semantic::DeclarationId { }, anchor });
+    for (std::size_t index { }; index < member_ids.size(); ++index) {
+        members.push_back(
+            { member_ids[index], object->members[index + 1U].storage });
+    }
+    return members;
+}
+
+std::optional<bool> Lowerer::initialize_hir_vhdl_protected_object(
+    const semantic::DeclarationId declaration_id,
+    const semantic::vhdl::Declaration& variable)
+{
+    const auto subtype = variable.subtype
+        ? hir_effective_vhdl_subtype(*variable.subtype)
+        : std::nullopt;
+    const auto* body = subtype
+        ? protected_body_of(*specialized_hir_unit_,
+              find_protected_type(*specialized_hir_unit_, *subtype))
+        : nullptr;
     if (body == nullptr) {
         return std::nullopt;
     }
-
-    const auto matches = hir_vhdl_protected_candidates(*body,
-        selected->member, true, protected_call_actuals(*invocation));
-    if (matches.size() != 1U) {
-        report(
-            matches.empty() ? "FSIM-ELAB-VHPROTECTED-012"
-                            : "FSIM-ELAB-VHPROTECTED-013",
-            matches.empty()
-                ? "protected function call '" + expression->vhdl->text
-                    + "' matches no public profile"
-                : "protected function call '" + expression->vhdl->text
-                    + "' is ambiguous",
-            hir_source_span(expression->vhdl->source));
-        return std::nullopt;
+    // A protected variable of a process or subprogram is a new object each
+    // time its declaration is elaborated: create its anchor once and clear
+    // it, so the first method call initializes the private variables.
+    const auto key = hir_vhdl_local_protected_key(declaration_id);
+    auto anchor = hir_vhdl_local_protected_anchors_.find(key);
+    if (anchor == hir_vhdl_local_protected_anchors_.end()) {
+        // Another lowering of this unit may have created the object.
+        const auto existing = std::ranges::find_if(
+            design_.vhdl_protected_object_info_,
+            [&](const VhdlProtectedObjectInfo& candidate) {
+                return candidate.name == key + "." + variable.name
+                    && !candidate.members.empty();
+            });
+        if (existing != design_.vhdl_protected_object_info_.end()) {
+            anchor = hir_vhdl_local_protected_anchors_.emplace(
+                key, existing->members.front().storage).first;
+        }
     }
-    const auto& method = *matches.front().declaration;
-    if (active_hir_callable_) {
+    if (anchor == hir_vhdl_local_protected_anchors_.end()) {
+        const auto storage = create_hir_vhdl_protected_anchor(
+            key + "." + variable.name, subtype->type_mark.spelling,
+            hir_source_span(variable.source));
+        anchor = hir_vhdl_local_protected_anchors_.emplace(key, storage).first;
+    }
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+    const auto cleared = load_integer(0, 1U, frontend::ValueDomain::Bit2);
+    const auto container = allocate_container_register(
+        design_.container_object_info_[anchor->second].type);
+    process_.operations.emplace_back(
+        ReadContainerObject { container, anchor->second });
+    process_.operations.emplace_back(
+        ContainerWrite { container, zero, cleared, true, false });
+    process_.operations.emplace_back(
+        WriteContainerObject { anchor->second, container, std::nullopt });
+    return true;
+}
+
+bool Lowerer::check_hir_vhdl_protected_call(
+    const semantic::DeclarationId method_id,
+    const std::string_view call_name,
+    const semantic::SourceSpanId source)
+{
+    const auto* method = find_vhdl_declaration(
+        *specialized_hir_unit_, method_id);
+    if (method == nullptr || !method->callable) {
+        return false;
+    }
+    if (contains_hir_protected_call(
+            *specialized_hir_unit_, method->statements, true)) {
+        report(
+            "FSIM-ELAB-VHPROTECTED-020",
+            "a protected method cannot suspend",
+            hir_source_span(method->source));
+        return false;
+    }
+    if (active_hir_callable_ && method->callable->function) {
         const auto& frame = hir_callable_frames_[*active_hir_callable_];
         const auto caller = specialized_hir_unit_->find_declaration(
             frame.declaration);
@@ -819,149 +1144,213 @@ Lowerer::lower_hir_vhdl_protected_expression(
             && caller->vhdl->callable
             && caller->vhdl->callable->function
             && caller->vhdl->callable->pure
-            && method.callable && !method.callable->pure) {
+            && !method->callable->pure) {
             report(
                 "FSIM-ELAB-VHPROTECTED-022",
                 "pure VHDL function '" + caller->vhdl->name
                     + "' cannot call impure protected function '"
-                    + expression->vhdl->text + "'",
-                hir_source_span(expression->vhdl->source));
-            return std::nullopt;
-        }
-    }
-    const auto result_subtype = method.subtype
-        ? hir_effective_vhdl_subtype(*method.subtype)
-        : std::nullopt;
-    const auto result_width = result_subtype
-        ? vhdl_subtype_width(*result_subtype)
-        : std::nullopt;
-    if (!result_width || *result_width != expected_width
-        || method.statements.size() != 1U) {
-        report(
-            !result_width || *result_width != expected_width
-                ? "FSIM-ELAB-VHPROTECTED-016"
-                : "FSIM-ELAB-VHPROTECTED-015",
-            !result_width || *result_width != expected_width
-                ? "protected function result is incompatible with its context"
-                : "a bounded protected function body must contain one direct value-return statement",
-            hir_source_span(expression->vhdl->source));
-        return std::nullopt;
-    }
-    const auto return_statement = specialized_hir_unit_->find_statement(
-        method.statements.front());
-    if (!return_statement || return_statement->vhdl == nullptr
-        || return_statement->vhdl->kind
-            != semantic::vhdl::StatementKind::return_statement
-        || !return_statement->vhdl->value) {
-        report(
-            "FSIM-ELAB-VHPROTECTED-015",
-            "a bounded protected function body must contain one direct value-return statement",
-            hir_source_span(method.source));
-        return std::nullopt;
-    }
-    if (active_hir_vhdl_protected_method_) {
-        report(
-            "FSIM-ELAB-VHPROTECTED-014",
-            "re-entry into a protected method is outside the bounded execution policy",
-            hir_source_span(expression->vhdl->source));
-        return std::nullopt;
-    }
-
-    const auto arguments = lower_hir_vhdl_protected_arguments(
-        method, matches.front().actuals);
-    if (!arguments) {
-        return std::nullopt;
-    }
-
-    const HirVhdlProtectedMethodScope method_scope { *this, method };
-
-    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
-    const auto storage = load_hir_vhdl_protected_storage(*body,
-        selected->object, method, *arguments, zero,
-        hir_source_span(expression->vhdl->source));
-    return storage ? lower_hir_expression(
-                         *return_statement->vhdl->value, *result_width)
-                   : std::nullopt;
-}
-
-bool Lowerer::lower_hir_vhdl_protected_statement(
-    const semantic::StatementId statement_id)
-{
-    const auto statement = specialized_hir_unit_->find_statement(statement_id);
-    const auto selected = statement && statement->vhdl != nullptr
-        ? selected_vhdl_name(
-              statement->vhdl->procedure.text())
-        : std::nullopt;
-    if (!statement || statement->vhdl == nullptr || !selected) {
-        return false;
-    }
-    const auto* body = protected_body_of(*specialized_hir_unit_,
-        hir_vhdl_protected_type(statement->vhdl->scope, selected->object));
-    if (body == nullptr) {
-        return false;
-    }
-
-    const auto matches = hir_vhdl_protected_candidates(*body,
-        selected->member, false, protected_call_actuals(*statement->vhdl));
-    if (matches.size() != 1U) {
-        const auto spelling = statement->vhdl->procedure.spelling;
-        report(
-            matches.empty() ? "FSIM-ELAB-VHPROTECTED-018"
-                            : "FSIM-ELAB-VHPROTECTED-019",
-            matches.empty()
-                ? "protected procedure call '" + spelling
-                    + "' matches no supported public input profile"
-                : "protected procedure call '" + spelling
-                    + "' is ambiguous",
-            hir_source_span(statement->vhdl->source));
-        return true;
-    }
-    const auto& method = *matches.front().declaration;
-    if (active_hir_vhdl_protected_method_) {
-        report(
-            "FSIM-ELAB-VHPROTECTED-014",
-            "re-entry into a protected method is outside the bounded execution policy",
-            hir_source_span(statement->vhdl->source));
-        return true;
-    }
-    if (contains_hir_protected_call(
-            *specialized_hir_unit_, method.statements, true)) {
-        report(
-            "FSIM-ELAB-VHPROTECTED-020",
-            "a protected method cannot suspend",
-            hir_source_span(method.source));
-        return true;
-    }
-    if (contains_hir_protected_call(
-            *specialized_hir_unit_, method.statements, false)) {
-        report(
-            "FSIM-ELAB-VHPROTECTED-021",
-            "nested protected procedure calls are outside the bounded non-reentrant policy",
-            hir_source_span(method.source));
-        return true;
-    }
-
-    const auto arguments = lower_hir_vhdl_protected_arguments(
-        method, matches.front().actuals);
-    if (!arguments) {
-        return true;
-    }
-
-    const HirVhdlProtectedMethodScope method_scope { *this, method };
-
-    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
-    const auto storage = load_hir_vhdl_protected_storage(*body,
-        selected->object, method, *arguments, zero,
-        hir_source_span(statement->vhdl->source));
-    if (storage && lower_hir_statements(method.statements)) {
-        for (const auto& member : *storage) {
-            process_.operations.emplace_back(ContainerWrite {
-                member.container, zero, member.value, true, false });
-            process_.operations.emplace_back(WriteContainerObject {
-                member.object, member.container, std::nullopt });
+                    + std::string { call_name } + "'",
+                hir_source_span(source));
+            return false;
         }
     }
     return true;
+}
+
+void Lowerer::load_hir_vhdl_protected_caches(
+    const std::span<const HirVhdlProtectedMember> members)
+{
+    if (members.empty()) {
+        return;
+    }
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+    // The first method call on the object initializes its private
+    // variables from their declarations (IEEE 1076-2008 5.6.2).
+    const auto anchor = members.front().storage;
+    const auto anchor_container = allocate_container_register(
+        design_.container_object_info_[anchor].type);
+    const auto initialized = allocate_register(
+        1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        ReadContainerObject { anchor_container, anchor });
+    process_.operations.emplace_back(ContainerRead {
+        initialized, anchor_container, zero, true, false });
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        initialized, 0U, 0U, UnknownBranchPolicy::when_false });
+    const auto initialize = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto nested_object = [&](const HirVhdlProtectedMember& member) {
+        const auto* declaration = find_vhdl_declaration(
+            *specialized_hir_unit_, member.declaration);
+        const auto subtype = declaration != nullptr && declaration->subtype
+            ? hir_effective_vhdl_subtype(*declaration->subtype)
+            : std::nullopt;
+        return subtype && hir_vhdl_subtype_protected_type(*subtype);
+    };
+    for (const auto& member : members.subspan(1U)) {
+        if (nested_object(member)) {
+            // A nested object starts uninitialized with its parent.
+            continue;
+        }
+        const auto& info = design_.container_object_info_[member.storage];
+        const auto* declaration = find_vhdl_declaration(
+            *specialized_hir_unit_, member.declaration);
+        const auto subtype = declaration != nullptr && declaration->subtype
+            ? hir_effective_vhdl_subtype(*declaration->subtype)
+            : std::nullopt;
+        const auto width = info.type.element_width;
+        std::optional<RegisterId> value;
+        if (declaration != nullptr
+            && declaration->form == semantic::vhdl::DeclarationForm::file) {
+            value = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                *value, unsigned_value(0U, 32U) });
+            if (declaration->initializer) {
+                const auto path = lower_hir_string_expression(
+                    *declaration->initializer);
+                const auto kind = declaration->file_open_kind
+                    ? specialized_hir_unit_->find_expression(
+                          *declaration->file_open_kind)
+                    : std::nullopt;
+                auto kind_name = kind && kind->vhdl != nullptr
+                    ? std::string_view { kind->vhdl->text }
+                    : std::string_view { "read_mode" };
+                if (const auto dot = kind_name.find_last_of('.');
+                    dot != std::string_view::npos) {
+                    kind_name.remove_prefix(dot + 1U);
+                }
+                const auto mode_text = kind_name == "write_mode" ? "w"
+                    : kind_name == "append_mode"                ? "a"
+                                                                 : "r";
+                if (path) {
+                    const auto mode = allocate_string_register();
+                    process_.operations.emplace_back(
+                        LoadStringConstant { mode, mode_text });
+                    process_.operations.emplace_back(FileOpen {
+                        *value, *path, mode, std::nullopt, true });
+                }
+            }
+        } else if (declaration != nullptr && declaration->initializer) {
+            value = lower_hir_expression(*declaration->initializer, width,
+                frontend::SystemVerilogScalarKind::None,
+                subtype ? &*subtype : nullptr);
+        } else if (subtype) {
+            if (const auto initial = hir_vhdl_default_value(
+                    *subtype, width, 0U, true)) {
+                value = load_constant(*initial,
+                    vhdl_value_domain(subtype->domain));
+            }
+        }
+        if (!value) {
+            report("FSIM-ELAB-VHPROTECTED-011",
+                "protected private variable '"
+                    + (declaration != nullptr ? declaration->name
+                                              : std::string { })
+                    + "' has no executable initial value",
+                declaration != nullptr ? hir_source_span(declaration->source)
+                                       : frontend::SourceSpan { });
+            return;
+        }
+        if (register_width(*value) != width) {
+            value = resize_register(*value, width, false);
+        }
+        // A BIT-like literal may lower as a logic value; a two-state member
+        // stores its known bits.
+        if (info.type.two_state
+            && !is_two_state_domain(register_domain(*value))) {
+            value = convert_to_two_state(*value);
+        }
+        const auto container = allocate_container_register(info.type);
+        process_.operations.emplace_back(
+            ReadContainerObject { container, member.storage });
+        process_.operations.emplace_back(
+            ContainerWrite { container, zero, *value, true, false });
+        process_.operations.emplace_back(
+            WriteContainerObject { member.storage, container, std::nullopt });
+    }
+    const auto set = load_integer(1, 1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        ContainerWrite { anchor_container, zero, set, true, false });
+    process_.operations.emplace_back(
+        WriteContainerObject { anchor, anchor_container, std::nullopt });
+    const auto loaded = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = Branch {
+        initialized, loaded, initialize, UnknownBranchPolicy::when_false };
+    for (const auto& member : members.subspan(1U)) {
+        if (nested_object(member)) {
+            // Methods name the nested object through this frame.
+            if (active_hir_callable_) {
+                hir_callable_frames_[*active_hir_callable_]
+                    .vhdl_protected_formals.insert_or_assign(
+                        member.declaration.value(), member.storage);
+            }
+            continue;
+        }
+        const auto& info = design_.container_object_info_[member.storage];
+        const auto* declaration = find_vhdl_declaration(
+            *specialized_hir_unit_, member.declaration);
+        const auto subtype = declaration != nullptr && declaration->subtype
+            ? hir_effective_vhdl_subtype(*declaration->subtype)
+            : std::nullopt;
+        const auto container = allocate_container_register(info.type);
+        const bool file = declaration != nullptr
+            && declaration->form == semantic::vhdl::DeclarationForm::file;
+        const auto value = allocate_register(info.type.element_width,
+            file ? frontend::ValueDomain::Bit2
+            : subtype ? vhdl_value_domain(subtype->domain)
+                      : (info.type.two_state ? frontend::ValueDomain::Bit2
+                                             : frontend::ValueDomain::Logic4));
+        process_.operations.emplace_back(
+            ReadContainerObject { container, member.storage });
+        process_.operations.emplace_back(
+            ContainerRead { value, container, zero, true, false });
+        hir_local_registers_.insert_or_assign(
+            member.declaration.value(), value);
+        hir_vhdl_protected_caches_.push_back(
+            { member.declaration, member.storage, container, value });
+    }
+}
+
+void Lowerer::flush_hir_vhdl_protected_caches()
+{
+    if (hir_vhdl_protected_caches_.empty()) {
+        return;
+    }
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+    for (const auto& cache : hir_vhdl_protected_caches_) {
+        // The method may have rebound the member's local register.
+        const auto current = hir_local_registers_.find(
+            cache.declaration.value());
+        const auto value = current != hir_local_registers_.end()
+            ? current->second
+            : cache.value;
+        process_.operations.emplace_back(ContainerWrite {
+            cache.container, zero, value, true, false });
+        process_.operations.emplace_back(WriteContainerObject {
+            cache.storage, cache.container, std::nullopt });
+    }
+}
+
+void Lowerer::reload_hir_vhdl_protected_caches()
+{
+    if (hir_vhdl_protected_caches_.empty()) {
+        return;
+    }
+    const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);
+    for (const auto& cache : hir_vhdl_protected_caches_) {
+        const auto current = hir_local_registers_.find(
+            cache.declaration.value());
+        const auto value = current != hir_local_registers_.end()
+            ? current->second
+            : cache.value;
+        process_.operations.emplace_back(
+            ReadContainerObject { cache.container, cache.storage });
+        process_.operations.emplace_back(
+            ContainerRead { value, cache.container, zero, true, false });
+    }
 }
 
 bool Lowerer::hir_vhdl_time_record_expression(

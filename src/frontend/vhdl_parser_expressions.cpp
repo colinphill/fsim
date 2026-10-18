@@ -22,6 +22,11 @@ void VhdlParser::note_vhdl_access_object(
   } else {
     vhdl_access_object_names_.erase(name);
   }
+  // An object declared with a unit's name hides that unit within its
+  // declarative region (IEEE 1076-2008 12.3).
+  if (vhdl_physical_unit_names_.contains(name)) {
+    vhdl_unit_hiding_object_names_.insert(name);
+  }
 }
 namespace {
 
@@ -1451,7 +1456,8 @@ Expression VhdlParser::parse_primary()
             }
             return call;
         }
-        if (vhdl_physical_unit_names_.contains(canonical)) {
+        if (vhdl_physical_unit_names_.contains(canonical)
+            && !vhdl_unit_hiding_object_names_.contains(canonical)) {
             return Expression { ExpressionKind::Call,
                 "@vhdl-physical:" + canonical,
                 { Expression { ExpressionKind::IntegerLiteral, "1", { },

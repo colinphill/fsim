@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/constraint_solver.hpp"
+#include "constraint_bounds_internal.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -327,6 +328,45 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
         PackedLogic4::from_aval_bval(profile.width, key ^ sign, 0));
   }
   return result;
+}
+
+std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
+    const std::span<const SystemVerilogConstraintClause> clauses,
+    const SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile,
+    const std::function<std::uint64_t()>& random,
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed) {
+  if (fixed.empty()) {
+    return systemverilog_constraint_variable_domain(
+        clauses, variable, profile, random);
+  }
+  std::vector<SystemVerilogConstraintClause> substituted;
+  substituted.reserve(clauses.size());
+  for (const auto& clause : clauses) {
+    auto copy = clause;
+    if (clause.expression) {
+      auto expression = *clause.expression;
+      for (auto& node : expression.nodes) {
+        if (node.operation != Operator::Variable) continue;
+        const auto value = fixed.find(node.variable);
+        if (value == fixed.end() || node.variable == variable
+            || value->second.width() != node.profile.width) {
+          continue;
+        }
+        node.operation = Operator::Constant;
+        node.constant = value->second;
+      }
+      copy.expression = std::make_shared<const SystemVerilogConstraintExpression>(
+          std::move(expression));
+      std::erase_if(copy.variables,
+          [&](const SystemVerilogConstraintVariableId id) {
+            return id != variable && fixed.contains(id);
+          });
+    }
+    substituted.push_back(std::move(copy));
+  }
+  return systemverilog_constraint_variable_domain(
+      substituted, variable, profile, random);
 }
 
 }  // namespace fsim::runtime

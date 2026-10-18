@@ -476,6 +476,10 @@ ICARUS_EXTENSION_SYNTAX = re.compile(
 # semantics and options.
 _ICARUS_RACE = "depends on Icarus's process order within a time step"
 ICARUS_NONSTANDARD = {
+    # IEEE 1497-2001 5.2: an SDF header starts with the required
+    # SDFVERSION entry; these files omit it.
+    **{name: "SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2)"
+       for name in ("br960a", "br960b", "br960c", "br960d", "pr2972866")},
     **{name: _ICARUS_RACE for name in (
         "br_ml20190806b", "pr3064375", "pr1662508", "pr1861212b",
         "pr1862744a", "sdw_dsbl", "fork3.19A", "fork3.19B", "pr812",
@@ -610,6 +614,14 @@ VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
 VERILATOR_NONSTANDARD = {
+    # IEEE 1800-2017 21.3.5 positions files with $rewind; $frewind is a
+    # Verilator spelling.
+    "t_sys_file_basic": "calls $frewind, which is not an IEEE system task "
+        "(IEEE 1800-2017 21.3.5 defines $rewind)",
+    "t_sys_file_autoflush": "calls $frewind, which is not an IEEE system "
+        "task (IEEE 1800-2017 21.3.5 defines $rewind)",
+    "t_sys_file_basic_cover_expr": "calls $frewind, which is not an IEEE "
+        "system task (IEEE 1800-2017 21.3.5 defines $rewind)",
     # factorial1 recursively invokes a static task, so its input x is
     # shared by every activation and is 1 when recursion unwinds. The
     # fixture instead expects the factorial from automatic arguments.
@@ -948,6 +960,14 @@ def verilator_group(name: str) -> str:
     return parts[1] if len(parts) > 1 else name
 
 
+# The delta-cycle cap is an implementation guard, not a language limit:
+# these loop millions of `#0` iterations at time 0.
+IVTEST_SIMULATE_OPTIONS = {
+    "pow_ca_signed": ["--max-deltas", "100000000"],
+    "pow_ca_unsigned": ["--max-deltas", "100000000"],
+}
+
+
 def ivtest_cases(root: Path) -> list[Case]:
     base = root / "sources" / "iverilog" / "ivtest"
     entries: dict[str, list[str]] = {}
@@ -1076,7 +1096,8 @@ def ivtest_cases(root: Path) -> list[Case]:
                 # ivtest runs from its root: relative file names resolve
                 # against the work directory.
                 commands.append(Command("simulate", ["simulate", "--engine", "{engine}",
-                                                     "--file-root", "."] + plusargs))
+                                                     "--file-root", "."] + plusargs
+                                        + IVTEST_SIMULATE_OPTIONS.get(name, [])))
         expect = "fail" if test_type in ("CE", "RE") else "pass"
         # ivtest runs from its root, so data files named by a relative path
         # ("ivltests/mem1.dat") are copied into the case's work directory.
@@ -1102,6 +1123,7 @@ def ivtest_cases(root: Path) -> list[Case]:
                           "diff": diff},
             skip=skip,
             out_of_scope=out_of_scope,
+            timeout=300.0 if name in IVTEST_SIMULATE_OPTIONS else None,
         ))
     return cases
 
@@ -1294,6 +1316,11 @@ def vests_cases(root: Path) -> list[Case]:
                     # A configuration of the chosen entity is the intended
                     # top: it supplies the component bindings.
                     owned = [c for c, e in configs.items() if e == entity.lower()]
+                    # The billowitch harness elaborates the last `XXXent`
+                    # entity itself (`ghdl --elab-run`), never a
+                    # configuration declared for it.
+                    if use_last_entity:
+                        owned = []
                     top = entity.lower() if entity.lower() in configs \
                         else owned[-1] if owned \
                         else vhdl_top_spec(entity, [text])
@@ -1408,6 +1435,11 @@ def nvc_cases(root: Path) -> list[Case]:
                     skip = skip or "requires named work library"
                 if key == "stop":
                     skip = skip or "nvc stop-delta option"
+                if key == "shuffle":
+                    # Process execution order within a cycle is unspecified
+                    # (IEEE 1076-2008 14.7.5); the test asserts nvc's
+                    # --shuffle reordering.
+                    skip = skip or "nvc --shuffle process order"
             elif key.startswith("+") or key.startswith("$"):
                 skip = skip or f"nvc option {flag}"
             elif key in NVC_SKIP_FLAGS:
