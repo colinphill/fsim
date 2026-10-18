@@ -293,7 +293,9 @@ void SystemVerilogConstraintSolver::add_distribution(
   for (std::size_t entry_index = 0;
        entry_index < distribution.entries.size(); ++entry_index) {
     const auto& entry = distribution.entries[entry_index];
-    if (entry.weight == 0 || entry.low.width() != variable.profile.width
+    // A zero weight is legal and gives its values no probability (IEEE
+    // 1800-2017 18.5.4).
+    if (entry.low.width() != variable.profile.width
         || entry.high.width() != variable.profile.width
         || !known(entry.low) || !known(entry.high)
         || compare(entry.low, entry.high, variable.profile.signed_value) > 0) {

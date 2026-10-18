@@ -367,6 +367,12 @@ private:
             if (alias->second != &type) {
                 type.systemverilog_class_declaration
                     = alias->second->systemverilog_class_declaration;
+                // A typedef of a class specialization names that
+                // specialization (IEEE 1800-2017 8.25, 6.18).
+                if (type.systemverilog_class_parameter_actuals.empty()) {
+                    type.systemverilog_class_parameter_actuals
+                        = alias->second->systemverilog_class_parameter_actuals;
+                }
             }
         } else if (const auto* source_declaration = source_class(type.named_type, scope)) {
             type.systemverilog_class_name = type.named_type;

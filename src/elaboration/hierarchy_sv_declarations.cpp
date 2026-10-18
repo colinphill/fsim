@@ -1786,13 +1786,18 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             = !net_bridge
             && (declaration.form == Form::variable
                 || declaration.form == Form::port);
+        // Unpacked structures and fixed arrays of them are bridged too, so
+        // implicit sensitivity sees their members (IEEE 1800-2017
+        // 9.2.2.2.1, 10.3).
+        const bool bridgeable_elements
+            = type->element_kind == ContainerElementKind::Packed
+            || type->element_kind == ContainerElementKind::Scalar
+            || (type->element_kind == ContainerElementKind::Aggregate
+                && !type->union_aggregate);
         const auto bridge_width
             = (net_bridge || variable_bridge)
-                && type->fixed
-                && (type->element_kind
-                        == ContainerElementKind::Packed
-                    || type->element_kind
-                        == ContainerElementKind::Scalar)
+                && (type->fixed || type->aggregate_value)
+                && bridgeable_elements
             ? container_signal_bridge_width(*type)
             : std::nullopt;
         constexpr auto maximum_bridge_width
@@ -1838,11 +1843,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 : domain == frontend::ValueDomain::Logic4
                 ? Logic4::x
                 : Logic4::zero;
-            // A declaration initializer also sets the bridge's value.
+            // A declaration initializer also sets the bridge's value; a
+            // variable's bridge starts from the container's own initial value
+            // (two-state members are 0, IEEE 1800-2017 6.8).
             const auto& initial_object
                 = design_.container_objects_.at(id).initial_value;
             const bool initialized_bridge
-                = (declaration.initializer || array_actual)
+                = (declaration.initializer || array_actual || variable_bridge)
                 && container_signal_bridge_width(initial_object.type)
                     == bridge_width;
             Signal signal {
@@ -2221,6 +2228,31 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 // the signal's elaborated value is the null handle meanwhile.
                 initial_value = PackedLogic4::from_aval_bval(
                     width, 0U, 0U);
+            } else if (std::string constant_error; const auto constant
+                = !class_handle && width <= 64U
+                    ? evaluate_hir_systemverilog_constant(
+                          working_specialization, *declaration.initializer,
+                          constant_error)
+                    : std::nullopt) {
+                // A four-state constant initializer (`= 1'bz`) keeps its
+                // unknown bits, sized to the declaration (IEEE 1800-2017
+                // 10.5, 6.8).
+                auto sized = PackedLogic4(width, Logic4::zero);
+                const auto extension = constant->signed_value
+                        && constant->packed.width() != 0U
+                    ? constant->packed.get(constant->packed.width() - 1U)
+                    : Logic4::zero;
+                for (std::size_t bit { }; bit < width; ++bit) {
+                    sized.set(bit, bit < constant->packed.width()
+                            ? constant->packed.get(bit)
+                            : extension == Logic4::one && constant->known()
+                            ? Logic4::one
+                            : extension == Logic4::x
+                                || extension == Logic4::z
+                            ? extension
+                            : Logic4::zero);
+                }
+                initial_value = std::move(sized);
             } else {
                 report(
                     "FSIM-ELAB-HIR-001",

@@ -548,6 +548,62 @@ ICARUS_NONSTANDARD = {
     # IEEE 1800-2017 Table 11-20: z and z under an unknown condition is x.
     "pr2172606b": "expects z from ?: of two z operands under an unknown "
         "condition",
+    # SystemVerilog constructs in Icarus's default Verilog-2005 mode (Batch
+    # 65 triage, triage/b65-c/INDEX.md).
+    **{name: "uses SystemVerilog constructs in Verilog-2005 mode" for name in (
+        "automatic_error4", "br_gh531", "br_gh788", "br_gh1178c", "pr872",
+        "random", "string12")},
+    # Non-standard input or implementation-defined output.
+    "param_string_compare": "applies ==? to string operands (IEEE 1800-2017 "
+        "11.4.6 is integral only)",
+    "pr2994193": "calls $dumpvars at two simulation times (IEEE 1800-2017 "
+        "21.7.1.2)",
+    "delay_var": "expects Icarus's default real display format",
+    **{name: "declares a 2-state or enum net (IEEE 1800-2017 6.7.1)"
+        for name in ("br_gh99e", "sv-2val-nets", "pull371")},
+    "display_bug": "uses a size-only packed dimension",
+    "br_gh553": "instantiates a module array without a port list",
+    "pr2834340b": "uses multiple output terminals in one pullup instance",
+    **{name: "uses several sources in a parallel module path (IEEE 1800-2017 "
+        "30.4.4.1)" for name in ("pr1877743", "specify_01")},
+    **{name: "drives a gate primitive with a real value" for name in (
+        "br_gh1223a", "br_gh1223b", "br_gh1223c")},
+    "pr1528093": "applies % to real operands (IEEE 1800-2017 11.3.1)",
+    "urand": "calls $urandom in Verilog-2005 mode",
+    "itor_rtoi": "expects results the test notes are not defined by the "
+        "standard",
+    "sv_class9": "expects dynamic-array assignment to alias (IEEE 1800-2017 "
+        "7.6 copies)",
+    **{name: "depends on Icarus @* and replication side-effect behavior"
+        for name in ("br1000", "concat4")},
+    **{name: "expects Icarus's assertion message format (implementation-"
+        "defined, IEEE 1800-2017 20.10)" for name in (
+        "sv_immediate_assert", "sv_immediate_assume")},
+    "pr1699519": "expects Icarus's %G/%E output",
+    "br_gh315": "uses the non-standard %-d flag",
+    "pr2476430": "uses non-standard %+08d and %04c flags",
+    **{name: "uses Icarus preprocessor behavior" for name in (
+        "pr478", "pr1467825", "br979")},
+    "pr1701855b": "calls $printtimescale on selects and arrays",
+    "queue_stat": "expects $q_* statistics behavior",
+    "always_latch_no_sens": "expects an Icarus-only error",
+    "enum_compatibility_fail1": "expects an error for instances that share "
+        "one enum declaration",
+    "real_delay": "uses variable-delay UDPs Icarus does not support",
+    **{name: "compares array-word VCD output with Icarus" for name in (
+        "array_dump", "array_word_check", "dump_memword", "pr2859628",
+        "vcd-dup")},
+    "br_gh732": "expects Icarus's initial x behavior",
+    "fread": "expects a non-fatal invalid $fread",
+    "br_gh1298": "expects an unspecified x-condition string result",
+    "pr985": "depends on the execution order of two time-zero initial "
+        "blocks (IEEE 1800-2017 9.2.1)",
+    **{name: "connects UDP terminals by name (udp_instance is positional, "
+        "IEEE 1800-2017 29.7)" for name in ("udp_dff", "pr938b")},
+    **{name: "gives a module instance an unparenthesized parameter value "
+        "(IEEE 1364-2005 A.4.1.1)" for name in ("z1", "z2")},
+    **{name: "declares ports in a module without a port list" for name in (
+        "module_output_port_var2", "module_output_port_sv_var2")},
 }
 # Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
@@ -606,6 +662,91 @@ VERILATOR_NONSTANDARD = {
     # context-determined left operand unsigned; the case guards these checks
     # from other simulators.
     "t_math_pow3": "keeps a power operand signed in an unsigned comparison",
+    # Verilator lint or implementation limits, not LRM errors (Batch 65
+    # triage, triage/b65-c/INDEX.md).
+    "t_module_reserved_keyword": "expects a Verilator reserved-word lint error",
+    **{name: "expects a Verilator UNOPTFLAT lint error" for name in (
+        "t_unoptflat_simple_bad", "t_unoptflat_simple_2_bad",
+        "t_unoptflat_simple_3_bad")},
+    **{name: "expects Verilator's convergence-limit abort" for name in (
+        "t_unopt_converge_run_bad", "t_unopt_converge_print_bad",
+        "t_unopt_converge_ndbg_bad", "t_unopt_converge_initial_run_bad")},
+    "t_constraint_array_limit": "depends on Verilator --constraint-array-limit",
+    "t_constraint_dist_randmode_unsup": "expects a Verilator unsupported-"
+        "feature error for legal code",
+    "t_assert_unique_case_bad": "expects a fatal stop; IEEE 1800-2017 12.5.3 "
+        "requires only a violation report",
+    # Verilator language extensions and directives.
+    **{name: "uses Verilog-AMS keywords (not an IEEE 1800 begin_keywords "
+        "version, 22.14)" for name in (
+        "t_vams_basic", "t_vams_wreal", "t_split_var_3_wreal")},
+    "t_verilated_header": "includes verilated.v",
+    "t_hier_block_cmake": "uses Verilator directives",
+    "t_cover_fsm_sel_assign": "uses a Verilator metacomment",
+    "t_timing_off": "uses Verilator timing_off metacomments",
+    **{name: "calls the non-standard array method map()" for name in (
+        "t_queue_method", "t_array_method", "t_assoc_method",
+        "t_assoc_wildcard_method")},
+    "t_randomize_soft_foreach": "uses soft foreach (soft applies only to "
+        "expression_or_dist, IEEE 1800-2017 18.5.14)",
+    "t_display_pattern_format": "uses the \\r escape (not in IEEE 1800-2017 "
+        "Table 5-1)",
+    # Input the LRM rejects.
+    "t_preproc_str_undef": "uses an undefined macro (IEEE 1800-2017 22.5.1)",
+    **{name: "gives always_latch an event control (IEEE 1800-2017 9.2.2.3)"
+        for name in ("t_opt_dedupe_clk_gate", "t_opt_dedupe_clk_gate_off")},
+    **{name: "declares timeunit after other module items (IEEE 1800-2017 "
+        "3.14.2.3)" for name in ("t_timescale_unit", "t_timing_osc")},
+    "t_var_rsvd": "uses the reserved word global as a name",
+    **{name: "uses ref formals of a static subroutine (IEEE 1800-2017 "
+        "13.5.2)" for name in (
+        "t_var_ref", "t_var_ref_noinline", "t_func_ref", "t_func_ref_arg",
+        "t_func_ref_noinline")},
+    **{name: "replicates inside an assignment pattern with other items "
+        "(IEEE 1800-2017 10.9.1)" for name in (
+        "t_struct_init", "t_struct_init_trace")},
+    "t_stream_unpacked_struct": "streams into a continuous assignment "
+        "target (net_lvalue, IEEE 1800-2017 10.3)",
+    **{name: "declares a local with its function's name (IEEE 1800-2017 "
+        "13.4)" for name in ("t_func_under", "t_class_format")},
+    **{name: "gives an n-input gate three delays (IEEE 1800-2017 28.3)"
+        for name in ("t_gate_basic", "t_gate_basic_timing")},
+    "t_opt_simulate_array": "uses an unnamed module-level begin-end block",
+    # Zero-delay loops, scheduling races and Verilator-specific evaluation.
+    **{name: "needs a zero-delay always loop to terminate" for name in (
+        "t_event_control_prev_name_collision", "t_opt_slice",
+        "t_opt_slice_no", "t_split_var_types", "t_timing_write_expr")},
+    **{name: "expects a process to wake on its own writes (not IEEE "
+        "1800-2017 9.4.2)" for name in (
+        "t_timing_sched", "t_scheduling_5", "t_finish_stops_nonfinal2")},
+    **{name: "depends on the order of same-time-step processes" for name in (
+        "t_force_assign", "t_assign_dff", "t_multidriven_simple",
+        "t_interface_input_port_assign", "t_interface_input_port_assign_noinl",
+        "t_math_eq", "t_tri_select_eqcase", "t_property_if_else",
+        "t_unpack_array_no_expand", "t_unpack_array_direct_assignment")},
+    **{name: "expects transport behavior from net and assign delays "
+        "(IEEE 1800-2017 28.16 is inertial)" for name in (
+        "t_net_delay_timing", "t_timing_nested_assignment_on_lhs")},
+    "t_opt_split_no": "assumes two-state initial values",
+    "t_select_plus": "expects a partly out-of-range part-select write to be "
+        "ignored whole (IEEE 1800-2017 11.5.1 writes the in-range bits)",
+    "t_clocked_release_combo": "expects release to restore a variable "
+        "(IEEE 1800-2017 10.6.2 keeps the forced value)",
+    **{name: "expects Verilator's resolution of variable or interface "
+        "contention" for name in ("t_tri_assigndly_nba",
+        "t_tri_iface_semantics")},
+    "t_union_unpacked": "reads an unpacked-union member other than the last "
+        "written (implementation-defined)",
+    "t_sys_fread": "reads a file the Verilator driver generates",
+    "t_assert_nonconsec_rep": "expects Verilator's count; the case notes "
+        "other simulators differ",
+    "t_assert_pre": "counts actions of a time-zero clock edge race",
+    **{name: "procedurally assigns an output port declared with an "
+        "implicit data type, which is a net (IEEE 1800-2017 23.2.2.3)"
+        for name in ("t_langext_2", "t_langext_4", "t_langext_2012ext",
+            "t_langext_2017ext", "t_langext_2023ext")},
+    "t_math_pow6": "initializes output net ports with nonconstant "
+        "expressions (IEEE 1800-2017 A.2.1.2 list_of_port_identifiers)",
 }
 
 def verilator_cases(root: Path) -> list[Case]:
@@ -699,6 +840,22 @@ def verilator_cases(root: Path) -> list[Case]:
         all_run_flags = python_literal_list(source, "all_run_flags") or []
         plusargs += [f for f in all_run_flags if f.startswith("+")]
         top_text = read_text(top_file)
+        # Modules declared in `include files (t_mailbox_class includes the
+        # module of t_mailbox.v) are part of the top file's text.
+        included_text = []
+        pending = [top_text]
+        seen_includes: set[str] = set()
+        while pending:
+            text = pending.pop()
+            for include in re.findall(r'`include\s+"([^"]+)"', text):
+                path = tdir / include
+                if include in seen_includes or not path.is_file():
+                    continue
+                seen_includes.add(include)
+                body = read_text(path)
+                included_text.append(body)
+                pending.append(body)
+        top_text = "\n".join([top_text, *included_text])
         declared = SV_MODULE_RE.findall(SV_COMMENT_RE.sub(" ", top_text))
         # The driver's shell wraps module t; tests with their own top or no
         # module t run as written.
@@ -745,7 +902,10 @@ def verilator_cases(root: Path) -> list[Case]:
         elab = ["elaborate", "-q", "--no-aot"]
         for top in tops:
             elab += ["--top", top]
-        commands.append(Command("elaborate", elab))
+        # A compile-only test declaring no module (only classes or
+        # packages) has no design to elaborate.
+        if tops or executes or compile_fails:
+            commands.append(Command("elaborate", elab))
         if not compile_fails:
             if executes:
                 # driver.py runs from test_regress: data files are named

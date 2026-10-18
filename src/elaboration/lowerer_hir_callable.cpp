@@ -2589,7 +2589,8 @@ bool Lowerer::lower_hir_class_string_property_write(
 std::optional<std::vector<runtime::SystemVerilogConstraintTemplate>>
 Lowerer::hir_inline_constraints(
     const semantic::ExpressionId expression_id,
-    const semantic::ScopeId process_scope) const
+    const semantic::ScopeId process_scope,
+    std::vector<semantic::ExpressionId>* const runtime_values) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -2663,6 +2664,38 @@ Lowerer::hir_inline_constraints(
                 return folded;
             }
             output.kind = TemplateKind::Name;
+            // A name the randomized object does not declare resolves in
+            // the calling scope (IEEE 1800-2017 18.7); pass its value.
+            const auto declaration = runtime_values != nullptr
+                ? hir_resolver().resolve_systemverilog_expression(id).unique()
+                : std::nullopt;
+            const auto width = hir_expression_width(id, process_scope);
+            const auto domain = hir_expression_domain(id, process_scope);
+            if (declaration && width && *width != 0U && *width <= 64U
+                && domain
+                && (hir_local_registers_.contains(declaration->value())
+                    || hir_runtime_binding(
+                        *declaration, process_scope, true))) {
+                Template value;
+                value.kind = TemplateKind::Constant;
+                value.text = "@inline-value:"
+                    + std::to_string(runtime_values->size());
+                value.constant = PackedLogic4::from_aval_bval(
+                    *width, 0U, 0U);
+                value.profile = {
+                    *domain == frontend::ValueDomain::Integer
+                        ? DomainKind::Integer
+                        : DomainKind::BitVector,
+                    *width,
+                    hir_expression_signed(id),
+                    source.nominal_type.empty()
+                        ? std::string { "$inline-value" }
+                        : source.nominal_type,
+                    *domain == frontend::ValueDomain::Logic4,
+                };
+                output.operands.push_back(std::move(value));
+                runtime_values->push_back(id);
+            }
             return output;
         }
         if (source.kind
@@ -4302,8 +4335,9 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     if (!profile || (profile->string_result != (string_result != nullptr))) {
         return std::nullopt;
     }
+    std::vector<semantic::ExpressionId> inline_values;
     auto inline_constraints = hir_inline_constraints(
-        expression, hir_process_scope_);
+        expression, hir_process_scope_, &inline_values);
     if (!inline_constraints) {
         return std::nullopt;
     }
@@ -4383,6 +4417,22 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         actual_names.push_back(actual.name);
         actual_directions.push_back(
             static_cast<std::uint8_t>(actual.direction));
+    }
+
+    for (std::size_t index = 0; index < inline_values.size(); ++index) {
+        const auto width = hir_expression_width(
+            inline_values[index], hir_process_scope_);
+        const auto lowered = width
+            ? lower_hir_expression(inline_values[index], *width)
+            : std::nullopt;
+        if (!lowered) {
+            return std::nullopt;
+        }
+        actuals.push_back(*lowered);
+        actual_kinds.push_back(0U);
+        actual_names.push_back("@inline-value:" + std::to_string(index));
+        actual_directions.push_back(
+            static_cast<std::uint8_t>(frontend::PortDirection::Input));
     }
 
     if (profile->string_result) {

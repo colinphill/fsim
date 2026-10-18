@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "hierarchy_builder_internal.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 #include "hierarchy_sv_ports_internal.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
@@ -1895,6 +1896,38 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 merged.initial_value = PackedLogic4 {
                     merged.initial_value.width(), pull };
                 merged_info.systemverilog_net_type = formal_net;
+            }
+        }
+        // An output variable port shares its actual variable's storage; the
+        // port's declaration initializer is that variable's value at time
+        // zero (IEEE 1800-2017 23.2.2.3, 6.8).
+        if (!interface_port
+            && direction == frontend::PortDirection::Output
+            && formal_declaration.initializer
+            && *actual_signal < design_.signals_.size()
+            && *actual_signal < design_.signal_info_.size()
+            && design_.signal_info_[*actual_signal]
+                   .systemverilog_net_type.empty()) {
+            std::string constant_error;
+            if (const auto constant = evaluate_hir_systemverilog_constant(
+                    *child_interface_specialization,
+                    *formal_declaration.initializer, constant_error)) {
+                auto& merged = design_.signals_[*actual_signal];
+                const auto width = merged.initial_value.width();
+                auto initial = PackedLogic4(width, Logic4::zero);
+                for (std::size_t bit { };
+                     bit < width && bit < constant->packed.width(); ++bit) {
+                    initial.set(bit, constant->packed.get(bit));
+                }
+                if (constant->signed_value && constant->packed.width() != 0U) {
+                    const auto sign = constant->packed.get(
+                        constant->packed.width() - 1U);
+                    for (auto bit = constant->packed.width(); bit < width;
+                         ++bit) {
+                        initial.set(bit, sign);
+                    }
+                }
+                merged.initial_value = std::move(initial);
             }
         }
         if (!child_aliases.emplace(

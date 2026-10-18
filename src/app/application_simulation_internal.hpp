@@ -232,9 +232,12 @@ struct Simulation::Impl {
     [[nodiscard]] runtime::SystemVerilogUvmRootHandle component_root(
         const std::string_view allocation_scope);
 
+    // `names` selects the randomized properties; `@inline-value:N` entries
+    // instead carry calling-scope values for the inline constraints.
     [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
         const runtime::SystemVerilogClassHandle handle,
-        const std::span<const std::string> selected_names,
+        const std::span<const std::string> names,
+        const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const runtime::SystemVerilogConstraintTemplate>
             inline_constraints);
 

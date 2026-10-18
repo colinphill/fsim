@@ -901,7 +901,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-059` | error | A declarative region contains the same local package-instance name more than once. |
 | `FSIM-VHDL-SEM-060` | error | A generic subprogram map associates the same named formal more than once. |
 | `FSIM-VHDL-SEM-061` | error | A positional generic subprogram association follows a named association. |
-| `FSIM-VHDL-SEM-062` | error | A generic subprogram instance duplicates another subprogram declaration or instance. |
 | `FSIM-VHDL-SEM-063` | error | A generic subprogram template has no generic formal. |
 | `FSIM-VHDL-SEM-064` | error | A declarative region contains a duplicate generic function or procedure template. |
 | `FSIM-VHDL-SEM-065` | error | A configuration instantiation list contains the same component label more than once. |
@@ -1835,6 +1834,7 @@ scheduler.
 | `FSIM-SV-SEM-419` | error | An overridable parameter's value names a specparam (IEEE 1800-2017 6.20.5). |
 | `FSIM-SV-SEM-420` | error | A foreach loop has more loop-variable positions than dimensions in its array (IEEE 1800-2017 12.7.3). |
 | `FSIM-SV-SEM-421` | error | A wildcard-imported identifier is referenced before a later conflicting declaration in the same scope. |
+| `FSIM-SV-SEM-422` | error | A Verilog (IEEE 1364-2005) function declares no input argument (IEEE 1364-2005 10.4.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |

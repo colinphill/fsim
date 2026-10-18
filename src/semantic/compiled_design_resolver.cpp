@@ -637,6 +637,57 @@ std::size_t scope_depth(
     return result;
 }
 
+bool systemverilog_package_references(const CompiledDesign& design,
+    const sv::Unit& package, const std::string_view name)
+{
+    const auto& scopes = design.semantics.scopes();
+    const auto in_package = [&](const ScopeId scope) {
+        return scope.valid() && scope.value() < scopes.size()
+            && scopes[scope.value()].unit == package.id;
+    };
+    const auto names = [&](const std::string_view text) {
+        return text == name
+            || (text.size() > name.size() && text.ends_with(name)
+                && text.substr(0U, text.size() - name.size())
+                       .ends_with("::"));
+    };
+    for (const auto& expression : design.systemverilog_hir.expressions()) {
+        if (in_package(expression.scope)
+            && (names(expression.text)
+                || (expression.referenced_name
+                    && names(expression.referenced_name->spelling)))) {
+            return true;
+        }
+    }
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        // The frontend folds a referenced package constant to its value, so
+        // a constant's use leaves no name behind; constants stay exported.
+        if (declaration.name == name
+            && (declaration.form == sv::DeclarationForm::parameter
+                || declaration.form == sv::DeclarationForm::local_parameter)) {
+            return true;
+        }
+        if (!in_package(declaration.scope)) {
+            continue;
+        }
+        if (declaration.type && names(declaration.type->target.spelling)) {
+            return true;
+        }
+        // Parameter initializers may live outside the package scope.
+        const auto value = declaration.initializer
+            ? design.find_expression(*declaration.initializer)
+            : std::nullopt;
+        if (value && value->systemverilog != nullptr
+            && (names(value->systemverilog->text)
+                || (value->systemverilog->referenced_name
+                    && names(
+                        value->systemverilog->referenced_name->spelling)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename AppendDirect>
 void collect_systemverilog_package_exports(
     const CompiledDesign& design, const sv::Unit& package,
@@ -663,6 +714,14 @@ void collect_systemverilog_package_exports(
                         != imported.package.spelling)
                 || (imported.member
                     && imported.member->spelling != member)) {
+                continue;
+            }
+            // A wildcard import only makes a name potentially visible; a
+            // wildcard export carries it on only once the package refers
+            // to it (IEEE 1800-2017 26.3, 26.6).
+            if (!exported.member && !imported.member
+                && !systemverilog_package_references(
+                    design, package, member)) {
                 continue;
             }
             const auto* source = systemverilog_package(design,
@@ -2511,6 +2570,17 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     if (design_ == nullptr) {
         return std::nullopt;
     }
+    // `work.pkg.t` is the expanded name of `t` in the working library's
+    // package `pkg` (IEEE 1076-2008 8.3, 13.2): resolve it as `pkg.t`.
+    if (spelling.size() > 5U
+        && same_vhdl_identifier(spelling.substr(0U, 4U), "work")
+        && spelling[4] == '.'
+        && spelling.find('.', 5U) != std::string_view::npos) {
+        if (const auto unqualified
+            = resolve_vhdl_named_type(spelling.substr(5U), owner_scope)) {
+            return unqualified;
+        }
+    }
     const auto simple_name = simple_vhdl_name(spelling);
     if (simple_name.empty()) {
         return std::nullopt;
@@ -3219,6 +3289,22 @@ CompiledDesignResolver::effective_vhdl_subtype(
     if (design_ == nullptr) {
         return std::nullopt;
     }
+    // A type mark that analysis could not resolve (a selected name such as
+    // `work.pkg.t`) is resolved now that every unit is known.
+    if (input.type_mark.target.valid() && !input.type_mark.spelling.empty()) {
+        const auto marked = find_type(*design_, effective_,
+            input.type_mark.target);
+        if (marked && marked->vhdl != nullptr
+            && marked->vhdl->form == vhdl::TypeForm::unresolved) {
+            if (const auto resolved = resolve_vhdl_named_type(
+                    input.type_mark.spelling, use_scope);
+                resolved && *resolved != input.type_mark.target) {
+                auto relinked = input;
+                relinked.type_mark.target = *resolved;
+                return effective_vhdl_subtype(relinked, use_scope);
+            }
+        }
+    }
 
     const auto make_boundary_binding = [](
         const std::span<const CompiledBindingFrame> active)
@@ -3395,6 +3481,12 @@ CompiledDesignResolver::effective_vhdl_subtype(
         } else if (same_vhdl_identifier(name, "boolean")) {
             result.domain = vhdl::ValueDomain::boolean;
             result.executable_width = 1U;
+            return true;
+        } else if (same_vhdl_identifier(name, "real")) {
+            // STD.STANDARD.REAL is held as a 64-bit IEEE double.
+            result.domain = vhdl::ValueDomain::bit2;
+            result.executable_width = 64U;
+            result.signed_value = true;
             return true;
         } else if (same_vhdl_identifier(name, "bit")) {
             result.domain = vhdl::ValueDomain::bit2;
@@ -4164,6 +4256,13 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         if (!result.constraints.empty()) {
                             selected->constraints = result.constraints;
                             selected->unconstrained = false;
+                            selected->executable_width.reset();
+                        }
+                        // A record constraint on the selected mark
+                        // (IEEE 1076-2008 5.3.3.1) applies as written.
+                        if (!result.element_constraints.empty()) {
+                            selected->element_constraints
+                                = result.element_constraints;
                             selected->executable_width.reset();
                         }
                         const bool append = !package->generic_bindings.empty()
@@ -5724,7 +5823,19 @@ CompiledDesignResolver::bind_vhdl_generics(
                 && declaration->vhdl->callable
                 && (declaration->vhdl->callable->default_callable
                     || declaration->vhdl->callable->default_box)) {
-                const auto resolved = resolve_vhdl_default_callable(
+                // The formal's profile names earlier generics of the same
+                // list (`function "+"(l, r : t) return t is <>`): match the
+                // default with the bindings made so far (IEEE 1076-2008
+                // 6.5.6.2).
+                std::vector<CompiledBindingFrame> frames {
+                    binding_frames_.begin(), binding_frames_.end()
+                };
+                frames.push_back(result);
+                const CompiledDesignResolver bound_resolver {
+                    *design_, selected_unit_, effective_, frames
+                };
+                const auto resolved
+                    = bound_resolver.resolve_vhdl_default_callable(
                     formals[index],
                     use_scope.valid()
                         ? use_scope
@@ -5733,10 +5844,18 @@ CompiledDesignResolver::bind_vhdl_generics(
                         ? &*declaration->vhdl->callable->default_callable
                         : nullptr);
                 const auto selected = resolved.unique();
-                if (!selected) {
+                // An operator box default with no visible declared match
+                // denotes the predefined operation (IEEE 1076-2008 9.2).
+                const bool predefined_operator
+                    = !selected && resolved.candidates.empty()
+                    && declaration->vhdl->callable->default_box
+                    && vhdl::operator_designator(declaration->vhdl->name);
+                if (!selected && !predefined_operator) {
                     return std::nullopt;
                 }
-                binding.actual_declaration = selected->key;
+                if (selected) {
+                    binding.actual_declaration = selected->key;
+                }
             } else if (form != vhdl::DeclarationForm::generic_function
                 && form != vhdl::DeclarationForm::generic_procedure
                 && form != vhdl::DeclarationForm::generic_package) {
@@ -7087,6 +7206,19 @@ CompiledDesignResolver::resolve_vhdl_callable(
             if (!declaration->vhdl->package) {
                 return { CompiledResolutionStatus::invalid, { } };
             }
+            // A box default of the instance's own generic list can name the
+            // instance being resolved (`procedure p is new p ...`); it does
+            // not denote that instance (IEEE 1076-2008 4.4, 6.5.6.2).
+            thread_local std::vector<DeclarationId> resolving_instances;
+            if (std::ranges::find(resolving_instances, selected)
+                != resolving_instances.end()) {
+                return { CompiledResolutionStatus::not_found, { } };
+            }
+            resolving_instances.push_back(selected);
+            struct ResolvingInstance {
+                std::vector<DeclarationId>& active;
+                ~ResolvingInstance() { active.pop_back(); }
+            } resolving_instance { resolving_instances };
             const auto& instance = *declaration->vhdl->package;
             std::vector<DeclarationId> templates;
             if (instance.template_name.selected) {

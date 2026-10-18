@@ -216,6 +216,36 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             issue.message,
             issue.source.valid() ? issue.source : record.source);
     }
+    // A type actual that names the parent's own type parameter denotes the
+    // type this parent occurrence was given (IEEE 1800-2017 6.20.3).
+    const auto& parent_actuals
+        = working_specialization.specialization().actual_identities;
+    for (auto& binding : parameter_bindings.bindings) {
+        if (!binding.actual_declaration) {
+            continue;
+        }
+        const auto formal = compiled_->find_declaration(binding.formal);
+        const auto actual
+            = compiled_->find_declaration(*binding.actual_declaration);
+        if (!formal || formal->systemverilog == nullptr
+            || formal->systemverilog->form
+                != semantic::sv::DeclarationForm::type_parameter
+            || !actual || actual->systemverilog == nullptr
+            || actual->systemverilog->form
+                != semantic::sv::DeclarationForm::type_parameter) {
+            continue;
+        }
+        const auto parent_actual = std::ranges::find(parent_actuals,
+            *binding.actual_declaration,
+            &semantic::SpecializedHirActualIdentity::declaration);
+        if (!binding.systemverilog_type && parent_actual != parent_actuals.end()
+            && parent_actual->systemverilog_type) {
+            binding.systemverilog_type = parent_actual->systemverilog_type;
+        }
+        if (binding.systemverilog_type) {
+            binding.actual_declaration.reset();
+        }
+    }
     for (auto& defparam : active_compiled_systemverilog_defparams_) {
         if (defparam.target_path != child_path) {
             continue;

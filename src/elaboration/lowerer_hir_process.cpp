@@ -604,6 +604,14 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
             if (const auto found = signals_.find(record->systemverilog->text);
                 found != signals_.end()) {
                 dependencies.push_back(found->second);
+            } else if (const auto root = signals_.find(
+                           record->systemverilog->text.substr(0U,
+                               record->systemverilog->text.find_first_of(
+                                   ".[")));
+                root != signals_.end()) {
+                // A member of a bridged unpacked structure changes with the
+                // structure's bridge signal.
+                dependencies.push_back(root->second);
             }
         }
         std::span<const semantic::ExpressionId> operands;
@@ -4536,7 +4544,23 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     if (vhdl_trailing_wait && vhdl_explicit_wait) {
         process_.operations[*vhdl_trailing_wait] = Jump { resume_entry };
     }
-    if (!process_.static_sensitivity.empty() && vhdl_explicit_wait) {
+    // A concurrent procedure call is a process that calls the procedure and
+    // then waits on its signal actuals (IEEE 1076-2008 11.4); the
+    // procedure may itself wait.
+    const auto concurrent_procedure_call = [&] {
+        if (description.statements.size() != 1U
+            || specialized_hir_unit_ == nullptr) {
+            return false;
+        }
+        const auto call = specialized_hir_unit_->find_statement(
+            description.statements.front());
+        return call && call->vhdl != nullptr
+            && call->vhdl->kind
+                == semantic::vhdl::StatementKind::procedure_call
+            && call->vhdl->source == description.source;
+    }();
+    if (!process_.static_sensitivity.empty() && vhdl_explicit_wait
+        && !concurrent_procedure_call) {
         report(
             "FSIM-VHDL-SEM-012",
             "a process sensitivity list cannot be combined with a direct or "

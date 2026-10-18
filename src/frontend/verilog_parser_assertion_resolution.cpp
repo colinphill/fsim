@@ -328,10 +328,27 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             // Only classify a leading name as the whole invocation when the
             // remainder is an argument list; composite sequence expressions
             // are expanded by PropertyParser.
-            const bool starts_instance
-                = predicate_tokens.size() == 1U
-                || (predicate_tokens.size() > 1U
-                    && predicate_tokens[1U].kind == TokenKind::LeftParen);
+            const auto argument_list_spans_predicate = [&] {
+                if (predicate_tokens.size() < 3U
+                    || predicate_tokens[1U].kind != TokenKind::LeftParen) {
+                    return false;
+                }
+                int depth { };
+                for (std::size_t position = 1U;
+                    position < predicate_tokens.size(); ++position) {
+                    if (predicate_tokens[position].kind
+                        == TokenKind::LeftParen) {
+                        ++depth;
+                    } else if (predicate_tokens[position].kind
+                            == TokenKind::RightParen
+                        && --depth == 0) {
+                        return position + 1U == predicate_tokens.size();
+                    }
+                }
+                return true;
+            };
+            const bool starts_instance = predicate_tokens.size() == 1U
+                || argument_list_spans_predicate();
             if (found != unit.systemverilog_assertion_declarations.end()
                 && starts_instance) {
                 sequence = &*found;

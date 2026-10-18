@@ -294,10 +294,54 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomize(
     const runtime::SystemVerilogClassHandle handle,
-    const std::span<const std::string> selected_names,
+    const std::span<const std::string> names,
+    const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const runtime::SystemVerilogConstraintTemplate>
-        inline_constraints)
+        source_constraints)
 {
+    constexpr std::string_view inline_value_prefix = "@inline-value:";
+    std::vector<std::string> selected_names;
+    std::vector<runtime::PackedLogic4> inline_values;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (!names[index].starts_with(inline_value_prefix)) {
+            selected_names.push_back(names[index]);
+            continue;
+        }
+        if (index >= actuals.size()) {
+            throw std::invalid_argument {
+                "randomize inline value has no actual"
+            };
+        }
+        inline_values.push_back(actuals[index]);
+    }
+    // Fill each calling-scope value placeholder (IEEE 1800-2017 18.7).
+    std::vector<runtime::SystemVerilogConstraintTemplate> inline_constraints {
+        source_constraints.begin(), source_constraints.end()
+    };
+    const auto fill = [&](auto&& self,
+                          runtime::SystemVerilogConstraintTemplate& node)
+        -> void {
+        if (node.kind == runtime::SystemVerilogConstraintTemplateKind::Constant
+            && node.text.starts_with(inline_value_prefix)) {
+            const auto slot = std::stoull(
+                node.text.substr(inline_value_prefix.size()));
+            if (slot >= inline_values.size()
+                || inline_values[slot].width() != node.constant.width()) {
+                throw std::invalid_argument {
+                    "randomize inline value does not match its constraint"
+                };
+            }
+            node.constant = inline_values[slot];
+            return;
+        }
+        for (auto& operand : node.operands) {
+            self(self, operand);
+        }
+    };
+    for (auto& constraint : inline_constraints) {
+        fill(fill, constraint);
+    }
+
     auto& object = class_heap.object(handle);
     const auto prior_properties = object.properties;
     const auto callback = [&](const std::string_view name) {

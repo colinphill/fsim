@@ -588,6 +588,10 @@ struct SubtypeIndication {
     std::string_view step,
     SubtypeIndication element);
 
+// Whether a subprogram designator is an operator symbol (IEEE 1076-2008
+// 4.2.1, 9.2), with or without its string-literal quotes.
+[[nodiscard]] bool operator_designator(std::string_view name);
+
 struct RecordElement {
     std::string name;
     SubtypeIndication subtype;

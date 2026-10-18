@@ -297,25 +297,28 @@ VerilogTimingCheckEvent VerilogParser::parse_verilog_timing_check_event() {
     event.edge = VerilogSpecifyEdge::Negedge;
   } else if (match_keyword("edge")) {
     event.edge = VerilogSpecifyEdge::Edge;
-    expect(
-        TokenKind::LeftBracket,
-        "'[' after timing-check edge",
-        "FSIM-SV-PARSE-157");
-    while (!at_end() && !at(TokenKind::RightBracket)) {
-      std::string descriptor;
-      while (!at_end() && !at(TokenKind::Comma)
-             && !at(TokenKind::RightBracket)) {
-        descriptor += advance().text;
+    if (!match(TokenKind::LeftBracket)) {
+      // A bare `edge` is any posedge or negedge transition (IEEE 1800-2017
+      // 31.5, A.7.5.3).
+      event.edge_descriptors = { "01", "0x", "x1", "10", "1x", "x0",
+          "0z", "z1", "1z", "z0" };
+    } else {
+      while (!at_end() && !at(TokenKind::RightBracket)) {
+        std::string descriptor;
+        while (!at_end() && !at(TokenKind::Comma)
+               && !at(TokenKind::RightBracket)) {
+          descriptor += advance().text;
+        }
+        if (!descriptor.empty()) {
+          event.edge_descriptors.push_back(std::move(descriptor));
+        }
+        if (!match(TokenKind::Comma)) break;
       }
-      if (!descriptor.empty()) {
-        event.edge_descriptors.push_back(std::move(descriptor));
-      }
-      if (!match(TokenKind::Comma)) break;
+      expect(
+          TokenKind::RightBracket,
+          "']' after timing-check edge descriptors",
+          "FSIM-SV-PARSE-158");
     }
-    expect(
-        TokenKind::RightBracket,
-        "']' after timing-check edge descriptors",
-        "FSIM-SV-PARSE-158");
   }
   event.expression = parse_expression();
   if (match(TokenKind::AndAndAnd)) {

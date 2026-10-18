@@ -367,15 +367,18 @@ void VerilogParser::parse_generated_genvar_declaration(
             [&](const VariableDeclaration& variable) {
               return variable.name == name.text;
             });
+    // A generate block is a scope: its genvar may hide an outer one with
+    // the same name (IEEE 1800-2017 27.4, 23.9).
     if (object_conflict
-        || current_generate_names_.contains(name.text)
-        || !declared_genvars_.insert(name.text).second) {
+        || std::ranges::find(local_genvars, name.text)
+            != local_genvars.end()) {
       error(
           name,
           "FSIM-SV-SEM-022",
           "duplicate or conflicting generated genvar declaration '"
               + name.text + "'");
     } else {
+      declared_genvars_.insert(name.text);
       ++current_generate_names_[name.text];
       local_genvars.push_back(name.text);
     }
@@ -1087,11 +1090,11 @@ void VerilogParser::parse_generate_branch(
     }
   }
   for (const auto& local_genvar : local_genvars) {
-    declared_genvars_.erase(local_genvar);
     const auto found = current_generate_names_.find(local_genvar);
     if (found != current_generate_names_.end()
         && --found->second == 0) {
       current_generate_names_.erase(found);
+      declared_genvars_.erase(local_genvar);
     }
   }
   next_implicit_generate_scope_ = parent_generate_ordinal;

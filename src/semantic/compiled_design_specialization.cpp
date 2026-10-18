@@ -6749,6 +6749,11 @@ private:
             return value;
         }
         const auto& type = *view->systemverilog->type;
+        // An implicitly typed parameter takes the type of its final value
+        // (IEEE 1800-2017 6.20.2); its identity is already that value.
+        if (type.target.spelling == "implicit" && !type.packed_range) {
+            return value;
+        }
         auto width = type.executable_width;
         if (!width && type.packed_range) {
             const auto boundary = [&](const std::optional<std::int64_t> folded,
@@ -14933,21 +14938,9 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
             // match denotes the predefined operator of the actual types
             // (IEEE 1076-2008 6.5.6.2, 9.2): the formal stays unbound and
             // its calls are the predefined operation.
-            const auto operator_symbol = [](std::string_view name) {
-                if (name.size() >= 2U && name.front() == '"'
-                    && name.back() == '"') {
-                    name = name.substr(1U, name.size() - 2U);
-                }
-                return !name.empty()
-                    && std::ranges::none_of(name, [](const char c) {
-                           return std::isalnum(
-                                      static_cast<unsigned char>(c))
-                               != 0 || c == '_';
-                       });
-            };
             if (candidates.status != CompiledResolutionStatus::unique
                 && formal_view->vhdl->callable->default_box
-                && operator_symbol(formals[index].name)) {
+                && vhdl::operator_designator(formals[index].name)) {
                 continue;
             }
             if (candidates.status

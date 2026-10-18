@@ -1731,10 +1731,51 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             } while (depth != 0U
                 && !at(TokenKind::EndOfFile, lookahead));
         }
-        while ((at(TokenKind::Scope, lookahead)
-                   || at(TokenKind::Dot, lookahead))
-            && at(TokenKind::Identifier, lookahead + 1)) {
-            lookahead += 2;
+        // `blk[1].task;` names a task in an element of a generate block
+        // array (IEEE 1800-2017 23.6, 27.4).
+        // Only a constant generate index qualifies; an object element
+        // (`this.items[i].print()`) is a method call.
+        // A declared variable (an array of class handles) is an object
+        // element, and a class has no generate blocks.
+        const bool scope_root = current().text != "this"
+            && current().text != "super" && class_parse_depth_ == 0U
+            && !unit_foreach_types_.contains(current().text)
+            && !current_procedural_names_.contains(current().text)
+            && !current_procedural_types_.contains(current().text);
+        const auto skip_scope_index = [&](std::size_t position)
+            -> std::optional<std::size_t> {
+            if (!scope_root || !at(TokenKind::LeftBracket, position)
+                || !at(TokenKind::Number, position + 1U)
+                || !at(TokenKind::RightBracket, position + 2U)) {
+                return std::nullopt;
+            }
+            std::size_t depth { };
+            do {
+                if (at(TokenKind::LeftBracket, position)) {
+                    ++depth;
+                } else if (at(TokenKind::RightBracket, position)) {
+                    --depth;
+                } else if (at(TokenKind::Semicolon, position)
+                    || at(TokenKind::EndOfFile, position)) {
+                    return std::nullopt;
+                }
+                ++position;
+            } while (depth != 0U);
+            return at(TokenKind::Dot, position)
+                    && at(TokenKind::Identifier, position + 1U)
+                ? std::optional { position }
+                : std::nullopt;
+        };
+        for (;;) {
+            if ((at(TokenKind::Scope, lookahead)
+                    || at(TokenKind::Dot, lookahead))
+                && at(TokenKind::Identifier, lookahead + 1)) {
+                lookahead += 2;
+            } else if (const auto next = skip_scope_index(lookahead)) {
+                lookahead = *next;
+            } else {
+                break;
+            }
         }
         // A system function called as a statement discards its value
         // (IEEE 1800-2017 13.4.1), as `void'($fgets(s, fd));` does.
@@ -1850,7 +1891,20 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 }
                 name += ')';
             }
-            while (at(TokenKind::Scope) || at(TokenKind::Dot)) {
+            while (at(TokenKind::Scope) || at(TokenKind::Dot)
+                || skip_scope_index(0U)) {
+                if (at(TokenKind::LeftBracket)) {
+                    std::size_t depth { };
+                    do {
+                        if (at(TokenKind::LeftBracket)) {
+                            ++depth;
+                        } else if (at(TokenKind::RightBracket)) {
+                            --depth;
+                        }
+                        name += advance().text;
+                    } while (depth != 0U && !at_end());
+                    continue;
+                }
                 const auto separator = advance();
                 name += separator.kind == TokenKind::Scope ? "::" : ".";
                 name += keyword("new")

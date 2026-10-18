@@ -946,7 +946,12 @@ Expression VerilogParser::parse_primary_impl()
         || (keyword("void") && at(TokenKind::Apostrophe, 1))) {
         const auto name = advance();
         std::string canonical = name.text;
-        if (match(TokenKind::Hash)) {
+        // `C#(args)` names a class specialization, also inside a scope
+        // chain (`P::C#(args)::member`, IEEE 1800-2017 8.25.1).
+        const auto append_specialization = [&] {
+            if (!match(TokenKind::Hash)) {
+                return;
+            }
             Instance actual_owner;
             parse_parameter_overrides(actual_owner, previous());
             canonical += "#(";
@@ -969,7 +974,8 @@ Expression VerilogParser::parse_primary_impl()
                     canonical += ")";
             }
             canonical += ")";
-        }
+        };
+        append_specialization();
         while (match(TokenKind::Scope)) {
             canonical += "::";
             const bool standard_member = canonical == "std::"
@@ -1027,6 +1033,9 @@ Expression VerilogParser::parse_primary_impl()
             canonical += (standard_member
                 ? advance()
                 : expect_identifier("package-scoped name")).text;
+            if (at(TokenKind::Hash) && at(TokenKind::LeftParen, 1)) {
+                append_specialization();
+            }
         }
         if (canonical == "$unit" || canonical.starts_with("$unit::")
             || canonical == "$root" || canonical.starts_with("$root::")
@@ -1729,7 +1738,12 @@ Expression VerilogParser::parse_primary_impl()
     if (match(TokenKind::LeftParen)) {
         const auto open = previous();
         const auto inner_begin = index_;
+        // Inside parentheses a constraint's `->` is the logical implication
+        // operator of an expression (IEEE 1800-2017 11.4.7, 18.5.6).
+        const auto constraint_depth = constraint_parse_depth_;
+        constraint_parse_depth_ = 0U;
         Expression expression = parse_expression();
+        constraint_parse_depth_ = constraint_depth;
         const auto assignment_operator
             = is_blocking_assignment_operator(current().kind);
         if (assignment_operator && statement_hoist_depth_ != 0U

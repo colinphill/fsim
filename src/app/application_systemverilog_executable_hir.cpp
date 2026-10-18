@@ -1738,16 +1738,25 @@ namespace {
             return sv::ProcessKind::always;
         }
 
-        [[nodiscard]] semantic::DeclarationId existing_variable(
+        [[nodiscard]] const sv::Declaration& existing_variable(
             const frontend::VariableDeclaration& input,
             const semantic::ScopeId scope)
         {
-            const auto found = find_declaration(
+            auto found = find_declaration(
                 scope, sv::DeclarationForm::variable, input.name, input.span);
+            // A block parameter is projected as a constant of the block
+            // (IEEE 1800-2017 6.20.1).
+            for (const auto form : { sv::DeclarationForm::local_parameter,
+                     sv::DeclarationForm::parameter }) {
+                if (found == nullptr && input.systemverilog_local_parameter) {
+                    found = find_declaration(
+                        scope, form, input.name, input.span);
+                }
+            }
             if (found == nullptr) {
                 throw std::logic_error { "missing SystemVerilog HIR process variable" };
             }
-            return found->id;
+            return *found;
         }
 
         void fill_process(
@@ -1765,10 +1774,8 @@ namespace {
             output.concurrent_assertion
                 = input.systemverilog_concurrent_assertion;
             for (const auto& declaration : input.variables) {
-                static_cast<void>(existing_variable(declaration, identity.scope));
-                const auto* hir_declaration = find_declaration(
-                    identity.scope, sv::DeclarationForm::variable,
-                    declaration.name, declaration.span);
+                const auto* hir_declaration
+                    = &existing_variable(declaration, identity.scope);
                 fill_type_expressions(
                     declaration.type, declaration.span, identity.scope,
                     hir_declaration->origin);

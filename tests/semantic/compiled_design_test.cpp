@@ -3483,6 +3483,22 @@ void test_compiled_systemverilog_resolver_exports_and_lets()
     imported.wildcard = true;
     imported.source = builder.source;
     builder.systemverilog_unit(export_package).imports.push_back(imported);
+    // A wildcard export carries a wildcard-imported name only once the
+    // exporting package refers to it (IEEE 1800-2017 26.3, 26.6).
+    const auto export_scope
+        = builder.model.units()[export_package.value()].scope;
+    for (const auto* referenced : { "VALUE", "increment" }) {
+        const auto reference = builder.model.add_expression_identity(
+            export_scope, builder.source, builder.origin);
+        sv::Expression use;
+        use.id = reference;
+        use.scope = export_scope;
+        use.kind = sv::ExpressionKind::name;
+        use.text = referenced;
+        use.source = builder.source;
+        use.origin = builder.origin;
+        builder.systemverilog.mutable_expressions().push_back(std::move(use));
+    }
     sv::Export exported;
     exported.package.spelling = "source_values";
     exported.package.source = builder.source;

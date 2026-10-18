@@ -10371,6 +10371,38 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             inertial->vhdl->operands.front(), expected_width, scalar_context,
             vhdl_array_context);
     }
+    // Two null arrays are equal (IEEE 1076-2008 9.2.3); a null array has no
+    // elements to load, so the comparison is a constant.
+    if (const auto comparison = specialized_hir_unit_->find_expression(
+            expression_id);
+        comparison && comparison->vhdl != nullptr
+        && comparison->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+        && comparison->vhdl->operands.size() == 2U
+        && (comparison->vhdl->text == "=" || comparison->vhdl->text == "/=")) {
+        const auto null_array = [&](const semantic::ExpressionId operand) {
+            const auto value = specialized_hir_unit_->find_expression(operand);
+            if (value && value->vhdl != nullptr
+                && value->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal
+                && value->vhdl->text == "\"\"") {
+                return true;
+            }
+            const auto subtype = hir_vhdl_expression_subtype(operand);
+            if (!subtype || subtype->unconstrained) {
+                return false;
+            }
+            const auto width = hir_expression_width(
+                operand, hir_process_scope_);
+            return (width && *width == 0U)
+                || vhdl_subtype_width(*subtype).value_or(1U) == 0U;
+        };
+        if (null_array(comparison->vhdl->operands[0])
+            && null_array(comparison->vhdl->operands[1])) {
+            return load_integer(comparison->vhdl->text == "=" ? 1 : 0,
+                expected_width != 0U ? expected_width : 1U,
+                frontend::ValueDomain::Boolean);
+        }
+    }
     if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
         const auto destination = allocate_register(
             parameter->value.width(),
@@ -19431,10 +19463,34 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             process_.operations[finish] = Jump { end };
             result = destination;
         } else {
-            const auto true_domain = hir_expression_domain(
-                source.operands[1], hir_process_scope_);
-            const auto false_domain = hir_expression_domain(
-                source.operands[2], hir_process_scope_);
+            // A string literal in an integral context is a two-state
+            // integral value (IEEE 1800-2017 5.9, 11.4.11).
+            const auto literal_string = [&](const auto& self,
+                                            const semantic::ExpressionId id)
+                -> bool {
+                const auto alternative
+                    = specialized_hir_unit_->find_expression(id);
+                if (!alternative || alternative->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& record = *alternative->systemverilog;
+                if (record.kind
+                    == semantic::sv::ExpressionKind::string_literal) {
+                    return true;
+                }
+                return record.kind == semantic::sv::ExpressionKind::call
+                    && record.text == "?:" && record.operands.size() == 3U
+                    && self(self, record.operands[1])
+                    && self(self, record.operands[2]);
+            };
+            const auto alternative_domain = [&](
+                const semantic::ExpressionId id) {
+                return literal_string(literal_string, id)
+                    ? std::optional { frontend::ValueDomain::Bit2 }
+                    : hir_expression_domain(id, hir_process_scope_);
+            };
+            const auto true_domain = alternative_domain(source.operands[1]);
+            const auto false_domain = alternative_domain(source.operands[2]);
             if (!domain && true_domain && false_domain) {
                 if (*true_domain == *false_domain) {
                     domain = true_domain;

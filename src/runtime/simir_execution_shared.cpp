@@ -43,11 +43,6 @@ namespace fsim::runtime::simir {
                 "runtime WaitFor requires a finite real delay"
             };
         }
-        if (*number < 0.0) {
-            throw std::invalid_argument {
-                "runtime WaitFor delay cannot be negative"
-            };
-        }
         const auto scaled_quanta = static_cast<long double>(*number)
             * static_cast<long double>(wait.delay)
             / static_cast<long double>(wait.rounding_quantum);
@@ -57,6 +52,19 @@ namespace fsim::runtime::simir {
             };
         }
         const auto rounded_quanta = std::round(scaled_quanta);
+        if (rounded_quanta < 0.0L) {
+            // A negative delay is its two's-complement value read as an
+            // unsigned 64-bit time (IEEE 1364-2005 9.7.1, 1800-2017 9.4.1).
+            if (rounded_quanta < static_cast<long double>(
+                    std::numeric_limits<std::int64_t>::min())) {
+                throw std::overflow_error {
+                    "runtime WaitFor delay overflows simulation ticks"
+                };
+            }
+            return static_cast<SimulationTick>(
+                       static_cast<std::int64_t>(rounded_quanta))
+                * wait.rounding_quantum;
+        }
         const auto maximum_quanta = static_cast<long double>(
                                         std::numeric_limits<SimulationTick>::max())
             / static_cast<long double>(wait.rounding_quantum);

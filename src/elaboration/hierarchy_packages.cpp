@@ -9724,7 +9724,64 @@ namespace {
                 const auto literal_width = literal.value
                     ? sized_width(sized_width, *literal.value)
                     : std::nullopt;
+                // An unsized based literal with x or z digits holds the bits
+                // its digits spell after leading zeros (IEEE 1800-2017 5.7.1);
+                // more bits than the base type cannot fit it (6.19).
+                const auto unsized_significant_width = [&]()
+                    -> std::optional<std::size_t> {
+                    const auto view = literal.value
+                        ? specialized->find_expression(*literal.value)
+                        : std::nullopt;
+                    if (!view || view->systemverilog == nullptr) {
+                        return std::nullopt;
+                    }
+                    const std::string_view text { view->systemverilog->text };
+                    if (!text.starts_with('\'')) {
+                        return std::nullopt;
+                    }
+                    auto digits = text.substr(1U);
+                    if (!digits.empty()
+                        && (digits.front() == 's' || digits.front() == 'S')) {
+                        digits.remove_prefix(1U);
+                    }
+                    if (digits.empty()) {
+                        return std::nullopt;
+                    }
+                    const auto base = static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(digits.front())));
+                    const std::size_t bits_per_digit = base == 'b' ? 1U
+                        : base == 'o' ? 3U
+                        : base == 'h' ? 4U
+                                      : 0U;
+                    if (bits_per_digit == 0U) {
+                        return std::nullopt;
+                    }
+                    digits.remove_prefix(1U);
+                    std::size_t significant { };
+                    bool leading = true;
+                    for (const auto digit : digits) {
+                        if (digit == '_') {
+                            continue;
+                        }
+                        if (leading && digit == '0') {
+                            continue;
+                        }
+                        leading = false;
+                        ++significant;
+                    }
+                    return significant * bits_per_digit;
+                };
                 if (!value) {
+                    const auto unsized_width = unknown && !literal_width
+                        ? unsized_significant_width()
+                        : std::nullopt;
+                    if (unsized_width && *unsized_width > *base_width) {
+                        append("FSIM-ELAB-SVENUM-001",
+                            "enum literal '" + literal.name
+                                + "' does not fit the base type of '"
+                                + type->name + "'",
+                            literal.source);
+                    }
                     if (unknown && literal_width
                         && *literal_width != *base_width) {
                         append("FSIM-ELAB-SVENUM-001",
@@ -21488,7 +21545,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
                 base.element_constraints.end(),
                 subtype.element_constraints.begin(),
                 subtype.element_constraints.end());
-            issues |= inspect(base, visiting, object_type);
+            // The base mark is named in the subtype declaration's scope.
+            issues |= inspect(
+                element_subtype(std::move(base)), visiting, object_type);
         } else if (definition.form
             == semantic::vhdl::TypeForm::unresolved) {
             const auto selected_type = object_type

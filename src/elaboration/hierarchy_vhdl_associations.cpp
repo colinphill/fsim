@@ -765,10 +765,32 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                 target_formals.push_back(declaration_id);
             }
         }
+        // A binding indication's own map associates the entity's formals
+        // directly (IEEE 1076-2008 7.3.2.2): its formals are not component
+        // ports and the component's defaults do not apply.
+        const bool binding_map = selected_rule != nullptr
+            && !(ports ? selected_rule->binding.port_map
+                       : selected_rule->binding.generic_map)
+                    .empty();
+        const auto target_named = [&](const semantic::vhdl::Name& name) {
+            return std::ranges::find_if(
+                target_formals, [&](const auto formal_id) {
+                    const auto formal = compiled_->find_declaration(formal_id);
+                    return formal && formal->vhdl != nullptr
+                        && vhdl_configuration_detail::
+                            configuration_name_equal(
+                                formal->vhdl->name, name.spelling);
+                });
+        };
         std::size_t positional { };
         std::vector<bool> mapped(component_formals.size());
         for (auto& association : associations) {
             std::size_t index = component_formals.size();
+            if (association.formal && binding_map
+                && target_named(*association.formal)
+                    != target_formals.end()) {
+                continue;
+            }
             if (association.formal) {
                 const auto found = std::ranges::find_if(
                     component_formals,
@@ -785,17 +807,8 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                     index = static_cast<std::size_t>(
                         std::distance(component_formals.begin(), found));
                 } else {
-                    const auto target_found = std::ranges::find_if(
-                        target_formals,
-                        [&](const auto formal_id) {
-                            const auto formal
-                                = compiled_->find_declaration(formal_id);
-                            return formal && formal->vhdl != nullptr
-                                && vhdl_configuration_detail::
-                                    configuration_name_equal(
-                                        formal->vhdl->name,
-                                        association.formal->spelling);
-                        });
+                    const auto target_found
+                        = target_named(*association.formal);
                     if (target_found != target_formals.end()) {
                         index = static_cast<std::size_t>(
                             std::distance(target_formals.begin(), target_found));
@@ -848,7 +861,7 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
             };
         }
         for (std::size_t index { };
-            index < component_formals.size()
+            !binding_map && index < component_formals.size()
             && index < target_formals.size();
             ++index) {
             if (mapped[index]) {

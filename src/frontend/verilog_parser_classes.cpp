@@ -152,7 +152,7 @@ bool VerilogParser::parse_class_property(
       || keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("chandle")
       || keyword("process") || keyword("event")
-      || keyword("enum")
+      || keyword("enum") || keyword("struct") || keyword("union")
       || keyword("longint") || keyword("time") || keyword("integer")
       || keyword("int") || keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("signed") || keyword("unsigned")
@@ -790,6 +790,12 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
   } else if (match_keyword("static")) {
     declaration.lifetime = SystemVerilogClassLifetime::Static;
   }
+  // A final specifier forbids derived classes (IEEE 1800-2023 8.20); no
+  // other construct of this design names it.
+  if (at(TokenKind::Colon) && keyword("final", 1)) {
+    advance();
+    advance();
+  }
 
   const auto name = expect_identifier("class name");
   declaration.name = name.text;
@@ -1085,6 +1091,15 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
           : (expect_keyword(
                  "function", false, "FSIM-SV-PARSE-262"),
              SystemVerilogClassMethodKind::Function);
+      // Dynamic override specifiers `:initial`, `:extends` and `:final`
+      // (IEEE 1800-2023 8.20) only restrict which declarations are legal;
+      // they do not change the method's behavior.
+      while (at(TokenKind::Colon)
+          && (keyword("initial", 1) || keyword("extends", 1)
+              || keyword("final", 1))) {
+        advance();
+        advance();
+      }
       declaration.methods.push_back(parse_class_method(
           method_start,
           kind,

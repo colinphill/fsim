@@ -549,6 +549,9 @@ Type VerilogParser::packed_array_of_type(
     type.packed_range.reset();
     type.packed_range_expression.reset();
     type.systemverilog_packed_dimensions.clear();
+    // A packed array of a named type is unsigned as a whole, whatever its
+    // element's signedness (IEEE 1800-2017 7.4.1).
+    type.is_signed = false;
     std::uint64_t flattened = 1U;
     bool concrete = true;
     for (const auto& dimension : dimensions) {

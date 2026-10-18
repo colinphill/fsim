@@ -2357,9 +2357,15 @@ private:
     };
     [[nodiscard]] std::optional<std::vector<
         runtime::SystemVerilogConstraintTemplate>>
+    // `runtime_values`, when given, receives each calling-scope name read
+    // at the call; its template carries a placeholder constant operand
+    // that the runtime fills from the matching `@inline-value:` actual
+    // (IEEE 1800-2017 18.7).
     hir_inline_constraints(
         semantic::ExpressionId expression,
-        semantic::ScopeId process_scope) const;
+        semantic::ScopeId process_scope,
+        std::vector<semantic::ExpressionId>* runtime_values
+        = nullptr) const;
     [[nodiscard]] std::optional<HirClassMethodProfile>
     hir_class_method_profile(
         semantic::ExpressionId expression,

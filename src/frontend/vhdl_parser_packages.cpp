@@ -610,11 +610,18 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     return false;
   }
   std::string template_name = detail::ascii_lower(tokens[index].text);
+  // `lib.outer.inner` names a package declared in package `outer` (IEEE
+  // 1076-2008 4.7); the instance sees `outer` as its template does.
+  std::vector<std::string> name_parts { template_name };
   ++index;
   while (kind(index, TokenKind::Dot) && kind(index + 1U, TokenKind::Identifier)) {
     template_name = detail::ascii_lower(tokens[index + 1U].text);
+    name_parts.push_back(template_name);
     index += 2U;
   }
+  const std::optional<std::string> enclosing_package = name_parts.size() >= 3U
+      ? std::optional { name_parts[name_parts.size() - 2U] }
+      : std::nullopt;
   // Generic map associations as token ranges.
   struct Association {
     std::string formal;
@@ -1013,6 +1020,21 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
   const auto& instance_name = instance_token.text;
   std::vector<Token> wrappers;
   std::vector<Token> expanded = context_before(*declaration);
+  if (enclosing_package) {
+    // `use work.outer, work.outer.all;`: both the enclosing package name
+    // and its declarations are visible inside the template.
+    expanded.push_back(identifier("use"));
+    expanded.push_back(identifier("work"));
+    expanded.push_back(make(TokenKind::Dot, "."));
+    expanded.push_back(identifier(*enclosing_package));
+    expanded.push_back(make(TokenKind::Comma, ","));
+    expanded.push_back(identifier("work"));
+    expanded.push_back(make(TokenKind::Dot, "."));
+    expanded.push_back(identifier(*enclosing_package));
+    expanded.push_back(make(TokenKind::Dot, "."));
+    expanded.push_back(identifier("all"));
+    expanded.push_back(make(TokenKind::Semicolon, ";"));
+  }
   expanded.push_back(identifier("package"));
   expanded.push_back(identifier(instance_name));
   expanded.push_back(identifier("is"));

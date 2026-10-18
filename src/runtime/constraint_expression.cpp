@@ -487,11 +487,21 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
     }
     if (node.operation == Operator::Variable) {
       const auto& assigned_profile = assignment.profile(node.variable);
-      if (assigned_profile.kind != node.profile.kind
-          || assigned_profile.width != node.profile.width
-          || assigned_profile.signed_value != node.profile.signed_value
-          || assigned_profile.nominal_type != node.profile.nominal_type
-          || assigned_profile.four_state != node.profile.four_state) {
+      // A non-random (state) property carries only its storage profile; the
+      // constraint reads its value as the property's declared type (IEEE
+      // 1800-2017 18.3).
+      const bool state_variable
+          = assigned_profile.nominal_type == "packed property"
+          || assigned_profile.nominal_type == "integer";
+      if (assigned_profile.width != node.profile.width
+          || (!state_variable
+              && (assigned_profile.kind != node.profile.kind
+                  || assigned_profile.signed_value
+                      != node.profile.signed_value
+                  || assigned_profile.nominal_type
+                      != node.profile.nominal_type
+                  || assigned_profile.four_state
+                      != node.profile.four_state))) {
         throw std::invalid_argument{
             "constraint expression variable profile does not match the solver"};
       }
@@ -733,7 +743,8 @@ namespace {
             && canonical.ends_with(name);
     }
 
-    [[nodiscard]] SystemVerilogConstraintVariableId find_template_variable(
+    [[nodiscard]] std::optional<SystemVerilogConstraintVariableId>
+    find_optional_template_variable(
         const SystemVerilogConstraintVariables& variables,
         std::string_view name)
     {
@@ -755,6 +766,14 @@ namespace {
             }
             result = variable;
         }
+        return result;
+    }
+
+    [[nodiscard]] SystemVerilogConstraintVariableId find_template_variable(
+        const SystemVerilogConstraintVariables& variables,
+        const std::string_view name)
+    {
+        const auto result = find_optional_template_variable(variables, name);
         if (!result) {
             throw std::invalid_argument {
                 "inline constraint name '" + std::string { name }
@@ -816,6 +835,13 @@ namespace {
             const Template& expression)
         {
             if (expression.kind == TemplateKind::Name) {
+                // A name the object does not declare reads the calling
+                // scope's value carried as the operand (IEEE 1800-2017 18.7).
+                if (expression.operands.size() == 1U
+                    && !find_optional_template_variable(
+                        variables_, expression.text)) {
+                    return lower(expression.operands.front());
+                }
                 const auto variable = find_template_variable(
                     variables_, expression.text);
                 if (variable >= solver_.variables().size()) {

@@ -400,6 +400,9 @@ private:
   std::optional<std::unordered_set<std::string>> vhdl_source_type_names_;
   bool vhdl_source_declares_type(const std::string &name);
   std::unordered_map<std::string, TypeDeclarationKind> vhdl_named_type_kinds_;
+  // Package declarations and bodies declared in a package declarative region
+  // (IEEE 1076-2008 4.7, 4.8), emitted as units after their enclosing unit.
+  std::vector<DesignUnit> nested_package_units_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
   bool numeric_bit_context_{};

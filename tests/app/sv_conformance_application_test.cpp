@@ -1624,11 +1624,18 @@ package selected_lookup;
          base_lookup::adjust, base_lookup::observer;
 endpackage
 
+// A wildcard export carries only names the package actually imports by
+// referring to them (IEEE 1800-2017 26.3, 26.6).
 package public_lookup;
   import base_lookup::*;
   import selected_lookup::*;
   export base_lookup::*;
   export selected_lookup::*;
+  typedef word_t public_word_t;
+  function automatic int public_bump(input int value);
+    return bump(adjust(value));
+  endfunction
+  typedef observer public_observer;
 endpackage
 
 module assignment_revision

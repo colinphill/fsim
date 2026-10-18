@@ -155,6 +155,8 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
   VerilogTypeSpec inherited;
   bool have_inherited_type = false;
   std::optional<bool> ansi_port_list;
+  // The interface type and modport of the previous interface port.
+  std::optional<std::pair<std::string, std::string>> inherited_interface;
   std::optional<Token> first_empty_slot;
   bool first_empty_ansi_error_reported = false;
   const auto note_port_style = [&](const bool ansi, const Token&) {
@@ -205,7 +207,15 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
                && at(TokenKind::Identifier, 2)
                && at(TokenKind::Identifier, 3))
               || at(TokenKind::Identifier, 1));
-      if (explicit_generic_interface || typed_interface) {
+      // A bare name after an interface port is another port of the same
+      // interface type and modport (IEEE 1800-2017 23.2.2.3).
+      const bool inherited_interface_port = inherited_interface
+          && at(TokenKind::Identifier)
+          && !keyword_reserved(keyword_set_, current().text)
+          && (at(TokenKind::Comma, 1) || at(TokenKind::RightParen, 1)
+              || at(TokenKind::LeftBracket, 1));
+      if (explicit_generic_interface || typed_interface
+          || inherited_interface_port) {
         note_port_style(true, current());
         const auto interface_start = current();
         (void)require_standard(
@@ -214,7 +224,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             interface_start);
         std::string interface_type;
         std::string modport;
-        if (explicit_generic_interface) {
+        if (inherited_interface_port) {
+          interface_type = inherited_interface->first;
+          modport = inherited_interface->second;
+        } else if (explicit_generic_interface) {
           advance();
           // `interface.mp a`: a generic interface port restricted to a
           // modport of whatever interface is connected (25.4).
@@ -264,8 +277,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             true,
             cover(interface_start.span, port_name.span),
             std::nullopt,
-            std::move(interface_type),
-            std::move(modport)};
+            interface_type,
+            modport};
+        inherited_interface.emplace(
+            std::move(interface_type), std::move(modport));
         const auto duplicate = std::ranges::find_if(
             unit.ports,
             [&](const SignalDeclaration& port) {
@@ -295,6 +310,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       }
       VerilogTypeSpec spec = inherited;
       bool declared_here = false;
+      inherited_interface.reset();
       if (is_direction_keyword()) {
         const auto direction_token = current();
         note_port_style(true, direction_token);
@@ -1838,6 +1854,11 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     parse_optional_signedness(type);
     parse_optional_range(type);
   }
+  // The literals of an enumeration declared here are declared in this
+  // block's scope (IEEE 1800-2017 6.19).
+  for (const auto& literal : type.enumeration_literals) {
+    current_procedural_names_.insert(literal);
+  }
 
   for (;;) {
     const auto name = expect_identifier("local variable name");
@@ -1856,6 +1877,10 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
         std::move(initializer),
         span_from(name, previous())});
     block.declarations.back().systemverilog_static = static_lifetime;
+    // A parameter of a task, function or block is a constant of that scope
+    // (IEEE 1800-2017 6.20.1), usable in its declarations' ranges.
+    block.declarations.back().systemverilog_local_parameter
+        = local_parameter;
     block.declarations.back().systemverilog_automatic = automatic
         || (!static_lifetime && unit_default_automatic_
             && !in_task_ && current_function_name_.empty());

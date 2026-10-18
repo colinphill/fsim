@@ -4434,6 +4434,17 @@ private:
         }
         return left * right;
     }
+    // Bitwise operators of integral scalars cannot overflow; they also carry
+    // the truth values of `a <-> b`, which the parser forms with `^`.
+    if (operation == "&") {
+        return left & right;
+    }
+    if (operation == "|") {
+        return left | right;
+    }
+    if (operation == "^") {
+        return left ^ right;
+    }
     return std::nullopt;
 }
 

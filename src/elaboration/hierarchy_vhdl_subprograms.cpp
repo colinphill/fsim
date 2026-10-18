@@ -266,6 +266,88 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
               }
               return std::pair { std::move(generics), callable };
           };
+    // Two subtype indications conform when they name the same type mark
+    // in their own scopes; a generic type of the declaration's generic list
+    // corresponds to the same-named one of the body's (IEEE 1076-2008 4.10).
+    // Names of the generic types common to the two generic lists being
+    // compared; such a type mark denotes corresponding generics.
+    std::vector<std::string> corresponding_generic_types;
+    const auto both_generic_types
+        = [&](const semantic::vhdl::SubtypeIndication& left,
+              const semantic::vhdl::SubtypeIndication& right) {
+              const auto name = simple_name_of(left.type_mark.spelling);
+              return left.constraints.empty() && right.constraints.empty()
+                  && name_equal(
+                      name, simple_name_of(right.type_mark.spelling))
+                  && std::ranges::any_of(corresponding_generic_types,
+                      [&](const std::string& generic) {
+                          return name_equal(generic, name);
+                      });
+          };
+    const auto subtypes_conform
+        = [&](const semantic::vhdl::SubtypeIndication& left,
+              const semantic::ScopeId left_scope,
+              const semantic::vhdl::SubtypeIndication& right,
+              const semantic::ScopeId right_scope) {
+              const auto left_name
+                  = simple_name_of(left.type_mark.spelling);
+              const auto right_name
+                  = simple_name_of(right.type_mark.spelling);
+              return (left_name.empty() || right_name.empty()
+                         || name_equal(left_name, right_name))
+                  && (both_generic_types(left, right)
+                      || semantic::CompiledDesignResolver { specialized }
+                             .vhdl_subtype_profiles_match(
+                                 left, left_scope, right, right_scope));
+          };
+    const auto callables_conform
+        = [&](const semantic::DeclarationId left_id,
+              const semantic::DeclarationId right_id) {
+              if (resolver.vhdl_callable_profile_matches(
+                      left_id, right_id, true)) {
+                  return true;
+              }
+              const auto left = specialized.find_declaration(left_id);
+              const auto right = specialized.find_declaration(right_id);
+              if (!left || left->vhdl == nullptr || !left->vhdl->callable
+                  || !right || right->vhdl == nullptr
+                  || !right->vhdl->callable) {
+                  return false;
+              }
+              const auto& left_callable = *left->vhdl->callable;
+              const auto& right_callable = *right->vhdl->callable;
+              if (left_callable.function != right_callable.function
+                  || left_callable.formals.size()
+                      != right_callable.formals.size()
+                  || left_callable.return_type.has_value()
+                      != right_callable.return_type.has_value()) {
+                  return false;
+              }
+              if (left_callable.return_type
+                  && !subtypes_conform(*left_callable.return_type,
+                      left->vhdl->scope, *right_callable.return_type,
+                      right->vhdl->scope)) {
+                  return false;
+              }
+              for (std::size_t index { };
+                  index < left_callable.formals.size(); ++index) {
+                  const auto left_formal = specialized.find_declaration(
+                      left_callable.formals[index]);
+                  const auto right_formal = specialized.find_declaration(
+                      right_callable.formals[index]);
+                  if (!left_formal || left_formal->vhdl == nullptr
+                      || !left_formal->vhdl->subtype || !right_formal
+                      || right_formal->vhdl == nullptr
+                      || !right_formal->vhdl->subtype
+                      || !subtypes_conform(*left_formal->vhdl->subtype,
+                          left_formal->vhdl->scope,
+                          *right_formal->vhdl->subtype,
+                          right_formal->vhdl->scope)) {
+                      return false;
+                  }
+              }
+              return true;
+          };
     const auto generic_formals_conform
         = [&](const std::span<const semantic::DeclarationId> specification,
               const std::span<const semantic::DeclarationId> body) {
@@ -285,28 +367,16 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                           left->vhdl->name, right->vhdl->name)) {
                       return false;
                   }
-                  if (left->vhdl->subtype || right->vhdl->subtype) {
-                      const auto left_name = left->vhdl->subtype
-                          ? simple_name_of(
-                                left->vhdl->subtype->type_mark.spelling)
-                          : std::string_view { };
-                      const auto right_name = right->vhdl->subtype
-                          ? simple_name_of(
-                                right->vhdl->subtype->type_mark.spelling)
-                          : std::string_view { };
-                      if (!left->vhdl->subtype
-                          || !right->vhdl->subtype
-                          || (!left_name.empty() && !right_name.empty()
-                              && !name_equal(left_name, right_name))
-                          || !semantic::CompiledDesignResolver {
-                              specialized }
-                              .vhdl_subtype_profiles_match(*left->vhdl->subtype, left->vhdl->scope, *right->vhdl->subtype, right->vhdl->scope)) {
-                          return false;
-                      }
+                  if ((left->vhdl->subtype || right->vhdl->subtype)
+                      && (!left->vhdl->subtype || !right->vhdl->subtype
+                          || !subtypes_conform(*left->vhdl->subtype,
+                              left->vhdl->scope, *right->vhdl->subtype,
+                              right->vhdl->scope))) {
+                      return false;
                   }
                   if ((left->vhdl->callable || right->vhdl->callable)
-                      && !resolver.vhdl_callable_profile_matches(
-                          specification[index], body[index], true)) {
+                      && !callables_conform(
+                          specification[index], body[index])) {
                       return false;
                   }
               }
@@ -358,13 +428,21 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                     = generic_template_profile(*specification->vhdl);
                 const auto body_profile
                     = generic_template_profile(*body->vhdl);
+                corresponding_generic_types.clear();
+                for (const auto generic : specification_profile.first) {
+                    const auto record = specialized.find_declaration(generic);
+                    if (record && record->vhdl != nullptr
+                        && record->vhdl->form == Form::generic_type) {
+                        corresponding_generic_types.push_back(
+                            record->vhdl->name);
+                    }
+                }
                 const auto callable_conforms
                     = specification_profile.second
                     && body_profile.second
-                    && resolver.vhdl_callable_profile_matches(
+                    && callables_conform(
                         *specification_profile.second,
-                        *body_profile.second,
-                        true);
+                        *body_profile.second);
                 if (generic_formals_conform(
                         specification_profile.first,
                         body_profile.first)

@@ -2036,6 +2036,34 @@ void add_vhdl_selected_package_reference(const CompiledDesign& design,
     });
 }
 
+// A type mark that is an expanded name `lib.pkg.t` (IEEE 1076-2008 8.3)
+// depends on package `pkg` even without a use clause naming it.
+void add_vhdl_type_mark_package_reference(
+    std::vector<CompiledReference>& references, const vhdl::Unit& owner,
+    const TypeReference& type_mark)
+{
+    const auto parts = support::split_vhdl_selected_name(type_mark.spelling);
+    if (parts.size() != 3U
+        || !vhdl::use_name_has_library_prefix(owner, parts.size(), parts[0])) {
+        return;
+    }
+    const auto owner_library = owner.library.empty()
+        ? std::string_view { "work" }
+        : std::string_view { owner.library };
+    const auto library = same_vhdl_identifier(parts[0], "work")
+        ? normalized_library(owner_library)
+        : parts[0];
+    references.push_back(CompiledReference {
+        CompiledReferenceKind::package,
+        owner.id,
+        support::ascii_lower(library),
+        vhdl_reference_name(parts[1]),
+        {},
+        type_mark.source,
+        std::nullopt,
+    });
+}
+
 void add_vhdl_context_reference(std::vector<CompiledReference>& references,
     const UnitId owner, const std::string_view owner_library,
     const vhdl::Name& name, const SourceSpanId source)
@@ -3038,6 +3066,17 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         }
         add_vhdl_selected_package_reference(design, references,
             owner->id, owner->library, expression);
+    }
+    for (const auto& declaration : design.vhdl_hir.declarations()) {
+        const auto* owner = instance_owner(declaration.scope);
+        const auto owner_view = owner != nullptr && declaration.subtype
+            ? design.find_unit(owner->id)
+            : std::nullopt;
+        if (!owner_view || owner_view->vhdl == nullptr) {
+            continue;
+        }
+        add_vhdl_type_mark_package_reference(references, *owner_view->vhdl,
+            declaration.subtype->type_mark);
     }
     for (const auto& instance : design.systemverilog_hir.instances()) {
         const auto* owner = instance_owner(instance.scope);

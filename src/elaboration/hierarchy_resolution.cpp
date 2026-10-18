@@ -2429,6 +2429,14 @@ void HierarchyBuilder::validate_process_drivers()
                 if (aliases == writable_container_signals.end()) {
                     return;
                 }
+                // Members of an unpacked structure are separate longest
+                // static prefixes (IEEE 1800-2017 6.5); a whole-object claim
+                // cannot tell member drivers apart.
+                if (object < design_.container_objects_.size()
+                    && design_.container_objects_[object]
+                           .initial_value.type.aggregate_value) {
+                    return;
+                }
                 for (const auto signal : aliases->second) {
                     if (variable_container_signals.contains(signal)
                         && !continuous_signals.contains(signal)) {

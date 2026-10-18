@@ -681,6 +681,18 @@ template <typename Input>
     const semantic::ScopeId scope,
     const semantic::OriginId parent)
 {
+    // A scalar parameter of a task or function is a local parameter of its
+    // scope (IEEE 1800-2017 6.20.1, 6.20.4).
+    if (input.systemverilog_local_parameter
+        && !input.type.systemverilog_container && input.initializer) {
+        frontend::ParameterDeclaration parameter;
+        parameter.name = input.name;
+        parameter.type = input.type;
+        parameter.default_value = *input.initializer;
+        parameter.local = true;
+        parameter.span = input.span;
+        return add_parameter(parameter, scope, parent);
+    }
     const auto id = add_object(
         input,
         scope,

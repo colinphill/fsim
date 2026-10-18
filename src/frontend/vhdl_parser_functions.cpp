@@ -188,39 +188,10 @@ void VhdlParser::parse_vhdl_function_item(
         "FSIM-VHDL-UNSUPPORTED-046",
         "a generic function instantiation has no pure or impure prefix");
   }
-  auto parsed =
-      parse_vhdl_subprogram_instantiation(start, "function");
-  const auto conflict =
-      std::ranges::any_of(
-          unit.functions,
-          [&](const auto& function) {
-            return function.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.procedures,
-          [&](const auto& procedure) {
-            return procedure.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.generic_function_instances,
-          [&](const auto& existing) {
-            return existing.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.generic_procedure_instances,
-          [&](const auto& existing) {
-            return existing.name == parsed.name;
-          });
-  if (conflict) {
-    error(
-        start,
-        "FSIM-VHDL-SEM-062",
-        "duplicate subprogram declaration or instance '"
-            + parsed.name + "'");
-  } else {
-    unit.generic_function_instances.push_back(
-        std::move(parsed));
-  }
+  // Subprogram instances are overloadable (IEEE 1076-2008 4.4); a
+  // homograph is only known once the generic map fixes the profile.
+  unit.generic_function_instances.push_back(
+      parse_vhdl_subprogram_instantiation(start, "function"));
 }
 
 void VhdlParser::parse_vhdl_procedure_item(
@@ -243,39 +214,10 @@ void VhdlParser::parse_vhdl_procedure_item(
     unit.procedures.push_back(std::move(procedure));
     return;
   }
-  auto parsed =
-      parse_vhdl_subprogram_instantiation(start, "procedure");
-  const auto conflict =
-      std::ranges::any_of(
-          unit.functions,
-          [&](const auto& function) {
-            return function.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.procedures,
-          [&](const auto& procedure) {
-            return procedure.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.generic_function_instances,
-          [&](const auto& existing) {
-            return existing.name == parsed.name;
-          })
-      || std::ranges::any_of(
-          unit.generic_procedure_instances,
-          [&](const auto& existing) {
-            return existing.name == parsed.name;
-          });
-  if (conflict) {
-    error(
-        start,
-        "FSIM-VHDL-SEM-062",
-        "duplicate subprogram declaration or instance '"
-            + parsed.name + "'");
-  } else {
-    unit.generic_procedure_instances.push_back(
-        std::move(parsed));
-  }
+  // Subprogram instances are overloadable (IEEE 1076-2008 4.4); a
+  // homograph is only known once the generic map fixes the profile.
+  unit.generic_procedure_instances.push_back(
+      parse_vhdl_subprogram_instantiation(start, "procedure"));
 }
 
 void VhdlParser::parse_vhdl_generic_subprogram(

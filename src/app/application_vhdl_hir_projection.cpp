@@ -898,6 +898,15 @@ void VhdlHirBuilder::add_disconnection_specifications(
         ? type.vhdl_type_declaration
         : (!type.named_type.empty() ? type.named_type : type.spelling);
     auto target = find_type(scope, spelling);
+    // An expanded name such as `work.pkg.t` (IEEE 1076-2008 8.3) denotes
+    // `t` without making it directly visible: resolve the selected spelling.
+    if (!target.valid() && !type.named_type.empty()
+        && type.named_type != spelling) {
+        if (const auto selected = find_type(scope, type.named_type);
+            selected.valid()) {
+            return { selected, source(type_span), type.named_type };
+        }
+    }
     if (!target.valid() && !type.nominal_type.empty()) {
         target = find_type(scope, type.nominal_type);
     }

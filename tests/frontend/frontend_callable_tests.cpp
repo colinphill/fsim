@@ -103,9 +103,11 @@ endmodule
       "classic_missing.sv",
       "module m; function logic f(a); f = 1'b0; endfunction endmodule",
       Language::SystemVerilog2017);
+  // A header name without a body declaration is an ANSI formal of the
+  // implicit type `input logic` (IEEE 1800-2017 13.3, 13.4).
   require(
-      !missing.ok() && has_code(missing, "FSIM-SV-SEM-058"),
-      "classic function header arguments require body declarations");
+      missing.ok() && !has_code(missing, "FSIM-SV-SEM-058"),
+      "header-only function arguments are implicit input logic formals");
   const auto extra = parse_text(
       "classic_extra.sv",
       "module m; function logic f(a); input logic a; input logic b; "

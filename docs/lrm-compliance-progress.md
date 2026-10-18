@@ -253,6 +253,83 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 65: nested packages, generic subprograms, inline constraint scope, loop ranges
+
+Continues the unified architecture plan (`.local-artifacts/lrm-closure/ARCH-PLAN-b64.md`,
+steps 11 and 13) and closes corpus cases from the Batch 65 triage index
+(`.local-artifacts/lrm-closure/triage/b65-c/INDEX.md`).
+
+VHDL:
+
+- Nested package declarations and bodies (VHDL-2008, 4.7) are analyzed as
+  units of their own, made visible through the enclosing package; expanded
+  type marks `lib.pkg.t` select the package at elaboration.
+- Subprogram instances are overloadable (4.4); generic subprograms conform by
+  scope-aware profiles; `is <>` subprogram defaults bind with earlier generics
+  of the same list; an operator box default with no declared match is the
+  predefined operation (6.5.6.2).
+- Sequential `for` loops over runtime enumeration or BOOLEAN bounds, and over
+  integer bounds whose operator tree reports no signedness (10.10). A loop
+  range with a CHARACTER bound makes a `'0'`-like bound a CHARACTER too
+  (5.3.2.1), so `for I in '0' to '9'` indexes a CHARACTER-indexed array.
+- A concurrent procedure call may call a procedure that waits (11.4).
+- Predefined MINIMUM/MAXIMUM have result subtypes, and an array of
+  enumeration elements (BIT, BOOLEAN) compares element positions unsigned
+  (5.3.2.4).
+- `'element`, record aggregates of CHARACTER elements, dynamic element
+  constant slices, null-array assignment and comparison, REAL `to_string`
+  formats, dotted signal dependencies.
+
+SystemVerilog and Verilog:
+
+- `randomize() with { ... }` inside a class method reads the method's
+  formals and locals: names the object does not declare take their values
+  from the calling scope (18.7).
+- A Verilog-2005 function must declare an input (IEEE 1364-2005 10.4.1,
+  new FSIM-SV-SEM-422); SystemVerilog still allows none.
+- An unsized x/z enum value that does not fit the base type is an error
+  (6.19). A wildcard export carries only names the package refers to
+  (26.3, 26.6); package constants, which the frontend folds at their uses,
+  stay exported.
+- Interface ports inherit interface types in port lists; forwarded type
+  parameters; struct/union class properties; `:final` and override
+  specifiers; classic task/function headers with implicit formals; stream
+  unpacking into wider targets; clocking-block events `@(cb)`; block-scope
+  enum literals and parameters; zero distribution weights; negative real
+  delays wrap like their integral value; task calls on generate-block
+  array elements (`blk[1].task`).
+- Out-of-scope lists gained Verilator and Icarus cases that need non-LRM
+  extensions (excluded counts below).
+
+Measurement: all six suites were run in full on frozen `b65w8` and compared
+with Batch 64 (`b64d`): **50 new passes, zero regressions**. Batch 64 is
+shown on the same in-scope set; none of the newly excluded cases passed
+before.
+
+| Suite | Batch64 passes / in scope | Batch65 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2502 / 2575 | 2511 / 2575 | 251 |
+| sv-tests | 1434 / 1497 | 1434 / 1497 | 0 |
+| verilator | 1516 / 2140 | 1539 / 2140 | 275 |
+| vests | 3556 / 3646 | 3559 / 3646 | 2 |
+| nvc | 837 / 1262 | 852 / 1262 | 220 |
+| vhdl-compliance | 39 / 72 | 39 / 72 | 0 |
+
+The labelled ctest run ends with the same 27 known failures. Tests that
+encoded non-LRM behaviour were changed to the LRM rule: header-only classic
+task arguments (frontend), a negative delay wraps (suspending tasks), a
+no-input Verilog-2005 function is rejected (frontend, 1364-2005 10.4.1), and
+wildcard exports in the resolver, conformance and interface tests now refer
+to the names they export (26.6). FSIM-VHDL-SEM-062 is retired and
+FSIM-SV-SEM-422 added (2972 codes).
+
+Deferred (recorded in the plan): VHDL character literals overloaded by a
+visible user enumeration resolve to the user literal in BIT/std_logic
+contexts (needs context-typed literal resolution; tc870-873), class property
+widths from class value parameters in lowered methods, slices by a range
+attribute (`x(x'range)`), BOOLEAN loop parameters in conditions (tc1019),
+and overload resolution with null-range array actuals.
+
 ### Batch 64: unified architecture (value paths, bit streams, aggregate shapes), class value parameters
 
 Four read-only triage lanes (sv-tests, Verilator, nvc, VESTs and compliance)

@@ -1378,7 +1378,7 @@ Simulation::Impl::Impl(
                     ? invoke_checked_class_cast(handle, method)
                     : method == "@builtin-randomize"
                     ? invoke_source_randomize(
-                          handle, names, inline_constraints)
+                          handle, names, actuals, inline_constraints)
                     : method.starts_with("@builtin-rand-mode:")
                         || method.starts_with("@builtin-constraint-mode:")
                     ? invoke_source_randomization_mode(

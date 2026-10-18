@@ -448,12 +448,16 @@ module classic_function;
 endmodule
 )",
       Language::Verilog2005);
+  // IEEE 1364-2005 10.4.1: a Verilog function shall declare at least one
+  // input; SystemVerilog lifts the rule (IEEE 1800-2017 13.4).
   require(
-      classic.ok()
-          && classic.design.units.front().functions.size() == 1
-          && classic.design.units.front().functions.front()
-                 .arguments.empty(),
-      "classic no-argument Verilog function");
+      !classic.ok()
+          && std::any_of(classic.diagnostics.begin(),
+              classic.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-422";
+              }),
+      "classic no-argument Verilog function is rejected");
 
   const auto qualified_result = parse_text(
       "qualified_function_result.sv",

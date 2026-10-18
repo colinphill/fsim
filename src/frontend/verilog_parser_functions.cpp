@@ -146,6 +146,11 @@ FunctionDeclaration VerilogParser::parse_function(
                   + argument_name.text + "'");
         }
         classic_header_arguments.push_back(argument_name.text);
+        if (language_ == Language::SystemVerilog2017) {
+          // Without a body declaration the name is an ANSI formal of
+          // implicit type `input logic` (IEEE 1800-2017 13.3, 13.4).
+          current_procedural_names_.insert(argument_name.text);
+        }
       } while (match(TokenKind::Comma));
     } else {
     (void)require_standard(
@@ -338,12 +343,20 @@ FunctionDeclaration VerilogParser::parse_function(
   if (!classic_header_arguments.empty()) {
     std::vector<FunctionArgument> ordered;
     ordered.reserve(classic_header_arguments.size());
+    std::size_t declared_in_body { };
     for (const auto& argument_name : classic_header_arguments) {
       const auto found = std::ranges::find(
           function.arguments,
           argument_name,
           &FunctionArgument::name);
-      if (found == function.arguments.end()) {
+      if (found == function.arguments.end()
+          && language_ == Language::SystemVerilog2017) {
+        auto type = default_verilog_type();
+        type.spelling = "logic";
+        ordered.push_back(FunctionArgument{
+            argument_name, std::move(type), PortDirection::Input,
+            function.span});
+      } else if (found == function.arguments.end()) {
         error(
             start,
             "FSIM-SV-SEM-058",
@@ -351,9 +364,10 @@ FunctionDeclaration VerilogParser::parse_function(
                 + "' has no body declaration");
       } else {
         ordered.push_back(std::move(*found));
+        ++declared_in_body;
       }
     }
-    if (ordered.size() != function.arguments.size()) {
+    if (declared_in_body != function.arguments.size()) {
       error(
           start,
           "FSIM-SV-SEM-058",
@@ -363,6 +377,16 @@ FunctionDeclaration VerilogParser::parse_function(
     function.arguments = std::move(ordered);
   }
   function.span = span_from(start, previous());
+  // IEEE 1364-2005 10.4.1: a Verilog function declares at least one input.
+  // SystemVerilog lifts the restriction (IEEE 1800-2017 13.4).
+  if (language_ == Language::Verilog2005
+      && std::ranges::none_of(function.arguments,
+          [](const FunctionArgument& argument) {
+            return argument.direction == PortDirection::Input;
+          })) {
+    error(start, "FSIM-SV-SEM-422",
+        "a Verilog function must declare at least one input");
+  }
   if (!constructor && !qualified_constructor
       && function.return_type.spelling != "void") {
     validate_function_body(function, start);
@@ -439,18 +463,29 @@ void VerilogParser::validate_function_body(
           const std::vector<Statement>& statements) -> void {
         for (const auto& statement : statements) {
           if (statement.kind == StatementKind::Assignment) {
-            // Every leaf of a concatenation target (`{hi, lo} = v;`) is a
-            // variable lvalue (IEEE 1800-2017 10.4.1).
+            // Every leaf of a concatenation or streaming target
+            // (`{hi, lo} = v;`, `{<<8{b}} = v;`) is a variable lvalue (IEEE
+            // 1800-2017 10.4.1, 11.4.14.3). A stream's first operand is its
+            // slice size.
+            const auto stream = [](const Expression& expression) {
+              return expression.kind == ExpressionKind::Call
+                  && (expression.text == "@stream-left"
+                      || expression.text == "@stream-right");
+            };
             std::vector<const Expression*> leaves { &statement.target };
             for (std::size_t index = 0; index < leaves.size(); ++index) {
-              if (leaves[index]->kind == ExpressionKind::Concatenation) {
-                for (const auto& operand : leaves[index]->operands) {
-                  leaves.push_back(&operand);
+              const auto& composite = *leaves[index];
+              if (composite.kind == ExpressionKind::Concatenation
+                  || stream(composite)) {
+                for (std::size_t operand = stream(composite) ? 1U : 0U;
+                     operand < composite.operands.size(); ++operand) {
+                  leaves.push_back(&composite.operands[operand]);
                 }
               }
             }
             for (const auto* leaf : leaves) {
-            if (leaf->kind == ExpressionKind::Concatenation) {
+            if (leaf->kind == ExpressionKind::Concatenation
+                || stream(*leaf)) {
               continue;
             }
             const Expression* root = leaf;
@@ -640,7 +675,11 @@ VerilogParser::parse_ansi_callable_formals(
       // A virtual interface formal (IEEE 1800-2017 25.9).
       type = parse_virtual_interface_type(advance());
       inherited_type = type;
-    } else if (implicit_var_formal) {
+    } else if (implicit_var_formal
+        || (explicit_direction && !explicit_type
+            && at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1))) {
+      // A formal with no data type is `logic`, also as the element type of
+      // an unpacked array formal (IEEE 1800-2017 13.3).
       type = default_verilog_type();
       type.spelling = "logic";
       inherited_type = type;
@@ -737,6 +776,11 @@ TaskDeclaration VerilogParser::parse_task(
               "duplicate task argument '" + argument_name.text + "'");
         }
         classic_header_arguments.push_back(argument_name.text);
+        if (language_ == Language::SystemVerilog2017) {
+          // Without a body declaration the name is an ANSI formal of
+          // implicit type `input logic` (IEEE 1800-2017 13.3).
+          current_procedural_names_.insert(argument_name.text);
+        }
       } while (match(TokenKind::Comma));
     } else {
     (void)require_standard(
@@ -846,8 +890,13 @@ TaskDeclaration VerilogParser::parse_task(
         if (explicit_argument_type) {
           explicit_task_arguments.insert(argument_name.text);
         }
+        // A classic header name is declared by this body declaration.
+        const bool header_argument = std::ranges::find(
+            classic_header_arguments, argument_name.text)
+            != classic_header_arguments.end();
         if ((!current_procedural_names_.insert(
-                argument_name.text).second && !typed_earlier)
+                argument_name.text).second && !typed_earlier
+                && !header_argument)
             || repeated_direction) {
           error(
               argument_name,
@@ -919,12 +968,20 @@ TaskDeclaration VerilogParser::parse_task(
   if (!classic_header_arguments.empty()) {
     std::vector<TaskArgument> ordered;
     ordered.reserve(classic_header_arguments.size());
+    std::size_t declared_in_body { };
     for (const auto& argument_name : classic_header_arguments) {
       const auto found = std::ranges::find(
           task.arguments,
           argument_name,
           &TaskArgument::name);
-      if (found == task.arguments.end()) {
+      if (found == task.arguments.end()
+          && language_ == Language::SystemVerilog2017) {
+        auto type = default_verilog_type();
+        type.spelling = "logic";
+        ordered.push_back(TaskArgument{
+            argument_name, std::move(type), PortDirection::Input,
+            task.span});
+      } else if (found == task.arguments.end()) {
         error(
             start,
             "FSIM-SV-SEM-067",
@@ -932,9 +989,10 @@ TaskDeclaration VerilogParser::parse_task(
                 + "' has no body declaration");
       } else {
         ordered.push_back(std::move(*found));
+        ++declared_in_body;
       }
     }
-    if (ordered.size() != task.arguments.size()) {
+    if (declared_in_body != task.arguments.size()) {
       error(
           start,
           "FSIM-SV-SEM-067",
@@ -1021,7 +1079,11 @@ void VerilogParser::validate_task_body(
       for (const auto& statement : statements) {
         auto scoped = automatic;
         for (const auto& declaration : statement.declarations) {
-          scoped.insert(declaration.name);
+          if (declaration.systemverilog_static) {
+            scoped.erase(declaration.name);
+          } else {
+            scoped.insert(declaration.name);
+          }
         }
         const auto report = [&](const std::string& name,
                                 const std::string& use) {
@@ -1066,7 +1128,14 @@ void VerilogParser::validate_task_body(
         }
       }
     };
-    check(check, task.statements, names);
+    // A local explicitly declared `static` is not automatic (6.21).
+    auto automatic_names = names;
+    for (const auto& variable : task.variables) {
+      if (variable.systemverilog_static) {
+        automatic_names.erase(variable.name);
+      }
+    }
+    check(check, task.statements, automatic_names);
   }
   const auto inspect =
       [&](const auto& self,

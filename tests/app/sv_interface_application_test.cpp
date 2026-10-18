@@ -424,9 +424,15 @@ endmodule
   const auto callable_edit = execute(
       edited_config, fsim::app::SimulationEngine::compiled);
   verify(callable_edit);
+  // A wildcard export carries only the names the package actually imports
+  // by referring to them (IEEE 1800-2017 26.3, 26.6).
   edit_source(
       "export base_values::VALUE, base_values::word_t, base_values::bump;",
-      "export base_values::*;");
+      "export base_values::*;\n"
+      "  typedef word_t public_word_t;\n"
+      "  function automatic logic [3:0] public_bump(input logic [3:0] v);\n"
+      "    return bump(v);\n"
+      "  endfunction");
   const auto export_edit = execute(
       edited_config, fsim::app::SimulationEngine::compiled);
   verify(export_edit);

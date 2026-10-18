@@ -440,16 +440,12 @@ endmodule
         const auto value = simulation.find_signal(
             "reference_failure.value");
         assert(value);
-        bool rejected = false;
-        try {
-            (void)simulation.run();
-        } catch (const std::exception& error) {
-            rejected = std::string_view { error.what() }.find("cannot be negative")
-                != std::string_view::npos;
-        }
-        assert(rejected);
+        // A negative delay is its two's-complement value read as an unsigned
+        // time (IEEE 1800-2017 9.4.1), not an error: the task resumes at the
+        // last representable tick and its ref formal writes the actual.
+        (void)simulation.run();
         assert(
-            simulation.read_signal(*value).to_msb_string() == "00000111");
+            simulation.read_signal(*value).to_msb_string() == "00000000");
     }
 }
 

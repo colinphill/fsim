@@ -3844,11 +3844,38 @@ bool Lowerer::lower_hir_statement_unsuspended(
             } else {
                 const auto source_width = hir_expression_width(
                     *value, hir_process_scope_);
-                const auto lowered = source_width && *source_width != 0U
+                auto lowered = source_width && *source_width != 0U
                     ? lower_hir_expression(*value, *source_width)
                     : std::nullopt;
                 if (!lowered) {
                     return assignment_rejected(__LINE__);
+                }
+                // A source wider than the targets supplies its leftmost bits
+                // (IEEE 1800-2017 11.4.14.3), before any slice reordering.
+                std::size_t target_width { };
+                bool target_width_known = true;
+                for (auto operand = stream.operands.begin() + 1;
+                    operand != stream.operands.end(); ++operand) {
+                    const auto width = hir_expression_width(
+                        *operand, hir_process_scope_);
+                    if (!width || *width == 0U) {
+                        target_width_known = false;
+                        break;
+                    }
+                    target_width += *width;
+                }
+                if (target_width_known
+                    && register_width(*lowered) > target_width) {
+                    const auto selected = allocate_register(
+                        target_width, register_domain(*lowered));
+                    process_.operations.emplace_back(Extract {
+                        selected,
+                        *lowered,
+                        static_cast<std::uint32_t>(
+                            register_width(*lowered) - target_width),
+                        static_cast<std::uint32_t>(target_width),
+                    });
+                    lowered = selected;
                 }
                 append.operation = ContainerBitstreamOperation::append_value;
                 append.value = *lowered;
@@ -8528,9 +8555,25 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     != declaration)) {
             return assignment_rejected(__LINE__);
         }
+        // A nested select of a packed member (`s.m[1][2]`) composes its
+        // selects relative to the member at the root of the chain.
+        const auto systemverilog_selection_root = [&] {
+            auto root = target_is_selected ? target_operands.front() : *target;
+            for (auto nested = specialized_hir_unit_->find_expression(root);
+                 nested && nested->systemverilog != nullptr
+                 && (nested->systemverilog->kind
+                         == semantic::sv::ExpressionKind::index
+                     || nested->systemverilog->kind
+                         == semantic::sv::ExpressionKind::slice)
+                 && !nested->systemverilog->operands.empty();
+                 nested = specialized_hir_unit_->find_expression(root)) {
+                root = nested->systemverilog->operands.front();
+            }
+            return root;
+        }();
         const auto systemverilog_member
             = hir_systemverilog_member_selection(
-                target_is_selected ? target_operands.front() : *target);
+                systemverilog_selection_root);
         const auto vhdl_member = vhdl_array_call
             ? std::optional<HirVhdlMemberSelection> { }
             : hir_vhdl_member_selection(
@@ -8914,6 +8957,51 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 true,
             };
         }
+        // A constant slice of a dynamically indexed element (`x(i)(3 downto
+        // 0)`): the slice's offset within the element plus the element's
+        // runtime offset.
+        if (!dynamic_vhdl_selection && target_is_selected && slice
+            && !constant_selection && target_expression->vhdl != nullptr
+            && hir_constant_integer(target_operands[1])
+            && hir_constant_integer(target_operands[2])) {
+            const auto element = specialized_hir_unit_->find_expression(
+                target_operands[0]);
+            const auto in_element = hir_constant_element_selection(
+                *target, hir_process_scope_);
+            const auto element_width = hir_expression_width(
+                target_operands[0], hir_process_scope_);
+            if (element && element->vhdl != nullptr
+                && element->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                && element->vhdl->operands.size() == 2U
+                && !hir_constant_integer(element->vhdl->operands[1])
+                && in_element && in_element->width != 0U && element_width
+                && *element_width != 0U
+                && in_element->offset < *element_width
+                && in_element->width <= *element_width - in_element->offset
+                && *element_width <= std::numeric_limits<std::uint32_t>::max()
+                && binding->width != 0U
+                && binding->width - 1U
+                    <= static_cast<std::size_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                const auto offset = lower_hir_vhdl_dynamic_element_offset(
+                    element->vhdl->operands[0], element->vhdl->operands[1],
+                    *element_width,
+                    static_cast<std::uint32_t>(in_element->offset));
+                if (!offset) {
+                    return assignment_rejected(__LINE__);
+                }
+                dynamic_vhdl_selection = DynamicPartIndex {
+                    *offset,
+                    static_cast<std::int64_t>(binding->width - 1U),
+                    0,
+                    0U,
+                    static_cast<std::uint32_t>(in_element->width),
+                    true,
+                    true,
+                };
+            }
+        }
         const auto vhdl_dynamic_slice_width
             = target_is_selected && slice && !constant_selection
                 && target_expression->vhdl != nullptr
@@ -8965,6 +9053,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             assignment_width = member_width
                 ? member_width
                 : std::optional { binding->width };
+        }
+        // Assigning a null array to a null array object changes nothing
+        // (IEEE 1076-2008 10.6.2.1, 5.3.2.2).
+        if (assignment_width && *assignment_width == 0U
+            && target_expression->vhdl != nullptr && value
+            && [&] {
+                   const auto source
+                       = specialized_hir_unit_->find_expression(*value);
+                   return (source && source->vhdl != nullptr
+                              && source->vhdl->kind
+                                  == semantic::vhdl::ExpressionKind::
+                                      string_literal
+                              && source->vhdl->text == "\"\"")
+                       || hir_expression_width(*value, hir_process_scope_)
+                              .value_or(1U)
+                           == 0U;
+               }()) {
+            return true;
         }
         if (!assignment_width || *assignment_width == 0U
             || *assignment_width
@@ -15750,26 +15856,65 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *vhdl_loop_declaration, hir_process_scope_, true);
             const auto parameter = hir_local_registers_.find(
                 vhdl_loop_declaration->value());
-            if (!initial_width || !final_width
-                || *initial_width == 0U || *initial_width > 64U
-                || initial_width != final_width
-                || initial_domain != frontend::ValueDomain::Integer
-                || final_domain != frontend::ValueDomain::Integer
-                || !hir_expression_signed(*initial_id)
-                || !hir_expression_signed(*final_id)
-                || !parameter_binding
+            // The parameter holds an integer, or the position number of an
+            // enumeration value (LRM 10.10 accepts any discrete range).
+            // Enumeration bounds are unsigned position codes, widened to the
+            // parameter's integer representation.
+            const auto parameter_width = parameter_binding
+                ? parameter_binding->width : std::size_t { };
+            const auto bound_ok = [&](const semantic::ExpressionId id,
+                                      const std::optional<std::size_t> width,
+                                      const std::optional<
+                                          frontend::ValueDomain> domain) {
+                if (!width || *width == 0U || *width > parameter_width
+                    || !domain) {
+                    return false;
+                }
+                // VHDL integer-domain values are signed integers (LRM
+                // 5.2.3) whatever signedness an operator tree reports.
+                if (*domain == frontend::ValueDomain::Integer) {
+                    return *width == parameter_width;
+                }
+                return (*domain == frontend::ValueDomain::Bit2
+                           || *domain == frontend::ValueDomain::Boolean)
+                    && *width < parameter_width
+                    && !hir_expression_signed(id);
+            };
+            if (!parameter_binding
                 || parameter_binding->kind
                     != HirRuntimeBindingKind::local
                 || parameter_binding->domain
                     != frontend::ValueDomain::Integer
                 || !parameter_binding->signed_value
-                || parameter_binding->width != *initial_width
+                || parameter_width == 0U || parameter_width > 64U
+                || !bound_ok(*initial_id, initial_width, initial_domain)
+                || !bound_ok(*final_id, final_width, final_domain)
                 || parameter == hir_local_registers_.end()
-                || register_width(parameter->second) != *initial_width
+                || register_width(parameter->second) != parameter_width
                 || register_domain(parameter->second)
                     != frontend::ValueDomain::Integer) {
                 return false;
             }
+            const auto lower_bound = [&](const semantic::ExpressionId id,
+                                         const std::size_t width,
+                                         const frontend::ValueDomain domain)
+                -> std::optional<RegisterId> {
+                const auto value = lower_hir_expression(id, width);
+                if (!value || register_width(*value) != width
+                    || register_domain(*value) != domain) {
+                    return std::nullopt;
+                }
+                if (domain == frontend::ValueDomain::Integer) {
+                    return value;
+                }
+                const auto widened = resize_register(
+                    *value, parameter_width, false);
+                const auto position = allocate_register(
+                    parameter_width, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(CopyRegister {
+                    position, widened });
+                return position;
+            };
             const auto value_fits_signed_width = [](
                 const std::int64_t value, const std::size_t width) {
                 if (width == 0U || width > 64U) {
@@ -15784,9 +15929,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             };
             if (static_bounds
                 && (!value_fits_signed_width(
-                        static_bounds->first, *initial_width)
+                        static_bounds->first, parameter_width)
                     || !value_fits_signed_width(
-                        static_bounds->second, *final_width))) {
+                        static_bounds->second, parameter_width))) {
                 return false;
             }
             // Nested lowering can restore hir_local_registers_, invalidating
@@ -15796,38 +15941,32 @@ bool Lowerer::lower_hir_statement_unsuspended(
             std::optional<RegisterId> final;
             if (static_bounds) {
                 initial = allocate_register(
-                    *initial_width, frontend::ValueDomain::Integer);
+                    parameter_width, frontend::ValueDomain::Integer);
                 process_.operations.emplace_back(LoadConstant {
                     *initial,
-                    integer_value(static_bounds->first, *initial_width),
+                    integer_value(static_bounds->first, parameter_width),
                 });
                 final = allocate_register(
-                    *final_width, frontend::ValueDomain::Integer);
+                    parameter_width, frontend::ValueDomain::Integer);
                 process_.operations.emplace_back(LoadConstant {
                     *final,
-                    integer_value(static_bounds->second, *final_width),
+                    integer_value(static_bounds->second, parameter_width),
                 });
             } else {
-                initial = lower_hir_expression(
-                    *initial_id, *initial_width);
-                final = lower_hir_expression(
-                    *final_id, *final_width);
-                if (!initial || !final
-                    || register_width(*initial) != *initial_width
-                    || register_width(*final) != *final_width
-                    || register_domain(*initial)
-                        != frontend::ValueDomain::Integer
-                    || register_domain(*final)
-                        != frontend::ValueDomain::Integer) {
+                initial = lower_bound(
+                    *initial_id, *initial_width, *initial_domain);
+                final = lower_bound(
+                    *final_id, *final_width, *final_domain);
+                if (!initial || !final) {
                     return false;
                 }
             }
             const auto captured_initial = allocate_register(
-                *initial_width, frontend::ValueDomain::Integer);
+                parameter_width, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(CopyRegister {
                 captured_initial, *initial });
             const auto captured_final = allocate_register(
-                *final_width, frontend::ValueDomain::Integer);
+                parameter_width, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(CopyRegister {
                 captured_final, *final });
 
@@ -15953,9 +16092,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto step = static_cast<InstructionIndex>(
                 process_.operations.size());
             const auto one = load_integer(
-                1, *initial_width, frontend::ValueDomain::Integer);
+                1, parameter_width, frontend::ValueDomain::Integer);
             const auto next = allocate_register(
-                *initial_width, frontend::ValueDomain::Integer);
+                parameter_width, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(Binary {
                 descending ? BinaryOperator::subtract_signed
                            : BinaryOperator::add_signed,
@@ -18598,6 +18737,33 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            // `@(cb)` names a clocking block's clocking event (IEEE
+            // 1800-2017 14.3).
+            const auto named_clocking_event = [&]()
+                -> std::optional<std::vector<semantic::sv::Sensitivity>> {
+                if (input.sensitivities.size() != 1U
+                    || input.sensitivities.front().expression
+                    || input.sensitivities.front().edge
+                        != semantic::sv::EdgeKind::any) {
+                    return std::nullopt;
+                }
+                const auto selected = specialized_hir_unit_->design()
+                    .find_unit(specialized_hir_unit_->unit());
+                if (!selected || selected->systemverilog == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& blocks = selected->systemverilog->clocking_blocks;
+                const auto block = std::ranges::find(blocks,
+                    input.sensitivities.front().signal,
+                    &semantic::sv::ClockingBlock::name);
+                if (block == blocks.end() || block->event.empty()) {
+                    return std::nullopt;
+                }
+                return block->event;
+            }();
+            const auto& sensitivities = named_clocking_event
+                ? *named_clocking_event
+                : input.sensitivities;
             const auto lowered = input.clocking_cycle_delay
                 ? input.clocking_cycle_count && clocking_event
                     && lower_repeated_event_wait(
@@ -18608,12 +18774,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 : input.assignment_control_repeated
                 ? input.loop_limit
                     && lower_repeated_event_wait(
-                        input.sensitivities,
+                        sensitivities,
                         std::nullopt,
                         *input.loop_limit,
                         input.statements)
                 : lower_event_wait(
-                      input.sensitivities,
+                      sensitivities,
                       std::nullopt,
                       input.statements);
             if (!lowered) {

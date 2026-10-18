@@ -9,6 +9,28 @@
 
 namespace fsim::semantic::vhdl {
 
+bool operator_designator(std::string_view name)
+{
+    if (name.size() >= 2U && name.front() == '"' && name.back() == '"') {
+        name = name.substr(1U, name.size() - 2U);
+    }
+    if (name.empty()) {
+        return false;
+    }
+    static constexpr std::string_view word_operators[] {
+        "and", "or", "nand", "nor", "xor", "xnor", "not", "abs", "mod",
+        "rem", "sll", "srl", "sla", "sra", "rol", "ror",
+    };
+    return std::ranges::none_of(name, [](const char c) {
+               return std::isalnum(static_cast<unsigned char>(c)) != 0
+                   || c == '_';
+           })
+        || std::ranges::any_of(word_operators,
+            [&](const std::string_view word) {
+                return support::equal_ignoring_ascii_case(name, word);
+            });
+}
+
 SubtypeIndication constrained_element_subtype(
     const SubtypeIndication& owner,
     const std::string_view step,

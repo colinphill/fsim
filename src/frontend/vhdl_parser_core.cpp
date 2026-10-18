@@ -154,6 +154,7 @@ ParseResult VhdlParser::run()
             continue;
         } else if (match_keyword("package", true)) {
             const auto start = previous();
+            const auto context = pending_context;
             if (match_keyword("body", true)) {
                 auto unit = parse_package(start, true);
                 attach_context(unit);
@@ -163,6 +164,13 @@ ParseResult VhdlParser::run()
                 attach_context(unit);
                 design.units.push_back(std::move(unit));
             }
+            // Nested packages follow their enclosing unit, with its context.
+            for (auto& nested : nested_package_units_) {
+                nested.vhdl_context.insert(nested.vhdl_context.begin(),
+                    context.begin(), context.end());
+                design.units.push_back(std::move(nested));
+            }
+            nested_package_units_.clear();
         } else {
             const auto unexpected = advance();
             error(unexpected, "FSIM-VHDL-UNSUPPORTED-001",
@@ -492,6 +500,32 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             const auto package_start = advance();
             parse_local_vhdl_package_instantiation(
                 unit.package_instances, package_start);
+        } else if (vhdl_standard_ >= VhdlStandard::Vhdl2008
+            && keyword("package", 0, true)
+            && (keyword("body", 1, true)
+                || (at(TokenKind::Identifier, 1) && keyword("is", 2, true)))) {
+            // A package declaration or body in a package declarative region
+            // (IEEE 1076-2008 4.7, 4.8; earlier standards forbid it).
+            const auto nested_start = advance();
+            const bool nested_body = match_keyword("body", true);
+            auto saved_types = vhdl_named_types_;
+            auto saved_kinds = vhdl_named_type_kinds_;
+            auto nested = parse_package(nested_start, nested_body);
+            vhdl_named_types_ = std::move(saved_types);
+            vhdl_named_type_kinds_ = std::move(saved_kinds);
+            VhdlContextItem library;
+            library.kind = VhdlContextItemKind::LibraryClause;
+            library.selected_names.push_back("work");
+            library.span = nested_start.span;
+            VhdlContextItem enclosing;
+            enclosing.kind = VhdlContextItemKind::UseClause;
+            enclosing.selected_names.push_back("work." + unit.name);
+            enclosing.selected_names.push_back(
+                "work." + unit.name + ".all");
+            enclosing.span = nested_start.span;
+            nested.vhdl_context.insert(nested.vhdl_context.begin(),
+                { std::move(library), std::move(enclosing) });
+            nested_package_units_.push_back(std::move(nested));
         } else if (match(TokenKind::PslDirective)) {
             error(previous(), "FSIM-VHDL-PSL-009",
                 "a PSL directive is not legal in a package declarative region");

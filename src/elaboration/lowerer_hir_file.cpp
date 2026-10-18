@@ -3552,7 +3552,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }();
         const bool real_value = value_type_name == "real"
             || hir_systemverilog_scalar_kind(*value)
-                == frontend::SystemVerilogScalarKind::Real;
+                == frontend::SystemVerilogScalarKind::Real
+            || hir_vhdl_expression_is_real(*value);
         const auto fifth = actual(time_value ? "unit" : "digits", 4U);
         if (call.procedure_arguments.size() < 2U
             || call.procedure_arguments.size()
@@ -3776,15 +3777,18 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             append_string(text);
             return true;
         }
-        if (real_value && fifth) {
-            const auto digits = hir_constant_integer(*fifth);
+        if (real_value) {
+            const auto digits = fifth
+                ? hir_constant_integer(*fifth)
+                : std::optional<std::int64_t> { 0 };
             if (!digits || *digits < 0 || *digits > 64) {
                 return fail("FSIM-ELAB-VHTEXTIO-011",
                     "TextIO write of REAL requires static DIGITS in 0..64");
             }
-            if (*digits > 0) {
+            {
                 // Nonzero DIGITS selects fixed-point notation with that many
-                // digits after the point.
+                // digits after the point; zero, the default, selects the
+                // exponent form (IEEE 1076-2008 16.4).
                 const auto lowered = lower_hir_expression(*value, 64U);
                 if (!lowered) {
                     return false;
@@ -3806,10 +3810,14 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     process_.operations.emplace_back(LoadConstant {
                         operation.second, unsigned_value(64U, 32U) });
                 }
-                operation.format = OutputFormat::real_fixed;
+                operation.format = *digits > 0
+                    ? OutputFormat::real_fixed
+                    : OutputFormat::real_scientific;
                 operation.scalar_kind
                     = frontend::SystemVerilogScalarKind::Real;
-                operation.precision = static_cast<std::uint32_t>(*digits);
+                operation.precision = *digits > 0
+                    ? static_cast<std::uint32_t>(*digits)
+                    : 6U;
                 if (!dynamic_field_register) {
                     operation.minimum_width = minimum_width;
                 }

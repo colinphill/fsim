@@ -4137,6 +4137,68 @@ SystemVerilogClassHirExecution::evaluate_packed(
         && value->text.starts_with("@sv-container-index:")) {
         return evaluate_class_handle_index(*value, handle, environment);
     }
+    // `T'(x)`: an integral cast to a built-in, sign or size target, or to a
+    // typedef of a packed integral type (IEEE 1800-2017 6.24.1).
+    if (constexpr auto cast_prefix = std::string_view { "@sv-cast:" };
+        value->kind == ExpressionKind::call
+        && value->text.starts_with(cast_prefix)
+        && value->operands.size() == 1U) {
+        const auto name = std::string_view { value->text }.substr(
+            cast_prefix.size());
+        const auto* operand_expression = expression(value->operands.front());
+        auto operand = evaluate_packed(
+            value->operands.front(), handle, environment);
+        if (!operand || operand_expression == nullptr) {
+            return std::nullopt;
+        }
+        const bool operand_signed = operand_expression->signed_value;
+        std::optional<std::size_t> target_width;
+        bool target_signed = operand_signed;
+        if (name == "byte" || name == "shortint" || name == "int"
+            || name == "longint" || name == "integer") {
+            target_width = name == "byte" ? 8U
+                : name == "shortint"      ? 16U
+                : name == "longint"       ? 64U
+                                          : 32U;
+            target_signed = true;
+        } else if (name == "bit" || name == "logic" || name == "reg") {
+            target_width = 1U;
+            target_signed = false;
+        } else if (name == "signed" || name == "unsigned") {
+            target_width = operand->width();
+            target_signed = name == "signed";
+        } else if (!name.empty()
+            && std::ranges::all_of(name, [](const char c) {
+                   return c >= '0' && c <= '9';
+               })) {
+            target_width = static_cast<std::size_t>(
+                std::strtoull(std::string { name }.c_str(), nullptr, 10));
+        } else {
+            for (const auto& candidate : hir_.declarations()) {
+                if (candidate.form
+                        != semantic::sv::DeclarationForm::typedef_declaration
+                    || candidate.name != name || !candidate.type) {
+                    continue;
+                }
+                const auto candidate_width = width(*candidate.type, 0U);
+                if (candidate_width == 0U) {
+                    continue;
+                }
+                target_width = candidate_width;
+                target_signed = candidate.type->signed_value;
+                break;
+            }
+        }
+        if (!target_width || *target_width == 0U) {
+            return std::nullopt;
+        }
+        const auto converted = resize_expression_operand(
+            *operand, *target_width, operand_signed);
+        if (!converted) {
+            return std::nullopt;
+        }
+        return apply_context(*converted, target_signed);
+    }
     if (value->kind == ExpressionKind::index) {
         const auto indexed = evaluate_class_handle_index(
             *value, handle, environment);

@@ -483,7 +483,10 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
         }
       }
     };
-    if (production.rules.size() == 1U) {
+    // A weighted rule is chosen with probability weight/sum, so a sole rule
+    // of weight zero is never chosen (IEEE 1800-2017 18.17.1).
+    if (production.rules.size() == 1U
+        && production.rules.front().weight.empty()) {
       emit_rule(production.rules.front());
     } else {
       const auto index_suffix = suffix + "_" + std::to_string(block_counter++);
