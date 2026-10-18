@@ -290,6 +290,10 @@ namespace {
             anonymous_aggregate_types_.emplace(*signature, type_id);
         }
     }
+    // `type(expression)` as a data type (IEEE 1800-2017 6.23).
+    if (input.systemverilog_type_of) {
+        output.type_of = expression(*input.systemverilog_type_of, scope, parent);
+    }
     return output;
 }
 

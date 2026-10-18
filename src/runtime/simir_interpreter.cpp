@@ -1502,6 +1502,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         = process.startup_phase()
             == ProcessStartupPhase::package_static_initializer;
     if (process.startup_phase() != ProcessStartupPhase::ordinary
+        && process.startup_phase() != ProcessStartupPhase::after_procedures
         && !package_static_initializer) {
         throw std::invalid_argument {
             "invalid SimIR process startup phase"
@@ -1968,7 +1969,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     const auto program = program_owner.program();
     std::optional<Impl::ConstantDriverStartupEntry> compact_shape;
     if (executable
-        && program.startup_phase() == ProcessStartupPhase::ordinary) {
+        && program.startup_phase() != ProcessStartupPhase::package_static_initializer) {
         compact_shape
             = recognize_constant_driver_startup(id, program);
     }
@@ -3363,7 +3364,7 @@ void Interpreter::start()
             }
             const auto program = impl_->processes.program_view(id);
             if (program.startup_phase()
-                != ProcessStartupPhase::ordinary) {
+                == ProcessStartupPhase::package_static_initializer) {
                 continue;
             }
             if (!program.static_sensitivity().empty()
@@ -3400,23 +3401,28 @@ void Interpreter::start()
         return reads_settling;
     };
     for (const bool late : { false, true }) {
-        for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-            if (inert(id)) {
-                continue;
-            }
-            const auto program = impl_->processes.program_view(id);
-            if (program.startup_phase()
-                != ProcessStartupPhase::ordinary) {
-                continue;
-            }
-            if (!program.initialize() || program.final()
-                || prearmed_static_waits[id] || starts_late(id) != late) {
-                continue;
-            }
-            if (late) {
-                impl_->queue_next_delta(id);
-            } else {
-                impl_->queue_at(id, impl_->scheduler.now(), true);
+        // Processes of the after_procedures phase start once every other
+        // ordinary process of time zero has been queued.
+        for (const auto phase : { ProcessStartupPhase::ordinary,
+                 ProcessStartupPhase::after_procedures }) {
+            for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+                if (inert(id)) {
+                    continue;
+                }
+                const auto program = impl_->processes.program_view(id);
+                if (program.startup_phase() != phase) {
+                    continue;
+                }
+                if (!program.initialize() || program.final()
+                    || prearmed_static_waits[id]
+                    || starts_late(id) != late) {
+                    continue;
+                }
+                if (late) {
+                    impl_->queue_next_delta(id);
+                } else {
+                    impl_->queue_at(id, impl_->scheduler.now(), true);
+                }
             }
         }
     }

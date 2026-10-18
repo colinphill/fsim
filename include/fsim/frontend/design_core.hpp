@@ -82,6 +82,8 @@ enum class ExpressionKind {
 
 // `text` contains the identifier/literal/operator/callee. Operands retain
 // source order for language-independent lowering.
+struct Type;
+
 struct Expression {
     ExpressionKind kind { ExpressionKind::Invalid };
     std::string text;
@@ -120,6 +122,9 @@ struct Expression {
     // identifier. `text` remains the decoded lowering spelling.
     std::optional<std::string> vhdl_selected_name_spelling;
     GeneratedTextKind generated_text { GeneratedTextKind::none };
+    // The data type of `type(data_type)` (IEEE 1800-2017 6.23); a
+    // `type(expression)` keeps its expression as the only operand.
+    std::shared_ptr<const Type> systemverilog_type_operand;
     Expression() = default;
 
     Expression(
@@ -538,6 +543,9 @@ enum class VhdlPredefinedSubtypeAttribute : std::uint8_t {
 struct Type {
     ValueDomain domain { ValueDomain::Unknown };
     std::string spelling;
+    // `type(expression)` used as a data type: the expression whose type this
+    // is (IEEE 1800-2017 6.23).
+    std::shared_ptr<const Expression> systemverilog_type_of;
     SystemVerilogScalarKind systemverilog_scalar { SystemVerilogScalarKind::None };
     std::string systemverilog_net_type;
     // Canonical selected function name from a SystemVerilog user-defined
@@ -1545,6 +1553,9 @@ enum class OutputFormat {
     Pattern,
     // `%v`: a net's strength (IEEE 1800-2017 21.2.1.5).
     Strength,
+    // `%l`: the library binding of the module, `library.cell` (IEEE
+    // 1800-2017 21.2.1.1).
+    Library,
 };
 
 struct OutputValue {

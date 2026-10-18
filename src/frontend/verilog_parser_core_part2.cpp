@@ -760,17 +760,31 @@ DesignUnit VerilogParser::parse_module(
     DesignUnit unit;
     unit.systemverilog_assertion_declarations
         = compilation_unit_checkers_;
-    // A checker may be instantiated before its declaration in the unit
-    // (IEEE 1800-2017 17.3): note every checker the body declares.
+    // A checker may be instantiated before its declaration (IEEE
+    // 1800-2017 17.3): note every checker the body declares and every
+    // checker declared later in the compilation unit, outside other
+    // modules, interfaces and programs.
     unit_checker_names_.clear();
+    bool past_body = false;
+    bool in_other_unit = false;
     for (auto index = index_; index + 1U < tokens_.size(); ++index) {
         const auto& token = tokens_[index];
-        if (token.kind == TokenKind::Identifier
-            && (token.text == "endmodule" || token.text == "endinterface"
-                || token.text == "endprogram")) {
-            break;
+        if (token.kind != TokenKind::Identifier) {
+            continue;
         }
-        if (token.kind == TokenKind::Identifier && token.text == "checker"
+        if (token.text == "endmodule" || token.text == "endinterface"
+            || token.text == "endprogram") {
+            past_body = true;
+            in_other_unit = false;
+            continue;
+        }
+        if (past_body
+            && (token.text == "module" || token.text == "macromodule"
+                || token.text == "interface" || token.text == "program")) {
+            in_other_unit = true;
+            continue;
+        }
+        if (!in_other_unit && token.text == "checker"
             && tokens_[index + 1U].kind == TokenKind::Identifier) {
             unit_checker_names_.insert(tokens_[index + 1U].text);
         }
@@ -1714,9 +1728,25 @@ DesignUnit VerilogParser::parse_module(
         }
     }
     resolve_implicit_nets(unit);
-    instantiate_checkers(unit);
-    resolve_assertion_references(unit);
-    resolve_generate_assertion_references(unit);
+    // A checker declared later in the compilation unit (17.3) is
+    // instantiated once the whole unit has been read.
+    const bool later_checker = std::ranges::any_of(
+        unit.systemverilog_checker_instances,
+        [&](const SystemVerilogCheckerInstance& instance) {
+            return unit_checker_names_.contains(instance.declaration_name)
+                && std::ranges::none_of(
+                    unit.systemverilog_assertion_declarations,
+                    [&](const SystemVerilogAssertionDeclaration& declaration) {
+                        return declaration.kind
+                                == SystemVerilogAssertionDeclarationKind::Checker
+                            && declaration.name == instance.declaration_name;
+                    });
+        });
+    if (later_checker) {
+        deferred_checker_units_.push_back(unit.name);
+    } else {
+        resolve_unit_checkers(unit);
+    }
     resolve_dpi_declarations(
         unit.systemverilog_dpi_declarations,
         unit.functions,

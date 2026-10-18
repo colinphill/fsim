@@ -98,6 +98,7 @@ namespace {
     const frontend::OutputFormat format) noexcept
 {
     return format != frontend::OutputFormat::Hierarchy
+        && format != frontend::OutputFormat::Library
         && format != frontend::OutputFormat::Time;
 }
 
@@ -581,6 +582,7 @@ Lowerer::hir_string_format_expression_status(
         *format->systemverilog->decoded_string);
     const auto consumes_value = [](const frontend::OutputFormat output) {
         return output != frontend::OutputFormat::Hierarchy
+            && output != frontend::OutputFormat::Library
             && output != frontend::OutputFormat::Time;
     };
     const auto invalid_conversion = std::ranges::any_of(
@@ -669,6 +671,10 @@ Lowerer::lower_hir_formatted_string(
         append_literal(conversion.prefix);
         if (conversion.format == frontend::OutputFormat::Hierarchy) {
             append_literal(hir_scope_hierarchy());
+            return true;
+        }
+        if (conversion.format == frontend::OutputFormat::Library) {
+            append_literal(hir_library_cell());
             return true;
         }
         StringMethod operation;
@@ -838,25 +844,53 @@ Lowerer::lower_hir_formatted_string(
     auto time_values = arguments.size() > value_index + other_values
         ? arguments.size() - value_index - other_values
         : std::size_t { };
-    for (const auto& conversion : parsed.conversions) {
-        std::optional<semantic::ExpressionId> value;
-        if (conversion.format == frontend::OutputFormat::Time) {
-            if (time_values != 0U && value_index < arguments.size()) {
+    const auto append_format = [&](const frontend::ParsedOutputFormat& format) {
+        for (const auto& conversion : format.conversions) {
+            std::optional<semantic::ExpressionId> value;
+            if (conversion.format == frontend::OutputFormat::Time) {
+                if (time_values != 0U && value_index < arguments.size()) {
+                    value = arguments[value_index++];
+                    --time_values;
+                }
+            } else if (output_conversion_consumes_value(conversion.format)) {
+                if (value_index >= arguments.size()) {
+                    return false;
+                }
                 value = arguments[value_index++];
-                --time_values;
             }
-        } else if (output_conversion_consumes_value(conversion.format)) {
-            value = arguments[value_index++];
+            if (!append_value(conversion, value)) {
+                return false;
+            }
         }
-        if (!append_value(conversion, value)) {
-            return std::nullopt;
-        }
+        append_literal(format.trailing_text);
+        return true;
+    };
+    if (!append_format(parsed)) {
+        return std::nullopt;
     }
-    append_literal(parsed.trailing_text);
-    for (; value_index < arguments.size(); ++value_index) {
+    // Arguments past the format show as $display shows them (IEEE
+    // 1800-2017 21.2.1): a string literal is more format text, a string
+    // value its characters, and another value its decimal form.
+    while (value_index < arguments.size()) {
+        const auto argument = arguments[value_index++];
+        const auto record = specialized_hir_unit_->find_expression(argument);
+        if (!default_format && record && record->systemverilog != nullptr
+            && record->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal
+            && record->systemverilog->decoded_string) {
+            const auto format = frontend::parse_output_format(
+                *record->systemverilog->decoded_string);
+            if (!format.valid || !append_format(format)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         frontend::ParsedOutputConversion conversion;
-        conversion.format = frontend::OutputFormat::Decimal;
-        if (!append_value(conversion, arguments[value_index])) {
+        conversion.format = hir_expression_is_string(
+                                argument, hir_process_scope_)
+            ? frontend::OutputFormat::String
+            : frontend::OutputFormat::Decimal;
+        if (!append_value(conversion, argument)) {
             return std::nullopt;
         }
     }
@@ -1021,6 +1055,7 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         *format->systemverilog->decoded_string);
     const auto consumes_value = [](const frontend::OutputFormat output) {
         return output != frontend::OutputFormat::Hierarchy
+            && output != frontend::OutputFormat::Library
             && output != frontend::OutputFormat::Time;
     };
     const auto required = static_cast<std::size_t>(
@@ -1694,6 +1729,8 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             return output
                                     != frontend::OutputFormat::Hierarchy
                                 && output
+                                    != frontend::OutputFormat::Library
+                                && output
                                     != frontend::OutputFormat::Time;
                         };
                     const auto has_unformatted = std::ranges::any_of(
@@ -1904,7 +1941,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                         == semantic::sv::StatementKind::report)
                 && source.value
                 && source.output_values.empty()
+                && source.task_arguments.empty()
                 && !source.output_format
+                && !hir_expression_width(*source.value, source.scope)
                 && !specialized_hir_unit_->evaluate_string_expression(
                     *source.value)
                 && !(source.kind == semantic::sv::StatementKind::report
@@ -4105,6 +4144,11 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                         pending_prefix = std::move(prefix) + hir_scope_hierarchy();
                         return;
                     }
+                    if (output.format
+                        == semantic::sv::OutputFormat::library) {
+                        pending_prefix = std::move(prefix) + hir_library_cell();
+                        return;
+                    }
                     MonitorValue value;
                     value.prefix = std::move(prefix);
                     value.minimum_width = output.minimum_width;
@@ -4214,10 +4258,16 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
             (const semantic::sv::OutputValue& output,
              std::string suffix,
              const bool newline) {
-                if (output.format == semantic::sv::OutputFormat::hierarchy) {
+                if (output.format == semantic::sv::OutputFormat::hierarchy
+                    || output.format == semantic::sv::OutputFormat::library) {
                     process_.operations.emplace_back(FileWriteLiteral {
                         *handle,
-                        output.prefix + hir_scope_hierarchy() + std::move(suffix),
+                        output.prefix
+                            + (output.format
+                                    == semantic::sv::OutputFormat::library
+                                ? hir_library_cell()
+                                : hir_scope_hierarchy())
+                            + std::move(suffix),
                         newline,
                     });
                     return true;

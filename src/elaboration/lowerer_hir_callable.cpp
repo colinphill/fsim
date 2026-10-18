@@ -17547,7 +17547,14 @@ bool Lowerer::lower_pending_hir_callables()
         const auto callable = pending_hir_callables_.front();
         pending_hir_callables_.pop_front();
         hir_callable_frames_[callable].queued = false;
+        const auto body_begin = process_.operations.size();
         lowered = lower_hir_callable_body(callable);
+        // An interface's own task or function may write the interface's
+        // signals that a modport gives the caller as inputs (IEEE
+        // 1800-2017 25.7).
+        if (lowered && hir_callable_frames_[callable].interface_receiver) {
+            authorize_readonly_signal_writes(body_begin);
+        }
     }
     hir_enclosing_local_registers_.clear();
     hir_enclosing_local_string_registers_.clear();

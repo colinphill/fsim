@@ -7984,7 +7984,7 @@ namespace {
                           *result, *declaration->systemverilog->initializer);
                   if (scalar_applicable) {
                       std::string scalar_error;
-                      auto scalar = evaluate_hir_systemverilog_scalar_declaration(
+                      auto scalar = evaluate_hir_systemverilog_declaration_value(
                           *result, declaration_id, scalar_error);
                       if (scalar) {
                           actuals.push_back({ declaration_id, scalar->canonical(),
@@ -9159,7 +9159,8 @@ namespace {
                                     == semantic::sv::UnitKind::interface || candidate.kind == semantic::sv::UnitKind::program);
                     });
             // A class constructor's result is its class, not a typedef.
-            if (type.target.target.valid() || name.empty()
+            // `type(expression)` names no alias (IEEE 1800-2017 6.23).
+            if (type.target.target.valid() || name.empty() || type.type_of
                 || name == "constructor"
                 || builtin_type(name) || covergroup || interface_or_program
                 || resolved_type_visible(name, scope, type.source_order)
@@ -11613,7 +11614,8 @@ namespace {
                 }
             }
             if (expression.kind == ExpressionKind::call
-                && expression.text.starts_with(cast_prefix)) {
+                && expression.text.starts_with(cast_prefix)
+                && expression.text != "@sv-cast:@type") {
                 const auto cast_type = std::string_view { expression.text }.substr(
                     cast_prefix.size());
                 const auto cast_size_declaration
@@ -15475,7 +15477,7 @@ void HierarchyBuilder::resolve_compiled_systemverilog_virtual_interface_initiali
             std::string scalar_error;
             if (scalar_applicable) {
                 const auto scalar
-                    = evaluate_hir_systemverilog_scalar_declaration(
+                    = evaluate_hir_systemverilog_declaration_value(
                         *specialized_interface, declaration_id,
                         scalar_error);
                 if (!scalar) {
@@ -16172,7 +16174,7 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
         std::string scalar_error;
         if (scalar_applicable) {
             if (const auto scalar
-                = evaluate_hir_systemverilog_scalar_declaration(
+                = evaluate_hir_systemverilog_declaration_value(
                     specialized, declaration_id, scalar_error)) {
                 display = scalar->display();
                 identity_value = scalar->canonical();
@@ -16281,6 +16283,18 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
         if (subtype
             && subtype->domain == semantic::vhdl::ValueDomain::string) {
             identity = semantic::systemverilog_string_identity(value);
+        } else if (subtype
+            && subtype->domain == semantic::vhdl::ValueDomain::logic9
+            && value.size() == 3U && value.front() == '\''
+            && value.back() == '\'') {
+            // A STD_ULOGIC character literal, by its position number.
+            constexpr std::string_view logic9_literals { "UX01ZWLH-" };
+            const auto position = logic9_literals.find(
+                static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(value[1]))));
+            if (position != std::string_view::npos) {
+                identity = std::to_string(position);
+            }
         } else {
             auto lowered = support::ascii_lower(value);
             if (lowered == "true" || lowered == "false") {
@@ -19339,13 +19353,21 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     }
     const auto full_name
         = working_path + "." + declaration.name;
-    const auto alias = std::ranges::find_if(
+    auto alias = std::ranges::find_if(
         working_signals,
         [&](const auto& existing) {
             return existing.first.find('.') == std::string::npos
                 && compiled_vhdl_name_equal(
                     existing.first, declaration.name);
         });
+    // A signal declared in a block hides a signal of the same name in an
+    // enclosing region (IEEE 1076-2008 12.3), as the implicit GUARD signal of
+    // a guarded block does; only a binding of this region aliases it.
+    if (alias != working_signals.end() && declaration.form == Form::signal
+        && working_signals.find_local(alias->first)
+            == working_signals.end()) {
+        alias = working_signals.end();
+    }
     const auto* alias_info = alias != working_signals.end()
             && alias->second < design_.signal_info_.size()
         ? &design_.signal_info_[alias->second]
@@ -27596,7 +27618,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                     "compiled VHDL process"
                         + process_name + " (HIR "
                         + std::to_string(process_id.value())
-                        + ") could not be lowered from HIR",
+                        + ") could not be lowered from HIR"
+                        + hir_lowering_rejection_detail(lowerer),
                     compiled_source_span(*compiled_, process_source));
                 return false;
             }

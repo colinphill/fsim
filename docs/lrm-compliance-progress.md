@@ -253,6 +253,108 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 68: R2-SV type operator and shared constant values, quick wins
+
+Batch 68 starts the R2-SV plan (`.local-artifacts/lrm-closure/R2SV-PLAN-b68.md`):
+- Step B (type operator and type parameters) is done.
+- Step C (shared constant values) is done in part.
+- About 38 smaller closures from the Batch 68 triage files are also in.
+
+R2-SV Step B: SystemVerilog types (IEEE 1800-2017 6.22, 6.23):
+
+- A new `SystemVerilogTypeDescriptor` describes a resolved type in one
+  specialization, with a canonical spelling for type matching (6.22.1):
+  - an enumeration matches only itself;
+  - an integer atom keeps its native range.
+
+  `total_bits()` gives the bit-stream width of a fixed unpacked array, which
+  `$bits` uses (20.6.2).
+- `type(expression)` can be used:
+  - as a data type;
+  - as a cast prefix (`type(x)'(v)`);
+  - as a type-parameter actual;
+  - as a `localparam type` default.
+
+  Each specialization replaces these declarations with the concrete type.
+  The new HIR fields are `TypeReference::type_of` and
+  `Expression::type_operand`.
+- Type equality and `case (type(...))` in a generate use the descriptor.
+- A cast to a `localparam type` in a constant expression resolves its
+  selected type.
+
+R2-SV Step C: one constant evaluator for packed and real values:
+
+- `HirScalarEvaluator` is removed. `HirConstantEvaluator` evaluates
+  real-family and chandle values directly:
+  - real and time literals;
+  - arithmetic and comparisons with a real operand (11.3.1);
+  - the conditional operator (11.4.11);
+  - real casts and the real math functions;
+  - conversion to the declared type.
+
+  x and z bits convert to 0 in a real value, and a real converts to an
+  integral type by rounding (6.12.2).
+- Integral subexpressions stay 4-state and wide.
+- The packed entry points still accept only an integral result.
+- String literals evaluate as packed constants (5.9).
+- A positional pattern for a packed structure assigns each member through
+  its type (10.9.1).
+
+Other SystemVerilog:
+- Severity tasks are formatted like `$display` (20.10). They are also legal
+  in generate regions (20.11).
+- An unsized decimal wider than 64 bits keeps its value (5.7.1).
+- Net input ports are not read-only, and interface methods may write
+  modport inputs (23.3.3, 25.7).
+- `%l` prints the library cell (21.2.1.1).
+- `always_comb` and `always_latch` start after the other time-zero processes
+  (9.2.2.2.2).
+- A hierarchical release keeps a forced variable's value (10.6.2).
+- `##0` waits only when the clocking event has not yet occurred (14.11).
+- An untyped task or function formal is a 1-bit logic (13.3).
+- Process named blocks take `genblk` names (27.6).
+- An SDF escaped identifier matches its instance (5.6.1).
+- FSIM-ELAB-HIR-001 now names the rejected construct.
+
+VHDL:
+- `real(real)` conversion (9.3.6).
+- `'driving` is false after a null transaction (16.2.4).
+- A disconnection specification applies inside blocks (7.4).
+- A block signal hides an outer signal of the same name (12.3).
+- Attribute names and specifications may carry signatures (8.6, 7.2).
+- Operator-symbol aliases (6.6.3).
+- `T'BASE` can be used as a type mark (16.2.2).
+- An empty VHDL-2019 record.
+- Generate labels appear in path names (16.2.5).
+- A pure function may call a procedure that references no outside signal
+  (4.10).
+
+Runner:
+- `--work LIB` sources compile into that library (33.2).
+- `test.sim_time` is honoured.
+- Out of scope: verilator t_math_shortreal, t_display_time,
+  t_scheduling_many_clocks, t_enum_func.
+
+Tests flipped to the LRM:
+- The FSIM-ELAB-HIR-001 expectation now names the rejected assignment.
+- The VHLEGAL-006 fixture's procedure reads a signal declared outside it
+  (4.10).
+
+Measurement:
+- The labelled ctest ends with the 28 known failures.
+- No diagnostic codes were added or retired (2965 codes).
+- The full six-suite run on the frozen `b68w1` against `b67w6` is in progress.
+  Its results and any regression fixes come with Batch 69.
+
+Deferred to Batch 69, together with folding `inferred_string_type` into the
+descriptor:
+- the generate-condition hook (br_gh345);
+- t_string_size;
+- the constant `$sformatf` move;
+- the `sized_range_bound` fold;
+- the `packed_formal` exemption;
+- Steps 0 and A.
+
 ### Batch 67: global constraints, randomized arrays, solver search, constraint operators
 
 Closes the global-constraint plan (`.local-artifacts/lrm-closure/triage/b67-global-constraints.md`)

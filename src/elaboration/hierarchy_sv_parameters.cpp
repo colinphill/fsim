@@ -413,14 +413,14 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                     working_specialization, *binding.expression);
             if (scalar_applicable) {
                 std::string scalar_error;
-                auto scalar = evaluate_hir_systemverilog_scalar_constant(
+                auto scalar = evaluate_hir_systemverilog_value(
                     working_specialization, *binding.expression,
                     scalar_error);
                 if (scalar
                     && target_scalar
                         != frontend::SystemVerilogScalarKind::None) {
-                    scalar = frontend::convert_systemverilog_scalar_constant(
-                        *scalar, target_scalar, scalar_error);
+                    scalar = convert_hir_systemverilog_value_kind(
+                        std::move(*scalar), target_scalar, scalar_error);
                 }
                 if (!scalar) {
                     add_diagnostic(
@@ -432,7 +432,11 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                     continue;
                 }
                 identity_value = scalar->canonical();
-            } else {
+            } else if (!formal->systemverilog->type
+                || formal->systemverilog->type->target.spelling
+                    != "string") {
+                // A string formal keeps the string identity of its actual
+                // (IEEE 1800-2017 6.16).
                 std::string constant_error;
                 auto constant = evaluate_hir_systemverilog_constant(
                     working_specialization, *binding.expression,

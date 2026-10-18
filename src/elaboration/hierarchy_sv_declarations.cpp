@@ -1937,6 +1937,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
               .value_or(*declaration.type);
     const auto full_name
         = materialized_path + "." + declaration.name;
+    // Only a variable input port is read-only in its module (IEEE 1800-2017
+    // 23.3.3.2). A net input port may also be driven inside the module,
+    // which coerces it to inout (23.3.3.6). A port whose type is not a
+    // four-state integral cannot be a net, so it is a variable.
+    const auto variable_input_port = [&] {
+        return compiled_port_direction(declaration)
+                == frontend::PortDirection::Input
+            && (declaration.form == semantic::sv::DeclarationForm::variable
+                || !(declaration.type->four_state
+                    || effective_type.four_state));
+    };
     if (const auto alias = whole_alias_signal(
             materialization, declaration.name)) {
         if (*alias >= design_.signal_info_.size()
@@ -1965,8 +1976,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             design_.signal_by_name_.insert_or_assign(
                 declaration.name, *alias);
         }
-        if (compiled_port_direction(declaration)
-            == frontend::PortDirection::Input) {
+        if (variable_input_port()) {
             read_only_signals.insert(*alias);
         }
         return true;
@@ -2298,7 +2308,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         }
     }
     register_resolution(id);
-    if (direction == frontend::PortDirection::Input) {
+    if (variable_input_port()) {
         read_only_signals.insert(id);
     }
     return true;

@@ -29,6 +29,10 @@ struct HirSystemVerilogConstant {
     frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
     std::string nominal_type;
     std::optional<semantic::sv::PackedRange> packed_range;
+    // A real-family or chandle value (IEEE 1800-2017 6.12, 6.14). The
+    // packed value then holds its conversion to an integer (6.12.2), which
+    // is what an integral context reads.
+    std::optional<frontend::SystemVerilogScalarConstant> scalar;
 
     [[nodiscard]] bool known() const noexcept;
     [[nodiscard]] std::optional<std::int64_t>
@@ -65,6 +69,15 @@ evaluate_hir_systemverilog_constant(
     semantic::ExpressionId expression,
     std::string& error);
 
+/// Evaluate a constant expression of any value kind: packed, real-family
+/// or chandle (IEEE 1800-2017 11.2.1). evaluate_hir_systemverilog_constant
+/// accepts only an integral result.
+[[nodiscard]] std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_value(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression,
+    std::string& error);
+
 /// Evaluate an expression for a declared type, so a keyed assignment
 /// pattern takes the type's aggregate layout.
 [[nodiscard]] std::optional<HirSystemVerilogConstant>
@@ -94,7 +107,21 @@ evaluate_hir_systemverilog_scalar_constant(
     semantic::ExpressionId expression,
     std::string& error);
 
-/// Evaluate a declaration with source-order checking for dependencies.
+/// The value of a constant declaration in its declared type: packed,
+/// real-family or chandle (IEEE 1800-2017 6.20.2).
+[[nodiscard]] std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_declaration_value(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::DeclarationId declaration,
+    std::string& error);
+
+/// Convert a constant to a real-family or chandle kind; any other kind
+/// leaves an integral value unchanged.
+[[nodiscard]] std::optional<HirSystemVerilogConstant>
+convert_hir_systemverilog_value_kind(HirSystemVerilogConstant value,
+    frontend::SystemVerilogScalarKind kind, std::string& error);
+
+/// Evaluate a declaration as a scalar.
 [[nodiscard]] std::optional<frontend::SystemVerilogScalarConstant>
 evaluate_hir_systemverilog_scalar_declaration(
     const semantic::SpecializedHirUnit& specialization,

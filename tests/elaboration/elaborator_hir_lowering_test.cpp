@@ -2064,8 +2064,9 @@ void run_local_nonblocking_boundary_test()
         [](const fsim::elaboration::Diagnostic& diagnostic) {
             return diagnostic.code == "FSIM-ELAB-HIR-001"
                 && diagnostic.message
-                    == "compiled SystemVerilog HIR statement 0 kind 0 at "
-                       "source line 1 could not be lowered"
+                    == "compiled SystemVerilog HIR assignment statement 0 "
+                       "at source line 1 could not be lowered; rejected "
+                       "assignment to name expression 'local_value' at 1:62"
                 && diagnostic.span.source_name.str() == "hir_direct.sv"
                 && diagnostic.span.begin.line == 1U
                 && diagnostic.span.begin.column == 70U;

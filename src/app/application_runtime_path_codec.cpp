@@ -118,6 +118,7 @@ template <typename ProcessRows>
             = process.startup_phase
                 == ProcessStartupPhase::package_static_initializer;
         if (process.startup_phase != ProcessStartupPhase::ordinary
+            && process.startup_phase != ProcessStartupPhase::after_procedures
             && !package_initializer) {
             report_error(diagnostics,
                 "runtime process has an invalid startup phase", source_name);

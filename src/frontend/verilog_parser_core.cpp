@@ -605,6 +605,25 @@ ParseResult VerilogParser::run() {
             skip_to_semicolon();
         }
     }
+    for (const auto& name : deferred_checker_units_) {
+        const auto unit = std::ranges::find(
+            design.units, name, &DesignUnit::name);
+        if (unit == design.units.end()) {
+            continue;
+        }
+        for (const auto& checker : compilation_unit_checkers_) {
+            if (std::ranges::none_of(
+                    unit->systemverilog_assertion_declarations,
+                    [&](const SystemVerilogAssertionDeclaration& declaration) {
+                        return declaration.kind == checker.kind
+                            && declaration.name == checker.name;
+                    })) {
+                unit->systemverilog_assertion_declarations.push_back(checker);
+            }
+        }
+        resolve_unit_checkers(*unit);
+    }
+    deferred_checker_units_.clear();
     link_out_of_block_constraints(design);
     // A compilation-unit type names a declared type (IEEE 1800-2017 6.18),
     // and a forward type declaration is completed.

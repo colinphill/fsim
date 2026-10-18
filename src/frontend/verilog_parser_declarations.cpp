@@ -87,6 +87,21 @@ void VerilogParser::parse_parameter_overrides(
         || at(TokenKind::LeftBracket);
   };
   const auto parse_actual = [&](ParameterOverride& override) {
+    // `type(...)` is a type actual (6.23) unless it begins a constant
+    // expression such as `type(a) == type(b)`.
+    if (keyword("type") && at(TokenKind::LeftParen, 1)
+        && language_ == Language::SystemVerilog2017) {
+      const auto resume = index_;
+      auto operator_type = parse_type_operator_type();
+      if (operator_type
+          && (at(TokenKind::Comma) || at(TokenKind::RightParen))) {
+        override.type_value = std::move(*operator_type);
+        return;
+      }
+      index_ = resume;
+      override.value = parse_expression();
+      return;
+    }
     if (begins_unambiguous_type_actual()) {
       override.type_value = parse_type_parameter_actual();
     } else {
@@ -1146,6 +1161,8 @@ void VerilogParser::parse_virtual_interface_declaration(
     return true;
   }
   return is_direction_keyword() || is_net_type_keyword()
+      || (language_ == Language::SystemVerilog2017 && keyword("type")
+          && at(TokenKind::LeftParen, 1))
       || keyword("static") || keyword("automatic")
       || keyword("string") || keyword("chandle") || keyword("event")
       || (keyword("process") && !at(TokenKind::Scope, 1))
@@ -1258,6 +1275,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     if (!is_net_type_keyword() && !keyword("string")
         && !keyword("chandle") && !keyword("event")
         && !keyword("struct") && !keyword("union") && !keyword("enum")
+        && !(keyword("type") && at(TokenKind::LeftParen, 1))
         && !is_named_type_reference_start()) {
       spec.type.spelling = "logic";
     }
@@ -1314,6 +1332,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
              || keyword("process")
              || keyword("struct") || keyword("union") || keyword("enum")) {
     spec.type = parse_parameter_type();
+  } else if (auto operator_type = parse_type_operator_type()) {
+    // `type(...)` as the data type of a declaration (IEEE 1800-2017 6.23).
+    spec.type = std::move(*operator_type);
   } else if (auto expanded = parse_named_packed_array_type()) {
     spec.type = std::move(*expanded);
   } else if (is_named_type_reference_start()) {

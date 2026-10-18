@@ -276,6 +276,28 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
                 || kind == frontend::SystemVerilogScalarKind::Realtime)) {
             kind = frontend::SystemVerilogScalarKind::ShortReal;
         }
+        // Likewise a shortreal argument of $realtobits converts to real.
+        if (*function == runtime::SystemVerilogMathFunction::RealToBits
+            && kind == frontend::SystemVerilogScalarKind::ShortReal) {
+            kind = frontend::SystemVerilogScalarKind::Real;
+        }
+        // The bit_val argument of $bitstoreal and $bitstoshortreal is
+        // bit [63:0] and bit [31:0]; an integral argument converts to it.
+        if (kind == frontend::SystemVerilogScalarKind::None
+            && (*function == runtime::SystemVerilogMathFunction::BitsToReal
+                || *function
+                    == runtime::SystemVerilogMathFunction::BitsToShortReal)) {
+            const auto width = *function
+                    == runtime::SystemVerilogMathFunction::BitsToReal
+                ? 64U
+                : 32U;
+            const auto lowered = lower_hir_expression(
+                operand_id, width, kind);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            return Operand { *lowered, width, kind, false };
+        }
         const auto width = kind
                 == frontend::SystemVerilogScalarKind::ShortReal
             ? std::optional<std::size_t> { 32U }

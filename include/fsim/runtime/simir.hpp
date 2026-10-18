@@ -1530,6 +1530,10 @@ enum class ProcessSchedulingDomain : std::uint8_t {
 enum class ProcessStartupPhase : std::uint8_t {
     ordinary,
     package_static_initializer,
+    // An ordinary process that time zero starts after every other ordinary
+    // process: an always_comb or always_latch runs once after all initial
+    // and always procedures have started (IEEE 1800-2017 9.2.2.2.2).
+    after_procedures,
 };
 
 struct Process {

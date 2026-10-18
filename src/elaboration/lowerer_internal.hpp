@@ -158,6 +158,23 @@ sv_container_method_call(const std::string_view text) noexcept
     return std::nullopt;
 }
 
+// The width of an unsized decimal literal whose value needs more than 64
+// bits: its significant bits plus a sign bit, as an unsized decimal number
+// is signed and at least 32 bits (IEEE 1800-2017 5.7.1). Empty for other
+// text.
+[[nodiscard]] std::optional<std::size_t> wide_unsized_decimal_width(
+    std::string_view text);
+
+// HIR kind names for lowering diagnostics.
+[[nodiscard]] std::string_view hir_statement_kind_name(
+    semantic::sv::StatementKind kind) noexcept;
+[[nodiscard]] std::string_view hir_statement_kind_name(
+    semantic::vhdl::StatementKind kind) noexcept;
+[[nodiscard]] std::string_view hir_expression_kind_name(
+    semantic::sv::ExpressionKind kind) noexcept;
+[[nodiscard]] std::string_view hir_expression_kind_name(
+    semantic::vhdl::ExpressionKind kind) noexcept;
+
 class Lowerer final {
 public:
     Lowerer(
@@ -248,6 +265,13 @@ public:
     [[nodiscard]] bool hierarchical_reference_missed() const noexcept
     {
         return hierarchical_reference_missed_;
+    }
+    // The construct or lowering step that last rejected the process being
+    // lowered, for the caller's FSIM-ELAB-HIR-001 report.
+    [[nodiscard]] const std::optional<std::string>&
+    hir_lowering_rejection() const noexcept
+    {
+        return hir_lowering_rejection_;
     }
     // Whether the caller retries a process that misses a hierarchical
     // reference once the unit's instances exist.
@@ -485,6 +509,10 @@ private:
         bool final { };
         bool body_timed_always { };
         bool always_comb_or_latch { };
+        // A source always_comb or always_latch first runs after every
+        // initial and always procedure has started (IEEE 1800-2017
+        // 9.2.2.2.2).
+        bool start_after_procedures { };
         bool wait_before_first_execution { };
         bool concurrent_assertion { };
         bool vhdl_guarded_assignment { };
@@ -1545,6 +1573,14 @@ private:
     // diagnostic while the current statement was lowered; named in the
     // statement's FSIM-ELAB-HIR-001 report.
     std::optional<std::string> hir_unlowered_expression_;
+    // The first construct or step that rejected the current statement or
+    // process without a diagnostic of its own; named in FSIM-ELAB-HIR-001.
+    std::optional<std::string> hir_lowering_rejection_;
+    // Records why lowering failed (the first reason wins) and returns false.
+    bool reject_hir_lowering(std::string reason);
+    // "<kind> expression '<text>' at <line>:<column>" for diagnostics.
+    [[nodiscard]] std::optional<std::string> hir_expression_summary(
+        semantic::ExpressionId expression) const;
     // An unsigned SystemVerilog operation zero-extends its signed
     // context-determined operands (IEEE 1800-2017 11.8.2): the next lowered
     // operand extends without sign, and an operator propagates that to its
@@ -1966,6 +2002,8 @@ private:
         const HirRuntimeBinding& binding) const noexcept;
     [[nodiscard]] bool signal_binding_is_writable(
         const HirRuntimeBinding& binding) const noexcept;
+    // Permits the writes of read-only signals from operation `begin` on.
+    void authorize_readonly_signal_writes(std::size_t begin);
     void record_readonly_signal_write(SignalId signal);
     void record_readonly_vhdl_output_write(
         const HirRuntimeBinding& binding);
@@ -3252,6 +3290,9 @@ private:
     std::string hierarchy_;
     // Labels of the named blocks enclosing the statement being lowered.
     std::vector<std::string> hir_named_blocks_;
+    // `library.cell` of the unit being lowered, for %l (IEEE 1800-2017
+    // 21.2.1.1).
+    [[nodiscard]] std::string hir_library_cell() const;
     // `%m` (IEEE 1800-2017 21.2.1.6): the instance and its enclosing named
     // blocks.
     [[nodiscard]] std::string hir_scope_hierarchy() const;
@@ -3271,5 +3312,14 @@ private:
     [[nodiscard]] bool hir_genvar_hides_signal(
         std::string_view name, semantic::ScopeId scope) const;
 };
+
+// "; rejected <construct>" when the lowerer recorded why its last process
+// failed without a diagnostic of its own.
+[[nodiscard]] inline std::string hir_lowering_rejection_detail(
+    const Lowerer& lowerer)
+{
+    const auto& rejection = lowerer.hir_lowering_rejection();
+    return rejection ? "; rejected " + *rejection : std::string { };
+}
 
 } // namespace fsim::elaboration

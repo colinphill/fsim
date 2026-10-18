@@ -32,6 +32,7 @@ namespace fsim::elaboration {
     case Source::Unformatted4: return Target::unformatted4;
     case Source::Pattern: return Target::pattern;
     case Source::Strength: return Target::strength;
+    case Source::Library: return Target::library;
     }
     return Target::decimal;
 }
@@ -50,7 +51,8 @@ namespace fsim::elaboration {
     case Source::decimal: return Target::decimal;
     case Source::character: return Target::character;
     case Source::string:
-    case Source::hierarchy: return Target::string;
+    case Source::hierarchy:
+    case Source::library: return Target::string;
     case Source::real_scientific: return Target::real_scientific;
     case Source::real_fixed: return Target::real_fixed;
     case Source::real_general: return Target::real_general;
@@ -68,6 +70,7 @@ namespace fsim::elaboration {
     const frontend::OutputFormat format)
 {
     if (format == frontend::OutputFormat::Hierarchy
+        || format == frontend::OutputFormat::Library
         || format == frontend::OutputFormat::Time) {
         throw std::logic_error { "invalid runtime string format" };
     }

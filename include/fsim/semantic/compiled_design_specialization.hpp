@@ -367,6 +367,11 @@ public:
     evaluate_systemverilog_bits_expression(
         ExpressionId expression) const;
 
+    /// The matching identity of a `type(...)` operator expression (IEEE
+    /// 1800-2017 6.23, 6.22.1); nullopt for any other expression.
+    [[nodiscard]] std::optional<std::string>
+    systemverilog_type_identity(ExpressionId expression) const;
+
     /// Evaluate the packed bit width of a type in this specialization.
     /// Parameterized ranges and packed members use this unit's actuals.
     [[nodiscard]] std::optional<std::size_t>

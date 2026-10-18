@@ -72,6 +72,7 @@ parse_output_format(const std::string_view text) {
         && conversion != 'd' && conversion != 'c'
         && conversion != 's' && conversion != 'e'
         && conversion != 'f' && conversion != 'g' && conversion != 'm'
+        && conversion != 'l'
         && conversion != 't' && conversion != 'u' && conversion != 'z'
         && conversion != 'p' && conversion != 'v') {
       result.valid = false;
@@ -99,7 +100,8 @@ parse_output_format(const std::string_view text) {
       return result;
     }
     if ((parsed.suppress_leading_zero || parsed.zero_pad)
-        && (conversion == 'c' || conversion == 'm' || conversion == 'v'
+        && (conversion == 'c' || conversion == 'm' || conversion == 'l'
+            || conversion == 'v'
             || conversion == 'u' || conversion == 'z')) {
       result.valid = false;
       return result;
@@ -121,6 +123,7 @@ parse_output_format(const std::string_view text) {
             : conversion == 'f' ? OutputFormat::RealFixed
             : conversion == 'g' ? OutputFormat::RealGeneral
             : conversion == 'm' ? OutputFormat::Hierarchy
+            : conversion == 'l' ? OutputFormat::Library
             : conversion == 't' ? OutputFormat::Time
             : conversion == 'u' ? OutputFormat::Unformatted2
             : conversion == 'p' ? OutputFormat::Pattern

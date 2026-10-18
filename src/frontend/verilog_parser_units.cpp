@@ -422,14 +422,19 @@ void VerilogParser::parse_generate_region(
           parse_static_generate_block());
       continue;
     }
-    if (unit.kind == UnitKind::SystemVerilogProgram
+    if ((unit.kind == UnitKind::SystemVerilogProgram
+            || language_ == Language::SystemVerilog2017)
         && (keyword("$fatal") || keyword("$error")
             || keyword("$warning") || keyword("$info"))) {
-      (void)require_standard(
-          "a program elaboration severity system task",
-          StandardRevision::SystemVerilog2023,
-          current(),
-          "FSIM-SV-PARSE-381");
+      // An elaboration severity system task (IEEE 1800-2017 20.11); a
+      // program allows one only from IEEE 1800-2023.
+      if (unit.kind == UnitKind::SystemVerilogProgram) {
+        (void)require_standard(
+            "a program elaboration severity system task",
+            StandardRevision::SystemVerilog2023,
+            current(),
+            "FSIM-SV-PARSE-381");
+      }
       if (auto statement = parse_statement()) {
         direct_region.then_body.concurrent_statements.push_back(
             std::move(*statement));
@@ -1540,6 +1545,9 @@ Type VerilogParser::parse_parameter_type() {
 }
 
 Type VerilogParser::parse_type_parameter_actual() {
+  if (auto operator_type = parse_type_operator_type()) {
+    return std::move(*operator_type);
+  }
   if (at(TokenKind::Identifier)
       && !keyword_reserved(keyword_set_, current().text)) {
     if (auto expanded = parse_named_packed_array_type()) {

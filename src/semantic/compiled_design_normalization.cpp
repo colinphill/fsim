@@ -2395,7 +2395,9 @@ bool add_type_dependencies(
     };
     if ((type.packed_range && !add_range(*type.packed_range))
         || !add_expression_dependency(
-            expressions, type.queue_maximum, dependencies)) {
+            expressions, type.queue_maximum, dependencies)
+        || !add_expression_dependency(
+            expressions, type.type_of, dependencies)) {
         return false;
     }
     for (const auto& actual : type.interface_parameter_actuals) {

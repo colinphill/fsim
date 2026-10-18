@@ -191,7 +191,42 @@ CollectionResult collect_occurrences(
             }
         }
 
-        if (generate.kind == Kind::selection) {
+        // `case (type(x))`: every choice is a type operator, and choices may
+        // not repeat a type (IEEE 1800-2017 6.23, 27.5).
+        const auto type_selector = generate.kind == Kind::selection
+                && generate.condition
+            ? parent_specialization.systemverilog_type_identity(
+                  *generate.condition)
+            : std::nullopt;
+        if (type_selector) {
+            std::unordered_set<std::string> type_choices;
+            for (const auto& alternative : generate.alternatives) {
+                if (alternative.is_default) {
+                    continue;
+                }
+                for (const auto& choice : alternative.choices) {
+                    const auto type = choice.right
+                        ? std::optional<std::string> { }
+                        : parent_specialization.systemverilog_type_identity(
+                              choice.left);
+                    if (!type) {
+                        fail(
+                            "FSIM-ELAB-GEN-009",
+                            "cannot evaluate compiled case-generate "
+                            "choice as an elaboration-time constant",
+                            choice.source);
+                        return false;
+                    }
+                    if (!type_choices.insert(*type).second) {
+                        fail(
+                            "FSIM-ELAB-GEN-010",
+                            "compiled case-generate choices overlap",
+                            choice.source);
+                        return false;
+                    }
+                }
+            }
+        } else if (generate.kind == Kind::selection) {
             const auto selector_integral = generate.condition
                 ? parent_specialization.evaluate_integral_expression(
                       *generate.condition)
@@ -429,7 +464,7 @@ ValidationResult validate_generated_constant(
             *occurrence.specialization, *record.initializer);
     std::string error;
     if (scalar_applicable) {
-        if (evaluate_hir_systemverilog_scalar_declaration(
+        if (evaluate_hir_systemverilog_declaration_value(
                 *occurrence.specialization, declaration_id, error)) {
             return { };
         }

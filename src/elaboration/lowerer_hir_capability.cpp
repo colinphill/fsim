@@ -2,6 +2,7 @@
 #include "lowerer_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "vhdl_hir_type_validation.hpp"
 
 #include <array>
@@ -14,6 +15,42 @@
 #include <tuple>
 
 namespace fsim::elaboration {
+
+std::optional<std::size_t> wide_unsized_decimal_width(
+    const std::string_view text)
+{
+    std::string decimal;
+    for (const char digit : text) {
+        if (digit == '_') {
+            continue;
+        }
+        if (digit < '0' || digit > '9') {
+            return std::nullopt;
+        }
+        decimal.push_back(digit);
+    }
+    const auto first_nonzero = decimal.find_first_not_of('0');
+    if (first_nonzero == std::string::npos) {
+        return std::nullopt;
+    }
+    decimal.erase(0U, first_nonzero);
+    std::size_t bits { };
+    while (!decimal.empty()) {
+        unsigned carry = 0U;
+        for (char& digit : decimal) {
+            const auto value = carry * 10U
+                + static_cast<unsigned>(digit - '0');
+            digit = static_cast<char>('0' + value / 2U);
+            carry = value % 2U;
+        }
+        ++bits;
+        const auto next_nonzero = decimal.find_first_not_of('0');
+        decimal.erase(0U,
+            next_nonzero == std::string::npos ? decimal.size()
+                                              : next_nonzero);
+    }
+    return bits > 64U ? std::optional { bits + 1U } : std::nullopt;
+}
 namespace {
 
     // The type a VHDL subtype chain denotes, through resolved subtypes and
@@ -915,7 +952,8 @@ namespace {
         }
         const auto quote = text.find('\'');
         if (quote == std::string_view::npos) {
-            return constant_integer_text(text).has_value();
+            return constant_integer_text(text).has_value()
+                || wide_unsized_decimal_width(text).has_value();
         }
         if (quote == 0U) {
             return false;
@@ -10029,7 +10067,13 @@ Lowerer::hir_vhdl_attribute_profile(
     const semantic::ScopeId process_scope,
     HirVhdlAttributeFailure* const failure) const
 {
-    const auto fail = [&](const HirVhdlAttributeFailure reason) {
+    // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the rejecting line.
+    const auto fail = [&](const HirVhdlAttributeFailure reason,
+                          const unsigned line = __builtin_LINE()) {
+        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            std::cerr << "[fsim-hir-lower] vhdl-attribute-rejected line="
+                      << line << '\n';
+        }
         if (failure != nullptr) {
             *failure = reason;
         }
@@ -16261,6 +16305,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             if (systemverilog_real_literal(source.text)) {
                 return 64U;
             }
+            if (const auto wide = wide_unsized_decimal_width(source.text)) {
+                return wide;
+            }
             return literal_width(source.text, 32U);
         }
         // A string literal in an integral context is eight bits per
@@ -17114,7 +17161,20 @@ Lowerer::hir_systemverilog_cast_type(
     const auto name = std::string_view { source.text }.substr(prefix.size());
     semantic::sv::TypeReference type;
     type.target.spelling = name;
-    if (name != "string" && name != "real" && name != "shortreal"
+    if (name == "@type") {
+        // `type(...)'(x)` (6.23): the operator's type in this
+        // specialization.
+        if (source.type_operand.empty()) {
+            return std::nullopt;
+        }
+        const auto resolver = hir_resolver();
+        type = resolver.underlying_systemverilog_type(
+                           source.type_operand.front(), source.scope)
+                   .value_or(source.type_operand.front());
+        if (type.type_of) {
+            return std::nullopt;
+        }
+    } else if (name != "string" && name != "real" && name != "shortreal"
         && name != "realtime") {
         const auto selected = hir_systemverilog_named_type_declaration(
             name, source.scope);
@@ -17246,6 +17306,34 @@ Lowerer::hir_systemverilog_cast_profile(
         prefix.size());
     if (type_name.empty()) {
         return std::nullopt;
+    }
+    if (type_name == "@type") {
+        if (source.type_operand.empty()) {
+            return std::nullopt;
+        }
+        const auto described = semantic::describe_systemverilog_type(
+            *specialized_hir_unit_, source.type_operand.front(),
+            source.scope);
+        using Kind = semantic::SystemVerilogTypeDescriptor::Kind;
+        if (!described || !described->unpacked.empty() || !described->bits
+            || *described->bits == 0U
+            || *described->bits > hir_systemverilog_maximum_constant_width
+            || (described->kind != Kind::integer_atom
+                && described->kind != Kind::integer_vector
+                && described->kind != Kind::enumeration
+                && described->kind != Kind::structure
+                && described->kind != Kind::union_type)) {
+            return std::nullopt;
+        }
+        const auto domain = described->four_state
+            ? frontend::ValueDomain::Logic4
+            : described->kind == Kind::integer_atom
+            ? frontend::ValueDomain::Integer
+            : frontend::ValueDomain::Bit2;
+        return HirSystemVerilogCastProfile {
+            static_cast<std::size_t>(*described->bits), domain,
+            described->is_signed, described->nominal,
+        };
     }
 
     const auto builtin = [&]()

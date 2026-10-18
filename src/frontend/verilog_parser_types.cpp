@@ -1387,4 +1387,42 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
     return true;
 }
 
+bool VerilogParser::type_operator_data_type_start() const
+{
+    // A built-in or aggregate data type, a signedness or a packed dimension
+    // starts a data type; a name is read as an expression and resolved to
+    // a type when it denotes one (IEEE 1800-2017 6.23).
+    return keyword("bit") || keyword("logic") || keyword("reg")
+        || keyword("byte") || keyword("shortint") || keyword("int")
+        || keyword("longint") || keyword("integer") || keyword("time")
+        || keyword("real") || keyword("shortreal") || keyword("realtime")
+        || keyword("string") || keyword("chandle") || keyword("event")
+        || keyword("struct") || keyword("union") || keyword("enum")
+        || keyword("signed") || keyword("unsigned")
+        || at(TokenKind::LeftBracket);
+}
+
+std::optional<Type> VerilogParser::parse_type_operator_type()
+{
+    if (language_ != Language::SystemVerilog2017 || !keyword("type")
+        || !at(TokenKind::LeftParen, 1)) {
+        return std::nullopt;
+    }
+    const auto start = advance();
+    advance();
+    Type result;
+    if (type_operator_data_type_start()) {
+        result = parse_parameter_type();
+    } else {
+        auto expression = parse_expression();
+        result.spelling = "@type-of";
+        result.named_type_span = cover(start.span, expression.span);
+        result.systemverilog_type_of
+            = std::make_shared<const Expression>(std::move(expression));
+    }
+    expect(TokenKind::RightParen, "')' after type operator",
+        "FSIM-SV-PARSE-001");
+    return result;
+}
+
 } // namespace fsim::frontend

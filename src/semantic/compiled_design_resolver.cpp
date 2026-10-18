@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_time.hpp"
 
@@ -3012,6 +3013,21 @@ CompiledDesignResolver::effective_systemverilog_type(
 {
     if (design_ == nullptr) {
         return std::nullopt;
+    }
+    // `type(expression)` as a data type denotes the expression's type in
+    // this specialization (IEEE 1800-2017 6.23).
+    if (input.type_of && effective_ != nullptr) {
+        const auto described = describe_systemverilog_expression_type(
+            *effective_, *input.type_of);
+        auto result = described ? systemverilog_type_reference(*described)
+                                : std::nullopt;
+        if (result) {
+            result->unpacked_dimensions.insert(
+                result->unpacked_dimensions.begin(),
+                input.unpacked_dimensions.begin(),
+                input.unpacked_dimensions.end());
+        }
+        return result;
     }
 
     const auto declaration_type = [&](const DeclarationId id)

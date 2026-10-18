@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_callable_legality.hpp"
 
+#include <unordered_map>
 #include <unordered_set>
 
 namespace fsim::elaboration {
@@ -195,9 +196,20 @@ namespace {
                     return;
                 }
                 const auto& record = *statement->vhdl;
-                calls_procedure = calls_procedure
-                    || record.kind
-                        == semantic::vhdl::StatementKind::procedure_call;
+                // A procedure called by a pure function may not reference a
+                // signal declared outside it (IEEE 1076-2008 4.10).
+                if (record.kind
+                        == semantic::vhdl::StatementKind::procedure_call
+                    && record.procedure.selected) {
+                    const auto procedure = specialization_.find_declaration(
+                        *record.procedure.selected);
+                    if (procedure && procedure->vhdl != nullptr
+                        && procedure->vhdl->callable
+                        && procedure_reads_outside_signal(
+                            *procedure->vhdl)) {
+                        calls_procedure = true;
+                    }
+                }
                 const auto inspect_optional = [&](const auto expression) {
                     if (expression) {
                         inspect_expression(inspect_expression, *expression);
@@ -247,14 +259,114 @@ namespace {
                 failures_.push_back({
                     "FSIM-ELAB-VHLEGAL-006",
                     "pure VHDL function '" + function.name
-                        + "' calls a procedure",
+                        + "' calls a procedure that references a signal "
+                          "declared outside it",
                     function.source,
                 });
             }
         }
 
+        // Whether a procedure body (or a procedure it calls) references a
+        // signal that is not one of its formals.
+        bool procedure_reads_outside_signal(
+            const semantic::vhdl::Declaration& procedure)
+        {
+            if (const auto known = procedure_reads_.find(procedure.id.value());
+                known != procedure_reads_.end()) {
+                return known->second;
+            }
+            // A recursive call sees `false` until the body is inspected.
+            procedure_reads_.emplace(procedure.id.value(), false);
+            std::unordered_set<std::uint32_t> formals;
+            for (const auto formal : procedure.callable->formals) {
+                formals.insert(formal.value());
+            }
+            bool found { };
+            std::unordered_set<std::uint32_t> expressions;
+            const auto inspect_expression = [&](const auto& self,
+                                                const semantic::ExpressionId id)
+                -> void {
+                if (found || !expressions.insert(id.value()).second) {
+                    return;
+                }
+                const auto expression = specialization_.find_expression(id);
+                if (!expression || expression->vhdl == nullptr) {
+                    return;
+                }
+                const auto selected = expression->vhdl->referenced_name
+                    ? expression->vhdl->referenced_name->selected
+                    : std::nullopt;
+                const auto declaration = selected
+                    ? specialization_.find_declaration(*selected)
+                    : std::nullopt;
+                if (declaration && declaration->vhdl != nullptr
+                    && !formals.contains(declaration->vhdl->id.value())
+                    && (declaration->vhdl->form
+                            == semantic::vhdl::DeclarationForm::signal
+                        || declaration->vhdl->object_class
+                            == semantic::vhdl::ObjectClass::signal)) {
+                    found = true;
+                    return;
+                }
+                for (const auto operand : expression->vhdl->operands) {
+                    self(self, operand);
+                }
+            };
+            std::unordered_set<std::uint32_t> statements;
+            const auto inspect_statement = [&](const auto& self,
+                                               const semantic::StatementId id)
+                -> void {
+                if (found || !statements.insert(id.value()).second) {
+                    return;
+                }
+                const auto statement = specialization_.find_statement(id);
+                if (!statement || statement->vhdl == nullptr) {
+                    return;
+                }
+                const auto& record = *statement->vhdl;
+                for (const auto expression : { record.target, record.value,
+                         record.condition }) {
+                    if (expression) {
+                        inspect_expression(inspect_expression, *expression);
+                    }
+                }
+                for (const auto& actual : record.procedure_arguments) {
+                    inspect_expression(inspect_expression, actual.actual);
+                }
+                if (record.kind
+                        == semantic::vhdl::StatementKind::procedure_call
+                    && record.procedure.selected) {
+                    const auto nested = specialization_.find_declaration(
+                        *record.procedure.selected);
+                    if (nested && nested->vhdl != nullptr
+                        && nested->vhdl->callable
+                        && procedure_reads_outside_signal(*nested->vhdl)) {
+                        found = true;
+                        return;
+                    }
+                }
+                for (const auto child : record.statements) {
+                    self(self, child);
+                }
+                for (const auto child : record.else_statements) {
+                    self(self, child);
+                }
+                for (const auto& alternative : record.alternatives) {
+                    for (const auto child : alternative.statements) {
+                        self(self, child);
+                    }
+                }
+            };
+            for (const auto statement : procedure.statements) {
+                inspect_statement(inspect_statement, statement);
+            }
+            procedure_reads_[procedure.id.value()] = found;
+            return found;
+        }
+
         const semantic::SpecializedHirUnit& specialization_;
         std::unordered_set<std::uint32_t> visited_declarations_;
+        std::unordered_map<std::uint32_t, bool> procedure_reads_;
         std::vector<Failure> failures_;
     };
 

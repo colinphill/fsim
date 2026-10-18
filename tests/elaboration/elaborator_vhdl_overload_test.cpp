@@ -1114,9 +1114,11 @@ architecture rtl of pure_legality is
   signal shared_value : integer;
   signal first_result : integer;
   signal second_result : integer;
+  -- A procedure called by a pure function may not reference a signal
+  -- declared outside it (IEEE 1076-2008 4.10); calling one is legal.
   procedure observe is
   begin
-    null;
+    assert shared_value = 0;
   end procedure;
   function reads_signal return integer is
   begin

@@ -279,6 +279,7 @@ template <typename Integer>
 
 [[nodiscard]] Value resized(Value value, const std::uint32_t width)
 {
+    value.scalar.reset();
     if (value.width == width) {
         return value;
     }
@@ -286,6 +287,18 @@ template <typename Integer>
     auto packed = PackedLogic4 { width, Logic4::zero };
     if (logic9) {
         packed = packed.promoted_to_logic9();
+    }
+    // An unsized fill literal (`'0`, `'1`, `'x`, `'z`) sets every bit of
+    // its target (IEEE 1800-2017 5.7.1).
+    if (value.unsized && value.width == 1U && width > 1U) {
+        if (logic9) {
+            packed.fill(value.packed.get_logic9(0U));
+        } else {
+            packed.fill(value.packed.get(0U));
+        }
+        value.packed = std::move(packed);
+        value.width = width;
+        return value;
     }
     if (width > value.width && value.width != 0U) {
         const auto sign = value.packed.get_logic9(value.width - 1U);
@@ -751,6 +764,14 @@ enum class Truth : std::uint8_t { false_value,
 
 [[nodiscard]] Truth truth(const Value& value) noexcept
 {
+    // A real value is true when nonzero, a chandle when not null (12.4).
+    if (value.scalar) {
+        if (const auto real = value.scalar->real()) {
+            return *real != 0.0 ? Truth::true_value : Truth::false_value;
+        }
+        return value.scalar->bits != 0U ? Truth::true_value
+                                         : Truth::false_value;
+    }
     bool unknown { };
     for (std::uint32_t bit = 0U; bit < value.width; ++bit) {
         const auto state = runtime::to_logic4(value.packed.get_logic9(bit));
@@ -997,6 +1018,7 @@ void append_packed(Value& destination, const Value& operand)
         error = "resolved SystemVerilog integral type has no supported width";
         return std::nullopt;
     }
+    value.scalar.reset();
     value = resized(
         std::move(value),
         static_cast<std::uint32_t>(*width));
@@ -1012,6 +1034,283 @@ void append_packed(Value& destination, const Value& operand)
         convert_to_two_state(value);
     }
     return value;
+}
+
+[[nodiscard]] ScalarKind scalar_kind(
+    const semantic::sv::ScalarKind kind) noexcept
+{
+    return static_cast<ScalarKind>(kind);
+}
+
+[[nodiscard]] ScalarKind scalar_kind(
+    const semantic::sv::TypeReference& type) noexcept
+{
+    return frontend::systemverilog_scalar_kind(type.target.spelling);
+}
+
+[[nodiscard]] ScalarKind promote_scalar_kind(
+    const ScalarKind left, const ScalarKind right) noexcept
+{
+    if (left == ScalarKind::Chandle || right == ScalarKind::Chandle) {
+        return ScalarKind::Chandle;
+    }
+    if (left == ScalarKind::Real || right == ScalarKind::Real) {
+        return ScalarKind::Real;
+    }
+    if (left == ScalarKind::Realtime || right == ScalarKind::Realtime) {
+        return ScalarKind::Realtime;
+    }
+    if (left == ScalarKind::ShortReal || right == ScalarKind::ShortReal) {
+        return ScalarKind::ShortReal;
+    }
+    if (left == ScalarKind::Time || right == ScalarKind::Time) {
+        return ScalarKind::Time;
+    }
+    return ScalarKind::None;
+}
+
+[[nodiscard]] Scalar scalar_integer(
+    const std::int64_t value,
+    const ScalarKind kind = ScalarKind::None) noexcept
+{
+    return { kind, std::bit_cast<std::uint64_t>(value) };
+}
+
+[[nodiscard]] Scalar scalar_real(
+    const double value, const ScalarKind kind) noexcept
+{
+    return kind == ScalarKind::ShortReal
+        ? Scalar { kind,
+              std::bit_cast<std::uint32_t>(static_cast<float>(value)) }
+        : Scalar { kind, std::bit_cast<std::uint64_t>(value) };
+}
+
+[[nodiscard]] std::optional<std::uint64_t> physical_unit_femtoseconds(
+    const std::string_view unit) noexcept
+{
+    if (unit == "fs") {
+        return 1U;
+    }
+    if (unit == "ps") {
+        return 1'000U;
+    }
+    if (unit == "ns") {
+        return 1'000'000U;
+    }
+    if (unit == "us") {
+        return 1'000'000'000U;
+    }
+    if (unit == "ms") {
+        return 1'000'000'000'000U;
+    }
+    if (unit == "s") {
+        return 1'000'000'000'000'000U;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::uint64_t scalar_time_scale(
+    const std::string_view spelling) noexcept
+{
+    if (spelling.empty()) {
+        return 1U;
+    }
+    std::uint64_t magnitude { };
+    const auto parsed = std::from_chars(
+        spelling.data(), spelling.data() + spelling.size(), magnitude);
+    if (parsed.ec != std::errc { } || parsed.ptr == spelling.data()) {
+        return 1U;
+    }
+    const auto suffix = std::string_view {
+        parsed.ptr,
+        static_cast<std::size_t>(
+            spelling.data() + spelling.size() - parsed.ptr)
+    };
+    const auto factor = physical_unit_femtoseconds(suffix);
+    if (!factor
+        || magnitude > std::numeric_limits<std::uint64_t>::max() / *factor) {
+        return 1U;
+    }
+    return magnitude * *factor;
+}
+
+[[nodiscard]] std::optional<double> exact_decimal(
+    const semantic::sv::DecimalLiteral& literal,
+    std::string& error)
+{
+    const auto spelling = literal.digits + "e"
+        + std::to_string(literal.decimal_exponent);
+    double value { };
+    const auto parsed = std::from_chars(
+        spelling.data(), spelling.data() + spelling.size(), value,
+        std::chars_format::scientific);
+    if (parsed.ec != std::errc { }
+        || parsed.ptr != spelling.data() + spelling.size()
+        || !std::isfinite(value)) {
+        error = "real/time literal is outside deterministic IEEE-754 range";
+        return std::nullopt;
+    }
+    return value;
+}
+
+[[nodiscard]] std::optional<semantic::UnitId> scope_unit(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ScopeId scope) noexcept
+{
+    const auto& scopes = specialization.design().semantics.scopes();
+    if (!scope.valid() || scope.value() >= scopes.size()) {
+        return std::nullopt;
+    }
+    return scopes[scope.value()].unit;
+}
+
+[[nodiscard]] std::optional<Scalar> parse_scalar_identity(
+    const std::string_view identity)
+{
+    constexpr auto prefix = std::string_view { "svscalar-v1:k=" };
+    if (!identity.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    const auto bits_marker = identity.find(":b=", prefix.size());
+    if (bits_marker == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto kind_text = identity.substr(
+        prefix.size(), bits_marker - prefix.size());
+    const auto bits_text = identity.substr(bits_marker + 3U);
+    const auto kind = parse_integer<unsigned>(kind_text);
+    std::uint64_t bits { };
+    const auto parsed = std::from_chars(
+        bits_text.data(), bits_text.data() + bits_text.size(), bits, 16);
+    if (!kind || *kind > static_cast<unsigned>(ScalarKind::Chandle)
+        || bits_text.empty() || bits_text.size() > 16U
+        || parsed.ec != std::errc { }
+        || parsed.ptr != bits_text.data() + bits_text.size()) {
+        return std::nullopt;
+    }
+    return Scalar { static_cast<ScalarKind>(*kind), bits };
+}
+
+struct RealMathFunction {
+    std::size_t arguments { };
+    double (*evaluate)(double, double) { };
+};
+
+[[nodiscard]] std::optional<RealMathFunction> real_math_function(
+    const std::string_view name)
+{
+    using Entry = std::pair<std::string_view, RealMathFunction>;
+    static const std::array functions {
+        Entry { "$ln", { 1U, [](double x, double) { return std::log(x); } } },
+        Entry { "$log10", { 1U, [](double x, double) { return std::log10(x); } } },
+        Entry { "$exp", { 1U, [](double x, double) { return std::exp(x); } } },
+        Entry { "$sqrt", { 1U, [](double x, double) { return std::sqrt(x); } } },
+        Entry { "$pow", { 2U, [](double x, double y) { return std::pow(x, y); } } },
+        Entry { "$floor", { 1U, [](double x, double) { return std::floor(x); } } },
+        Entry { "$ceil", { 1U, [](double x, double) { return std::ceil(x); } } },
+        Entry { "$sin", { 1U, [](double x, double) { return std::sin(x); } } },
+        Entry { "$cos", { 1U, [](double x, double) { return std::cos(x); } } },
+        Entry { "$tan", { 1U, [](double x, double) { return std::tan(x); } } },
+        Entry { "$asin", { 1U, [](double x, double) { return std::asin(x); } } },
+        Entry { "$acos", { 1U, [](double x, double) { return std::acos(x); } } },
+        Entry { "$atan", { 1U, [](double x, double) { return std::atan(x); } } },
+        Entry { "$atan2", { 2U, [](double y, double x) { return std::atan2(y, x); } } },
+        Entry { "$hypot", { 2U, [](double x, double y) { return std::hypot(x, y); } } },
+        Entry { "$sinh", { 1U, [](double x, double) { return std::sinh(x); } } },
+        Entry { "$cosh", { 1U, [](double x, double) { return std::cosh(x); } } },
+        Entry { "$tanh", { 1U, [](double x, double) { return std::tanh(x); } } },
+        Entry { "$asinh", { 1U, [](double x, double) { return std::asinh(x); } } },
+        Entry { "$acosh", { 1U, [](double x, double) { return std::acosh(x); } } },
+        Entry { "$atanh", { 1U, [](double x, double) { return std::atanh(x); } } },
+    };
+    const auto found = std::ranges::find(functions, name, &Entry::first);
+    return found == functions.end() ? std::nullopt
+                                    : std::optional { found->second };
+}
+
+[[nodiscard]] bool real_family(const ScalarKind kind) noexcept
+{
+    return kind == ScalarKind::Real || kind == ScalarKind::ShortReal
+        || kind == ScalarKind::Realtime;
+}
+
+/// A real-family value. Its packed form is the integer it converts to,
+/// rounded away from zero at one half (IEEE 1800-2017 6.12.2).
+[[nodiscard]] Value real_value(double input, const ScalarKind kind)
+{
+    const auto scalar = scalar_real(input, kind);
+    // A shortreal keeps single precision.
+    const auto value = scalar.real().value_or(input);
+    Value result;
+    if (std::isfinite(value)) {
+        const cpp_int integer { std::round(value) };
+        const auto magnitude = boost::multiprecision::abs(integer);
+        const auto bits = magnitude == 0
+            ? 1U
+            : static_cast<std::uint32_t>(
+                  boost::multiprecision::msb(magnitude) + 1U);
+        const auto width = std::max<std::uint32_t>(64U, bits + 1U);
+        result = make_value(packed_integer(integer, width), true, false,
+            frontend::ValueDomain::Bit2);
+    } else {
+        result = make_known(0U, 64U, true, false, frontend::ValueDomain::Bit2);
+    }
+    result.scalar = scalar;
+    return result;
+}
+
+/// The real number a value converts to: x and z bits count as zero
+/// (IEEE 1800-2017 6.12.2).
+[[nodiscard]] std::optional<double> real_of(const Value& value)
+{
+    if (value.scalar) {
+        if (const auto real = value.scalar->real()) {
+            return real;
+        }
+        if (value.scalar->kind == ScalarKind::Chandle) {
+            return std::nullopt;
+        }
+        if (const auto integral = value.scalar->integral()) {
+            return static_cast<double>(*integral);
+        }
+        return std::nullopt;
+    }
+    if (value.unbounded || value.width == 0U) {
+        return std::nullopt;
+    }
+    return numeric_integer(value).convert_to<double>();
+}
+
+/// Convert a value to a real-family or chandle kind; an integral kind keeps
+/// the integral value (its scalar, if any, rounds as in 6.12.2).
+[[nodiscard]] std::optional<Value> convert_value_kind(
+    Value value, const ScalarKind kind, std::string& error)
+{
+    if (real_family(kind)) {
+        const auto real = real_of(value);
+        if (!real) {
+            error = "constant value does not convert to a real type";
+            return std::nullopt;
+        }
+        return real_value(*real, kind);
+    }
+    if (kind == ScalarKind::Chandle) {
+        if (!value.scalar || value.scalar->kind != ScalarKind::Chandle) {
+            error = "only null converts to a chandle constant";
+            return std::nullopt;
+        }
+        return value;
+    }
+    value.scalar.reset();
+    return value;
+}
+
+[[nodiscard]] Value chandle_value(const std::uint64_t bits)
+{
+    auto result = make_known(bits, 64U, false, false,
+        frontend::ValueDomain::Bit2);
+    result.scalar = Scalar { ScalarKind::Chandle, bits };
+    return result;
 }
 
 class HirConstantEvaluator final {
@@ -1041,6 +1340,13 @@ public:
         auto result = evaluate_impl(expression);
         active_expressions_.pop_back();
         return result;
+    }
+
+    /// A constant declaration's value in its declared type.
+    [[nodiscard]] std::optional<Value> evaluate_declaration(
+        const semantic::DeclarationId declaration)
+    {
+        return value_for_declaration(declaration);
     }
 
     /// An expression evaluated for a declared type, so that a keyed
@@ -1511,6 +1817,39 @@ private:
                 return keep(make_known(
                     scalar->bits, 64U, false, false));
             }
+            if (const auto scalar = parse_scalar_identity(actual->identity);
+                scalar && real_family(scalar->kind)) {
+                auto value = real_value(
+                    scalar->real().value_or(0.0), scalar->kind);
+                // A real actual of an integral formal rounds (6.12.2).
+                const auto view = specialization_.find_declaration(
+                    declaration);
+                const auto formal_kind = view && view->systemverilog != nullptr
+                        && view->systemverilog->type
+                    ? scalar_kind(*view->systemverilog->type)
+                    : ScalarKind::None;
+                if (real_family(formal_kind)) {
+                    auto converted = convert_value_kind(
+                        std::move(value), formal_kind, error_);
+                    return converted ? keep(std::move(converted))
+                                     : std::nullopt;
+                }
+                if (view && view->systemverilog != nullptr
+                    && view->systemverilog->type
+                    && hir_systemverilog_explicit_integral_type(
+                        *view->systemverilog->type)) {
+                    value.scalar.reset();
+                    auto converted = convert_record_type(
+                        std::move(value), *view->systemverilog->type);
+                    return converted ? keep(std::move(converted))
+                                     : std::nullopt;
+                }
+                return keep(std::move(value));
+            }
+            if (const auto scalar = parse_scalar_identity(actual->identity);
+                scalar && scalar->kind == ScalarKind::Chandle) {
+                return keep(chandle_value(scalar->bits));
+            }
             if (auto parsed = parse_canonical(actual->identity)) {
                 return keep(std::move(parsed));
             }
@@ -1533,13 +1872,27 @@ private:
             remove();
             return std::nullopt;
         }
+        // A real-family or chandle declaration converts its initializer
+        // to its own type (IEEE 1800-2017 6.12.2).
+        const auto declared_kind = view->systemverilog->type
+            ? scalar_kind(*view->systemverilog->type)
+            : ScalarKind::None;
         auto result = view->systemverilog->type
+                && !real_family(declared_kind)
+                && declared_kind != ScalarKind::Chandle
             ? evaluate_typed(*view->systemverilog->initializer,
                   *view->systemverilog->type)
             : evaluate(*view->systemverilog->initializer);
-        if (result && view->systemverilog->type
+        if (result && real_family(declared_kind)) {
+            result = convert_value_kind(
+                std::move(*result), declared_kind, error_);
+        } else if (result && declared_kind == ScalarKind::Chandle) {
+            result = convert_value_kind(
+                std::move(*result), declared_kind, error_);
+        } else if (result && view->systemverilog->type
             && hir_systemverilog_explicit_integral_type(
                 *view->systemverilog->type)) {
+            result->scalar.reset();
             result = convert_record_type(
                 std::move(*result), *view->systemverilog->type);
         }
@@ -1699,6 +2052,18 @@ private:
     {
         if (record.operands.size() != 1U) {
             return std::nullopt;
+        }
+        if ((record.text == "-" || record.text == "+")
+            && real_valued(record.operands.front())) {
+            auto operand = evaluate(record.operands.front());
+            const auto real = operand ? real_of(*operand) : std::nullopt;
+            if (!real) {
+                return std::nullopt;
+            }
+            const auto kind = real_family(value_kind(*operand))
+                ? value_kind(*operand)
+                : ScalarKind::Real;
+            return real_value(record.text == "-" ? -*real : *real, kind);
         }
         // `-`, `~` and `+` take the context width of their expression
         // before applying (IEEE 1800-2017 11.6.1).
@@ -1975,6 +2340,21 @@ private:
     {
         if (record.operands.size() != 2U) {
             return std::nullopt;
+        }
+        if ((record.text == "+" || record.text == "-" || record.text == "*"
+                || record.text == "/" || record.text == "**"
+                || record.text == "%" || record.text == "=="
+                || record.text == "!=" || record.text == "==="
+                || record.text == "!==" || record.text == "<"
+                || record.text == "<=" || record.text == ">"
+                || record.text == ">=")
+            && (real_valued(record.operands.front())
+                || real_valued(record.operands.back())
+                || value_kind_hint(record.operands.front())
+                    == ScalarKind::Chandle
+                || value_kind_hint(record.operands.back())
+                    == ScalarKind::Chandle)) {
+            return evaluate_real_binary(record);
         }
         // Operands of arithmetic and bitwise operators take the width of
         // the whole expression, those of a relational operator the wider
@@ -2794,6 +3174,18 @@ private:
             return std::nullopt;
         }
         std::optional<semantic::sv::TypeReference> selected;
+        if (declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::type_parameter
+            && declaration->systemverilog->declared_type) {
+            // A type parameter denotes its actual, or else its default
+            // (6.20.3); the resolver selects it in this specialization.
+            semantic::sv::TypeReference named;
+            named.target.target = *declaration->systemverilog->declared_type;
+            named.target.spelling = declaration->systemverilog->name;
+            return resolver.underlying_systemverilog_type(
+                       named, declaration->systemverilog->scope)
+                .value_or(named);
+        }
         if (declaration->systemverilog->type) {
             selected = declaration->systemverilog->type;
         } else if (declaration->systemverilog->declared_type) {
@@ -2902,7 +3294,20 @@ private:
             } else {
                 cast_name = std::string_view { record.text }.substr(
                     std::string_view { "@sv-cast:" }.size());
-                if (const auto width
+                // A cast to a real type converts the value; one to an
+                // integral type rounds a real (IEEE 1800-2017 6.24.1).
+                if (const auto kind = frontend::systemverilog_scalar_kind(
+                        cast_name);
+                    real_family(kind) || kind == ScalarKind::Chandle) {
+                    return convert_value_kind(
+                        std::move(*result), kind, error_);
+                }
+                if (cast_name == "time") {
+                    type.emplace();
+                    type->executable_width = 64U;
+                    type->four_state = true;
+                    type->target.spelling = "time";
+                } else if (const auto width
                     = parse_integer<std::uint32_t>(cast_name)) {
                     // A size cast keeps the expression's signedness (6.24.1).
                     type.emplace();
@@ -2926,6 +3331,13 @@ private:
                     type->signed_value = true;
                     type->four_state = cast_name == "integer";
                     type->target.spelling = std::string { cast_name };
+                } else if (cast_name == "@type"
+                    && !record.type_operand.empty()) {
+                    // `type(...)'(x)` (6.23).
+                    type = semantic::CompiledDesignResolver {
+                        specialization_
+                    }.underlying_systemverilog_type(
+                         record.type_operand.front(), record.scope);
                 } else {
                     type = named_cast_type(record, cast_name);
                 }
@@ -2983,6 +3395,66 @@ private:
             || record.text == "$unpacked_dimensions";
         if (query) {
             return evaluate_query(record);
+        }
+        if (record.text == "?:" && record.operands.size() == 3U
+            && (real_valued(record.operands[1])
+                || real_valued(record.operands[2]))) {
+            // A real operand makes the result real (IEEE 1800-2017
+            // 11.4.11); an ambiguous condition with differing reals gives 0.
+            const auto condition = evaluate(record.operands.front());
+            if (!condition) {
+                return std::nullopt;
+            }
+            const auto state = truth(*condition);
+            auto when_true = state != Truth::false_value
+                ? evaluate(record.operands[1])
+                : std::optional<Value> { };
+            auto when_false = state != Truth::true_value
+                ? evaluate(record.operands[2])
+                : std::optional<Value> { };
+            if ((state != Truth::false_value && !when_true)
+                || (state != Truth::true_value && !when_false)) {
+                return std::nullopt;
+            }
+            const auto kind = promote_scalar_kind(
+                when_true ? value_kind(*when_true) : ScalarKind::None,
+                when_false ? value_kind(*when_false) : ScalarKind::None);
+            const auto result_kind = real_family(kind) ? kind
+                                                       : ScalarKind::Real;
+            if (state == Truth::unknown) {
+                const auto lhs = real_of(*when_true);
+                const auto rhs = real_of(*when_false);
+                if (!lhs || !rhs) {
+                    error_ = "real conditional operand is not numeric";
+                    return std::nullopt;
+                }
+                return real_value(*lhs == *rhs ? *lhs : 0.0, result_kind);
+            }
+            return convert_value_kind(
+                std::move(state == Truth::true_value ? *when_true
+                                                     : *when_false),
+                result_kind, error_);
+        }
+        // The real math functions are constant system functions (IEEE
+        // 1800-2017 11.2.1, 20.8.2); their results follow IEEE 754.
+        if (const auto function = real_math_function(record.text);
+            function && record.operands.size() == function->arguments) {
+            std::array<double, 2U> arguments { };
+            for (std::size_t index { }; index < function->arguments;
+                ++index) {
+                const auto operand = evaluate(record.operands[index]);
+                const auto real = operand ? real_of(*operand)
+                                          : std::optional<double> { };
+                if (!real) {
+                    if (operand) {
+                        error_ = "a math function argument is not numeric";
+                    }
+                    return std::nullopt;
+                }
+                arguments[index] = *real;
+            }
+            return real_value(function->evaluate(arguments[0], arguments[1]),
+                ScalarKind::Real);
         }
         if (record.text == "?:" && record.operands.size() == 3U) {
             const auto condition = evaluate(record.operands.front());
@@ -3420,12 +3892,18 @@ private:
                                     : frontend::ValueDomain::Bit2);
             }
         }
-        if (!view || view->systemverilog == nullptr || members == nullptr
-            || view->systemverilog->kind != ExpressionKind::assignment_pattern
-            || std::ranges::all_of(view->systemverilog->associations,
+        // A positional pattern for a packed structure gives its members in
+        // declaration order, each converted to the member's type (10.9.1).
+        const bool positional = view && view->systemverilog != nullptr
+            && std::ranges::all_of(view->systemverilog->associations,
                 [](const auto& association) {
                     return association.choice_spelling.empty();
-                })) {
+                });
+        if (!view || view->systemverilog == nullptr || members == nullptr
+            || view->systemverilog->kind != ExpressionKind::assignment_pattern
+            || (positional
+                && view->systemverilog->associations.size()
+                    != members->size())) {
             return evaluate(expression);
         }
         std::unordered_set<std::uint32_t> visiting;
@@ -3457,7 +3935,14 @@ private:
             }
             return true;
         };
-        for (const auto& association : view->systemverilog->associations) {
+        for (std::size_t index { };
+            const auto& association : view->systemverilog->associations) {
+            if (positional) {
+                if (!place((*members)[index++], association.value)) {
+                    return std::nullopt;
+                }
+                continue;
+            }
             if (association.choice_spelling == "default") {
                 default_value = association.value;
                 continue;
@@ -4163,6 +4648,230 @@ private:
         return Flow::normal;
     }
 
+    // ---- Real-family values (IEEE 1800-2017 6.12, 11.3.1) ----
+
+    /// Whether an expression has a real-family type: a real literal, a real
+    /// declaration, a real cast or math function, or an arithmetic or
+    /// conditional operator with a real operand (11.3.1, 11.4.11).
+    [[nodiscard]] bool real_valued(const semantic::ExpressionId expression)
+    {
+        if (const auto found = real_valued_.find(expression.value());
+            found != real_valued_.end()) {
+            return found->second;
+        }
+        real_valued_.emplace(expression.value(), false);
+        const auto result = real_valued_impl(expression);
+        real_valued_[expression.value()] = result;
+        return result;
+    }
+
+    [[nodiscard]] bool real_valued_impl(
+        const semantic::ExpressionId expression)
+    {
+        const auto view = specialization_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.decimal_literal
+            || real_family(scalar_kind(record.scalar_kind))) {
+            return true;
+        }
+        const auto operand = [&](const std::size_t index) {
+            return index < record.operands.size()
+                && real_valued(record.operands[index]);
+        };
+        switch (record.kind) {
+        case ExpressionKind::name: {
+            const auto declaration = systemverilog_constant_name_declaration(
+                specialization_, record);
+            if (!declaration) {
+                return false;
+            }
+            const auto& actuals
+                = specialization_.specialization().actual_identities;
+            const auto actual = std::ranges::find(actuals, *declaration,
+                &semantic::SpecializedHirActualIdentity::declaration);
+            const auto declared = specialization_.find_declaration(
+                *declaration);
+            if (!declared || declared->systemverilog == nullptr) {
+                return false;
+            }
+            const auto& candidate = *declared->systemverilog;
+            if (candidate.type
+                && candidate.type->target.spelling != "implicit") {
+                return real_family(scalar_kind(*candidate.type));
+            }
+            if (actual != actuals.end()) {
+                const auto scalar = parse_scalar_identity(actual->identity);
+                return scalar && real_family(scalar->kind);
+            }
+            return candidate.initializer
+                && real_valued(*candidate.initializer);
+        }
+        case ExpressionKind::unary:
+            return (record.text == "-" || record.text == "+") && operand(0U);
+        case ExpressionKind::binary:
+            return (record.text == "+" || record.text == "-"
+                       || record.text == "*" || record.text == "/"
+                       || record.text == "**")
+                && (operand(0U) || operand(1U));
+        case ExpressionKind::call:
+            if (record.text == "?:") {
+                return operand(1U) || operand(2U);
+            }
+            return record.text == "@sv-cast:real"
+                || record.text == "@sv-cast:shortreal"
+                || record.text == "@sv-cast:realtime"
+                || real_math_function(record.text).has_value();
+        default:
+            return false;
+        }
+    }
+
+    /// A real or time literal; a time literal is rounded to the time
+    /// precision and expressed in the time unit (IEEE 1800-2017 5.8).
+    [[nodiscard]] std::optional<Value> evaluate_decimal(
+        const semantic::sv::Expression& record)
+    {
+        auto value = exact_decimal(*record.decimal_literal, error_);
+        if (!value) {
+            return std::nullopt;
+        }
+        if (record.decimal_literal->kind
+            != semantic::sv::DecimalLiteralKind::time) {
+            return real_value(*value, ScalarKind::Real);
+        }
+        const auto factor = physical_unit_femtoseconds(
+            record.decimal_literal->time_unit);
+        const auto owner = scope_unit(specialization_, record.scope);
+        const auto unit = owner
+            ? specialization_.design().find_unit(*owner)
+            : std::optional<semantic::CompiledUnitView> { };
+        const auto scale = unit && unit->systemverilog != nullptr
+            ? scalar_time_scale(unit->systemverilog->compilation.time_unit)
+            : 1U;
+        if (!factor || scale == 0U) {
+            error_ = "time literal has an invalid unit or evaluation context";
+            return std::nullopt;
+        }
+        const auto precision = unit && unit->systemverilog != nullptr
+            ? scalar_time_scale(
+                  unit->systemverilog->compilation.time_precision)
+            : 0U;
+        auto femtoseconds = *value * static_cast<double>(*factor);
+        if (precision != 0U) {
+            femtoseconds = std::round(
+                femtoseconds / static_cast<double>(precision))
+                * static_cast<double>(precision);
+        }
+        return real_value(
+            femtoseconds / static_cast<double>(scale), ScalarKind::Realtime);
+    }
+
+    [[nodiscard]] static ScalarKind value_kind(const Value& value) noexcept
+    {
+        return value.scalar ? value.scalar->kind : ScalarKind::None;
+    }
+
+    /// The chandle kind of a null literal or a chandle expression.
+    [[nodiscard]] ScalarKind value_kind_hint(
+        const semantic::ExpressionId expression) const
+    {
+        const auto view = specialization_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return ScalarKind::None;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::class_null
+            || record.text == "@sv-null") {
+            return ScalarKind::Chandle;
+        }
+        return scalar_kind(record.scalar_kind) == ScalarKind::Chandle
+            ? ScalarKind::Chandle
+            : ScalarKind::None;
+    }
+
+    /// Arithmetic and comparison with a real operand: the other operand
+    /// converts to real (IEEE 1800-2017 11.3.1); comparisons give a 1-bit
+    /// result.
+    [[nodiscard]] std::optional<Value> evaluate_real_binary(
+        const semantic::sv::Expression& record)
+    {
+        auto left = evaluate(record.operands.front());
+        if (!left) {
+            return std::nullopt;
+        }
+        auto right = evaluate(record.operands.back());
+        if (!right) {
+            return std::nullopt;
+        }
+        const auto& op = record.text;
+        const bool equality = op == "==" || op == "===";
+        const bool inequality = op == "!=" || op == "!==";
+        if (value_kind(*left) == ScalarKind::Chandle
+            || value_kind(*right) == ScalarKind::Chandle) {
+            if (value_kind(*left) != value_kind(*right)
+                || (!equality && !inequality)) {
+                error_ = "chandle constants only support equality and "
+                         "inequality with chandle or null";
+                return std::nullopt;
+            }
+            const auto equal = left->scalar->bits == right->scalar->bits;
+            return logical_result(equal == equality ? Truth::true_value
+                                                    : Truth::false_value);
+        }
+        const auto lhs = real_of(*left);
+        const auto rhs = real_of(*right);
+        if (!lhs || !rhs) {
+            error_ = "real constant operand is not numeric";
+            return std::nullopt;
+        }
+        std::optional<bool> compared;
+        if (equality) {
+            compared = *lhs == *rhs;
+        } else if (inequality) {
+            compared = *lhs != *rhs;
+        } else if (op == "<") {
+            compared = *lhs < *rhs;
+        } else if (op == "<=") {
+            compared = *lhs <= *rhs;
+        } else if (op == ">") {
+            compared = *lhs > *rhs;
+        } else if (op == ">=") {
+            compared = *lhs >= *rhs;
+        }
+        if (compared) {
+            return logical_result(
+                *compared ? Truth::true_value : Truth::false_value);
+        }
+        auto kind = promote_scalar_kind(value_kind(*left), value_kind(*right));
+        if (!real_family(kind)) {
+            kind = ScalarKind::Real;
+        }
+        double result { };
+        if (op == "+") {
+            result = *lhs + *rhs;
+        } else if (op == "-") {
+            result = *lhs - *rhs;
+        } else if (op == "*") {
+            result = *lhs * *rhs;
+        } else if (op == "/") {
+            result = *lhs / *rhs;
+        } else if (op == "**") {
+            result = std::pow(*lhs, *rhs);
+        } else {
+            error_ = "operator '" + op + "' is not legal for real operands";
+            return std::nullopt;
+        }
+        // A real division by zero gives an IEEE 754 infinity or NaN.
+        if (!std::isfinite(result) && op != "/" && op != "**") {
+            error_ = "real constant operation produced a nonfinite result";
+            return std::nullopt;
+        }
+        return real_value(result, kind);
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_impl(
         const semantic::ExpressionId expression)
     {
@@ -4171,6 +4880,13 @@ private:
             return std::nullopt;
         }
         const auto& record = *view->systemverilog;
+        if (record.decimal_literal) {
+            return evaluate_decimal(record);
+        }
+        if (record.kind == ExpressionKind::class_null
+            || record.text == "@sv-null") {
+            return chandle_value(0U);
+        }
         if (record.kind == ExpressionKind::boolean_literal) {
             return make_known(
                 record.text == "true" || record.text == "1" ? 1U : 0U,
@@ -4180,6 +4896,29 @@ private:
             || record.kind == ExpressionKind::logic_literal) {
             return parse_literal(record.text,
                 record.kind == ExpressionKind::integer_literal, error_);
+        }
+        if (record.kind == ExpressionKind::string_literal
+            && record.decoded_string) {
+            // A string literal in an integral context is an unsigned packed
+            // value of eight bits per character, the last character in the
+            // low byte (IEEE 1800-2017 5.9, 11.10); "" is one NUL byte.
+            const auto& text = *record.decoded_string;
+            const auto characters = std::max<std::size_t>(text.size(), 1U);
+            if (characters > hir_systemverilog_maximum_constant_width / 8U) {
+                error_ = "string literal exceeds the constant width limit";
+                return std::nullopt;
+            }
+            auto packed = PackedLogic4 { characters * 8U, Logic4::zero };
+            for (std::size_t at = 0; at < text.size(); ++at) {
+                const auto character = static_cast<unsigned char>(
+                    text[text.size() - 1U - at]);
+                for (std::size_t bit = 0; bit < 8U; ++bit) {
+                    if (((character >> bit) & 1U) != 0U) {
+                        packed.set(at * 8U + bit, Logic4::one);
+                    }
+                }
+            }
+            return make_value(std::move(packed), false, false);
         }
         if (record.kind == ExpressionKind::name) {
             return evaluate_name(record);
@@ -4223,762 +4962,32 @@ private:
     std::vector<std::pair<std::size_t, std::uint32_t>> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
     std::unordered_map<std::uint32_t, std::uint32_t> contexts_;
+    std::unordered_map<std::uint32_t, bool> real_valued_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };
 };
 
-[[nodiscard]] ScalarKind scalar_kind(
-    const semantic::sv::ScalarKind kind) noexcept
+/// The scalar view of a constant: a real-family or chandle value as it is,
+/// an integral value as a signed 64-bit integer (x and z bits as 0).
+[[nodiscard]] std::optional<Scalar> scalar_of(const Value& value,
+    const ScalarKind kind, std::string& error)
 {
-    return static_cast<ScalarKind>(kind);
-}
-
-[[nodiscard]] ScalarKind scalar_kind(
-    const semantic::sv::TypeReference& type) noexcept
-{
-    return frontend::systemverilog_scalar_kind(type.target.spelling);
-}
-
-[[nodiscard]] ScalarKind promote_scalar_kind(
-    const ScalarKind left, const ScalarKind right) noexcept
-{
-    if (left == ScalarKind::Chandle || right == ScalarKind::Chandle) {
-        return ScalarKind::Chandle;
+    if (value.scalar) {
+        return value.scalar;
     }
-    if (left == ScalarKind::Real || right == ScalarKind::Real) {
-        return ScalarKind::Real;
-    }
-    if (left == ScalarKind::Realtime || right == ScalarKind::Realtime) {
-        return ScalarKind::Realtime;
-    }
-    if (left == ScalarKind::ShortReal || right == ScalarKind::ShortReal) {
-        return ScalarKind::ShortReal;
-    }
-    if (left == ScalarKind::Time || right == ScalarKind::Time) {
-        return ScalarKind::Time;
-    }
-    return ScalarKind::None;
-}
-
-[[nodiscard]] Scalar scalar_integer(
-    const std::int64_t value,
-    const ScalarKind kind = ScalarKind::None) noexcept
-{
-    return { kind, std::bit_cast<std::uint64_t>(value) };
-}
-
-[[nodiscard]] Scalar scalar_real(
-    const double value, const ScalarKind kind) noexcept
-{
-    return kind == ScalarKind::ShortReal
-        ? Scalar { kind,
-              std::bit_cast<std::uint32_t>(static_cast<float>(value)) }
-        : Scalar { kind, std::bit_cast<std::uint64_t>(value) };
-}
-
-[[nodiscard]] std::optional<double> scalar_number(
-    const Scalar& value) noexcept
-{
-    if (const auto real = value.real()) {
-        return real;
-    }
-    if (const auto integer = value.integral()) {
-        return static_cast<double>(*integer);
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::uint64_t> physical_unit_femtoseconds(
-    const std::string_view unit) noexcept
-{
-    if (unit == "fs") {
-        return 1U;
-    }
-    if (unit == "ps") {
-        return 1'000U;
-    }
-    if (unit == "ns") {
-        return 1'000'000U;
-    }
-    if (unit == "us") {
-        return 1'000'000'000U;
-    }
-    if (unit == "ms") {
-        return 1'000'000'000'000U;
-    }
-    if (unit == "s") {
-        return 1'000'000'000'000'000U;
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::uint64_t scalar_time_scale(
-    const std::string_view spelling) noexcept
-{
-    if (spelling.empty()) {
-        return 1U;
-    }
-    std::uint64_t magnitude { };
-    const auto parsed = std::from_chars(
-        spelling.data(), spelling.data() + spelling.size(), magnitude);
-    if (parsed.ec != std::errc { } || parsed.ptr == spelling.data()) {
-        return 1U;
-    }
-    const auto suffix = std::string_view {
-        parsed.ptr,
-        static_cast<std::size_t>(
-            spelling.data() + spelling.size() - parsed.ptr)
-    };
-    const auto factor = physical_unit_femtoseconds(suffix);
-    if (!factor
-        || magnitude > std::numeric_limits<std::uint64_t>::max() / *factor) {
-        return 1U;
-    }
-    return magnitude * *factor;
-}
-
-[[nodiscard]] std::optional<double> exact_decimal(
-    const semantic::sv::DecimalLiteral& literal,
-    std::string& error)
-{
-    const auto spelling = literal.digits + "e"
-        + std::to_string(literal.decimal_exponent);
-    double value { };
-    const auto parsed = std::from_chars(
-        spelling.data(), spelling.data() + spelling.size(), value,
-        std::chars_format::scientific);
-    if (parsed.ec != std::errc { }
-        || parsed.ptr != spelling.data() + spelling.size()
-        || !std::isfinite(value)) {
-        error = "real/time literal is outside deterministic IEEE-754 range";
+    if (value.unbounded) {
+        error = "symbolic unbounded '$' is not a scalar constant";
         return std::nullopt;
     }
-    return value;
+    const auto integer = numeric_integer(value);
+    if (integer < std::numeric_limits<std::int64_t>::min()
+        || integer > std::numeric_limits<std::int64_t>::max()) {
+        error = "integral constant is outside the signed 64-bit scalar range";
+        return std::nullopt;
+    }
+    return scalar_integer(integer.convert_to<std::int64_t>(),
+        kind == ScalarKind::Time ? ScalarKind::Time : ScalarKind::None);
 }
-
-[[nodiscard]] std::optional<semantic::UnitId> scope_unit(
-    const semantic::SpecializedHirUnit& specialization,
-    const semantic::ScopeId scope) noexcept
-{
-    const auto& scopes = specialization.design().semantics.scopes();
-    if (!scope.valid() || scope.value() >= scopes.size()) {
-        return std::nullopt;
-    }
-    return scopes[scope.value()].unit;
-}
-
-[[nodiscard]] std::optional<Scalar> parse_scalar_identity(
-    const std::string_view identity)
-{
-    constexpr auto prefix = std::string_view { "svscalar-v1:k=" };
-    if (!identity.starts_with(prefix)) {
-        return std::nullopt;
-    }
-    const auto bits_marker = identity.find(":b=", prefix.size());
-    if (bits_marker == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto kind_text = identity.substr(
-        prefix.size(), bits_marker - prefix.size());
-    const auto bits_text = identity.substr(bits_marker + 3U);
-    const auto kind = parse_integer<unsigned>(kind_text);
-    std::uint64_t bits { };
-    const auto parsed = std::from_chars(
-        bits_text.data(), bits_text.data() + bits_text.size(), bits, 16);
-    if (!kind || *kind > static_cast<unsigned>(ScalarKind::Chandle)
-        || bits_text.empty() || bits_text.size() > 16U
-        || parsed.ec != std::errc { }
-        || parsed.ptr != bits_text.data() + bits_text.size()) {
-        return std::nullopt;
-    }
-    return Scalar { static_cast<ScalarKind>(*kind), bits };
-}
-
-[[nodiscard]] std::optional<std::int64_t> checked_scalar_arithmetic(
-    const std::int64_t left,
-    const std::int64_t right,
-    const std::string_view operation) noexcept
-{
-    constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
-    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
-    if (operation == "+") {
-        if ((right > 0 && left > maximum - right)
-            || (right < 0 && left < minimum - right)) {
-            return std::nullopt;
-        }
-        return left + right;
-    }
-    if (operation == "-") {
-        if ((right < 0 && left > maximum + right)
-            || (right > 0 && left < minimum + right)) {
-            return std::nullopt;
-        }
-        return left - right;
-    }
-    if (operation == "*") {
-        if (left == 0 || right == 0) {
-            return 0;
-        }
-        if ((left == -1 && right == minimum)
-            || (right == -1 && left == minimum)) {
-            return std::nullopt;
-        }
-        if (left > 0) {
-            if ((right > 0 && left > maximum / right)
-                || (right < 0 && right < minimum / left)) {
-                return std::nullopt;
-            }
-        } else if ((right > 0 && left < minimum / right)
-            || (right < 0 && left < maximum / right)) {
-            return std::nullopt;
-        }
-        return left * right;
-    }
-    // Bitwise operators of integral scalars cannot overflow; they also carry
-    // the truth values of `a <-> b`, which the parser forms with `^`.
-    if (operation == "&") {
-        return left & right;
-    }
-    if (operation == "|") {
-        return left | right;
-    }
-    if (operation == "^") {
-        return left ^ right;
-    }
-    return std::nullopt;
-}
-
-struct RealMathFunction {
-    std::size_t arguments { };
-    double (*evaluate)(double, double) { };
-};
-
-[[nodiscard]] std::optional<RealMathFunction> real_math_function(
-    const std::string_view name)
-{
-    using Entry = std::pair<std::string_view, RealMathFunction>;
-    static const std::array functions {
-        Entry { "$ln", { 1U, [](double x, double) { return std::log(x); } } },
-        Entry { "$log10", { 1U, [](double x, double) { return std::log10(x); } } },
-        Entry { "$exp", { 1U, [](double x, double) { return std::exp(x); } } },
-        Entry { "$sqrt", { 1U, [](double x, double) { return std::sqrt(x); } } },
-        Entry { "$pow", { 2U, [](double x, double y) { return std::pow(x, y); } } },
-        Entry { "$floor", { 1U, [](double x, double) { return std::floor(x); } } },
-        Entry { "$ceil", { 1U, [](double x, double) { return std::ceil(x); } } },
-        Entry { "$sin", { 1U, [](double x, double) { return std::sin(x); } } },
-        Entry { "$cos", { 1U, [](double x, double) { return std::cos(x); } } },
-        Entry { "$tan", { 1U, [](double x, double) { return std::tan(x); } } },
-        Entry { "$asin", { 1U, [](double x, double) { return std::asin(x); } } },
-        Entry { "$acos", { 1U, [](double x, double) { return std::acos(x); } } },
-        Entry { "$atan", { 1U, [](double x, double) { return std::atan(x); } } },
-        Entry { "$atan2", { 2U, [](double y, double x) { return std::atan2(y, x); } } },
-        Entry { "$hypot", { 2U, [](double x, double y) { return std::hypot(x, y); } } },
-        Entry { "$sinh", { 1U, [](double x, double) { return std::sinh(x); } } },
-        Entry { "$cosh", { 1U, [](double x, double) { return std::cosh(x); } } },
-        Entry { "$tanh", { 1U, [](double x, double) { return std::tanh(x); } } },
-        Entry { "$asinh", { 1U, [](double x, double) { return std::asinh(x); } } },
-        Entry { "$acosh", { 1U, [](double x, double) { return std::acosh(x); } } },
-        Entry { "$atanh", { 1U, [](double x, double) { return std::atanh(x); } } },
-    };
-    const auto found = std::ranges::find(functions, name, &Entry::first);
-    return found == functions.end() ? std::nullopt
-                                    : std::optional { found->second };
-}
-
-class HirScalarEvaluator final {
-public:
-    HirScalarEvaluator(
-        const semantic::SpecializedHirUnit& specialization,
-        std::string& error)
-        : specialization_(specialization)
-        , error_(error)
-    {
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate(
-        const semantic::ExpressionId expression)
-    {
-        if (!active_expressions_.insert(expression.value()).second) {
-            error_ = "recursive SystemVerilog scalar constant expression";
-            return std::nullopt;
-        }
-        auto result = evaluate_impl(expression);
-        active_expressions_.erase(expression.value());
-        return result;
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_declaration(
-        const semantic::DeclarationId declaration)
-    {
-        return value_for_declaration(declaration);
-    }
-
-private:
-    struct DeclarationBoundary {
-        semantic::UnitId unit;
-        std::size_t position { };
-    };
-
-    [[nodiscard]] std::optional<DeclarationBoundary> declaration_boundary(
-        const semantic::DeclarationId declaration) const
-    {
-        const auto view = specialization_.find_declaration(declaration);
-        if (!view || view->systemverilog == nullptr) {
-            return std::nullopt;
-        }
-        const auto unit_id = scope_unit(
-            specialization_, view->systemverilog->scope);
-        if (!unit_id) {
-            return std::nullopt;
-        }
-        const auto unit = specialization_.design().find_unit(*unit_id);
-        if (!unit || unit->systemverilog == nullptr) {
-            return std::nullopt;
-        }
-        const auto found = std::ranges::find(
-            unit->systemverilog->declarations, declaration);
-        if (found == unit->systemverilog->declarations.end()) {
-            return std::nullopt;
-        }
-        return DeclarationBoundary { *unit_id,
-            static_cast<std::size_t>(std::distance(
-                unit->systemverilog->declarations.begin(), found)) };
-    }
-
-    [[nodiscard]] bool source_order_allows(
-        const semantic::DeclarationId declaration) const
-    {
-        if (boundaries_.empty()) {
-            return true;
-        }
-        const auto candidate = declaration_boundary(declaration);
-        if (!candidate) {
-            return true;
-        }
-        const auto& boundary = boundaries_.back();
-        return candidate->unit != boundary.unit
-            || candidate->position < boundary.position;
-    }
-
-    [[nodiscard]] std::optional<Scalar> actual_value(
-        const semantic::DeclarationId declaration) const
-    {
-        const auto& actuals
-            = specialization_.specialization().actual_identities;
-        const auto actual = std::ranges::find(actuals, declaration,
-            &semantic::SpecializedHirActualIdentity::declaration);
-        if (actual == actuals.end()) {
-            return std::nullopt;
-        }
-        if (const auto scalar = parse_scalar_identity(actual->identity)) {
-            return scalar;
-        }
-        if (const auto integral = parse_canonical(actual->identity)) {
-            if (const auto value = integral->integer_value()) {
-                return scalar_integer(*value);
-            }
-        }
-        const auto value = parse_integer<std::int64_t>(actual->identity);
-        return value ? std::optional { scalar_integer(*value) }
-                     : std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<Scalar> value_for_declaration(
-        const semantic::DeclarationId declaration)
-    {
-        if (const auto actual = actual_value(declaration)) {
-            return actual;
-        }
-        if (!source_order_allows(declaration)) {
-            error_ = "scalar parameter dependency is declared later";
-            return std::nullopt;
-        }
-        if (!active_declarations_.insert(declaration.value()).second) {
-            error_ = "recursive SystemVerilog scalar constant declaration";
-            return std::nullopt;
-        }
-        const auto view = specialization_.find_declaration(declaration);
-        if (!view || view->systemverilog == nullptr
-            || !view->systemverilog->initializer) {
-            active_declarations_.erase(declaration.value());
-            return std::nullopt;
-        }
-        const auto boundary = declaration_boundary(declaration);
-        if (boundary) {
-            boundaries_.push_back(*boundary);
-        }
-        auto result = evaluate(*view->systemverilog->initializer);
-        if (boundary) {
-            boundaries_.pop_back();
-        }
-        const auto target = view->systemverilog->type
-            ? scalar_kind(*view->systemverilog->type)
-            : ScalarKind::None;
-        if (result && target != ScalarKind::None) {
-            result = frontend::convert_systemverilog_scalar_constant(
-                *result, target, error_);
-        }
-        active_declarations_.erase(declaration.value());
-        return result;
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_literal(
-        const semantic::sv::Expression& record)
-    {
-        if (record.decimal_literal) {
-            auto value = exact_decimal(*record.decimal_literal, error_);
-            if (!value) {
-                return std::nullopt;
-            }
-            auto kind = ScalarKind::Real;
-            if (record.decimal_literal->kind
-                == semantic::sv::DecimalLiteralKind::time) {
-                const auto factor = physical_unit_femtoseconds(
-                    record.decimal_literal->time_unit);
-                const auto owner = scope_unit(specialization_, record.scope);
-                const auto unit = owner
-                    ? specialization_.design().find_unit(*owner)
-                    : std::optional<semantic::CompiledUnitView> { };
-                const auto scale = unit && unit->systemverilog != nullptr
-                    ? scalar_time_scale(
-                          unit->systemverilog->compilation.time_unit)
-                    : 1U;
-                if (!factor || scale == 0U) {
-                    error_ = "time literal has an invalid unit or evaluation "
-                             "context";
-                    return std::nullopt;
-                }
-                // The literal is rounded to the time precision, then
-                // expressed in the time unit (IEEE 1800-2017 5.8).
-                const auto precision = unit && unit->systemverilog != nullptr
-                    ? scalar_time_scale(
-                          unit->systemverilog->compilation.time_precision)
-                    : 0U;
-                auto femtoseconds = *value * static_cast<double>(*factor);
-                if (precision != 0U) {
-                    femtoseconds = std::round(
-                        femtoseconds / static_cast<double>(precision))
-                        * static_cast<double>(precision);
-                }
-                *value = femtoseconds / static_cast<double>(scale);
-                kind = ScalarKind::Realtime;
-            }
-            return scalar_real(*value, kind);
-        }
-        std::string integral_error;
-        const auto integral = evaluate_hir_systemverilog_constant(
-            specialization_, record.id, integral_error);
-        if (!integral) {
-            error_ = integral_error.empty()
-                ? "integer literal is outside the signed 64-bit scalar range"
-                : std::move(integral_error);
-            return std::nullopt;
-        }
-        const auto value = integral->integer_value();
-        if (!value) {
-            error_ = "integer literal is outside the signed 64-bit scalar "
-                     "range";
-            return std::nullopt;
-        }
-        return scalar_integer(*value);
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_name(
-        const semantic::sv::Expression& record)
-    {
-        const auto declaration = systemverilog_constant_name_declaration(
-            specialization_, record);
-        if (!declaration) {
-            // A genvar holds its current generate iteration value, an
-            // integer (IEEE 1800-2017 27.4).
-            std::string integral_error;
-            if (const auto integral = evaluate_hir_systemverilog_constant(
-                    specialization_, record.id, integral_error)) {
-                if (const auto value = integral->integer_value()) {
-                    return scalar_integer(*value);
-                }
-            }
-            error_ = "unknown scalar constant '" + record.text + "'";
-            return std::nullopt;
-        }
-        return value_for_declaration(*declaration);
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_unary(
-        const semantic::sv::Expression& record)
-    {
-        if (record.operands.size() != 1U) {
-            return std::nullopt;
-        }
-        auto operand = evaluate(record.operands.front());
-        if (!operand) {
-            return std::nullopt;
-        }
-        if (record.text == "+") {
-            return operand;
-        }
-        if (record.text == "!") {
-            return scalar_integer(!operand->truth());
-        }
-        if (record.text == "-") {
-            if (const auto value = operand->real()) {
-                return scalar_real(-*value, operand->kind);
-            }
-            if (const auto value = operand->integral(); value
-                && *value != std::numeric_limits<std::int64_t>::min()) {
-                return scalar_integer(-*value, operand->kind);
-            }
-            error_ = "unary scalar negation overflows";
-        }
-        return std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_binary(
-        const semantic::sv::Expression& record)
-    {
-        if (record.operands.size() != 2U) {
-            return std::nullopt;
-        }
-        auto left = evaluate(record.operands.front());
-        if (!left) {
-            return std::nullopt;
-        }
-        if (record.text == "&&" && !left->truth()) {
-            return scalar_integer(0);
-        }
-        if (record.text == "||" && left->truth()) {
-            return scalar_integer(1);
-        }
-        auto right = evaluate(record.operands.back());
-        if (!right) {
-            return std::nullopt;
-        }
-        if (left->kind == ScalarKind::Chandle
-            || right->kind == ScalarKind::Chandle) {
-            const auto equality = record.text == "=="
-                || record.text == "===";
-            const auto inequality = record.text == "!="
-                || record.text == "!==";
-            if (left->kind != ScalarKind::Chandle
-                || right->kind != ScalarKind::Chandle
-                || (!equality && !inequality)) {
-                error_ = "chandle constants only support equality and "
-                         "inequality with chandle or null";
-                return std::nullopt;
-            }
-            const auto equal = left->bits == right->bits;
-            return scalar_integer(equality ? equal : !equal);
-        }
-        if (record.text == "&&" || record.text == "||") {
-            return scalar_integer(right->truth());
-        }
-        const auto left_integer = left->integral();
-        const auto right_integer = right->integral();
-        const auto lhs = scalar_number(*left);
-        const auto rhs = scalar_number(*right);
-        if (!lhs || !rhs) {
-            error_ = "scalar constant operand is not numeric";
-            return std::nullopt;
-        }
-        const auto comparison = [&](const auto& first, const auto& second)
-            -> std::optional<Scalar> {
-            if (record.text == "==" || record.text == "===") {
-                return scalar_integer(first == second);
-            }
-            if (record.text == "!=" || record.text == "!==") {
-                return scalar_integer(first != second);
-            }
-            if (record.text == "<") {
-                return scalar_integer(first < second);
-            }
-            if (record.text == "<=") {
-                return scalar_integer(first <= second);
-            }
-            if (record.text == ">") {
-                return scalar_integer(first > second);
-            }
-            if (record.text == ">=") {
-                return scalar_integer(first >= second);
-            }
-            return std::nullopt;
-        };
-        if (left_integer && right_integer) {
-            if (const auto result = comparison(
-                    *left_integer, *right_integer)) {
-                return result;
-            }
-        } else if (const auto result = comparison(*lhs, *rhs)) {
-            return result;
-        }
-        const auto kind = promote_scalar_kind(left->kind, right->kind);
-        if (left_integer && right_integer && !frontend::is_real_scalar_kind(kind)) {
-            if ((record.text == "/" || record.text == "%")
-                && *right_integer == 0) {
-                error_ = "scalar constant division by zero";
-                return std::nullopt;
-            }
-            if (record.text == "/") {
-                if (*left_integer == std::numeric_limits<std::int64_t>::min()
-                    && *right_integer == -1) {
-                    error_ = "integral scalar constant operation overflows";
-                    return std::nullopt;
-                }
-                return scalar_integer(
-                    *left_integer / *right_integer, kind);
-            }
-            if (record.text == "%") {
-                return scalar_integer(
-                    *left_integer
-                            == std::numeric_limits<std::int64_t>::min()
-                        && *right_integer == -1
-                    ? 0
-                    : *left_integer % *right_integer,
-                    kind);
-            }
-            if (const auto result = checked_scalar_arithmetic(
-                    *left_integer, *right_integer, record.text)) {
-                return scalar_integer(*result, kind);
-            }
-            error_ = "integral scalar constant operation overflows";
-            return std::nullopt;
-        }
-        double result { };
-        if (record.text == "+") {
-            result = *lhs + *rhs;
-        } else if (record.text == "-") {
-            result = *lhs - *rhs;
-        } else if (record.text == "*") {
-            result = *lhs * *rhs;
-        } else if (record.text == "/") {
-            result = *lhs / *rhs;
-        } else {
-            error_ = "unsupported scalar constant operator '" + record.text
-                + "'";
-            return std::nullopt;
-        }
-        // A real division by zero gives an IEEE 754 infinity or NaN.
-        if (!std::isfinite(result) && record.text != "/") {
-            error_ = "scalar constant operation produced a nonfinite result";
-            return std::nullopt;
-        }
-        if (frontend::is_real_scalar_kind(kind)) {
-            return scalar_real(result, kind);
-        }
-        if (result
-                > static_cast<double>(
-                    std::numeric_limits<std::int64_t>::max())
-            || result
-                < static_cast<double>(
-                    std::numeric_limits<std::int64_t>::min())
-            || std::trunc(result) != result) {
-            error_ = "integral scalar constant operation overflows";
-            return std::nullopt;
-        }
-        return scalar_integer(static_cast<std::int64_t>(result), kind);
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_call(
-        const semantic::sv::Expression& record)
-    {
-        if (record.text == "?:" && record.operands.size() == 3U) {
-            const auto condition = evaluate(record.operands.front());
-            if (!condition) {
-                return std::nullopt;
-            }
-            auto selected = evaluate(
-                record.operands[condition->truth() ? 1U : 2U]);
-            if (!selected) {
-                return std::nullopt;
-            }
-            const auto result_kind = scalar_kind(record.scalar_kind);
-            return result_kind == ScalarKind::None
-                ? selected
-                : frontend::convert_systemverilog_scalar_constant(
-                      *selected, result_kind, error_);
-        }
-        constexpr auto cast_prefix = std::string_view { "@sv-cast:" };
-        if (record.operands.size() == 1U
-            && record.text.starts_with(cast_prefix)) {
-            const auto operand = evaluate(record.operands.front());
-            if (!operand) {
-                return std::nullopt;
-            }
-            const auto name = std::string_view { record.text }.substr(
-                cast_prefix.size());
-            const auto target = frontend::systemverilog_scalar_kind(name);
-            if (target != ScalarKind::None) {
-                return frontend::convert_systemverilog_scalar_constant(
-                    *operand, target, error_);
-            }
-        }
-        // The real math functions are constant system functions (IEEE
-        // 1800-2017 11.2.1, 20.8.2); their results follow IEEE 754.
-        if (const auto function = real_math_function(record.text);
-            function && record.operands.size() == function->arguments) {
-            std::array<double, 2U> arguments { };
-            for (std::size_t index { }; index < function->arguments; ++index) {
-                const auto operand = evaluate(record.operands[index]);
-                if (!operand) {
-                    return std::nullopt;
-                }
-                if (const auto real = operand->real()) {
-                    arguments[index] = *real;
-                } else if (const auto integral = operand->integral()) {
-                    arguments[index] = static_cast<double>(*integral);
-                } else {
-                    error_ = "a math function argument is not numeric";
-                    return std::nullopt;
-                }
-            }
-            return scalar_real(
-                function->evaluate(arguments[0], arguments[1]), ScalarKind::Real);
-        }
-        error_ = "expression is not a supported scalar constant form";
-        return std::nullopt;
-    }
-
-    [[nodiscard]] std::optional<Scalar> evaluate_impl(
-        const semantic::ExpressionId expression)
-    {
-        const auto view = specialization_.find_expression(expression);
-        if (!view || view->systemverilog == nullptr) {
-            return std::nullopt;
-        }
-        const auto& record = *view->systemverilog;
-        if (record.kind == ExpressionKind::integer_literal
-            || record.kind == ExpressionKind::logic_literal) {
-            return evaluate_literal(record);
-        }
-        if (record.kind == ExpressionKind::boolean_literal) {
-            return scalar_integer(
-                record.text == "true" || record.text == "1" ? 1 : 0);
-        }
-        if (record.kind == ExpressionKind::class_null
-            || record.text == "@sv-null") {
-            return Scalar { ScalarKind::Chandle, 0U };
-        }
-        if (record.kind == ExpressionKind::name) {
-            return evaluate_name(record);
-        }
-        if (record.kind == ExpressionKind::unary) {
-            return evaluate_unary(record);
-        }
-        if (record.kind == ExpressionKind::binary) {
-            return evaluate_binary(record);
-        }
-        if (record.kind == ExpressionKind::call) {
-            return evaluate_call(record);
-        }
-        error_ = "expression is not a supported scalar constant form";
-        return std::nullopt;
-    }
-
-    const semantic::SpecializedHirUnit& specialization_;
-    std::string& error_;
-    std::unordered_set<std::uint32_t> active_expressions_;
-    std::unordered_set<std::uint32_t> active_declarations_;
-    std::vector<DeclarationBoundary> boundaries_;
-};
 
 [[nodiscard]] bool scalar_expression_applicable(
     const semantic::SpecializedHirUnit& specialization,
@@ -5173,6 +5182,9 @@ HirSystemVerilogConstant::integer_value() const noexcept
 
 std::string HirSystemVerilogConstant::display() const
 {
+    if (scalar) {
+        return scalar->display();
+    }
     if (unbounded) {
         return "$";
     }
@@ -5194,6 +5206,9 @@ std::string HirSystemVerilogConstant::display() const
 
 std::string HirSystemVerilogConstant::canonical() const
 {
+    if (scalar) {
+        return scalar->canonical();
+    }
     auto bits = packed.to_msb_string();
     std::ranges::transform(bits, bits.begin(), ascii_lower);
     return "svconst-v3:b=" + std::to_string(unbounded ? 1U : 0U)
@@ -5231,6 +5246,21 @@ evaluate_hir_systemverilog_constant(
     const semantic::ExpressionId expression,
     std::string& error)
 {
+    auto value = evaluate_hir_systemverilog_value(
+        specialization, expression, error);
+    if (value && value->scalar) {
+        error = "a real-family or chandle value is not an integral constant";
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_value(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression,
+    std::string& error)
+{
     error.clear();
     // Evaluation depends only on the specialization and the expression;
     // instances sharing a specialization evaluate each expression once.
@@ -5263,8 +5293,13 @@ evaluate_hir_systemverilog_typed_constant(
     std::string& error)
 {
     error.clear();
-    return HirConstantEvaluator { specialization, error }.evaluate_for_type(
-        expression, type);
+    auto value = HirConstantEvaluator { specialization, error }
+                     .evaluate_for_type(expression, type);
+    if (value && value->scalar) {
+        error = "a real-family or chandle value is not an integral constant";
+        return std::nullopt;
+    }
+    return value;
 }
 
 bool hir_systemverilog_scalar_expression_applicable(
@@ -5283,8 +5318,27 @@ evaluate_hir_systemverilog_scalar_constant(
     const semantic::ExpressionId expression,
     std::string& error)
 {
+    const auto value = evaluate_hir_systemverilog_value(
+        specialization, expression, error);
+    return value ? scalar_of(*value, ScalarKind::None, error) : std::nullopt;
+}
+
+std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_declaration_value(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId declaration,
+    std::string& error)
+{
     error.clear();
-    return HirScalarEvaluator { specialization, error }.evaluate(expression);
+    return HirConstantEvaluator { specialization, error }
+        .evaluate_declaration(declaration);
+}
+
+std::optional<HirSystemVerilogConstant>
+convert_hir_systemverilog_value_kind(HirSystemVerilogConstant value,
+    const frontend::SystemVerilogScalarKind kind, std::string& error)
+{
+    return convert_value_kind(std::move(value), kind, error);
 }
 
 std::optional<frontend::SystemVerilogScalarConstant>
@@ -5293,9 +5347,17 @@ evaluate_hir_systemverilog_scalar_declaration(
     const semantic::DeclarationId declaration,
     std::string& error)
 {
-    error.clear();
-    return HirScalarEvaluator { specialization, error }
-        .evaluate_declaration(declaration);
+    const auto value = evaluate_hir_systemverilog_declaration_value(
+        specialization, declaration, error);
+    if (!value) {
+        return std::nullopt;
+    }
+    const auto view = specialization.find_declaration(declaration);
+    const auto kind = view && view->systemverilog != nullptr
+            && view->systemverilog->type
+        ? scalar_kind(*view->systemverilog->type)
+        : ScalarKind::None;
+    return scalar_of(*value, kind, error);
 }
 
 std::optional<HirSystemVerilogConstant>

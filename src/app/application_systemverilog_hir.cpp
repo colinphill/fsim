@@ -557,6 +557,12 @@ namespace systemverilog_hir_detail {
                 static_cast<frontend::EdgeKind>(input.call_result_width));
         }
         output.decoded_string = input.decoded_string;
+        // `type(data_type)` (IEEE 1800-2017 6.23).
+        if (input.systemverilog_type_operand) {
+            output.type_operand.push_back(type_reference(
+                *input.systemverilog_type_operand, input.span, scope,
+                parent));
+        }
         output.decimal_literal = systemverilog_decimal_literal(
             input.systemverilog_decimal_literal);
         output.scalar_kind = static_cast<sv::ScalarKind>(

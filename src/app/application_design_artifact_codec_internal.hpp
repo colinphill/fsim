@@ -341,7 +341,7 @@ namespace codec_detail {
                     >= runtime::simir::ProcessStartupPhase::ordinary
                 && value
                     <= runtime::simir::ProcessStartupPhase::
-                        package_static_initializer;
+                        after_procedures;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
@@ -528,7 +528,7 @@ namespace codec_detail {
                 && value <= semantic::sv::CoverageScalarKind::chandle;
         } else if constexpr (std::same_as<T, semantic::sv::OutputFormat>) {
             return value >= semantic::sv::OutputFormat::binary
-                && value <= semantic::sv::OutputFormat::strength;
+                && value <= semantic::sv::OutputFormat::library;
         } else if constexpr (std::same_as<T, semantic::sv::TypeForm>) {
             return value >= semantic::sv::TypeForm::unresolved
                 && value <= semantic::sv::TypeForm::unpacked_union;

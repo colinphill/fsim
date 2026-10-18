@@ -441,6 +441,50 @@ std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
         bits };
 }
 
+// The selectors that may follow a function call or an attribute name,
+// which are names themselves (IEEE 1076-2008 8.1): an index or slice, a
+// record element, and a value attribute.
+Expression VhdlParser::parse_vhdl_name_suffixes(
+    Expression prefix, const SourceSpan& start)
+{
+    for (;;) {
+        if (match(TokenKind::LeftParen)) {
+            prefix = parse_index_or_slice_suffix(std::move(prefix), start,
+                "')' after chained slice", "')' after chained index",
+                "FSIM-VHDL-PARSE-033");
+            continue;
+        }
+        if (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
+            advance();
+            const auto member = advance();
+            prefix = Expression { ExpressionKind::Call,
+                "@vhdl-member:" + vhdl_name(member.text),
+                { std::move(prefix) }, cover(start, member.span) };
+            continue;
+        }
+        if (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)) {
+            advance();
+            const auto attribute = advance();
+            const auto designator = detail::ascii_lower(attribute.text);
+            std::vector<Expression> operands { std::move(prefix) };
+            const bool dimension_argument = designator == "left"
+                || designator == "right" || designator == "high"
+                || designator == "low" || designator == "length"
+                || designator == "range" || designator == "reverse_range"
+                || designator == "ascending";
+            if (dimension_argument && match(TokenKind::LeftParen)) {
+                operands.push_back(parse_expression());
+                expect(TokenKind::RightParen, "')' after attribute argument",
+                    "FSIM-VHDL-PARSE-120");
+            }
+            prefix = Expression { ExpressionKind::Call, "'" + designator,
+                std::move(operands), cover(start, previous().span) };
+            continue;
+        }
+        return prefix;
+    }
+}
+
 Expression VhdlParser::parse_index_or_slice_suffix(Expression prefix,
     const SourceSpan& start, const std::string_view slice_close,
     const std::string_view index_close, const std::string_view code,
@@ -745,7 +789,8 @@ Expression VhdlParser::parse_primary()
                     std::move(actuals), span };
                 expression.selected_operator_prefix
                     = std::move(selected_operator_prefix);
-                return expression;
+                return parse_vhdl_name_suffixes(
+                    std::move(expression), start.span);
             }
             if (actuals.size() == 1U
                 && (unary_symbol || symbol == "+" || symbol == "-"
@@ -756,7 +801,8 @@ Expression VhdlParser::parse_primary()
                     std::move(actuals), span };
                 expression.selected_operator_prefix
                     = std::move(selected_operator_prefix);
-                return expression;
+                return parse_vhdl_name_suffixes(
+                    std::move(expression), start.span);
             }
             error(start, "FSIM-VHDL-PARSE-300",
                 "an operator symbol function call requires the operator's "
@@ -1182,6 +1228,29 @@ Expression VhdlParser::parse_primary()
             }
             return selected;
         }
+        // A signature after the prefix of an attribute name selects one of
+        // several overloaded subprograms or enumeration literals (IEEE
+        // 1076-2008 8.6); the attribute specification is found by the name.
+        if (at(TokenKind::LeftBracket)) {
+            std::size_t depth { };
+            std::size_t offset { };
+            for (; index_ + offset < tokens_.size(); ++offset) {
+                const auto kind = current(offset).kind;
+                if (kind == TokenKind::LeftBracket) {
+                    ++depth;
+                } else if (kind == TokenKind::RightBracket && --depth == 0U) {
+                    break;
+                } else if (kind == TokenKind::Semicolon) {
+                    break;
+                }
+            }
+            if (depth == 0U && at(TokenKind::Apostrophe, offset + 1U)
+                && at(TokenKind::Identifier, offset + 2U)) {
+                for (std::size_t skipped { }; skipped <= offset; ++skipped) {
+                    advance();
+                }
+            }
+        }
         if (match(TokenKind::Apostrophe)) {
             if (at(TokenKind::LeftParen)) {
                 auto value = parse_primary();
@@ -1323,7 +1392,17 @@ Expression VhdlParser::parse_primary()
             std::vector<Expression> operands {
                 std::move(attribute_prefix)
             };
-            if (match(TokenKind::LeftParen)) {
+            // A signal attribute without a parameter denotes a value, which
+            // a following parenthesis indexes or slices (IEEE 1076-2008
+            // 16.2.4, 8.1).
+            const bool parameterless_signal_attribute
+                = designator == "event" || designator == "active"
+                || designator == "last_event" || designator == "last_active"
+                || designator == "last_value" || designator == "driving"
+                || designator == "driving_value"
+                || designator == "transaction";
+            if (!parameterless_signal_attribute
+                && match(TokenKind::LeftParen)) {
                 operands.push_back(parse_expression());
                 expect(TokenKind::RightParen, "')' after attribute argument",
                     "FSIM-VHDL-PARSE-120");
@@ -1362,8 +1441,10 @@ Expression VhdlParser::parse_primary()
                     "the predefined 'reflect attribute does not accept an "
                     "argument");
             }
-            return Expression { ExpressionKind::Call, "'" + designator,
-                std::move(operands), cover(name.span, previous().span) };
+            return parse_vhdl_name_suffixes(
+                Expression { ExpressionKind::Call, "'" + designator,
+                    std::move(operands), cover(name.span, previous().span) },
+                name.span);
         }
         if (match(TokenKind::LeftParen)) {
             if (at(TokenKind::RightParen)) {

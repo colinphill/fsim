@@ -52,15 +52,20 @@ namespace {
             std::vector<Pending> pending;
             for (auto& cell : file_.cells) {
                 for (auto& declaration : cell.declarations) {
-                    pending.push_back(Pending { &declaration });
+                    pending.push_back(Pending { &declaration, false });
                 }
             }
             while (!pending.empty()) {
-                auto* node = pending.back().node;
+                const auto current = pending.back();
                 pending.pop_back();
-                inspect(*node);
+                auto* node = current.node;
+                // A PATHPULSEPERCENT value is a percentage of the path
+                // delay, not a delay value.
+                const bool percentage = current.percentage
+                    || node->kind == SdfConstructKind::PathPulsePercent;
+                inspect(*node, percentage);
                 for (auto& child : node->children)
-                    pending.push_back(Pending { &child });
+                    pending.push_back(Pending { &child, percentage });
             }
             if (saw_single_ && saw_triple_) {
                 diagnose("FSIM-SDF-30-004",
@@ -72,6 +77,7 @@ namespace {
     private:
         struct Pending {
             SdfSyntaxNode* node;
+            bool percentage { };
         };
 
         void diagnose(std::string code, std::string message,
@@ -126,10 +132,10 @@ namespace {
             }
         }
 
-        void inspect(const SdfSyntaxNode& node)
+        void inspect(const SdfSyntaxNode& node, const bool percentage)
         {
             inspect_profile(node);
-            if (node.kind == SdfConstructKind::Value)
+            if (node.kind == SdfConstructKind::Value && !percentage)
                 inspect_value(node);
             inspect_delay_list(node);
         }

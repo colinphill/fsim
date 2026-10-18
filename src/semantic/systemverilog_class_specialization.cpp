@@ -1081,7 +1081,8 @@ private:
                     || range_resolves(*type.packed_range))
                 && std::ranges::all_of(
                     type.unpacked_dimensions, range_resolves)
-                && expression(type.queue_maximum);
+                && expression(type.queue_maximum)
+                && expression(type.type_of);
         };
         bool valid = expression(declaration->initializer)
             && (!declaration->type || type_resolves(*declaration->type))

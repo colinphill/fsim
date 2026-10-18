@@ -319,7 +319,7 @@ VERILATOR_SHELL = """module {shell};
     initial begin
 {init0}
         #10;
-        while ($time < 1100) begin
+        while ($time < {sim_time}) begin
 {body}
         end
     end
@@ -327,7 +327,8 @@ endmodule
 """
 
 
-def verilator_shell(top_text: str, module: str = "t", shell: str = "top") -> str:
+def verilator_shell(top_text: str, module: str = "t", shell: str = "top",
+                    sim_time: int = 1100) -> str:
     inputs: list[str] = []
     get_sigs = True
     for line in top_text.splitlines():
@@ -359,7 +360,8 @@ def verilator_shell(top_text: str, module: str = "t", shell: str = "top") -> str
             body += "          clk = !clk;\n"
         body += "          #1;\n"
     return VERILATOR_SHELL.format(decls=decls, ports=ports, init0=init0.rstrip("\n"),
-                                  body=body.rstrip("\n"), module=module, shell=shell)
+                                  body=body.rstrip("\n"), module=module, shell=shell,
+                                  sim_time=sim_time)
 
 
 def python_driver_names(source: str) -> dict[str, object]:
@@ -614,6 +616,23 @@ VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
 VERILATOR_NONSTANDARD = {
+    # IEEE 1800-2017 9.2.2.2.2: always_comb runs once at time zero; an
+    # always @* procedure waits for its first event.
+    "t_enum_func": "expects an always @* procedure to run at time zero, "
+        "which IEEE 1800-2017 9.2.2.2.2 gives only always_comb",
+    # IEEE 1800-2017 20.2: $finish exits at once; the test counts a
+    # nonblocking update scheduled in the same time step as the $finish.
+    "t_scheduling_many_clocks": "counts a nonblocking update of the time "
+        "step that calls $finish, which IEEE 1800-2017 20.2 does not run",
+    # IEEE 1800-2017 20.4.2: $timeformat takes all four arguments or none.
+    "t_display_time": "calls $timeformat with one to three or empty "
+        "arguments; IEEE 1800-2017 20.4.2 requires all four or none",
+    # IEEE 1800-2017 6.12: shortreal is single precision, so a shortreal
+    # holding 1.414 differs from the real 1.414 (11.3.1 compares them as
+    # real); the test expects Verilator's double-precision shortreal.
+    "t_math_shortreal": "compares a shortreal with a real literal as "
+        "equal, which needs shortreal stored in double precision "
+        "(IEEE 1800-2017 6.12 makes it single precision)",
     # A dist is a constraint item (IEEE 1800-2017 A.1.10 expression_or_dist),
     # not an operator, so it cannot appear inside parentheses.
     "t_constraint_dist_foreach_if": "writes a dist inside parentheses, "
@@ -883,11 +902,32 @@ def verilator_cases(root: Path) -> list[Case]:
             and not re.search(r"make_top_shell\s*=\s*False", source)
         # `--top-module X` (or `--top X`, which may name a configuration)
         # selects the root the driver elaborates.
+        # driver.py's main runs the clock until `test.sim_time` (1100 by
+        # default).
+        sim_time_match = re.search(r"^test\.sim_time\s*=\s*(\d+)\s*$", source, re.M)
+        sim_time = int(sim_time_match.group(1)) if sim_time_match else 1100
         explicit_top = None
         for value in python_literal_list(source, "verilator_flags2") or []:
             match = re.search(r"--top(?:-module)?[ =]([A-Za-z_]\w*)", value)
             if match:
                 explicit_top = match.group(1)
+        # `--work LIB FILE...` compiles the files that follow into library
+        # LIB (IEEE 1800-2017 33.2); configurations then select cells from
+        # those libraries.
+        library_args = list(compile_args)
+        library_files: dict[str, list[str]] = {}
+        current_library = None
+        flag_tokens = [token for value in
+                       python_literal_list(source, "verilator_flags2") or []
+                       for token in value.split()]
+        for index, token in enumerate(flag_tokens):
+            if token == "--work" and index + 1 < len(flag_tokens):
+                current_library = flag_tokens[index + 1]
+            elif current_library and token.startswith("t/") \
+                    and token.endswith((".v", ".sv", ".vg")) \
+                    and (tdir.parent / token).is_file():
+                library_files.setdefault(current_library, []).append(
+                    str(tdir.parent / token))
         compile_args.append(str(top_file))
         compile_args += [str(f) for f in verilator_library_files(top_file, tdir)]
         shell = ""
@@ -897,7 +937,8 @@ def verilator_cases(root: Path) -> list[Case]:
                     top_text):
                 compile_args.append("verilator_shell.sv")
                 tops = ["fsim_verilator_top"]
-                shell = verilator_shell(top_text, explicit_top, "fsim_verilator_top")
+                shell = verilator_shell(top_text, explicit_top, "fsim_verilator_top",
+                                        sim_time)
             else:
                 tops = [explicit_top]
                 # A configuration with several design cells (33.4.1.1)
@@ -910,16 +951,20 @@ def verilator_cases(root: Path) -> list[Case]:
         elif use_shell:
             compile_args.append("verilator_shell.sv")
             tops = ["top"]
-            shell = verilator_shell(top_text)
+            shell = verilator_shell(top_text, sim_time=sim_time)
         else:
             tops = sv_root_modules([top_text])
-        commands = [Command("compile", compile_args)]
+        commands = [Command("compile", library_args + ["--library", library] + files)
+                    for library, files in library_files.items()]
+        commands.append(Command("compile", compile_args))
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
         executes = "test.execute(" in source
         # Verilator's compile also elaborates, so an expected compile
         # failure may come from fsim's elaborate step.
         elab = ["elaborate", "-q", "--no-aot"]
+        for library in library_files:
+            elab += ["--search-library", library]
         for top in tops:
             elab += ["--top", top]
         # A compile-only test declaring no module (only classes or

@@ -1242,6 +1242,19 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         spelling += vhdl_name(selected.text);
     }
 
+    // `T'BASE` denotes the base type of T (IEEE 1076-2008 16.2.2), here as
+    // the type mark of a subtype indication.
+    if (at(TokenKind::Apostrophe) && keyword("base", 1, true)) {
+        const auto separator = spelling.find_last_of('.');
+        if (const auto base = vhdl_base_type_mark(
+                separator == std::string::npos
+                    ? spelling
+                    : spelling.substr(separator + 1U))) {
+            advance();
+            advance();
+            spelling = *base;
+        }
+    }
     // `obj'subtype` denotes the subtype of an object (IEEE 1076-2008
     // 16.2.2); the HIR resolves the object.
     if (at(TokenKind::Apostrophe) && keyword("subtype", 1, true)) {
@@ -1852,6 +1865,52 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         unit.signals,
         unit.vhdl_disconnections,
         unit.concurrent_statements);
+    // A disconnection specification of the architecture also applies to
+    // the guarded assignments of its blocks and generate statements to its
+    // signals, unless a nested declaration hides the signal (IEEE 1076-2008
+    // 7.4, 12.3).
+    if (!unit.vhdl_disconnections.empty()) {
+        const auto apply_nested = [&](const auto& self,
+                                      std::vector<GenerateRegion>& regions,
+                                      const std::vector<SignalDeclaration>&
+                                          visible) -> void {
+            const auto apply_body = [&](GenerateBody& body) {
+                std::vector<SignalDeclaration> remaining;
+                for (const auto& signal : visible) {
+                    if (std::ranges::find(body.signals, signal.name,
+                            &SignalDeclaration::name)
+                        == body.signals.end()) {
+                        remaining.push_back(signal);
+                    }
+                }
+                std::vector<Statement> undecided;
+                for (auto& statement : body.concurrent_statements) {
+                    if (!statement.vhdl_disconnection_delay) {
+                        undecided.push_back(statement);
+                    }
+                }
+                apply_vhdl_disconnection_specifications(
+                    remaining, unit.vhdl_disconnections, undecided);
+                std::size_t next { };
+                for (auto& statement : body.concurrent_statements) {
+                    if (!statement.vhdl_disconnection_delay) {
+                        statement.vhdl_disconnection_delay
+                            = undecided[next].vhdl_disconnection_delay;
+                        ++next;
+                    }
+                }
+                self(self, body.generate_regions, remaining);
+            };
+            for (auto& region : regions) {
+                apply_body(region.then_body);
+                apply_body(region.else_body);
+                for (auto& alternative : region.alternatives) {
+                    apply_body(alternative.body);
+                }
+            }
+        };
+        apply_nested(apply_nested, unit.generate_regions, unit.signals);
+    }
     rewrite_vhdl_formal_conversions(unit);
     // Configuration specifications of nested blocks bind their instances by
     // label (IEEE 1076-2008 7.3).

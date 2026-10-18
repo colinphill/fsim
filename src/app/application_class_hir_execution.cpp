@@ -7647,7 +7647,8 @@ std::string SystemVerilogClassHirExecution::format_report(
         };
     }
     const auto consumes_value = [](const frontend::OutputFormat conversion) {
-        return conversion != frontend::OutputFormat::Hierarchy;
+        return conversion != frontend::OutputFormat::Hierarchy
+            && conversion != frontend::OutputFormat::Library;
     };
     const auto required_values = static_cast<std::size_t>(std::ranges::count_if(
         parsed.conversions, [&](const auto& conversion) {

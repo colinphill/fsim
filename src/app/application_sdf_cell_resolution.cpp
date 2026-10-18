@@ -234,8 +234,18 @@ namespace {
             const auto& parent_candidate_value = candidates[*parent];
             candidate.segments = parent_candidate_value.segments;
             candidate.segment_policies = parent_candidate_value.segment_policies;
-            candidate.segments.push_back(candidate.resolved.instance_path.substr(
-                parent_candidate_value.resolved.instance_path.size() + 1U));
+            // An escaped Verilog identifier's leading backslash and
+            // terminating space are not part of its name (IEEE 1800-2017
+            // 5.6.1); the SDF name is compared without its escapes.
+            auto segment = candidate.resolved.instance_path.substr(
+                parent_candidate_value.resolved.instance_path.size() + 1U);
+            if (segment.starts_with('\\')) {
+                segment.erase(0U, 1U);
+                while (!segment.empty() && segment.back() == ' ') {
+                    segment.pop_back();
+                }
+            }
+            candidate.segments.push_back(std::move(segment));
             candidate.segment_policies.push_back(
                 parent_candidate_value.resolved.case_policy);
         }

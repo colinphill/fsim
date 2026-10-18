@@ -347,6 +347,15 @@ FunctionDeclaration VerilogParser::parse_function(
     argument->type = variable.type;
     return true;
   });
+  // A port declaration without a data type that no body declaration
+  // completes is a one-bit logic (IEEE 1364-2005 10.3.1, IEEE 1800-2017
+  // 13.3).
+  for (auto& argument : function.arguments) {
+    if (argument.type.spelling == "implicit") {
+      argument.type = default_verilog_type();
+      argument.type.spelling = "logic";
+    }
+  }
   if (!classic_header_arguments.empty()) {
     std::vector<FunctionArgument> ordered;
     ordered.reserve(classic_header_arguments.size());
@@ -684,7 +693,10 @@ VerilogParser::parse_ansi_callable_formals(
       inherited_type = type;
     } else if (implicit_var_formal
         || (explicit_direction && !explicit_type
-            && at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1))) {
+            && at(TokenKind::Identifier)
+            && (at(TokenKind::LeftBracket, 1) || at(TokenKind::Comma, 1)
+                || at(TokenKind::RightParen, 1)
+                || at(TokenKind::Assign, 1)))) {
       // A formal with no data type is `logic`, also as the element type of
       // an unpacked array formal (IEEE 1800-2017 13.3).
       type = default_verilog_type();
@@ -970,6 +982,15 @@ TaskDeclaration VerilogParser::parse_task(
         "task argument");
     argument.type = variable->type;
     task.variables.erase(variable);
+  }
+  // A port declaration without a data type that no body declaration
+  // completes is a one-bit logic (IEEE 1364-2005 10.2.1, IEEE 1800-2017
+  // 13.3).
+  for (auto& argument : task.arguments) {
+    if (argument.type.spelling == "implicit") {
+      argument.type = default_verilog_type();
+      argument.type.spelling = "logic";
+    }
   }
   task.statements = std::move(body.statements);
   if (!classic_header_arguments.empty()) {

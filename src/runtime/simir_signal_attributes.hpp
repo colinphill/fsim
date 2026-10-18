@@ -38,6 +38,13 @@ template <typename Owner>
     if (signal >= owner.signals.size()) {
         throw std::out_of_range("invalid SimIR signal ID");
     }
+    // A driver disconnected by a null transaction is not driving (IEEE
+    // 1076-2008 16.2.4, 14.7.2).
+    if constexpr (requires { owner.vhdl_disconnected_drivers; }) {
+        if (owner.vhdl_disconnected_drivers.contains({ signal, process })) {
+            return false;
+        }
+    }
     const auto regions = owner.processes.program_view(process).driver_regions();
     if (!selection) {
         return std::ranges::any_of(regions, [signal](const auto& region) {

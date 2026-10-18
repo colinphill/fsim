@@ -276,6 +276,7 @@ enum class OutputFormat : std::uint8_t {
     unformatted4,
     pattern,
     strength,
+    library,
 };
 
 enum class GeneratedTextKind : std::uint8_t {
@@ -335,6 +336,8 @@ struct CallAssociation {
     SourceSpanId source;
 };
 
+struct TypeReference;
+
 struct Expression {
     ExpressionId id;
     ScopeId scope;
@@ -362,6 +365,9 @@ struct Expression {
     // Exact semantic type selected for an explicitly typed assignment pattern.
     // Invalid or unresolved names leave this disengaged.
     std::optional<TypeId> nominal_type_target;
+    // The data type of a `type(data_type)` operator (IEEE 1800-2017 6.23); at
+    // most one element. `type(expression)` keeps the expression as operand.
+    std::vector<TypeReference> type_operand;
 };
 
 /// The expression-sized cast introduced by the frontend stores its constant
@@ -620,6 +626,9 @@ struct TypeReference {
     std::optional<std::uint64_t> executable_width;
     bool four_state { };
     std::uint64_t source_order { };
+    // `type(expression)` used as a data type: the type of the expression
+    // (IEEE 1800-2017 6.23), resolved in each specialization.
+    std::optional<ExpressionId> type_of;
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;

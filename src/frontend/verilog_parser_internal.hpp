@@ -430,6 +430,8 @@ class VerilogParser final : private detail::ParserBase {
 
   std::vector<SystemVerilogCheckerInstance> parse_checker_instances();
 
+  // Instantiates the unit's checkers and resolves its assertions.
+  void resolve_unit_checkers(DesignUnit& unit);
   void instantiate_checkers(DesignUnit& unit);
 
   void structure_sequence_expression(
@@ -642,6 +644,9 @@ class VerilogParser final : private detail::ParserBase {
   Expression signed_parameter_value(
 
       Expression value, bool signing_only, bool is_signed);
+  // `type(data_type)` or `type(expression)` as a data type (6.23).
+  [[nodiscard]] bool type_operator_data_type_start() const;
+  std::optional<Type> parse_type_operator_type();
   Type parse_type_parameter_actual();
 
   void add_parameter(
@@ -813,6 +818,7 @@ class VerilogParser final : private detail::ParserBase {
   Statement parse_forever_statement(const Token& start);
   Statement parse_fork_statement(const Token& start);
 
+  void parse_report_message(Statement& statement);
   void parse_fatal_arguments(Statement& statement);
 
   void parse_nonfatal_report_arguments(
@@ -1029,6 +1035,8 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t next_bind_unit_ { };
   // Checkers declared anywhere in the current module body.
   std::unordered_set<std::string> unit_checker_names_;
+  // Units whose checker instances wait for a later checker declaration.
+  std::vector<std::string> deferred_checker_units_;
   bool module_has_non_time_item_{};
   bool program_generate_context_{};
   // The last parameter type was a signing without a range (6.20.2).

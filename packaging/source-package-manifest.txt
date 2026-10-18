@@ -570,6 +570,7 @@ include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
+include/fsim/semantic/systemverilog_type_descriptor.hpp
 include/fsim/semantic/vhdl_hir.hpp
 include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
@@ -1417,6 +1418,7 @@ src/semantic/integral_identity_memo.hpp
 src/semantic/model.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
+src/semantic/systemverilog_type_descriptor.cpp
 src/semantic/vhdl_hir.cpp
 src/support/allocation_hooks.cpp
 src/support/allocation_hooks.def

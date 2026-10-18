@@ -368,7 +368,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             report(
                 "FSIM-ELAB-HIR-001",
                 "compiled concurrent statement could not be lowered "
-                "from HIR",
+                "from HIR"
+                    + hir_lowering_rejection_detail(lowerer),
                 compiled_source_span(*compiled_, statement_source));
             return false;
         }
@@ -463,7 +464,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
-                "compiled process could not be lowered from HIR",
+                "compiled process could not be lowered from HIR"
+                    + hir_lowering_rejection_detail(lowerer),
                 compiled_source_span(*compiled_, process_source));
             return false;
         }
@@ -721,7 +723,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated process could not be lowered "
-                    "from HIR",
+                    "from HIR"
+                        + hir_lowering_rejection_detail(generated_lowerer),
                     compiled_source_span(
                         *compiled_, process_source));
                 return false;
@@ -853,7 +856,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             *item.process, source_language, occurrence.path);
         if (!lowered) {
             report("FSIM-ELAB-HIR-001",
-                "compiled generated process could not be lowered from HIR",
+                "compiled generated process could not be lowered from HIR"
+                    + hir_lowering_rejection_detail(generated_lowerer),
                 compiled_source_span(*compiled_,
                     process && process->systemverilog != nullptr
                         ? process->systemverilog->source
@@ -900,7 +904,8 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
             report(
                 "FSIM-ELAB-HIR-001",
                 "compiled concurrent statement could not be lowered "
-                "from HIR",
+                "from HIR"
+                    + hir_lowering_rejection_detail(lowerer),
                 compiled_source_span(*compiled_, statement_source));
             return false;
         }
@@ -923,7 +928,8 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
-                "compiled process could not be lowered from HIR",
+                "compiled process could not be lowered from HIR"
+                    + hir_lowering_rejection_detail(lowerer),
                 compiled_source_span(*compiled_, process_source));
             return false;
         }

@@ -552,6 +552,7 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/hierarchy_path.cpp
   src/semantic/model.cpp
   src/semantic/systemverilog_class_specialization.cpp
+  src/semantic/systemverilog_type_descriptor.cpp
   src/semantic/systemverilog_hir.cpp
   src/semantic/vhdl_hir.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)

@@ -1167,6 +1167,7 @@ Expression VerilogParser::parse_primary_impl()
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
             std::optional<std::uint64_t> data_type_bits;
+            std::shared_ptr<const Type> type_operand;
             const auto sampled_value_call = canonical == "$sampled"
                 || canonical == "$rose" || canonical == "$fell"
                 || canonical == "$stable" || canonical == "$changed"
@@ -1221,6 +1222,12 @@ Expression VerilogParser::parse_primary_impl()
                         }
                         argument_names.emplace_back();
                         arguments.push_back(std::move(event));
+                    } else if (canonical == "type" && arguments.empty()
+                        && language_ == Language::SystemVerilog2017
+                        && type_operator_data_type_start()) {
+                        // `type(data_type)` (IEEE 1800-2017 6.23).
+                        type_operand = std::make_shared<const Type>(
+                            parse_parameter_type());
                     } else if (canonical == "$bits" && arguments.empty()
                         && (keyword("logic") || keyword("reg")
                             || keyword("bit") || keyword("byte")
@@ -1294,7 +1301,8 @@ Expression VerilogParser::parse_primary_impl()
             } else if (canonical == "type"
                 && language_ == Language::SystemVerilog2017) {
                 expression.text = "@sv-type";
-                if (expression.operands.size() != 1U) {
+                expression.systemverilog_type_operand = type_operand;
+                if (expression.operands.size() != (type_operand ? 0U : 1U)) {
                     error(
                         name,
                         "FSIM-SV-SEM-241",
@@ -1650,6 +1658,25 @@ Expression VerilogParser::parse_primary_impl()
                     "')' after SystemVerilog cast expression",
                     "FSIM-SV-PARSE-220");
                 const auto span = cover(expression.span, previous().span);
+                if (expression.text == "@sv-type") {
+                    // `type(...)'(x)` casts to the type the operator
+                    // denotes (IEEE 1800-2017 6.23, 6.24.1).
+                    auto cast_type = expression.systemverilog_type_operand;
+                    if (!cast_type && expression.operands.size() == 1U) {
+                        Type type_of;
+                        type_of.spelling = "@type-of";
+                        type_of.named_type_span = expression.span;
+                        type_of.systemverilog_type_of
+                            = std::make_shared<const Expression>(
+                                std::move(expression.operands.front()));
+                        cast_type = std::make_shared<const Type>(
+                            std::move(type_of));
+                    }
+                    Expression cast { ExpressionKind::Call, "@sv-cast:@type",
+                        { std::move(operand) }, span };
+                    cast.systemverilog_type_operand = std::move(cast_type);
+                    return parse_postfix(std::move(cast));
+                }
                 return parse_postfix(Expression {
                     ExpressionKind::Call,
                     "@sv-size-cast:expression",

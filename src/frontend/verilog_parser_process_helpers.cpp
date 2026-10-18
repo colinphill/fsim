@@ -1190,6 +1190,28 @@ Statement VerilogParser::parse_do_while_statement(const Token& start)
     return statement;
 }
 
+void VerilogParser::parse_report_message(Statement& statement)
+{
+    // A lone string literal is the message. Otherwise the arguments are
+    // formatted as $display formats them (IEEE 1800-2017 20.10): the first
+    // is kept as an expression and the rest as task arguments.
+    if (at(TokenKind::StringLiteral)
+        && current(1).kind != TokenKind::Comma) {
+        const auto message = advance();
+        statement.output_text = decoded_string_literal_text(message);
+        statement.output_generated_text = message.generated_text;
+    } else {
+        // A format literal keeps its text as the message metadata too.
+        if (at(TokenKind::StringLiteral)) {
+            statement.output_text = decoded_string_literal_text(current());
+            statement.output_generated_text = current().generated_text;
+        }
+        statement.value = parse_expression();
+    }
+    while (match(TokenKind::Comma)) {
+        statement.task_arguments.push_back(parse_expression());
+    }
+}
 void VerilogParser::parse_fatal_arguments(Statement& statement)
 {
     statement.output_text = "$fatal";
@@ -1199,25 +1221,13 @@ void VerilogParser::parse_fatal_arguments(Statement& statement)
     }
     if (!at(TokenKind::RightParen)) {
         if (at(TokenKind::StringLiteral)) {
-            const auto message = advance();
-            statement.output_text = decoded_string_literal_text(message);
-            statement.output_generated_text = message.generated_text;
+            parse_report_message(statement);
         } else {
+            // The finish number precedes the message.
             (void)parse_expression();
             if (match(TokenKind::Comma)) {
-                if (at(TokenKind::StringLiteral)) {
-                    const auto message = advance();
-                    statement.output_text
-                        = decoded_string_literal_text(message);
-                    statement.output_generated_text
-                        = message.generated_text;
-                } else {
-                    statement.value = parse_expression();
-                }
+                parse_report_message(statement);
             }
-        }
-        while (match(TokenKind::Comma)) {
-            statement.task_arguments.push_back(parse_expression());
         }
     }
     expect(
@@ -1234,16 +1244,7 @@ void VerilogParser::parse_nonfatal_report_arguments(
         return;
     }
     if (!at(TokenKind::RightParen)) {
-        if (at(TokenKind::StringLiteral)) {
-            const auto message = advance();
-            statement.output_text = decoded_string_literal_text(message);
-            statement.output_generated_text = message.generated_text;
-        } else {
-            statement.value = parse_expression();
-        }
-        while (match(TokenKind::Comma)) {
-            statement.task_arguments.push_back(parse_expression());
-        }
+        parse_report_message(statement);
     }
     expect(
         TokenKind::RightParen,

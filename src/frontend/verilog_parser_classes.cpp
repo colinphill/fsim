@@ -676,6 +676,9 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                         tokens_.insert(tokens_.begin()
                                 + static_cast<std::ptrdiff_t>(at_index) + 1,
                             open);
+                        // The `][` pair keeps the list at depth one, so a
+                        // third and later loop variable splits the same way.
+                        ++at_index;
                         ++loop_variables;
                     }
                 }

@@ -7,6 +7,7 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 
+#include <array>
 #include <charconv>
 #include <cstdlib>
 #include <iostream>
@@ -874,6 +875,77 @@ namespace {
 
 } // namespace
 
+namespace {
+
+    template <typename Kind, std::size_t Count>
+    std::string_view kind_name(
+        const Kind kind, const std::array<std::string_view, Count>& names)
+    {
+        const auto index = static_cast<std::size_t>(kind);
+        return index < names.size() ? names[index] : "unknown";
+    }
+
+} // namespace
+
+std::string_view hir_statement_kind_name(
+    const semantic::sv::StatementKind kind) noexcept
+{
+    static constexpr std::array<std::string_view, 35U> names {
+        "assignment", "force", "release", "conditional", "selection", "loop",
+        "break", "continue", "return", "task call", "assertion",
+        "delay control", "event control", "wait", "event trigger", "fork",
+        "wait fork", "disable fork", "disable", "display", "file close",
+        "file flush", "file display", "memory transfer", "container method",
+        "monitor control", "pause", "finish", "exit", "block", "null",
+        "procedural assign", "deassign", "wait order", "report",
+    };
+    return kind_name(kind, names);
+}
+
+std::string_view hir_statement_kind_name(
+    const semantic::vhdl::StatementKind kind) noexcept
+{
+    static constexpr std::array<std::string_view, 16U> names {
+        "signal assignment", "variable assignment", "if", "case", "loop",
+        "exit", "next", "return", "procedure call", "assertion", "report",
+        "wait", "block", "force", "release", "null",
+    };
+    return kind_name(kind, names);
+}
+
+std::string_view hir_expression_kind_name(
+    const semantic::sv::ExpressionKind kind) noexcept
+{
+    static constexpr std::array<std::string_view, 23U> names {
+        "invalid", "name", "integer literal", "boolean literal",
+        "logic literal", "string literal", "unary", "update", "binary",
+        "call", "index", "slice", "assignment pattern", "concatenation",
+        "replication", "default", "null", "new", "cast", "class property",
+        "static class property", "method call", "static method call",
+    };
+    return kind_name(kind, names);
+}
+
+std::string_view hir_expression_kind_name(
+    const semantic::vhdl::ExpressionKind kind) noexcept
+{
+    static constexpr std::array<std::string_view, 18U> names {
+        "invalid", "name", "integer literal", "real literal",
+        "boolean literal", "logic literal", "string literal", "unary",
+        "update", "binary", "call", "index", "slice", "aggregate",
+        "concatenation", "replication", "others", "conditional",
+    };
+    return kind_name(kind, names);
+}
+
+bool Lowerer::reject_hir_lowering(std::string reason)
+{
+    if (!hir_lowering_rejection_) {
+        hir_lowering_rejection_ = std::move(reason);
+    }
+    return false;
+}
+
 std::optional<Lowerer::LoopControlContext> Lowerer::lower_hir_loop_body(
     const std::string_view label,
     const std::span<const semantic::StatementId> statements)
@@ -1042,12 +1114,19 @@ bool Lowerer::lower_hir_statements(
     bool valid = true;
     for (const auto statement : statements) {
         hir_unlowered_expression_.reset();
+        hir_lowering_rejection_.reset();
+        const auto diagnostics_before = diagnostics_.size();
         if (!lower_hir_statement(statement)) {
             valid = false;
             const auto detail = hir_unlowered_expression_
                 ? "; unsupported " + *hir_unlowered_expression_
+                : hir_lowering_rejection_
+                ? "; rejected " + *hir_lowering_rejection_
+                : diagnostics_.size() != diagnostics_before
+                ? std::string { "; an enclosed statement was reported" }
                 : std::string { };
             hir_unlowered_expression_.reset();
+            hir_lowering_rejection_.reset();
             const auto record = specialized_hir_unit_ != nullptr
                 ? specialized_hir_unit_->find_statement(statement)
                 : std::nullopt;
@@ -1061,10 +1140,10 @@ bool Lowerer::lower_hir_statements(
                     : std::string { };
                 report(
                     "FSIM-ELAB-HIR-001",
-                    "compiled SystemVerilog HIR statement "
-                        + std::to_string(statement.value()) + " kind "
-                        + std::to_string(static_cast<std::uint32_t>(
-                            record->systemverilog->kind))
+                    "compiled SystemVerilog HIR "
+                        + std::string { hir_statement_kind_name(
+                            record->systemverilog->kind) }
+                        + " statement " + std::to_string(statement.value())
                         + " at source line "
                         + std::to_string(origin.begin.line)
                         + " could not be lowered" + detail + task,
@@ -1073,10 +1152,10 @@ bool Lowerer::lower_hir_statements(
                 const auto origin = hir_source_span(record->vhdl->source);
                 report(
                     "FSIM-ELAB-HIR-001",
-                    "compiled VHDL HIR statement "
-                        + std::to_string(statement.value()) + " kind "
-                        + std::to_string(static_cast<std::uint32_t>(
-                            record->vhdl->kind))
+                    "compiled VHDL HIR "
+                        + std::string { hir_statement_kind_name(
+                            record->vhdl->kind) }
+                        + " statement " + std::to_string(statement.value())
                         + " at source line "
                         + std::to_string(origin.begin.line)
                         + " could not be lowered" + detail,
@@ -1590,9 +1669,20 @@ bool Lowerer::lower_hir_force_release(
         const auto& released = design_.signal_info_.at(*binding->signal);
         // A variable driven by a continuous assignment re-evaluates instead.
         const auto continuously_assigned = [&] {
+            // A hierarchical target (`release sub.v`) has no declaration in
+            // this unit; its variable keeps the forced value as well.
+            // A port of that instance aliases its actual, which other drivers
+            // may write; only a variable it owns keeps the value.
+            if (!declaration) {
+                const auto owned = target_expression.kind
+                        == semantic::sv::ExpressionKind::name
+                    && target_expression.text.find('.') != std::string::npos
+                    && released.name.ends_with("." + target_expression.text);
+                return !owned;
+            }
             const auto unit = specialized_hir_unit_->design().find_unit(
                 specialized_hir_unit_->unit());
-            if (!unit || unit->systemverilog == nullptr || !declaration) {
+            if (!unit || unit->systemverilog == nullptr) {
                 return true;
             }
             const auto assigns = [&](const auto& statements) {
@@ -2835,14 +2925,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     == ProcessSchedulingDomain::systemverilog
             ? SignalUpdateDomain::systemverilog_active
             : SignalUpdateDomain::generic;
-        // Under FSIM_HIR_LOWER_TRACE_FAILURES, name the lowerer line that
-        // rejected an assignment.
-        const auto assignment_rejected = [](const int line) {
+        // Names the rejected target in the statement's diagnostic; under
+        // FSIM_HIR_LOWER_TRACE_FAILURES also the lowerer line that rejected
+        // it.
+        const auto assignment_rejected = [&](const int line) {
             if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
                 std::cerr << "[fsim-hir-lower] assignment-rejected line="
                           << line << '\n';
             }
-            return false;
+            const auto summary = target ? hir_expression_summary(*target)
+                                        : std::nullopt;
+            return reject_hir_lowering(summary
+                    ? "assignment to " + *summary
+                    : std::string { "assignment without a target" });
         };
         const auto trace_assignment_failure =
             [&](const std::string_view reason) {
@@ -16542,10 +16637,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                    }()
             ? semantic::sv::OutputFormat::string
             : requested_format;
-        if (format == semantic::sv::OutputFormat::hierarchy) {
+        if (format == semantic::sv::OutputFormat::hierarchy
+            || format == semantic::sv::OutputFormat::library) {
             emit_deferred_assertion_action_handoff();
             process_.operations.emplace_back(Display {
-                std::move(prefix) + hir_scope_hierarchy() + std::move(suffix),
+                std::move(prefix)
+                    + (format == semantic::sv::OutputFormat::library
+                            ? hir_library_cell()
+                            : hir_scope_hierarchy())
+                    + std::move(suffix),
                 newline,
                 postponed,
             });
@@ -16880,6 +16980,41 @@ bool Lowerer::lower_hir_statement_unsuspended(
         case semantic::sv::StatementKind::conditional:
             return lower_if();
         case semantic::sv::StatementKind::selection: {
+            // `case (type(x))` is decided at elaboration: only the items of
+            // the matching type, or the default, remain (IEEE 1800-2017
+            // 6.23, 12.5).
+            if (input.condition) {
+                if (const auto type_selector
+                    = specialized_hir_unit_->systemverilog_type_identity(
+                        *input.condition)) {
+                    const semantic::sv::CaseAlternative* selected = nullptr;
+                    const semantic::sv::CaseAlternative* fallback = nullptr;
+                    for (const auto& alternative : input.case_alternatives) {
+                        if (alternative.is_default) {
+                            fallback = &alternative;
+                            continue;
+                        }
+                        for (const auto choice : alternative.choices) {
+                            const auto choice_type = specialized_hir_unit_
+                                ->systemverilog_type_identity(choice);
+                            if (!choice_type) {
+                                report("FSIM-ELAB-SVTYPE-006",
+                                    "a type case item requires a type "
+                                    "operator",
+                                    span);
+                                return false;
+                            }
+                            if (selected == nullptr
+                                && *choice_type == *type_selector) {
+                                selected = &alternative;
+                            }
+                        }
+                    }
+                    selected = selected != nullptr ? selected : fallback;
+                    return selected == nullptr
+                        || lower_hir_statements(selected->statements);
+                }
+            }
             const auto lowered = lower_case(input.case_alternatives);
             if (!lowered
                 && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
@@ -18233,6 +18368,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         pending_prefix = std::move(prefix) + hir_scope_hierarchy();
                         return;
                     }
+                    if (format
+                        == semantic::sv::OutputFormat::library) {
+                        pending_prefix = std::move(prefix) + hir_library_cell();
+                        return;
+                    }
                     MonitorValue monitor_value;
                     monitor_value.prefix = std::move(prefix);
                     monitor_value.minimum_width = minimum_width;
@@ -18468,6 +18608,52 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     input.output_precision);
         case semantic::sv::StatementKind::report: {
             emit_deferred_assertion_action_handoff();
+            const auto string_report = [&](const StringRegisterId message) {
+                const auto severity = load_constant(
+                    unsigned_value(
+                        static_cast<std::uint64_t>(runtime_assertion_severity(
+                            input.assertion_severity)),
+                        2U),
+                    frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(StringReport {
+                    message,
+                    severity,
+                    runtime_source_location(span),
+                    true,
+                });
+                return true;
+            };
+            // Message arguments are formatted as $display formats them
+            // (IEEE 1800-2017 20.10): a leading string literal is the
+            // format, and otherwise each value shows in decimal.
+            const auto first_record = input.value
+                ? specialized_hir_unit_->find_expression(*input.value)
+                : std::nullopt;
+            const bool format_literal = first_record
+                && first_record->systemverilog != nullptr
+                && first_record->systemverilog->kind
+                    == semantic::sv::ExpressionKind::string_literal
+                && first_record->systemverilog->decoded_string;
+            if (input.value
+                && (!input.task_arguments.empty()
+                    || (!format_literal
+                        && !hir_expression_is_string(
+                            *input.value, hir_process_scope_)))) {
+                std::vector<semantic::ExpressionId> arguments {
+                    *input.value
+                };
+                for (const auto& argument : input.task_arguments) {
+                    if (!argument.actual) {
+                        return false;
+                    }
+                    arguments.push_back(*argument.actual);
+                }
+                const auto message = lower_hir_formatted_string(arguments,
+                    format_literal ? std::nullopt
+                                   : std::optional {
+                                         frontend::OutputFormat::Decimal });
+                return message && string_report(*message);
+            }
             const auto report_text = input.value
                 ? specialized_hir_unit_->evaluate_string_expression(
                       *input.value)
@@ -18476,22 +18662,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (input.value && !report_text
                 && hir_expression_is_string(*input.value, hir_process_scope_)) {
                 const auto message = lower_hir_string_expression(*input.value);
-                if (!message) {
-                    return false;
-                }
-                const auto severity = load_constant(
-                    unsigned_value(
-                        static_cast<std::uint64_t>(runtime_assertion_severity(
-                            input.assertion_severity)),
-                        2U),
-                    frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(StringReport {
-                    *message,
-                    severity,
-                    runtime_source_location(span),
-                    true,
-                });
-                return true;
+                return message && string_report(*message);
             }
             process_.operations.emplace_back(Report {
                 report_text.value_or(input.output_text),
@@ -18804,6 +18975,74 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto& sensitivities = named_clocking_event
                 ? *named_clocking_event
                 : input.sensitivities;
+            // `##0` waits for the clocking event only when it has not yet
+            // occurred in the current time step (IEEE 1800-2023 14.11).
+            if (input.clocking_cycle_delay && input.clocking_cycle_count
+                && clocking_event && clocking_event->size() == 1U
+                && hir_constant_integer(*input.clocking_cycle_count)
+                    == std::optional<std::int64_t> { 0 }) {
+                const auto& event = clocking_event->front();
+                const auto signal = event.expression
+                    ? std::optional<SignalId> { }
+                    : hir_named_signal(event.signal, hir_process_scope_);
+                if (signal) {
+                    const auto elapsed = allocate_register(
+                        64U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(
+                        SignalLastEvent { elapsed, *signal });
+                    const auto zero = load_constant(
+                        unsigned_value(0U, 64U), frontend::ValueDomain::Bit2);
+                    auto occurred = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::equal, occurred, elapsed, zero });
+                    if (event.edge != semantic::sv::EdgeKind::any) {
+                        const auto clock_width
+                            = design_.signal_info_.at(*signal).width;
+                        const auto clock_value = allocate_register(
+                            clock_width, frontend::ValueDomain::Logic4);
+                        process_.operations.emplace_back(ReadSignal {
+                            clock_value, *signal, SignalReadKind::current });
+                        const auto level = load_constant(
+                            unsigned_value(
+                                event.edge == semantic::sv::EdgeKind::positive
+                                    ? 1U
+                                    : 0U,
+                                clock_width),
+                            frontend::ValueDomain::Logic4);
+                        const auto matched = allocate_register(
+                            1U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::case_equal, matched, clock_value,
+                            level });
+                        const auto both = allocate_register(
+                            1U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::bit_and, both, occurred, matched });
+                        occurred = both;
+                    }
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        occurred, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto clocking_wait = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    if (!lower_event_wait(*clocking_event, std::nullopt,
+                            input.statements)) {
+                        return false;
+                    }
+                    const auto end = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations[branch] = Branch {
+                        occurred, end, clocking_wait,
+                        UnknownBranchPolicy::when_false };
+                    if (!systemverilog_program_owner_) {
+                        process_.operations.emplace_back(
+                            WaitRegion { runtime::SchedulerPhase::reactive });
+                    }
+                    return lower_hir_statements(input.statements);
+                }
+            }
             const auto lowered = input.clocking_cycle_delay
                 ? input.clocking_cycle_count && clocking_event
                     && lower_repeated_event_wait(
@@ -21167,6 +21406,19 @@ bool Lowerer::capture_hir_update_target_indices(
         }
     }
     return false;
+}
+
+std::string Lowerer::hir_library_cell() const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return { };
+    }
+    const auto unit = specialized_hir_unit_->design().find_unit(
+        specialized_hir_unit_->unit());
+    if (!unit || unit->systemverilog == nullptr) {
+        return { };
+    }
+    return unit->systemverilog->library + "." + unit->systemverilog->name;
 }
 
 std::string Lowerer::hir_scope_hierarchy() const

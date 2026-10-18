@@ -767,25 +767,42 @@ namespace {
         }
         const elaboration::VerilogSpecifyPathInfo* match = nullptr;
         std::optional<PathEndpointBinding> match_binding;
-        for (const auto& path : elaborated.verilog_specify_paths()) {
-            if (!equal_under_case_policy(
-                    path.instance, target.instance_path, target.case_policy)
-                || !path_edge_matches(resolved, path)
-                || !path_condition_matches(resolved, path)) {
-                continue;
+        // An IOPATH without an edge or a condition first selects a path
+        // without one. When there is none, it annotates the path between the
+        // same ports whatever its edge or condition (IEEE 1364-2005 16.2.2,
+        // IEEE 1497-2001 5.4.1.1).
+        const bool unedged = std::ranges::none_of(resolved.endpoints,
+            [](const SdfResolvedEndpoint& endpoint) {
+                return endpoint.role != SdfEndpointRole::Condition
+                    && !endpoint.edge_identity.empty();
+            });
+        const bool unconditional = resolved.condition_identity.empty();
+        for (const bool fallback : { false, true }) {
+            if (fallback && (match || (!unedged && !unconditional))) {
+                break;
             }
-            const auto binding
-                = path_endpoint_binding(resolved, path, elaborated);
-            if (!binding)
-                continue;
-            if (match) {
-                diagnose(diagnostics, "FSIM-SDF-ENDPOINT-006",
-                    "SDF IOPATH matches multiple elaborated specify paths after exact selection, edge, and condition filtering",
-                    span);
-                return false;
+            for (const auto& path : elaborated.verilog_specify_paths()) {
+                if (!equal_under_case_policy(path.instance,
+                        target.instance_path, target.case_policy)
+                    || !((fallback && unedged)
+                        || path_edge_matches(resolved, path))
+                    || !((fallback && unconditional)
+                        || path_condition_matches(resolved, path))) {
+                    continue;
+                }
+                const auto binding
+                    = path_endpoint_binding(resolved, path, elaborated);
+                if (!binding)
+                    continue;
+                if (match) {
+                    diagnose(diagnostics, "FSIM-SDF-ENDPOINT-006",
+                        "SDF IOPATH matches multiple elaborated specify paths after exact selection, edge, and condition filtering",
+                        span);
+                    return false;
+                }
+                match = &path;
+                match_binding = binding;
             }
-            match = &path;
-            match_binding = binding;
         }
         if (!match)
             return true;

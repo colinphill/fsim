@@ -142,8 +142,11 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     generated_signal_declarations(materialization));
                 if (!occurrence) {
                     report("FSIM-ELAB-HIR-001",
-                        "compiled generated VHDL concurrent statement "
-                        "could not be lowered from HIR",
+                        std::string {
+                            "compiled generated VHDL concurrent statement "
+                            "could not be lowered from HIR" }
+                            + hir_lowering_rejection_detail(
+                                generated_lowerer),
                         compiled_source_span(
                             *compiled_, statement_source));
                     return false;
@@ -178,8 +181,10 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                                    guard);
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
-                    "compiled generated VHDL concurrent statement "
-                    "could not be lowered from HIR",
+                    std::string {
+                        "compiled generated VHDL concurrent statement "
+                        "could not be lowered from HIR" }
+                        + hir_lowering_rejection_detail(generated_lowerer),
                     compiled_source_span(
                         *compiled_, statement_source));
                 return false;

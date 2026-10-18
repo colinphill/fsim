@@ -370,6 +370,8 @@ private:
   // After '(': a slice `left to|downto right)` or an index group
   // `i[, j...])` of `prefix` (IEEE 1076-2008 8.4, 8.5). A chained suffix
   // takes one index only.
+  Expression parse_vhdl_name_suffixes(Expression prefix,
+      const SourceSpan& start);
   Expression parse_index_or_slice_suffix(Expression prefix,
       const SourceSpan& start, std::string_view slice_close,
       std::string_view index_close, std::string_view code,

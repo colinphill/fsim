@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
@@ -1463,6 +1464,16 @@ std::optional<std::uint64_t> systemverilog_expression_width(
         return finish(static_cast<std::uint64_t>(*cast_width));
     }
     if (record.kind == sv::ExpressionKind::call
+        && record.text == "@sv-cast:@type") {
+        const auto described = record.type_operand.empty()
+            ? std::nullopt
+            : describe_systemverilog_type(
+                  unit, record.type_operand.front(), record.scope);
+        return finish(described && described->unpacked.empty()
+                ? described->bits
+                : std::nullopt);
+    }
+    if (record.kind == sv::ExpressionKind::call
         && record.text.starts_with("@sv-cast:")) {
         const auto cast_width = parse_unsigned(
             std::string_view { record.text }.substr(9U), 10U);
@@ -1801,6 +1812,11 @@ class HirIntegralEvaluator {
     using VhdlPackageSelection = CompiledVhdlPackageMember;
 
 public:
+    [[nodiscard]] const SpecializedHirUnit& unit() const noexcept
+    {
+        return unit_;
+    }
+
     explicit HirIntegralEvaluator(const SpecializedHirUnit& unit,
         std::vector<SpecializedHirConstantEffect>* effects = nullptr,
         const std::string_view effect_code = "FSIM-ELAB-SVCONST-002",
@@ -7706,6 +7722,19 @@ public:
                 || form == sv::DeclarationForm::enumeration_literal;
             if (constant && view->systemverilog->initializer) {
                 result = evaluate(*view->systemverilog->initializer);
+                // The fill literal `'1` sets every bit of the declared type
+                // (IEEE 1800-2017 5.7.1); the coercion below sizes it.
+                const auto literal = unit_.find_expression(
+                    *view->systemverilog->initializer);
+                if (result && *result == 1 && literal
+                    && literal->systemverilog != nullptr
+                    && (literal->systemverilog->kind
+                            == sv::ExpressionKind::logic_literal
+                        || literal->systemverilog->kind
+                            == sv::ExpressionKind::integer_literal)
+                    && literal->systemverilog->text == "'1") {
+                    result = -1;
+                }
             } else if (constant) {
                 result = parse_integral_identity(
                     view->systemverilog->name);
@@ -8061,9 +8090,20 @@ private:
                 }
             }
         }
-        // Fixed unpacked arrays of a retained type actual have a known
-        // packed width only through the exact actual-and-dimensions walk
-        // above. Do not size other array/container forms by nominal fallback.
+        // A fixed-size unpacked array's bit-stream width counts every
+        // element (IEEE 1800-2017 20.6.2).
+        if (type->container_form == sv::TypeForm::static_array) {
+            const auto described = describe_systemverilog_type(
+                unit_, *type, declaration->systemverilog->scope);
+            const auto total = described ? described->total_bits()
+                                         : std::nullopt;
+            if (!total || *total == 0U
+                || *total > static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max())) {
+                return std::nullopt;
+            }
+            return static_cast<std::size_t>(*total);
+        }
         if (type->container_form) {
             return std::nullopt;
         }
@@ -9406,7 +9446,19 @@ private:
         const sv::Statement& statement)
     {
         std::vector<ExpressionId> values;
-        if (statement.value) {
+        // A format literal is both the message text and the first value;
+        // it formats the remaining arguments (IEEE 1800-2017 20.10).
+        const auto format_literal = [&] {
+            const auto view = statement.value
+                ? unit_.find_expression(*statement.value)
+                : std::nullopt;
+            return view && view->systemverilog != nullptr
+                && view->systemverilog->kind == sv::ExpressionKind::string_literal
+                && view->systemverilog->decoded_string
+                && *view->systemverilog->decoded_string
+                    == statement.output_text;
+        };
+        if (statement.value && !format_literal()) {
             values.push_back(*statement.value);
         }
         for (const auto& argument : statement.task_arguments) {
@@ -11958,6 +12010,36 @@ private:
                     return std::nullopt;
                 }
             }
+            if constexpr (systemverilog) {
+                // `type(a) == type(b)` compares two types for a match (IEEE
+                // 1800-2017 6.23, 6.22.1).
+                const auto type_operator = [&](const ExpressionId id) {
+                    const auto record = unit_.find_expression(id);
+                    return record && record->systemverilog != nullptr
+                        && record->systemverilog->kind == Kind::call
+                        && record->systemverilog->text == "@sv-type";
+                };
+                const auto operation = normalized_token(expression.text);
+                if ((operation == "==" || operation == "!="
+                        || operation == "===" || operation == "!==")
+                    && type_operator(expression.operands[0])
+                    && type_operator(expression.operands[1])) {
+                    const auto left_type
+                        = describe_systemverilog_expression_type(
+                            unit_, expression.operands[0]);
+                    const auto right_type
+                        = describe_systemverilog_expression_type(
+                            unit_, expression.operands[1]);
+                    if (!left_type || !right_type) {
+                        return std::nullopt;
+                    }
+                    const bool equal = systemverilog_types_match(
+                        *left_type, *right_type);
+                    return operation == "!=" || operation == "!=="
+                        ? !equal
+                        : equal;
+                }
+            }
             const auto left = evaluate(expression.operands[0]);
             const auto right = evaluate(expression.operands[1]);
             if (left && right) {
@@ -12838,6 +12920,51 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
         preserve_generate_subtree(generate, output);
         return;
     }
+    // `case (type(x))` selects the alternative whose type matches (IEEE
+    // 1800-2017 6.23, 27.5).
+    if (generate.kind == sv::GenerateKind::selection) {
+        if (const auto type_selector
+            = evaluator.unit().systemverilog_type_identity(
+                *generate.condition)) {
+            const sv::GenerateAlternative* selected = nullptr;
+            const sv::GenerateAlternative* fallback = nullptr;
+            for (const auto& alternative : generate.alternatives) {
+                if (alternative.is_default) {
+                    fallback = &alternative;
+                    continue;
+                }
+                for (const auto& choice : alternative.choices) {
+                    const auto choice_type
+                        = evaluator.unit().systemverilog_type_identity(
+                            choice.left);
+                    if (!choice_type) {
+                        preserve_generate_subtree(generate, output);
+                        return;
+                    }
+                    if (*choice_type == *type_selector) {
+                        selected = &alternative;
+                        break;
+                    }
+                }
+                if (selected != nullptr) {
+                    break;
+                }
+            }
+            selected = selected != nullptr ? selected : fallback;
+            if (selected == nullptr) {
+                return;
+            }
+            const auto nested = std::ranges::find(
+                generate.nested, selected->alternative_discriminator,
+                &sv::GenerateRegion::alternative_discriminator);
+            if (nested == generate.nested.end()) {
+                preserve_generate_subtree(generate, output);
+                return;
+            }
+            select_systemverilog_generate(*nested, evaluator, output);
+            return;
+        }
+    }
     const auto selector = evaluator.evaluate(*generate.condition);
     const auto bit_selector = selector
         ? std::optional<std::string> { }
@@ -13068,6 +13195,58 @@ struct SpecializedHirUnitFactory {
 
 namespace {
 
+// A declaration typed `type(expression)` takes the expression's type in
+// this specialization (IEEE 1800-2017 6.23), so that layout and storage see
+// a concrete data type. The declarator's own unpacked dimensions remain.
+void concretize_type_operator_declarations(
+    SpecializedHirUnit& unit, const sv::Unit& source)
+{
+    const auto concrete = [&](const sv::TypeReference& original)
+        -> std::optional<sv::TypeReference> {
+        const auto described = describe_systemverilog_expression_type(
+            unit, *original.type_of);
+        auto result = described ? systemverilog_type_reference(*described)
+                                : std::nullopt;
+        if (!result) {
+            return std::nullopt;
+        }
+        result->unpacked_dimensions.insert(
+            result->unpacked_dimensions.begin(),
+            original.unpacked_dimensions.begin(),
+            original.unpacked_dimensions.end());
+        if (!result->unpacked_dimensions.empty()) {
+            result->container_form = sv::TypeForm::static_array;
+        }
+        result->source_order = original.source_order;
+        return result;
+    };
+    for (const auto id : source.declarations) {
+        const auto declaration = unit.find_declaration(id);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            continue;
+        }
+        const auto& record = *declaration->systemverilog;
+        const bool typed = record.type && record.type->type_of;
+        const bool defaulted
+            = record.default_type && record.default_type->type_of;
+        if (!typed && !defaulted) {
+            continue;
+        }
+        auto replacement = record;
+        if (typed) {
+            replacement.type = concrete(*record.type);
+        }
+        if (defaulted) {
+            replacement.default_type = concrete(*record.default_type);
+        }
+        if ((typed && !replacement.type)
+            || (defaulted && !replacement.default_type)) {
+            continue;
+        }
+        static_cast<void>(unit.replace(std::move(replacement)));
+    }
+}
+
 std::optional<SpecializedHirUnit> working_specialization(
     const CompiledDesign& design,
     std::optional<SpecializedHirOverlay> specialization,
@@ -13088,9 +13267,14 @@ std::optional<SpecializedHirUnit> working_specialization(
             replacement_units.push_back(entity->id);
         }
     }
-    return SpecializedHirUnitFactory::make(design,
+    auto result = SpecializedHirUnitFactory::make(design,
         std::move(*specialization), std::move(replacement_units),
         validated_lookup_indexes, std::move(memo_context));
+    if (selected->systemverilog != nullptr) {
+        concretize_type_operator_declarations(
+            result, *selected->systemverilog);
+    }
+    return result;
 }
 
 struct AssociationFormal {
@@ -16145,6 +16329,21 @@ SpecializedHirUnit::evaluate_systemverilog_bits_expression(
         nullptr, initializer_memo_context_
     };
     return evaluator.evaluate_systemverilog_bits(expression);
+}
+
+std::optional<std::string>
+SpecializedHirUnit::systemverilog_type_identity(
+    const ExpressionId expression) const
+{
+    const auto record = find_expression(expression);
+    if (!record || record->systemverilog == nullptr
+        || record->systemverilog->kind != sv::ExpressionKind::call
+        || record->systemverilog->text != "@sv-type") {
+        return std::nullopt;
+    }
+    const auto type = describe_systemverilog_expression_type(
+        *this, expression);
+    return type ? std::optional { type->canonical() } : std::nullopt;
 }
 
 std::optional<std::size_t>

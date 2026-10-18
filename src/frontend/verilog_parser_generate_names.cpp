@@ -47,6 +47,22 @@ void remember_names(
   }
 }
 
+// A named block of an initial or always construct is declared in the
+// module's scope, so an implicit generate block name avoids it (IEEE
+// 1800-2017 27.6).
+void remember_process_blocks(
+    std::unordered_set<std::string>& names,
+    const std::vector<Process>& processes) {
+  for (const auto& process : processes) {
+    for (const auto& statement : process.statements) {
+      if (statement.kind == StatementKind::Block
+          && !statement.label.empty()) {
+        names.insert(statement.label);
+      }
+    }
+  }
+}
+
 void remember_body_declarations(
     std::unordered_set<std::string>& names,
     const GenerateBody& body) {
@@ -62,11 +78,13 @@ void remember_body_declarations(
   remember_names(names, body.procedures);
   remember_names(names, body.package_instances);
   remember_names(names, body.instances);
+  remember_process_blocks(names, body.processes);
 }
 
 void remember_unit_declarations(
     std::unordered_set<std::string>& names,
     const DesignUnit& unit) {
+  remember_process_blocks(names, unit.processes);
   remember_names(names, unit.parameters);
   remember_names(names, unit.type_aliases);
   remember_names(names, unit.ports);

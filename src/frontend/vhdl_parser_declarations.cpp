@@ -1033,6 +1033,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                       canonical_name;
   type.vhdl_type_declaration = type.nominal_type;
   std::unordered_set<std::string> member_names;
+  // VHDL-2019 allows a record type without elements (LCS-2016-082).
+  const bool empty_record = keyword("end", 0, true)
+      && keyword("record", 1, true)
+      && vhdl_standard_ >= VhdlStandard::Vhdl2019;
   while (!at_end() &&
          !(keyword("end", 0, true) && keyword("record", 1, true))) {
     const auto member_start = current();
@@ -1083,7 +1087,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       }
     }
   }
-  if (type.packed_members.empty()) {
+  if (type.packed_members.empty() && !empty_record) {
     error(name, "FSIM-VHDL-PARSE-130",
           "a bounded VHDL record type requires at least one supported "
           "element");
@@ -1298,6 +1302,16 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
         entity_names.push_back(std::move(entity_name));
         entity_name.clear();
       }
+      continue;
+    }
+    // An entity designator's signature selects among overloads (IEEE
+    // 1076-2008 7.2); the attribute value is looked up by the name.
+    if (match(TokenKind::LeftBracket)) {
+      while (!at_end() && !at(TokenKind::RightBracket)
+             && !at(TokenKind::Semicolon)) {
+        advance();
+      }
+      (void)match(TokenKind::RightBracket);
       continue;
     }
     const auto token = advance();
@@ -1781,6 +1795,26 @@ void VhdlParser::parse_signal_declaration(
 void VhdlParser::parse_vhdl_object_alias(
     std::vector<TypeAliasDeclaration> &type_aliases,
     std::vector<SignalAliasDeclaration> &aliases, const Token &start) {
+  // An alias of an operator or enumeration literal is a nonobject alias
+  // designated by an operator symbol or character literal (IEEE 1076-2008
+  // 6.6.3). Its target and signature are read here; calls through it are
+  // resolved with the overloads of its target.
+  if (at(TokenKind::StringLiteral) || at(TokenKind::CharacterLiteral)) {
+    advance();
+    expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
+    std::size_t depth { };
+    while (!at_end() && !(depth == 0U && at(TokenKind::Semicolon))) {
+      if (at(TokenKind::LeftBracket)) {
+        ++depth;
+      } else if (at(TokenKind::RightBracket) && depth != 0U) {
+        --depth;
+      }
+      advance();
+    }
+    expect(TokenKind::Semicolon, "';' after alias declaration",
+           "FSIM-VHDL-PARSE-236");
+    return;
+  }
   const auto name = expect_identifier("alias name");
   const auto is_converse_alias = [&]() {
     if (!keyword("is", 0, true) || !at(TokenKind::Identifier, 1)) {

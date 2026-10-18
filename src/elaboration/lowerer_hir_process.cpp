@@ -300,30 +300,12 @@ void Lowerer::record_readonly_vhdl_output_write(
     record_readonly_signal_write(*binding.signal);
 }
 
-void Lowerer::validate_read_only_signal_writes(
-    const frontend::SourceSpan& source)
-{
-    std::set<SignalId> reported;
-    const auto check = [&](
-        const SignalId signal, const std::size_t operation_index) {
-        const auto authorized_write
-            = readonly_signal_write_operations_.find(operation_index);
-        const bool permitted_write
-            = authorized_write != readonly_signal_write_operations_.end()
-            && authorized_write->second == signal;
-        if (read_only_signals_.contains(signal)
-            && !permitted_write
-            && reported.insert(signal).second) {
-            report(
-                "FSIM-ELAB-SVIFACE-006",
-                "an input signal is read-only within process '"
-                    + process_.name + "'",
-                source);
-        }
-    };
-    for (std::size_t operation_index { };
-        operation_index < process_.operations.size(); ++operation_index) {
-        const auto& operation = process_.operations[operation_index];
+namespace {
+
+    // The signal a signal-writing operation updates.
+    std::optional<SignalId> written_signal(const Operation& operation)
+    {
+        std::optional<SignalId> result;
         fsim::runtime::simir::visit_operation(
             [&](const auto& candidate) {
                 using Operation = std::decay_t<decltype(candidate)>;
@@ -358,10 +340,49 @@ void Lowerer::validate_read_only_signal_writes(
                         Operation, WriteInertialDynamicPartSlice>
                     || std::is_same_v<Operation, ReleaseSignalSlice>
                     || std::is_same_v<Operation, ForceSignalSlice>) {
-                    check(candidate.signal, operation_index);
+                    result = candidate.signal;
                 }
             },
             operation);
+        return result;
+    }
+
+} // namespace
+
+void Lowerer::authorize_readonly_signal_writes(const std::size_t begin)
+{
+    for (auto index = begin; index < process_.operations.size(); ++index) {
+        const auto signal = written_signal(process_.operations[index]);
+        if (signal && read_only_signals_.contains(*signal)) {
+            readonly_signal_write_operations_.insert_or_assign(
+                index, *signal);
+        }
+    }
+}
+
+void Lowerer::validate_read_only_signal_writes(
+    const frontend::SourceSpan& source)
+{
+    std::set<SignalId> reported;
+    for (std::size_t operation_index { };
+        operation_index < process_.operations.size(); ++operation_index) {
+        const auto signal = written_signal(
+            process_.operations[operation_index]);
+        if (!signal || !read_only_signals_.contains(*signal)) {
+            continue;
+        }
+        const auto authorized_write
+            = readonly_signal_write_operations_.find(operation_index);
+        const bool permitted_write
+            = authorized_write != readonly_signal_write_operations_.end()
+            && authorized_write->second == *signal;
+        if (!permitted_write && reported.insert(*signal).second) {
+            report(
+                "FSIM-ELAB-SVIFACE-006",
+                "an input signal is read-only within process '"
+                    + process_.name + "'",
+                source);
+        }
     }
 }
 
@@ -2121,6 +2142,8 @@ std::optional<Process> Lowerer::lower_hir_process(
         description.always_comb_or_latch = input.kind
                 == semantic::sv::ProcessKind::always_comb
             || input.kind == semantic::sv::ProcessKind::always_latch;
+        description.start_after_procedures
+            = description.always_comb_or_latch;
         description.concurrent_assertion = input.concurrent_assertion;
         for (const auto& sensitivity : input.sensitivities) {
             if (sensitivity.signal == "*") {
@@ -3484,6 +3507,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
 // Clears the register, local and control state of one lowered process.
 void Lowerer::reset_hir_process_state()
 {
+    hir_lowering_rejection_.reset();
     next_register_ = 0U;
     next_string_register_ = 0U;
     next_container_register_ = 0U;
@@ -3609,6 +3633,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     };
     if (event_baseline) {
         event_baseline = event_bit(*event_baseline);
+    }
+    if (description.start_after_procedures) {
+        process_.startup_phase
+            = runtime::simir::ProcessStartupPhase::after_procedures;
     }
     const auto resume_entry = static_cast<InstructionIndex>(
         process_.operations.size());

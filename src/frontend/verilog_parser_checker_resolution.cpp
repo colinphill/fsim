@@ -14,6 +14,13 @@
 
 namespace fsim::frontend {
 
+void VerilogParser::resolve_unit_checkers(DesignUnit& unit)
+{
+    instantiate_checkers(unit);
+    resolve_assertion_references(unit);
+    resolve_generate_assertion_references(unit);
+}
+
 void VerilogParser::instantiate_checkers(DesignUnit& unit)
 {
     using TokenMap = std::unordered_map<std::string, std::vector<Token>>;

@@ -1110,7 +1110,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             }
             const auto consumes_value =
                 [](const OutputFormat format) {
-                    return format != OutputFormat::Hierarchy;
+                    return format != OutputFormat::Hierarchy
+                        && format != OutputFormat::Library;
                 };
             const auto required_values = static_cast<std::size_t>(std::ranges::count_if(
                 parsed_format.conversions,
@@ -1325,7 +1326,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     for (auto& conversion : parsed_format.conversions) {
                         Expression value;
                         const bool takes_value
-                            = conversion.format != OutputFormat::Hierarchy;
+                            = conversion.format != OutputFormat::Hierarchy
+                            && conversion.format != OutputFormat::Library;
                         if (takes_value && at(TokenKind::Comma)
                             && !at(TokenKind::Comma, 1U)
                             && !at(TokenKind::RightParen, 1U)) {
@@ -1386,6 +1388,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     const auto consumes_value =
                         [](const OutputFormat format) {
                             return format != OutputFormat::Hierarchy
+                                && format != OutputFormat::Library
                                 && format != OutputFormat::Time;
                         };
                     const auto required_values = static_cast<std::size_t>(std::ranges::count_if(

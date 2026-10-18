@@ -741,6 +741,12 @@ namespace {
                 || output.kind == sv::ExpressionKind::class_property
                 || output.kind == sv::ExpressionKind::class_method_call;
             output.decoded_string = input.decoded_string;
+            // `type(data_type)` (IEEE 1800-2017 6.23).
+            if (input.systemverilog_type_operand) {
+                output.type_operand.push_back(type_reference(
+                    *input.systemverilog_type_operand, input.span, scope,
+                    parent));
+            }
             output.decimal_literal
                 = systemverilog_hir_detail::systemverilog_decimal_literal(
                     input.systemverilog_decimal_literal);
@@ -755,7 +761,8 @@ namespace {
                     input.text, input.span, scope,
                     input.systemverilog_source_order);
             } else if (input.kind == frontend::ExpressionKind::Call
-                && input.text.starts_with("@sv-cast:")) {
+                && input.text.starts_with("@sv-cast:")
+                && input.text != "@sv-cast:@type") {
                 output.referenced_name = name(
                     input.text.substr(
                         std::string_view { "@sv-cast:" }.size()),
@@ -1341,6 +1348,10 @@ namespace {
                         element, container.span, scope, parent));
                 }
             }
+            // `type(expression)` as a data type (IEEE 1800-2017 6.23).
+            if (input.systemverilog_type_of) {
+                output.type_of = expression(*input.systemverilog_type_of, scope, parent);
+            }
             return output;
         }
 
@@ -1688,6 +1699,7 @@ namespace {
                     item.value, child_scope, statement_origin);
                 if (value
                     || item.format == frontend::OutputFormat::Hierarchy
+                    || item.format == frontend::OutputFormat::Library
                     || item.format == frontend::OutputFormat::Time) {
                     output.output_values.push_back({ value,
                         elaboration::hir_output_format(item.format),
