@@ -1619,7 +1619,9 @@ Lowerer::lower_hir_static_container_value(
             if (base && base->type != nullptr && base->type->queue
                 && (base->type->element_kind == ContainerElementKind::Packed
                     || base->type->element_kind
-                        == ContainerElementKind::Scalar)) {
+                        == ContainerElementKind::Scalar
+                    || base->type->element_kind
+                        == ContainerElementKind::String)) {
                 const auto& type = *base->type;
                 const auto queue = base->local
                     ? *base->local
@@ -1681,13 +1683,22 @@ Lowerer::lower_hir_static_container_value(
                 process_.operations.emplace_back(Branch {
                     within, branch + 1U, 0U,
                     UnknownBranchPolicy::when_false });
-                const auto element = allocate_register(type.element_width,
-                    type.two_state ? frontend::ValueDomain::Bit2
-                                   : frontend::ValueDomain::Logic4);
-                process_.operations.emplace_back(ContainerRead {
-                    element, queue, index, true, false, false });
-                process_.operations.emplace_back(AppendContainer {
-                    result, false, { }, element, { } });
+                if (type.element_kind == ContainerElementKind::String) {
+                    const auto text = allocate_string_register();
+                    process_.operations.emplace_back(ContainerStringRead {
+                        text, queue, index, true, false, false, { } });
+                    process_.operations.emplace_back(AppendContainer {
+                        result, false, { }, { }, text });
+                } else {
+                    const auto element = allocate_register(
+                        type.element_width,
+                        type.two_state ? frontend::ValueDomain::Bit2
+                                       : frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(ContainerRead {
+                        element, queue, index, true, false, false });
+                    process_.operations.emplace_back(AppendContainer {
+                        result, false, { }, element, { } });
+                }
                 process_.operations.emplace_back(Binary {
                     BinaryOperator::add_unsigned, index, index, one });
                 process_.operations.emplace_back(Jump { loop });
@@ -1846,12 +1857,26 @@ Lowerer::lower_hir_static_container_value(
         selection->selected_type,
         { },
         source_offset);
-    const auto after = static_cast<InstructionIndex>(
-        process_.operations.size());
-    for (const auto branch : skips) {
-        if (auto* const skip = runtime::simir::operation_get_if<Branch>(
-                &process_.operations[branch])) {
-            skip->when_false = after;
+    if (!skips.empty()) {
+        // A skipped read resets the register, which an earlier execution
+        // of a repeated process may have written, to the default value.
+        const auto join = process_.operations.size();
+        process_.operations.emplace_back(Jump { });
+        const auto defaults = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(CopyContainerRegister {
+            value, allocate_container_register(selection->selected_type) });
+        const auto after = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (auto* const jump = runtime::simir::operation_get_if<Jump>(
+                &process_.operations[join])) {
+            jump->target = after;
+        }
+        for (const auto branch : skips) {
+            if (auto* const skip = runtime::simir::operation_get_if<Branch>(
+                    &process_.operations[branch])) {
+                skip->when_false = defaults;
+            }
         }
     }
     return HirStaticContainerValue {
@@ -2894,6 +2919,36 @@ Lowerer::hir_inline_constraints(
             output.text = source.text.substr(property_prefix.size());
             return output;
         }
+        // A property reached through another handle (`item.addr`) is a
+        // value of the calling scope (IEEE 1800-2017 18.7).
+        const auto rooted_in_randomized_object = [&] {
+            auto current = source.operands.front();
+            for (std::size_t depth { }; depth < 64U; ++depth) {
+                if (same_lvalue(same_lvalue, current, *randomized_object, 0U)) {
+                    return true;
+                }
+                const auto next = specialized_hir_unit_->find_expression(
+                    current);
+                if (!next || next->systemverilog == nullptr
+                    || next->systemverilog->operands.empty()
+                    || (next->systemverilog->kind
+                            != semantic::sv::ExpressionKind::class_property
+                        && next->systemverilog->kind
+                            != semantic::sv::ExpressionKind::index)) {
+                    return false;
+                }
+                current = next->systemverilog->operands.front();
+            }
+            return true;
+        };
+        if (source.kind == semantic::sv::ExpressionKind::class_property
+            && source.text.starts_with(property_prefix)
+            && source.operands.size() == 1U && randomized_object
+            && !rooted_in_randomized_object()) {
+            if (auto value = caller_value(id)) {
+                return value;
+            }
+        }
         if (source.kind == semantic::sv::ExpressionKind::class_null) {
             output.kind = TemplateKind::Constant;
             output.constant = PackedLogic4::from_aval_bval(64U, 0U, 0U);
@@ -3849,10 +3904,15 @@ bool Lowerer::lower_hir_class_property_initializers(
         if (property.type.container_form) {
             const auto pattern = specialized_hir_unit_->find_expression(
                 *property.initializer);
+            const bool concatenation = pattern
+                && pattern->systemverilog != nullptr
+                && pattern->systemverilog->kind
+                    == semantic::sv::ExpressionKind::concatenation;
             if (!property.type.class_identity.empty() || !pattern
                 || pattern->systemverilog == nullptr
-                || pattern->systemverilog->kind
-                    != semantic::sv::ExpressionKind::assignment_pattern) {
+                || (pattern->systemverilog->kind
+                        != semantic::sv::ExpressionKind::assignment_pattern
+                    && !concatenation)) {
                 continue;
             }
             const auto type = hir_systemverilog_container_type(property.type);
@@ -3863,8 +3923,13 @@ bool Lowerer::lower_hir_class_property_initializers(
                 property.declaration, property.name, { }, std::nullopt,
                 &*type, false
             };
-            const auto value = lower_hir_container_assignment_pattern(
-                *property.initializer, target);
+            // An unpacked array concatenation `{1, 2, 3}` initializes a
+            // queue or dynamic array too (IEEE 1800-2017 10.10).
+            const auto value = concatenation
+                ? lower_hir_static_container_actual(
+                      *property.initializer, *type, property.declaration)
+                : lower_hir_container_assignment_pattern(
+                      *property.initializer, target);
             if (!value) {
                 continue;
             }
@@ -7238,6 +7303,50 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
             }
         }
     }
+    // `inst.blk.f()` names a function of a generate block of an instance
+    // (IEEE 1800-2017 23.6, 27.6).
+    std::vector<std::string> generate_chain;
+    if (!target_unit && receiver.find('.') != std::string_view::npos) {
+        auto instance = std::string { receiver };
+        while (!target_unit) {
+            const auto separator = instance.rfind('.');
+            if (separator == std::string::npos) {
+                break;
+            }
+            generate_chain.insert(generate_chain.begin(),
+                instance.substr(separator + 1U));
+            instance.resize(separator);
+            for (std::string lexical_scope = hierarchy_;;) {
+                const auto candidate = lexical_scope.empty()
+                    ? instance
+                    : lexical_scope + "." + instance;
+                const auto found = std::ranges::find_if(
+                    design_.specializations_,
+                    [&](const SpecializationInfo& specialization) {
+                        return specialization.instance == candidate;
+                    });
+                if (found != design_.specializations_.end()
+                    && found->source_unit) {
+                    target_unit = found->source_unit;
+                    target_path = found->instance;
+                    for (const auto& name : generate_chain) {
+                        target_path += "." + name;
+                    }
+                    break;
+                }
+                if (lexical_scope.empty()) {
+                    break;
+                }
+                const auto up = lexical_scope.rfind('.');
+                lexical_scope = up == std::string::npos
+                    ? std::string { }
+                    : lexical_scope.substr(0U, up);
+            }
+        }
+        if (!target_unit) {
+            generate_chain.clear();
+        }
+    }
     if (!target_unit) {
         // The instance may be elaborated after the calling process; the
         // process is retried then.
@@ -7245,6 +7354,21 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         return std::nullopt;
     }
     const auto& scopes = design.semantics.scopes();
+    // Whether a declaration scope is the named generate-block chain below
+    // the unit's own scope.
+    const auto in_generate_chain = [&](const semantic::Scope& scope) {
+        std::vector<std::string_view> names;
+        const auto* current = &scope;
+        for (std::size_t depth = 0; depth < 64U && current->parent; ++depth) {
+            names.insert(names.begin(), current->name);
+            if (current->parent->value() >= scopes.size()) {
+                return false;
+            }
+            current = &scopes[current->parent->value()];
+        }
+        return names.size() == generate_chain.size()
+            && std::ranges::equal(names, generate_chain);
+    };
     std::optional<semantic::DeclarationId> selected;
     for (const auto& declaration : design.systemverilog_hir.declarations()) {
         if (declaration.name != member || !declaration.callable
@@ -7257,7 +7381,9 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
             continue;
         }
         const auto& scope = scopes[declaration.scope.value()];
-        if (scope.unit != *target_unit || scope.parent) {
+        if (scope.unit != *target_unit
+            || (generate_chain.empty() ? scope.parent.has_value()
+                                       : !in_generate_chain(scope))) {
             continue;
         }
         if (selected) {
@@ -13641,6 +13767,23 @@ Lowerer::lower_hir_function_call_value(
         : std::nullopt;
     auto callable_key = std::to_string(callable_identity)
         + signal_actual_key;
+    // A subprogram of one package instance is not another instance's: each
+    // reads its own generics (IEEE 1076-2008 4.9).
+    if (resolution->package_instance) {
+        callable_key += "|instance:"
+            + std::to_string(resolution->package_instance->value());
+    }
+    for (const auto& binding : resolution->generic_bindings) {
+        callable_key += "|generic:" + std::to_string(binding.formal.value())
+            + ":"
+            + (binding.expression
+                    ? std::to_string(binding.expression->value())
+                    : std::string { "-" })
+            + ":"
+            + (binding.actual_declaration
+                    ? std::to_string(binding.actual_declaration->value())
+                    : std::string { "-" });
+    }
     if (lexical_parent) {
         callable_key += "|lexical-parent:"
             + std::to_string(*lexical_parent);

@@ -516,6 +516,10 @@ VhdlParser::parse_vhdl_procedure_parameters() {
     }
 
     const auto type = parse_vhdl_type(true, true);
+    // A signal formal may be of kind bus (IEEE 1076-2008 6.5.2).
+    if (object_class == InterfaceObjectClass::Signal) {
+      (void)match_keyword("bus", true);
+    }
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       const auto default_start = previous();

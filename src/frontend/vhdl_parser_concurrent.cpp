@@ -431,6 +431,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
         out.value = Expression { ExpressionKind::Call, *connection.port,
             { formal }, group.operands[index].span };
         out.span = connection.span;
+        out.label = "fsim__formal_conversion_" + formal.text;
         result.then_body.concurrent_statements.push_back(std::move(out));
       }
     }
@@ -1334,6 +1335,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         out.target = actual_name;
         out.value = Expression { ExpressionKind::Call, conversion, { implicit_name }, span };
         out.span = span;
+        out.label = implicit;
         unit.concurrent_statements.push_back(std::move(out));
         if (port->direction == PortDirection::Inout) {
           Statement in;

@@ -1441,10 +1441,16 @@ void VhdlParser::parse_vhdl_group_declaration(DesignUnit &unit,
           "duplicate VHDL group declaration '" + name + "'");
     return;
   }
+  // A template may also come from a package declared earlier, through a
+  // use clause (IEEE 1076-2008 6.9, 6.10, 12.4).
+  if (template_declaration) {
+    vhdl_group_templates_.insert(name);
+  }
   if (!template_declaration &&
       !std::ranges::any_of(unit.vhdl_groups, [&](const auto &group) {
         return group.template_declaration && group.name == template_name;
-      })) {
+      }) &&
+      !vhdl_group_templates_.contains(template_name)) {
     error(name_token, "FSIM-VHDL-SEM-101",
           "VHDL group instance references undeclared template '" +
               template_name + "'");

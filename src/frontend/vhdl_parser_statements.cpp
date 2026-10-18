@@ -1074,8 +1074,13 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   }
   // An external name denotes the object it names, so it can be a target
   // (IEEE 1076-2008 8.7, 10.5.2.1).
+  // An alias of an external name denotes that object too (6.6.2).
   const bool external_target = aggregate_targets.empty()
-      && at(TokenKind::ShiftLeft);
+      && (at(TokenKind::ShiftLeft)
+          || (at(TokenKind::Identifier)
+              && vhdl_external_aliases_.contains(vhdl_name(current().text))
+              && !at(TokenKind::Dot, 1U) && !at(TokenKind::Apostrophe, 1U)
+              && !at(TokenKind::LeftParen, 1U)));
   if (aggregate_targets.empty() && !at(TokenKind::Identifier)
       && !external_target) {
     return std::nullopt;
@@ -1195,6 +1200,32 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
     statement = parse_conditional_signal_assignment(std::move(statement));
   } else {
     statement.value = parse_conditional_assignment_value();
+    // `unaffected` as an alternative of a conditional variable assignment
+    // leaves the variable's value as it is (IEEE 1076-2019 10.6.3): it
+    // reads back the target.
+    {
+      std::vector<Expression*> pending{&statement.value};
+      while (!pending.empty()) {
+        auto* expression = pending.back();
+        pending.pop_back();
+        if (expression->kind != ExpressionKind::Call
+            || expression->text != "?:") {
+          continue;
+        }
+        for (std::size_t index = 1U; index < expression->operands.size();
+             ++index) {
+          auto& alternative = expression->operands[index];
+          if (alternative.kind == ExpressionKind::Identifier
+              && vhdl_name(alternative.text) == "unaffected") {
+            const auto span = alternative.span;
+            alternative = statement.target;
+            alternative.span = span;
+          } else {
+            pending.push_back(&alternative);
+          }
+        }
+      }
+    }
     diagnose_misplaced_vhdl_delay_mechanism();
     if (match_keyword("after", true)) {
       statement.delay = parse_vhdl_delay(previous());

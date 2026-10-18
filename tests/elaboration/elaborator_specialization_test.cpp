@@ -1547,25 +1547,6 @@ end architecture rtl;
     assert(has_diagnostic(
         ambiguous_constant_result, "FSIM-ELAB-PKG-004"));
 
-    const auto malformed_import = fsim::frontend::parse_text(
-        "malformed_package_import.vhd",
-        R"(
-use work.values;
-entity malformed_package_import is
-end entity malformed_package_import;
-architecture rtl of malformed_package_import is
-begin
-end architecture rtl;
-)",
-        fsim::frontend::Language::Vhdl2008);
-    assert(malformed_import.ok());
-    const auto malformed_import_result = compile_and_elaborate(
-        malformed_import.design,
-        "vhdl:work.malformed_package_import(rtl)");
-    assert(!malformed_import_result.ok());
-    assert(has_diagnostic(
-        malformed_import_result, "FSIM-ELAB-PKG-001"));
-
     const auto invalid_package_values = fsim::frontend::parse_text(
         "invalid_package_values.vhd",
         R"(

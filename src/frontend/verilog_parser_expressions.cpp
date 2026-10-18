@@ -1894,6 +1894,17 @@ Expression VerilogParser::parse_primary_impl()
                         { },
                         type.span
                     };
+                } else if (at(TokenKind::Identifier)
+                    && at(TokenKind::LeftBrace, 1U)
+                    && packed_typedef_types_.contains(current().text)) {
+                    // A user type as the slice size gives its width
+                    // (IEEE 1800-2017 11.4.14).
+                    const auto type = advance();
+                    slice_size = Expression {
+                        ExpressionKind::Call, "$bits",
+                        { Expression { ExpressionKind::Identifier,
+                            type.text, { }, type.span } },
+                        type.span };
                 } else {
                     slice_size = parse_expression();
                 }

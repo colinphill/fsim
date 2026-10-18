@@ -207,6 +207,34 @@ void Resolver::retain_task_profile(
   }
   if (expression.text.starts_with("@sv-cast:")
       && expression.operands.size() == 1U) {
+    // A static cast of a class handle to a class it may be assigned to is
+    // that handle (IEEE 1800-2017 6.24.1, 8.15).
+    const auto classes = resolve_class_name(
+        std::string_view{expression.text}.substr(
+            std::string_view{"@sv-cast:"}.size()),
+        scope);
+    if (classes.size() == 1U) {
+      const auto target = class_type(*classes.front());
+      auto operand_type = resolve_expression(
+          expression.operands.front(), scope);
+      const auto operand_class = operand_type
+          ? class_identity(*operand_type) : std::nullopt;
+      const auto target_class = class_identity(target);
+      const bool null_operand
+          = expression.operands.front().text == "@sv-null";
+      if (target_class
+          && (null_operand
+              || (operand_class
+                  && class_assignable(*operand_class, *target_class)))) {
+        auto operand = std::move(expression.operands.front());
+        expression = std::move(operand);
+        if (null_operand) {
+          expression.nominal_type = *target_class;
+          return target;
+        }
+        return operand_type;
+      }
+    }
     const auto operand = resolve_expression(
         expression.operands.front(), scope);
     if (chandle(operand)) {
@@ -851,9 +879,15 @@ void Resolver::retain_task_profile(
   }
 
   // An unqualified randomize call in a class method randomizes the object
-  // itself (IEEE 1800-2017 18.6.1, 18.7).
+  // itself (IEEE 1800-2017 18.6.1, 18.7); an unqualified get_randstate
+  // reads the object's own generator state (18.13.4).
   if (scope.class_owner != nullptr && scope.method_body
-      && expression.text == "randomize") {
+      && (expression.text == "randomize"
+          || (expression.text == "get_randstate"
+              && expression.operands.empty()
+              && find_methods(scope.class_owner->canonical_identity,
+                     "get_randstate", SystemVerilogClassMethodKind::Function)
+                  .empty()))) {
     Expression receiver{
         ExpressionKind::Identifier, "this", {}, expression.span};
     receiver.nominal_type = scope.class_owner->canonical_identity;
@@ -863,7 +897,7 @@ void Resolver::retain_task_profile(
       expression.call_argument_names.insert(
           expression.call_argument_names.begin(), std::string{});
     }
-    expression.text = ".randomize";
+    expression.text = "." + expression.text;
     return resolve_call(
         expression, scope, expected_class, expected_scalar);
   }
@@ -1144,6 +1178,20 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           || statement.task_name == "constraint_mode")) {
     statement.task_name = "this." + statement.task_name;
   }
+  // An unqualified `srandom(seed);` or `set_randstate(state);` in a method
+  // seeds the object's own generator (IEEE 1800-2017 18.13.3, 18.13.5).
+  if (scope.class_owner != nullptr && scope.method_body
+      && statement.task_arguments.size() == 1U
+      && (statement.task_name == "srandom"
+          || statement.task_name == "set_randstate")
+      && find_methods(scope.class_owner->canonical_identity,
+             statement.task_name, SystemVerilogClassMethodKind::Function)
+          .empty()
+      && find_methods(scope.class_owner->canonical_identity,
+             statement.task_name, SystemVerilogClassMethodKind::Task)
+          .empty()) {
+    statement.task_name = "this." + statement.task_name;
+  }
   const auto dot = statement.task_name.rfind('.');
   // `obj.c.constraint_mode(0);` or `obj.v.rand_mode(0);` selects a
   // constraint block or random property, not an object (18.8, 18.9).
@@ -1314,6 +1362,28 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           kind,
           statement.task_arguments.size(),
           statement.span);
+      // A static task called through a handle runs without an object
+      // (IEEE 1800-2017 8.10); the handle only names the class.
+      if (match && match->method && match->method->is_static
+          && kind != SystemVerilogClassMethodKind::Constructor) {
+        statement.task_name = "@sv-static-task:"
+            + match->method->canonical_identity;
+        retain_task_profile(
+            statement,
+            *match->method,
+            match->owner,
+            &*receiver_type);
+        for (std::size_t index = 0;
+             index < statement.task_arguments.size(); ++index) {
+          if (index < match->method->arguments.size()) {
+            resolve_typed_expression(statement.task_arguments[index],
+                scope, match->method->arguments[index].type);
+          } else {
+            resolve_expression(statement.task_arguments[index], scope);
+          }
+        }
+        return;
+      }
       if (match) {
         const auto canonical = match->method
             ? match->method->canonical_identity

@@ -177,6 +177,32 @@ void Resolver::run() {
         resolve_statement(statement, process_scope, std::nullopt);
       }
     }
+    // Continuous assignments can call class methods (`assign c =
+    // C#(3)::f(a);`, IEEE 1800-2017 8.10, 10.3), as in generate bodies.
+    // Only those that name a class scope are visited; the resolver's
+    // recursion is not needed for deep ordinary expressions.
+    const auto names_class_scope = [](const Statement& statement) {
+      std::vector<const Expression*> pending{
+          &statement.target, &statement.value};
+      while (!pending.empty()) {
+        const auto* expression = pending.back();
+        pending.pop_back();
+        if ((expression->kind == ExpressionKind::Call
+                || expression->kind == ExpressionKind::Identifier)
+            && expression->text.find("::") != std::string::npos) {
+          return true;
+        }
+        for (const auto& operand : expression->operands) {
+          pending.push_back(&operand);
+        }
+      }
+      return false;
+    };
+    for (auto& statement : unit.concurrent_statements) {
+      if (names_class_scope(statement)) {
+        resolve_statement(statement, scope, std::nullopt);
+      }
+    }
     for (auto& region : unit.generate_regions) {
       resolve_generate_body(region.then_body, scope);
       resolve_generate_body(region.else_body, scope);
@@ -708,6 +734,75 @@ bool Resolver::class_assignable(
     if (separator == std::string::npos) return type;
     lexical_identity.resize(separator);
   }
+}
+std::optional<Type> Resolver::class_type_parameter_actual(
+    const std::string& named, const SystemVerilogClassDeclaration& owner,
+    const Type& receiver, const Scope& scope) const {
+  const auto& parameters = owner.parameters;
+  const auto formal = std::ranges::find_if(parameters,
+      [&](const ParameterDeclaration& parameter) {
+        return parameter.kind == ParameterKind::Type
+            && parameter.name == named;
+      });
+  const auto receiver_identity = class_identity(receiver);
+  if (formal == parameters.end() || !receiver_identity) return std::nullopt;
+  const auto position = static_cast<std::size_t>(
+      std::distance(parameters.begin(), formal));
+  const auto from_actual = [&](const std::optional<Type>& type_actual,
+                               const Expression& value)
+      -> std::optional<Type> {
+    if (type_actual) return canonicalize_selected_type(*type_actual, scope);
+    if (value.kind == ExpressionKind::Identifier && !value.text.empty()) {
+      Type named_actual;
+      named_actual.named_type = value.text;
+      named_actual.spelling = value.text;
+      named_actual = canonicalize_selected_type(
+          std::move(named_actual), scope);
+      if (!named_actual.systemverilog_class_declaration.empty()) {
+        return named_actual;
+      }
+    }
+    return std::nullopt;
+  };
+  if (*receiver_identity == owner.canonical_identity) {
+    const auto& actuals = receiver.systemverilog_class_parameter_actuals;
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+      const auto& actual = actuals[index];
+      if ((actual.name && *actual.name != named)
+          || (!actual.name && index != position)) {
+        continue;
+      }
+      return from_actual(actual.type_actual
+              ? std::optional<Type>{*actual.type_actual} : std::nullopt,
+          actual.value);
+    }
+    if (actuals.empty() && formal->default_type) {
+      auto defaulted = canonicalize_selected_type(*formal->default_type, scope);
+      if (!defaulted.systemverilog_class_declaration.empty()) {
+        return defaulted;
+      }
+    }
+    return std::nullopt;
+  }
+  const auto* current = find_class(*receiver_identity);
+  std::set<std::string> visited;
+  while (current != nullptr && current->base
+      && visited.insert(current->canonical_identity).second) {
+    if (current->base->declaration_identity == owner.canonical_identity) {
+      const auto& actuals = current->base->parameter_actuals;
+      for (std::size_t index = 0; index < actuals.size(); ++index) {
+        const auto& actual = actuals[index];
+        if ((!actual.name.empty() && actual.name != named)
+            || (actual.name.empty() && index != position)) {
+          continue;
+        }
+        return from_actual(actual.type_actual, actual.value);
+      }
+      return std::nullopt;
+    }
+    current = find_base_class(*current);
+  }
+  return std::nullopt;
 }
 std::optional<Type> Resolver::packed_member_type(
     const Type& type, const std::string_view member) const {
@@ -1769,9 +1864,16 @@ void Resolver::retain_result_type(
           expression.operands = {std::move(receiver)};
           retain_call_profile(expression, *method->method, true);
         }
-        const auto type = resolve_alias_type(
+        auto type = resolve_alias_type(
             method->method->return_type,
             method->owner->canonical_identity);
+        if (const auto& named = method->method->return_type.named_type;
+            !named.empty() && class_identity(*receiver_type)) {
+          if (auto actual = class_type_parameter_actual(
+                  named, *method->owner, *receiver_type, scope)) {
+            type = std::move(*actual);
+          }
+        }
         retain_result_type(expression, type);
         if (const auto identity = class_identity(type)) {
           expression.nominal_type = *identity;
@@ -1792,6 +1894,7 @@ void Resolver::retain_result_type(
         match.owner->canonical_identity);
     // A property declared with a type parameter of the receiver's class
     // has the specialization's type actual (IEEE 1800-2017 8.25).
+    bool type_actual_found = false;
     if (const auto& named = match.property->declaration.type.named_type;
         !named.empty() && class_identity(*receiver_type)
             && *class_identity(*receiver_type)
@@ -1815,6 +1918,7 @@ void Resolver::retain_result_type(
           }
           if (actual.type_actual) {
             type = canonicalize_selected_type(*actual.type_actual, scope);
+            type_actual_found = true;
           } else if (actual.value.kind == ExpressionKind::Identifier
               && !actual.value.text.empty()) {
             // A positional actual that names a type is parsed as a name.
@@ -1825,10 +1929,21 @@ void Resolver::retain_result_type(
                 std::move(named_actual), scope);
             if (!named_actual.systemverilog_class_declaration.empty()) {
               type = std::move(named_actual);
+              type_actual_found = true;
             }
           }
           break;
         }
+      }
+    }
+    // A type parameter of a base class takes the actual of the derived
+    // class's `extends Base #(T)` clause, or its default (IEEE 1800-2017
+    // 8.25, 8.13).
+    if (const auto& named = match.property->declaration.type.named_type;
+        !type_actual_found && !named.empty()) {
+      if (auto actual = class_type_parameter_actual(
+              named, *match.owner, *receiver_type, scope)) {
+        type = std::move(*actual);
       }
     }
     if (match.property->is_static) {

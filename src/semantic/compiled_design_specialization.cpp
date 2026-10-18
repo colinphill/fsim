@@ -142,6 +142,9 @@ struct VhdlInitializerValue {
         integer,
         packed,
         array,
+        // A record value: one element per record element, in declaration
+        // order (IEEE 1076-2008 5.3.3).
+        record,
     };
 
     Kind kind { Kind::invalid };
@@ -155,6 +158,7 @@ struct VhdlInitializerValue {
     bool array_descending { };
     bool array_null { };
     std::shared_ptr<const vhdl::SubtypeIndication> array_element_subtype;
+    TypeId record_type;
     std::vector<VhdlInitializerValue> elements;
 };
 
@@ -2133,6 +2137,17 @@ public:
             result = evaluate_expression(*view->systemverilog);
         } else if (view && view->vhdl != nullptr) {
             result = evaluate_vhdl_record_constant_element(*view->vhdl);
+            // An element of a record-valued constant, generic or function
+            // result (IEEE 1076-2008 8.3, 9.4.2).
+            if (!result && view->vhdl->kind == vhdl::ExpressionKind::name
+                && view->vhdl->text.find('.') != std::string::npos) {
+                if (const auto selected
+                    = evaluate_vhdl_selected_value(*view->vhdl);
+                    selected
+                    && selected->kind == VhdlConstantValue::Kind::integer) {
+                    result = selected->integer;
+                }
+            }
             if (!result) {
                 result = evaluate_expression(*view->vhdl);
             }
@@ -2712,6 +2727,13 @@ private:
     {
         if (value.kind == VhdlConstantValue::Kind::integer) {
             return subtype.domain == vhdl::ValueDomain::integer
+                ? std::optional { std::move(value) }
+                : std::nullopt;
+        }
+        // A record result has the function's record type (6.5.6.2).
+        if (value.kind == VhdlConstantValue::Kind::record) {
+            const auto* record = vhdl_record_definition(subtype);
+            return record != nullptr && record->id == value.record_type
                 ? std::optional { std::move(value) }
                 : std::nullopt;
         }
@@ -3497,6 +3519,14 @@ private:
     [[nodiscard]] std::optional<VhdlConstantValue> vhdl_coerce_value(
         VhdlConstantValue value, const vhdl::SubtypeIndication& subtype)
     {
+        // A record value keeps its elements; its type must be the subtype's
+        // (IEEE 1076-2008 5.3.3).
+        if (value.kind == VhdlConstantValue::Kind::record) {
+            const auto* record = vhdl_record_definition(subtype);
+            return record != nullptr && record->id == value.record_type
+                ? std::optional { std::move(value) }
+                : std::nullopt;
+        }
         if (value.kind == VhdlConstantValue::Kind::array) {
             const auto boolean_array
                 = vhdl_boolean_array_subtype_info(subtype);
@@ -3744,6 +3774,195 @@ private:
             : std::nullopt;
     }
 
+    /// The record type a subtype denotes, through subtypes and aliases.
+    [[nodiscard]] const vhdl::TypeDefinition* vhdl_record_definition(
+        const vhdl::SubtypeIndication& subtype) const
+    {
+        auto type_id = subtype.type_mark.target;
+        std::set<TypeId> visited;
+        while (type_id.valid() && visited.insert(type_id).second) {
+            const auto type = unit_.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return nullptr;
+            }
+            if (type->vhdl->form == vhdl::TypeForm::record) {
+                return type->vhdl;
+            }
+            if (type->vhdl->form != vhdl::TypeForm::subtype
+                && type->vhdl->form != vhdl::TypeForm::alias) {
+                return nullptr;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        return nullptr;
+    }
+
+    /// An element value in its element subtype: an aggregate takes that
+    /// subtype as its context (IEEE 1076-2008 9.3.3.1).
+    [[nodiscard]] std::optional<VhdlConstantValue> evaluate_vhdl_element(
+        const ExpressionId value_id,
+        const vhdl::SubtypeIndication& element_subtype,
+        const ScopeId element_scope)
+    {
+        const auto effective = CompiledDesignResolver { unit_ }
+                                   .effective_vhdl_subtype(
+                                       element_subtype, element_scope)
+                                   .value_or(element_subtype);
+        const auto value = unit_.find_expression(value_id);
+        if (value && value->vhdl != nullptr
+            && value->vhdl->kind == vhdl::ExpressionKind::aggregate) {
+            return evaluate_vhdl_aggregate(value_id, effective);
+        }
+        auto result = evaluate_vhdl_value(value_id);
+        if (result && result->kind == VhdlConstantValue::Kind::packed) {
+            if (auto coerced = vhdl_coerce_value(*result, effective)) {
+                result = std::move(coerced);
+            }
+        }
+        return result;
+    }
+
+    /// A record aggregate by position, by element name and with OTHERS
+    /// (IEEE 1076-2008 9.3.3.2).
+    [[nodiscard]] std::optional<VhdlConstantValue>
+    evaluate_vhdl_record_aggregate(const vhdl::Expression& aggregate,
+        const vhdl::TypeDefinition& record)
+    {
+        const auto owner = unit_.find_declaration(record.declaration);
+        if (!owner || owner->vhdl == nullptr
+            || !consume_constant_work_unit(record.record_elements.size())) {
+            return std::nullopt;
+        }
+        const auto scope = owner->vhdl->scope;
+        const auto& elements = record.record_elements;
+        std::vector<std::optional<ExpressionId>> values(elements.size());
+        std::optional<ExpressionId> others;
+        std::size_t position { };
+        for (const auto& association : aggregate.associations) {
+            if (association.positional()) {
+                if (position >= values.size()) {
+                    return std::nullopt;
+                }
+                values[position++] = association.value;
+                continue;
+            }
+            bool named = false;
+            for (const auto choice_id : association.choices) {
+                const auto choice = unit_.find_expression(choice_id);
+                if (!choice || choice->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                if (choice->vhdl->kind
+                        == vhdl::ExpressionKind::default_choice
+                    || support::equal_ignoring_ascii_case(
+                        std::string_view { choice->vhdl->text }, "others")) {
+                    others = association.value;
+                    named = true;
+                    continue;
+                }
+                const auto element = std::ranges::find_if(elements,
+                    [&](const vhdl::RecordElement& candidate) {
+                        return support::equal_ignoring_ascii_case(
+                            std::string_view { candidate.name },
+                            std::string_view { choice->vhdl->text });
+                    });
+                if (element == elements.end()) {
+                    return std::nullopt;
+                }
+                values[static_cast<std::size_t>(
+                    std::distance(elements.begin(), element))]
+                    = association.value;
+                named = true;
+            }
+            if (!named) {
+                return std::nullopt;
+            }
+        }
+        VhdlConstantValue result;
+        result.kind = VhdlConstantValue::Kind::record;
+        result.record_type = record.id;
+        result.elements.reserve(elements.size());
+        for (std::size_t index { }; index < elements.size(); ++index) {
+            const auto value_id = values[index] ? values[index] : others;
+            if (!value_id) {
+                return std::nullopt;
+            }
+            auto element = evaluate_vhdl_element(
+                *value_id, elements[index].subtype, scope);
+            if (!element) {
+                return std::nullopt;
+            }
+            result.elements.push_back(std::move(*element));
+        }
+        return result;
+    }
+
+    /// The element `name` of a record value (IEEE 1076-2008 8.3).
+    [[nodiscard]] std::optional<VhdlConstantValue> vhdl_record_element(
+        const VhdlConstantValue& value, const std::string_view name) const
+    {
+        if (value.kind != VhdlConstantValue::Kind::record) {
+            return std::nullopt;
+        }
+        const auto type = unit_.find_type(value.record_type);
+        if (!type || type->vhdl == nullptr
+            || type->vhdl->record_elements.size() != value.elements.size()) {
+            return std::nullopt;
+        }
+        const auto& elements = type->vhdl->record_elements;
+        const auto element = std::ranges::find_if(elements,
+            [&](const vhdl::RecordElement& candidate) {
+                return support::equal_ignoring_ascii_case(
+                    std::string_view { candidate.name }, name);
+            });
+        if (element == elements.end()) {
+            return std::nullopt;
+        }
+        return value.elements[static_cast<std::size_t>(
+            std::distance(elements.begin(), element))];
+    }
+
+    /// A selected name `c.e.f` of a record-valued object: its prefix's value
+    /// projected to the elements (IEEE 1076-2008 8.3).
+    [[nodiscard]] std::optional<VhdlConstantValue>
+    evaluate_vhdl_selected_value(const vhdl::Expression& name)
+    {
+        if (name.kind != vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const std::string_view text { name.text };
+        const CompiledDesignResolver resolver { unit_ };
+        for (auto dot = text.find('.'); dot != std::string_view::npos;
+             dot = text.find('.', dot + 1U)) {
+            vhdl::Name prefix;
+            prefix.spelling = std::string { text.substr(0U, dot) };
+            const auto declaration = resolver
+                                         .resolve_vhdl(prefix, name.scope,
+                                             [](const CompiledDeclarationView&
+                                                     view) {
+                                                 return view.vhdl != nullptr
+                                                     && vhdl_evaluable_value_form(
+                                                         view.vhdl->form);
+                                             })
+                                         .unique();
+            if (!declaration) {
+                continue;
+            }
+            auto value = evaluate_vhdl_declaration(*declaration);
+            auto remaining = text.substr(dot + 1U);
+            while (value && !remaining.empty()) {
+                const auto separator = remaining.find('.');
+                value = vhdl_record_element(
+                    *value, remaining.substr(0U, separator));
+                remaining = separator == std::string_view::npos
+                    ? std::string_view { }
+                    : remaining.substr(separator + 1U);
+            }
+            return value;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<VhdlConstantValue>
     evaluate_vhdl_aggregate(const ExpressionId expression_id,
         const vhdl::SubtypeIndication& subtype)
@@ -3753,6 +3972,9 @@ private:
             || expression->vhdl->kind != vhdl::ExpressionKind::aggregate
             || expression->vhdl->associations.empty()) {
             return std::nullopt;
+        }
+        if (const auto* record = vhdl_record_definition(subtype)) {
+            return evaluate_vhdl_record_aggregate(*expression->vhdl, *record);
         }
         if (!vhdl_aggregate_uses_others(
                 expression->vhdl->associations.front())) {
@@ -5039,6 +5261,12 @@ private:
             }
             const auto left = static_cast<std::int64_t>(bits.size() - 1U);
             return vhdl_packed_value(std::move(bits), left, 0);
+        }
+        if (source.kind == Kind::name
+            && source.text.find('.') != std::string::npos) {
+            if (auto selected = evaluate_vhdl_selected_value(source)) {
+                return selected;
+            }
         }
         if (source.kind == Kind::name) {
             if ((!source.referenced_name
@@ -6773,6 +7001,12 @@ private:
                     return std::nullopt;
                 }
                 local_value = *initialized;
+            } else if (local_subtype
+                && vhdl_record_definition(*local_subtype) != nullptr) {
+                if (auto initialized = vhdl_default_record_value(
+                        *local_subtype)) {
+                    local_value = std::move(*initialized);
+                }
             }
             call_frames_.back().vhdl_values.insert_or_assign(
                 child, std::move(local_value));
@@ -6812,6 +7046,116 @@ private:
         }
         call_frames_.pop_back();
         return result;
+    }
+
+    /// The default value of a record: each element's leftmost value
+    /// (IEEE 1076-2008 6.4.2.3); nullopt when an element has none here.
+    [[nodiscard]] std::optional<VhdlConstantValue> vhdl_default_record_value(
+        const vhdl::SubtypeIndication& subtype)
+    {
+        const auto* record = vhdl_record_definition(subtype);
+        const auto owner = record != nullptr
+            ? unit_.find_declaration(record->declaration)
+            : std::nullopt;
+        if (record == nullptr || !owner || owner->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        VhdlConstantValue result;
+        result.kind = VhdlConstantValue::Kind::record;
+        result.record_type = record->id;
+        for (const auto& element : record->record_elements) {
+            const auto effective = CompiledDesignResolver { unit_ }
+                                       .effective_vhdl_subtype(
+                                           element.subtype,
+                                           owner->vhdl->scope)
+                                       .value_or(element.subtype);
+            if (vhdl_record_definition(effective) != nullptr) {
+                auto nested = vhdl_default_record_value(effective);
+                if (!nested) {
+                    return std::nullopt;
+                }
+                result.elements.push_back(std::move(*nested));
+            } else if (vhdl_array_element_subtype(effective)) {
+                auto array = vhdl_array_value(effective);
+                if (!array) {
+                    return std::nullopt;
+                }
+                result.elements.push_back(std::move(*array));
+            } else if (effective.domain == vhdl::ValueDomain::integer) {
+                const auto range = std::ranges::find_if(effective.constraints,
+                    [](const vhdl::RangeConstraint& constraint) {
+                        return constraint.kind
+                            == vhdl::RangeKind::discrete;
+                    });
+                const auto left = range != effective.constraints.end()
+                    ? (range->left ? range->left
+                            : range->left_expression
+                            ? evaluate(*range->left_expression)
+                            : std::nullopt)
+                    : std::optional<std::int64_t> {
+                          std::numeric_limits<std::int32_t>::min() };
+                if (!left) {
+                    return std::nullopt;
+                }
+                result.elements.push_back(vhdl_integer_value(*left));
+            } else {
+                return std::nullopt;
+            }
+        }
+        return result;
+    }
+
+    /// `v.e.f := x` for a record variable of this frame (IEEE 1076-2008
+    /// 10.6.2.1): a read-modify-write of the variable's value.
+    [[nodiscard]] bool assign_vhdl_record_element(
+        const vhdl::Expression& target, const VhdlConstantValue& value)
+    {
+        const std::string_view text { target.text };
+        const auto dot = text.find('.');
+        vhdl::Name root_name;
+        root_name.spelling = std::string { text.substr(0U, dot) };
+        const auto root = CompiledDesignResolver { unit_ }
+                              .resolve_vhdl(root_name, target.scope)
+                              .unique();
+        if (!root || call_frames_.empty()) {
+            return false;
+        }
+        const auto found = call_frames_.back().vhdl_values.find(*root);
+        if (found == call_frames_.back().vhdl_values.end()) {
+            return false;
+        }
+        auto updated = found->second;
+        auto* current = &updated;
+        auto remaining = text.substr(dot + 1U);
+        while (!remaining.empty()) {
+            if (current->kind != VhdlConstantValue::Kind::record) {
+                return false;
+            }
+            const auto separator = remaining.find('.');
+            const auto name = remaining.substr(0U, separator);
+            const auto type = unit_.find_type(current->record_type);
+            if (!type || type->vhdl == nullptr
+                || type->vhdl->record_elements.size()
+                    != current->elements.size()) {
+                return false;
+            }
+            const auto& elements = type->vhdl->record_elements;
+            const auto element = std::ranges::find_if(elements,
+                [&](const vhdl::RecordElement& candidate) {
+                    return support::equal_ignoring_ascii_case(
+                        std::string_view { candidate.name }, name);
+                });
+            if (element == elements.end()) {
+                return false;
+            }
+            current = &current->elements[static_cast<std::size_t>(
+                std::distance(elements.begin(), element))];
+            remaining = separator == std::string_view::npos
+                ? std::string_view { }
+                : remaining.substr(separator + 1U);
+        }
+        *current = value;
+        return assign_vhdl_name(*root, std::move(updated));
     }
 
     [[nodiscard]] bool assign_vhdl_name(
@@ -6861,6 +7205,12 @@ private:
             return false;
         }
         const auto& expression = *target->vhdl;
+        if (expression.kind == vhdl::ExpressionKind::name
+            && expression.text.find('.') != std::string::npos) {
+            if (assign_vhdl_record_element(expression, value)) {
+                return true;
+            }
+        }
         if (expression.kind == vhdl::ExpressionKind::name) {
             if (!expression.referenced_name
                 || !expression.referenced_name->selected) {
@@ -11702,6 +12052,20 @@ private:
                     }
                 }
             }
+            if constexpr (!systemverilog) {
+                // A character literal of a user enumeration type (resolved
+                // by its context, IEEE 1076-2008 9.3.2) is its position in
+                // that type, not a bit value. BIT, CHARACTER and the IEEE
+                // logic types keep their established encodings.
+                if (expression.kind == Kind::logic_literal
+                    && expression.resolved_type
+                    && expression.resolved_type->valid()) {
+                    if (const auto ordinal = vhdl_user_character_ordinal(
+                            *expression.resolved_type, expression.text)) {
+                        return ordinal;
+                    }
+                }
+            }
             if (literal || systemverilog
                 || expression.kind != Kind::logic_literal) {
                 return literal;
@@ -12766,6 +13130,46 @@ private:
             actual_declarations_.emplace(
                 actual->declaration, *actual->actual_declaration);
         }
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> vhdl_user_character_ordinal(
+        TypeId type_id, const std::string_view text) const
+    {
+        std::set<TypeId> visiting;
+        while (type_id.valid() && visiting.insert(type_id).second) {
+            const auto type = unit_.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            const auto& literals = type->vhdl->enumeration_literals;
+            // A subtype's literal list is not the base type's positions.
+            if (!literals.empty()
+                && type->vhdl->form == vhdl::TypeForm::enumeration) {
+                const auto spelled = [&](const std::size_t position,
+                                         const std::string_view spelling) {
+                    return position < literals.size()
+                        && literals[position].spelling == spelling;
+                };
+                // BIT-like types ('0', '1' first) and the IEEE logic types
+                // keep their encodings.
+                if ((spelled(0U, "'0'") && spelled(1U, "'1'"))
+                    || (spelled(0U, "'U'") && spelled(1U, "'X'")
+                        && spelled(2U, "'0'") && spelled(3U, "'1'"))
+                    || literals.size() > 64U) {
+                    return std::nullopt;
+                }
+                const auto found = std::ranges::find_if(literals,
+                    [&](const auto& literal) {
+                        return literal.spelling == text;
+                    });
+                return found != literals.end()
+                    ? std::optional { static_cast<std::int64_t>(
+                          found->ordinal) }
+                    : std::nullopt;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        return std::nullopt;
     }
 
     const SpecializedHirUnit& unit_;

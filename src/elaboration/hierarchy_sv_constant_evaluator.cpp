@@ -57,6 +57,37 @@ resolve_constant_name_declaration(
     if (selected
         && systemverilog_constant_declaration(
             specialization, *selected)) {
+        // A bind instance's actuals resolve as if the instantiation were in
+        // its target (IEEE 1800-2017 23.11): a constant linked in another
+        // unit yields to a same-named constant of the target.
+        const auto declaration = specialization.find_declaration(*selected);
+        const auto* scope = declaration && declaration->systemverilog != nullptr
+            ? specialization.design().find_scope(
+                  declaration->systemverilog->scope)
+            : nullptr;
+        if (scope != nullptr && scope->unit != specialization.unit()) {
+            if (const auto rebound
+                = semantic::CompiledDesignResolver { specialization }
+                      .resolve_systemverilog_constant(
+                          expression.text, specialization.scope(), false,
+                          expression.referenced_name
+                              ? expression.referenced_name->source_order
+                              : 0U)
+                      .unique();
+                rebound && *rebound != *selected) {
+                const auto target = specialization.find_declaration(
+                    *rebound);
+                const auto* target_scope = target
+                        && target->systemverilog != nullptr
+                    ? specialization.design().find_scope(
+                          target->systemverilog->scope)
+                    : nullptr;
+                if (target_scope != nullptr
+                    && target_scope->unit == specialization.unit()) {
+                    return rebound;
+                }
+            }
+        }
         return selected;
     }
 
@@ -4658,7 +4689,58 @@ private:
             if (!base) {
                 return false;
             }
-            if (record.kind == ExpressionKind::index
+            const auto shape = record.kind == ExpressionKind::index
+                    && record.operands.size() == 2U
+                ? packed_shape(record.operands.front())
+                : std::nullopt;
+            if (shape && shape->size() > 1U) {
+                // An index of a multidimensional packed array writes one
+                // element of its outermost dimension (IEEE 1800-2017 7.4.5).
+                std::uint64_t element_width = 1U;
+                std::uint64_t total_width = 1U;
+                for (std::size_t level = 0U; level < shape->size(); ++level) {
+                    const auto& [left, right] = (*shape)[level];
+                    const auto extent = static_cast<std::uint64_t>(
+                        std::max(left, right) - std::min(left, right) + 1);
+                    if (level != 0U) {
+                        element_width *= extent;
+                    }
+                    total_width *= extent;
+                }
+                if (total_width > maximum_constant_width) {
+                    return false;
+                }
+                const auto index = evaluate(record.operands.back());
+                const auto integer = index && index->known()
+                    ? index->integer_value() : std::nullopt;
+                const auto [left, right] = shape->front();
+                if (!integer || *integer < std::min(left, right)
+                    || *integer > std::max(left, right)) {
+                    return true;
+                }
+                if (base->packed.width() != total_width) {
+                    PackedLogic4 widened {
+                        static_cast<std::size_t>(total_width),
+                        base->domain == frontend::ValueDomain::Bit2
+                            ? Logic4::zero : Logic4::x };
+                    for (std::size_t bit = 0U; bit < base->packed.width()
+                        && bit < widened.width(); ++bit) {
+                        widened.set(bit, runtime::to_logic4(
+                            base->packed.get_logic9(bit)));
+                    }
+                    base->packed = std::move(widened);
+                    base->width = static_cast<std::uint32_t>(total_width);
+                    base->unsized = false;
+                }
+                const auto element = static_cast<std::uint64_t>(
+                    left >= right ? *integer - right : right - *integer);
+                for (std::uint64_t bit = 0U; bit < element_width; ++bit) {
+                    const auto state = bit < value.packed.width()
+                        ? runtime::to_logic4(value.packed.get_logic9(bit))
+                        : Logic4::zero;
+                    base->packed.set(element * element_width + bit, state);
+                }
+            } else if (record.kind == ExpressionKind::index
                 && record.operands.size() == 2U) {
                 const auto index = evaluate(record.operands.back());
                 const auto integer = index ? index->integer_value()

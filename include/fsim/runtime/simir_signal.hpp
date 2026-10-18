@@ -63,6 +63,10 @@ struct VhdlSignalResolver {
   // resolves k connected drivers (k below the driver count).
   std::uint8_t guarded_kind{};
   std::vector<VhdlResolverVariant> variants{};
+  // A port-association conversion (IEEE 1076-2008 6.5.7.1): the program
+  // reads these signals and runs, in the same simulation cycle, whenever
+  // one of them changes. Such a signal has no drivers of its own.
+  std::vector<SignalId> sources{};
 
   friend bool operator==(
       const VhdlSignalResolver&, const VhdlSignalResolver&) = default;

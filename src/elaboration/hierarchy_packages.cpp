@@ -17,6 +17,8 @@
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 
 #include <bit>
+#include <cstdlib>
+#include <iostream>
 #include <cctype>
 #include <charconv>
 #include <functional>
@@ -4125,25 +4127,36 @@ namespace {
                                     || range.right_expression);
                         });
                     if (constrained != subtype.constraints.end()) {
-                        auto left = constrained->left
-                            ? constrained->left
-                            : specialization.evaluate_integral_expression(
-                                  *constrained->left_expression);
-                        auto right = constrained->right
-                            ? constrained->right
-                            : specialization.evaluate_integral_expression(
-                                  *constrained->right_expression);
-                        if (!left && constrained->left_expression) {
+                        // A literal bound names a position of this
+                        // enumeration type; '0' is not the bit value 0
+                        // here (IEEE 1076-2008 5.2.2.1).
+                        std::optional<std::int64_t> left;
+                        if (constrained->left_expression) {
                             left = type_resolver
                                        .vhdl_enumeration_literal_ordinal(
                                            definition.id,
                                            *constrained->left_expression);
                         }
-                        if (!right && constrained->right_expression) {
+                        if (!left) {
+                            left = constrained->left;
+                        }
+                        if (!left && constrained->left_expression) {
+                            left = specialization.evaluate_integral_expression(
+                                *constrained->left_expression);
+                        }
+                        std::optional<std::int64_t> right;
+                        if (constrained->right_expression) {
                             right = type_resolver
                                         .vhdl_enumeration_literal_ordinal(
                                             definition.id,
                                             *constrained->right_expression);
+                        }
+                        if (!right) {
+                            right = constrained->right;
+                        }
+                        if (!right && constrained->right_expression) {
+                            right = specialization.evaluate_integral_expression(
+                                *constrained->right_expression);
                         }
                         if (left && right) {
                             result.enumeration_range
@@ -6998,6 +7011,33 @@ namespace {
         const auto resolve = [&](const auto& self,
                                  const semantic::vhdl::SubtypeIndication& input)
             -> std::optional<frontend::IntegerRange> {
+            // A character literal bound of a user enumeration evaluates to
+            // its position, which the frontend's folded bit value is not.
+            if (const auto literal_bounds = std::ranges::find_if(
+                    input.constraints,
+                    [&](const auto& range) {
+                        if (!range.left_expression || !range.right_expression) {
+                            return false;
+                        }
+                        const auto bound = specialization.find_expression(
+                            *range.left_expression);
+                        return bound && bound->vhdl != nullptr
+                            && bound->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::logic_literal;
+                    });
+                literal_bounds != input.constraints.end()) {
+                const semantic::CompiledDesignResolver resolver {
+                    specialization
+                };
+                const auto left = resolver.vhdl_enumeration_literal_ordinal(
+                    input.type_mark.target, *literal_bounds->left_expression);
+                const auto right = resolver.vhdl_enumeration_literal_ordinal(
+                    input.type_mark.target, *literal_bounds->right_expression);
+                if (left && right) {
+                    return frontend::IntegerRange {
+                        *left, *right, literal_bounds->descending };
+                }
+            }
             if (const auto range = compiled_integer_range(input)) {
                 return range;
             }
@@ -16943,6 +16983,24 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         }
         if (const auto actual = find_compiled_vhdl_signal(working_signals, actual_name)) {
             actual_signal = *actual;
+            // An out or inout port's default is its driver's initial value,
+            // so an unresolved actual it alone drives starts with it (IEEE
+            // 1076-2008 6.5.2, 14.7.3.4).
+            if (produces_output && formal_declaration.initializer
+                && *actual < design_.signals_.size()
+                && design_.signal_info_[*actual].resolution
+                    == ResolutionKind::none
+                && design_.signals_[*actual].initial_value.width() <= 64U) {
+                if (const auto value
+                    = child_interface_specialization
+                          .evaluate_integral_expression(
+                              *formal_declaration.initializer)) {
+                    auto& driven = design_.signals_[*actual];
+                    driven.initial_value = compiled_vhdl_integral_value(
+                        *value, design_.signal_info_[*actual].source_domain,
+                        driven.initial_value.width());
+                }
+            }
         }
     }
     if (!actual_signal && formal_declaration.subtype) {
@@ -17408,6 +17466,25 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     std::move(*lowered));
                 return true;
             };
+            // A conversion function or type conversion of a signal actual
+            // (IEEE 1076-2008 6.5.7.1) gives the formal its effective value
+            // in the same simulation cycle as the actual (14.7.3.3), unlike
+            // an expression actual's implicit signal assignment.
+            if (accepts_input && !produces_output && !value && !static_value
+                && lower_compiled_vhdl_input_conversion(actual_lowerer,
+                    port_actual_specialization, *binding.expression, id,
+                    working_path, formal_declaration.subtype,
+                    architecture)) {
+                record_lowering_census(vhdl_port_input_actual_occurrences_);
+                return CompiledVhdlPortActual {
+                    id,
+                    std::move(actual_hir_type_identity),
+                    std::move(actual_hir_type),
+                    std::move(actual_hir_subtype),
+                    std::move(actual_hir_declaration),
+                    std::move(actual_hir_scope),
+                };
+            }
             if (accepts_input && !value && !static_value) {
                 record_lowering_census(
                     vhdl_port_input_actual_occurrences_);
@@ -19117,6 +19194,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     && compiled_vhdl_name_equal(
                         existing.first, target_name);
             });
+        // An alias of an element or slice of an object keeps its target
+        // expression; each reference reads or writes that part of the
+        // object (IEEE 1076-2008 6.6.2).
+        if (target == working_signals.end() && declaration.initializer
+            && target_name.find('.') != std::string_view::npos) {
+            return true;
+        }
         if (target == working_signals.end()) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -19497,6 +19581,18 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         if (type_id) {
             return std::nullopt;
         }
+        // The predefined index subtypes of STD.STANDARD arrays such as
+        // BIT_VECTOR (NATURAL) and STRING (POSITIVE) are subtypes of INTEGER.
+        auto name = spelling;
+        if (const auto dot = name.find_last_of('.');
+            dot != std::string_view::npos) {
+            name.remove_prefix(dot + 1U);
+        }
+        if (compiled_vhdl_name_equal(name, "integer")
+            || compiled_vhdl_name_equal(name, "natural")
+            || compiled_vhdl_name_equal(name, "positive")) {
+            return std::string { "vhdl-builtin:integer" };
+        }
         return std::nullopt;
     };
     struct IndexSubtypeBounds {
@@ -19546,7 +19642,15 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             // A missing or ambiguous type is not evidence that the spelling
             // names a predefined scalar.  Keep unknown qualified and
             // competing imported names unsupported instead of collapsing
-            // them to a builtin base range by their final identifier.
+            // them to a builtin base range by their final identifier. The
+            // index subtype recorded for a STD.STANDARD array (BIT_VECTOR's
+            // NATURAL) is spelled without a declaration.
+            if (spelling.find('.') == std::string_view::npos
+                && (compiled_vhdl_name_equal(spelling, "natural")
+                    || compiled_vhdl_name_equal(spelling, "positive")
+                    || compiled_vhdl_name_equal(spelling, "integer"))) {
+                return predefined_base_bounds(spelling);
+            }
             return std::nullopt;
         }
         std::unordered_set<std::uint32_t> visiting;
@@ -19675,7 +19779,12 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             // an unknown qualified name or an ambiguous imported name; both
             // must remain unsupported instead of borrowing INTEGER/NATURAL/
             // POSITIVE bounds.  Standard bounds below are available only
-            // after the resolver identifies the retained STD.STANDARD type.
+            // after the resolver identifies the retained STD.STANDARD type,
+            // or for the unqualified index subtype spelling recorded for a
+            // builtin STD.STANDARD array such as BIT_VECTOR.
+            if (spelling.find('.') == std::string_view::npos) {
+                return predefined_bounds(spelling);
+            }
             return std::nullopt;
         }
 
@@ -19829,6 +19938,23 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         inherited_port_range = [&] (
         const semantic::vhdl::RangeConstraint& constraint)
         -> std::optional<semantic::vhdl::RangeConstraint> {
+        if (std::getenv("FSIM_VHDL_PORT_RANGE_TRACE") != nullptr) {
+            const auto text = [&](const std::optional<semantic::ExpressionId> id) {
+                const auto found = id
+                    ? working_specialization.find_expression(*id)
+                    : std::nullopt;
+                return found && found->vhdl != nullptr
+                    ? found->vhdl->text + "/" + std::to_string(
+                          static_cast<int>(found->vhdl->kind))
+                    : std::string { "-" };
+            };
+            std::cerr << "[fsim-vhdl-port-range] " << declaration.name
+                      << " kind=" << static_cast<int>(constraint.kind)
+                      << " from_bounds=" << constraint.direction_from_bounds
+                      << " left=" << text(constraint.left_expression)
+                      << " right=" << text(constraint.right_expression)
+                      << '\n';
+        }
         if (declaration.form != Form::signal || !declaration.subtype
             || declaration.subtype->constraints.size() != 1U
             || constraint.kind != semantic::vhdl::RangeKind::array_index
@@ -20398,7 +20524,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             }
             return static_cast<unsigned char>(initializer->vhdl->text[1]);
         }();
-        const auto value = character_literal
+        auto value = character_literal
             ? character_literal
             : working_specialization.evaluate_integral_expression(
                   *declaration.initializer);
@@ -20547,6 +20673,24 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 if (packed && packed->bits.size() == width) {
                     static_value = PackedLogic4::from_logic9_msb_string(
                         packed->bits);
+                }
+            }
+        }
+        // A static function call or other constant expression evaluates as
+        // a constant would (IEEE 1076-2008 6.4.2.3, 9.4.1).
+        if (!value && !static_value) {
+            if (const auto evaluated = working_specialization
+                    .evaluate_vhdl_constant_expression(
+                        *declaration.initializer)) {
+                if (const auto* packed = std::get_if<
+                        semantic::SpecializedHirVhdlPackedValue>(&*evaluated);
+                    packed != nullptr && packed->bits.size() == width) {
+                    static_value = PackedLogic4::from_logic9_msb_string(
+                        packed->bits);
+                } else if (const auto* integer
+                    = std::get_if<std::int64_t>(&*evaluated);
+                    integer != nullptr && width <= 64U && !real_subtype) {
+                    value = *integer;
                 }
             }
         }
@@ -20970,28 +21114,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                             const auto* package = find_unit(
                                 semantic::vhdl::UnitKind::package,
                                 library, parts[1]);
+                            // A `use lib.unit` naming another design
+                            // unit was checked when this unit was analyzed
+                            // (IEEE 1076-2008 12.4); that unit need not be
+                            // part of the elaborated closure.
                             if (package != nullptr) {
                                 validate_package(*package, item.source);
-                            } else if (compiled_vhdl_library_equal(
-                                           library, owner_library)
-                                && std::ranges::none_of(
-                                    compiled_->vhdl_units(),
-                                    [&](const semantic::vhdl::Unit& unit) {
-                                        return unit.primary_name.empty()
-                                            && compiled_vhdl_library_equal(
-                                                unit.library, library)
-                                            && compiled_vhdl_name_equal(
-                                                unit.name, parts[1]);
-                                    })) {
-                                // `use lib.unit` names a design unit of
-                                // the library (IEEE 1076-2008 12.4).
-                                report("FSIM-ELAB-PKG-001",
-                                    "use clause names '" + std::string { spelling }
-                                        + "', which is not a design unit of library '"
-                                        + std::string { library } + "'",
-                                    compiled_source_span(
-                                        *compiled_, item.source));
-                                valid = false;
                             }
                         }
                         continue;
@@ -27598,6 +27726,14 @@ bool HierarchyBuilder::lower_compiled_vhdl_unit_processes(
                               statement_id))) {
                       return false;
                   }
+                  // An output port's formal conversion drives its actual in
+                  // the same simulation cycle (IEEE 1076-2008 6.5.7.1,
+                  // 14.7.3.3).
+                  if (lower_compiled_vhdl_formal_conversion(
+                          lowerer, statement_id, path, owner)) {
+                      ++concurrent_order;
+                      continue;
+                  }
                   auto lowered = lower_cached_vhdl_occurrence(
                       entity, owner, specialized, lowerer,
                       statement_id, path, concurrent_order++);
@@ -30050,6 +30186,45 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 = signal->second < design_.signal_info_.size()
                 ? &design_.signal_info_[signal->second]
                 : nullptr;
+            // A port of an unconstrained array type takes its index ranges
+            // from the actual signal (IEEE 1076-2008 6.5.6.3).
+            if (actual_info != nullptr && actual_info->vhdl_array
+                && formal->subtype
+                && formal->subtype->constraints.empty()
+                && std::ranges::all_of(actual_info->vhdl_array->dimensions,
+                    [](const auto& dimension) {
+                        return dimension.range.has_value();
+                    })) {
+                const auto unconstrained_formal = compiled_vhdl_signal_type(
+                    materialization.specialization,
+                    *formal->subtype, formal->scope);
+                if (unconstrained_formal && unconstrained_formal->vhdl_array
+                    && unconstrained_formal->vhdl_array->unconstrained
+                    && unconstrained_formal->vhdl_array->dimensions.size()
+                        == actual_info->vhdl_array->dimensions.size()) {
+                    auto& stored = block_port_declarations[*formal_index];
+                    auto replacement = stored;
+                    for (const auto& dimension
+                        : actual_info->vhdl_array->dimensions) {
+                        semantic::vhdl::RangeConstraint constraint;
+                        constraint.kind
+                            = semantic::vhdl::RangeKind::array_index;
+                        constraint.left = dimension.range->left;
+                        constraint.right = dimension.range->right;
+                        constraint.descending = dimension.range->descending;
+                        constraint.null = dimension.null;
+                        replacement.subtype->constraints.push_back(
+                            constraint);
+                    }
+                    replacement.subtype->unconstrained = false;
+                    replacement.subtype->executable_width = actual_info->width;
+                    if (materialization.specialization.replace(replacement)) {
+                        stored = std::move(replacement);
+                        block_ports[*formal_index] = &stored;
+                        formal = &stored;
+                    }
+                }
+            }
             const auto formal_type = formal->subtype
                 ? compiled_vhdl_signal_type(
                       materialization.specialization,
@@ -30104,13 +30279,54 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             const auto& formal_nominal = formal_type
                 ? formal_type->nominal_type
                 : std::string { };
-            if (actual_info == nullptr || !formal_width
+            // A composite formal of the actual's nominal type takes the
+            // actual's layout; an unconstrained record or array formal has
+            // no layout of its own (IEEE 1076-2008 6.5.6.3).
+            const bool same_nominal_composite = actual_info != nullptr
+                && !formal_nominal.empty()
+                && formal_nominal == actual_info->nominal_type
+                && (!formal_width || *formal_width == actual_info->width)
+                && (!formal_width
+                    || (formal_type
+                        && (formal_type->vhdl_array
+                            || !formal_type->packed_members.empty())));
+            if (!same_nominal_composite
+                && (actual_info == nullptr || !formal_width
                 || *formal_width != actual_info->width
                 || formal_domain != actual_info->source_domain
                 || formal_signed != actual_info->is_signed
                 || !same_packed_range()
                 || (!formal_nominal.empty()
-                    && formal_nominal != actual_info->nominal_type)) {
+                    && formal_nominal != actual_info->nominal_type))) {
+                if (std::getenv("FSIM_VHDL_BLOCK_TRACE") != nullptr) {
+                    std::cerr << "[fsim-vhdl-block] port=" << formal->name
+                              << " actual_info=" << (actual_info != nullptr)
+                              << " formal_width="
+                              << (formal_width ? std::to_string(*formal_width)
+                                               : std::string { "none" })
+                              << " actual_width="
+                              << (actual_info ? actual_info->width : 0U)
+                              << " formal_domain="
+                              << static_cast<int>(formal_domain)
+                              << " actual_domain="
+                              << (actual_info ? static_cast<int>(
+                                      actual_info->source_domain) : -1)
+                              << " formal_signed=" << formal_signed
+                              << " actual_signed="
+                              << (actual_info && actual_info->is_signed)
+                              << " same_range=" << same_packed_range()
+                              << " formal_nominal=" << formal_nominal
+                              << " actual_nominal="
+                              << (actual_info ? actual_info->nominal_type
+                                              : std::string { })
+                              << " constraints="
+                              << (formal->subtype
+                                      ? formal->subtype->constraints.size()
+                                      : 0U)
+                              << " actual_array="
+                              << (actual_info && actual_info->vhdl_array)
+                              << '\n';
+                }
                 report(
                     "FSIM-ELAB-VHBLOCK-003",
                     "block port '" + formal->name

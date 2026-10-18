@@ -701,6 +701,20 @@ private:
     // collected there instead of lowered; with `only`, just those processes
     // are lowered (after the child instances exist, IEEE 1076-2008 8.7,
     // 14.5).
+    // Port-association conversions (IEEE 1076-2008 6.5.7.1) become
+    // conversion programs of their target signals, run in the same
+    // simulation cycle as their sources change. Each returns false when
+    // the occurrence is not such a conversion or cannot be lowered so.
+    bool lower_compiled_vhdl_formal_conversion(Lowerer& lowerer,
+        semantic::StatementId statement, std::string_view path,
+        const semantic::vhdl::Unit& owner);
+    bool lower_compiled_vhdl_input_conversion(Lowerer& lowerer,
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId actual, SignalId destination,
+        std::string_view path,
+        const std::optional<semantic::vhdl::SubtypeIndication>& context,
+        const semantic::vhdl::Unit& owner);
+
     bool lower_compiled_vhdl_unit_processes(
         const semantic::vhdl::Unit& entity,
         const semantic::vhdl::Unit& architecture,

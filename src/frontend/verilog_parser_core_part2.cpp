@@ -1386,6 +1386,55 @@ DesignUnit VerilogParser::parse_module(
             for (const auto& assignment : assignments) {
                 check_verilog_primitive_net_terminal(assignment.target,
                     unit.signals, assign_token, false, true);
+                // A continuous assignment to a variable takes only the
+                // default drive strength (IEEE 1800-2017 10.3.4, 6.5).
+                if (assignment.verilog_drive_strength
+                    && (assignment.verilog_drive_strength->zero
+                            != VerilogStrength::Strong
+                        || assignment.verilog_drive_strength->one
+                            != VerilogStrength::Strong)) {
+                    std::vector<const Expression*> pending {
+                        &assignment.target };
+                    while (!pending.empty()) {
+                        const auto* target = pending.back();
+                        pending.pop_back();
+                        if (target->kind == ExpressionKind::Concatenation) {
+                            for (const auto& operand : target->operands) {
+                                pending.push_back(&operand);
+                            }
+                            continue;
+                        }
+                        while ((target->kind == ExpressionKind::Index
+                                   || target->kind == ExpressionKind::Slice)
+                            && !target->operands.empty()) {
+                            target = &target->operands.front();
+                        }
+                        if (target->kind != ExpressionKind::Identifier) {
+                            continue;
+                        }
+                        const auto signal = std::ranges::find_if(
+                            unit.signals, [&](const SignalDeclaration& candidate) {
+                                return candidate.name == target->text;
+                            });
+                        if (signal == unit.signals.end()
+                            || !signal->type.systemverilog_net_type.empty()) {
+                            continue;
+                        }
+                        const auto spelling
+                            = detail::ascii_lower(signal->type.spelling);
+                        if (spelling == "reg" || spelling == "integer"
+                            || spelling == "time" || spelling == "real"
+                            || spelling == "realtime" || spelling == "logic"
+                            || spelling == "bit" || spelling == "int"
+                            || spelling == "byte" || spelling == "shortint"
+                            || spelling == "longint") {
+                            error(assign_token, "FSIM-SV-SEM-412",
+                                "a continuous assignment with a drive "
+                                "strength must target a net, not variable '"
+                                    + target->text + "'");
+                        }
+                    }
+                }
             }
             unit.concurrent_statements.insert(
                 unit.concurrent_statements.end(),

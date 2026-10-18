@@ -176,4 +176,136 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
     }
 }
 
+namespace {
+
+// A static name of a subelement or slice of a signal (IEEE 1076-2008 8.1):
+// the formal is associated with that part of the actual signal itself.
+bool vhdl_static_signal_name(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId actual, const std::size_t depth = 0U)
+{
+    const auto expression = specialization.find_expression(actual);
+    if (!expression || expression->vhdl == nullptr || depth > 16U) {
+        return false;
+    }
+    const auto& source = *expression->vhdl;
+    using Kind = semantic::vhdl::ExpressionKind;
+    if (source.kind == Kind::name) {
+        return depth != 0U || source.text.find('.') != std::string::npos;
+    }
+    if ((source.kind != Kind::index && source.kind != Kind::slice)
+        || source.operands.size() < 2U) {
+        return false;
+    }
+    for (std::size_t index = 1U; index < source.operands.size(); ++index) {
+        const auto bound = specialization.find_expression(
+            source.operands[index]);
+        if (bound && bound->vhdl != nullptr
+            && bound->vhdl->kind == Kind::binary
+            && (bound->vhdl->text == "to" || bound->vhdl->text == "downto")
+            && bound->vhdl->operands.size() == 2U) {
+            if (!specialization.evaluate_integral_expression(
+                    bound->vhdl->operands[0])
+                || !specialization.evaluate_integral_expression(
+                    bound->vhdl->operands[1])) {
+                return false;
+            }
+            continue;
+        }
+        if (!specialization.evaluate_integral_expression(
+                source.operands[index])) {
+            return false;
+        }
+    }
+    return vhdl_static_signal_name(
+        specialization, source.operands.front(), depth + 1U);
+}
+
+bool vhdl_conversion_actual(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId actual)
+{
+    if (vhdl_static_signal_name(specialization, actual)) {
+        return true;
+    }
+    const auto expression = specialization.find_expression(actual);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->operands.size() != 1U
+        || expression->vhdl->text.starts_with('@')
+        || expression->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix)) {
+        return false;
+    }
+    const auto operand = specialization.find_expression(
+        expression->vhdl->operands.front());
+    return operand && operand->vhdl != nullptr
+        && operand->vhdl->kind == semantic::vhdl::ExpressionKind::name;
+}
+
+} // namespace
+
+bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
+    Lowerer& lowerer,
+    const semantic::StatementId statement,
+    const std::string_view path,
+    const semantic::vhdl::Unit& owner)
+{
+    auto conversion = lowerer.lower_hir_vhdl_formal_conversion(
+        statement, path);
+    // A resolved actual combines its port's converted value with its other
+    // sources through the resolution function; it keeps its driver.
+    if (!conversion
+        || design_.signals_[conversion->destination].vhdl_resolver
+        || design_.signals_[conversion->destination].resolution
+            != ResolutionKind::none) {
+        return false;
+    }
+    auto& program = conversion->conversion;
+    auto& process = program.program.process;
+    process.language_standard = owner.standard;
+    process.compatibility_profile = owner.compatibility_profile;
+    canonicalize_process_operations(process);
+    const auto process_id = process.id;
+    design_.append_process_record(std::move(process));
+    VhdlSignalResolver resolver {
+        process_id, program.program.input, program.program.output, { } };
+    resolver.sources = std::move(program.sources);
+    design_.signals_[conversion->destination].vhdl_resolver
+        = std::move(resolver);
+    return true;
+}
+
+bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
+    Lowerer& lowerer,
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId actual,
+    const SignalId destination,
+    const std::string_view path,
+    const std::optional<semantic::vhdl::SubtypeIndication>& context,
+    const semantic::vhdl::Unit& owner)
+{
+    if (!vhdl_conversion_actual(specialization, actual)
+        || destination >= design_.signals_.size()
+        || design_.signals_[destination].vhdl_resolver) {
+        return false;
+    }
+    auto program = lowerer.lower_hir_vhdl_conversion_program(
+        actual, destination, path, context);
+    if (!program) {
+        return false;
+    }
+    auto& process = program->program.process;
+    process.language_standard = owner.standard;
+    process.compatibility_profile = owner.compatibility_profile;
+    canonicalize_process_operations(process);
+    const auto process_id = process.id;
+    design_.append_process_record(std::move(process));
+    VhdlSignalResolver resolver {
+        process_id, program->program.input, program->program.output, { } };
+    resolver.sources = std::move(program->sources);
+    design_.signals_[destination].vhdl_resolver = std::move(resolver);
+    return true;
+}
+
 } // namespace fsim::elaboration

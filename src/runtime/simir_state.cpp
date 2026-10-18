@@ -4634,6 +4634,18 @@ void Interpreter::Impl::publish_value_change(
 {
     auto& signal = signals[signal_id];
     const auto& old_value = signal_last_values[signal_id];
+    // A port conversion reading this signal updates its target in the same
+    // simulation cycle (IEEE 1076-2008 14.7.3.3).
+    if (!vhdl_conversion_dependents.empty()) {
+        if (const auto found = vhdl_conversion_dependents.find(signal_id);
+            found != vhdl_conversion_dependents.end()) {
+            for (const auto target : found->second) {
+                if (pending_vhdl_resolution_set.insert(target).second) {
+                    pending_vhdl_resolutions.push_back(target);
+                }
+            }
+        }
+    }
     if (!state_prepared) {
         ++signal_value_revisions[signal_id];
         note_aggregate_leaf_current_change(signal_id);

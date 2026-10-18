@@ -1498,6 +1498,79 @@ class VhdlExecutableBuilder final {
         hir_.mutable_expressions().end(),
         std::make_move_iterator(indexed_prefixes.begin()),
         std::make_move_iterator(indexed_prefixes.end()));
+    // A discrete subtype name as the sole index is a slice over the
+    // subtype's range (IEEE 1076-2008 8.5): `v(idx)` is
+    // `v(idx'left to idx'right)` in the subtype's direction.
+    {
+      std::vector<vh::Expression> bounds;
+      for (auto& expression : hir_.mutable_expressions()) {
+        if (expression.kind != vh::ExpressionKind::index
+            || expression.operands.size() != 2U) {
+          continue;
+        }
+        const auto operand = std::ranges::find_if(hir_.expressions(),
+            [&](const vh::Expression& candidate) {
+              return candidate.id == expression.operands[1];
+            });
+        if (operand == hir_.expressions().end()
+            || operand->kind != vh::ExpressionKind::name
+            || !operand->referenced_name
+            || !operand->referenced_name->selected) {
+          continue;
+        }
+        const auto* declaration = find_declaration(
+            *operand->referenced_name->selected);
+        if (declaration == nullptr
+            || (declaration->form != vh::DeclarationForm::type
+                && declaration->form != vh::DeclarationForm::subtype)) {
+          continue;
+        }
+        // The direction of the subtype's own range, or of its type's.
+        std::optional<bool> descending;
+        if (declaration->subtype) {
+          for (const auto& constraint : declaration->subtype->constraints) {
+            if (constraint.kind == vh::RangeKind::discrete) {
+              descending = constraint.descending;
+            }
+          }
+        }
+        if (!descending) {
+          for (const auto& type : hir_.types()) {
+            if (type.declaration == declaration->id && type.scalar_range) {
+              descending = type.scalar_range->descending;
+            }
+          }
+        }
+        if (!descending) {
+          continue;
+        }
+        const auto operand_id = expression.operands[1];
+        const auto bound = [&](const std::string_view attribute) {
+          const auto bound_origin = origin(expression.source,
+              expression.origin, "VHDL subtype slice bound");
+          const auto bound_id = model_.add_expression_identity(
+              expression.scope, expression.source, bound_origin);
+          vh::Expression value;
+          value.id = bound_id;
+          value.scope = expression.scope;
+          value.kind = vh::ExpressionKind::call;
+          value.text = std::string { attribute };
+          value.source = expression.source;
+          value.origin = bound_origin;
+          value.operands.push_back(operand_id);
+          bounds.push_back(std::move(value));
+          return bound_id;
+        };
+        const auto left = bound("'left");
+        const auto right = bound("'right");
+        expression.kind = vh::ExpressionKind::slice;
+        expression.text = *descending ? "downto" : "to";
+        expression.operands = { expression.operands[0], left, right };
+      }
+      hir_.mutable_expressions().insert(hir_.mutable_expressions().end(),
+          std::make_move_iterator(bounds.begin()),
+          std::make_move_iterator(bounds.end()));
+    }
     const auto find_expression = [&](const semantic::ExpressionId id)
         -> const vh::Expression* {
       const auto found = std::ranges::find_if(

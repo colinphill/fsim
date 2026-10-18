@@ -1593,6 +1593,61 @@ bool Lowerer::lower_hir_force_release(
     auto constant_selection = hierarchical_element ? hierarchical_element
         : selected ? hir_constant_selection(target, hir_process_scope_)
                    : std::nullopt;
+    // `force va[0][1] = v` on a local fixed unpacked array: the bit lies in
+    // the selected element's slice of the array's packed storage, leftmost
+    // element most significant.
+    if (!hierarchical_element && constant_selection && selected) {
+        std::vector<semantic::ExpressionId> element_indices;
+        auto root = target_expression.operands.front();
+        for (;;) {
+            const auto nested = specialized_hir_unit_->find_expression(root);
+            if (!nested || nested->systemverilog == nullptr
+                || nested->systemverilog->kind
+                    != semantic::sv::ExpressionKind::index
+                || nested->systemverilog->operands.size() != 2U) {
+                break;
+            }
+            element_indices.insert(element_indices.begin(),
+                nested->systemverilog->operands[1]);
+            root = nested->systemverilog->operands.front();
+        }
+        const auto container = element_indices.empty()
+            ? std::nullopt
+            : hir_container_object_binding(root);
+        const auto* type = container ? container->type : nullptr;
+        if (type != nullptr && type->fixed && type->element_width != 0U
+            && type->dimensions.size() == element_indices.size()
+            && constant_selection->offset + constant_selection->width
+                <= type->element_width) {
+            std::uint64_t position { };
+            std::uint64_t count { 1U };
+            bool valid { true };
+            for (std::size_t dimension { };
+                dimension < element_indices.size(); ++dimension) {
+                const auto [left, right] = type->dimensions[dimension];
+                const auto chosen
+                    = hir_constant_integer(element_indices[dimension]);
+                const auto low = std::min(left, right);
+                const auto high = std::max(left, right);
+                if (!chosen || *chosen < low || *chosen > high) {
+                    valid = false;
+                    break;
+                }
+                const auto extent
+                    = static_cast<std::uint64_t>(high - low) + 1U;
+                position = position * extent
+                    + static_cast<std::uint64_t>(left <= right
+                            ? *chosen - left
+                            : left - *chosen);
+                count *= extent;
+            }
+            if (valid
+                && count * type->element_width == binding->width) {
+                constant_selection->offset += static_cast<std::size_t>(
+                    (count - 1U - position) * type->element_width);
+            }
+        }
+    }
     if (member) {
         if (member->offset
                 > std::numeric_limits<std::uint32_t>::max()
@@ -7056,7 +7111,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 binding.signal = *signal;
                 return binding;
             }
-            if (declaration) {
+            // A declaration of another scope (a generate block's object
+            // named hierarchically, `blk[0].mem[i]`) has no binding here.
+            if (declaration
+                && hir_runtime_binding(
+                    *declaration, hir_process_scope_, true)) {
                 return std::nullopt;
             }
             auto root = *target;
@@ -7080,8 +7139,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 || root_view->systemverilog->kind
                     != semantic::sv::ExpressionKind::name
                 || root_view->systemverilog->text.find('.')
-                    == std::string::npos
-                || hir_target_declaration(root)) {
+                    == std::string::npos) {
+                return std::nullopt;
+            }
+            if (const auto root_declaration = hir_target_declaration(root);
+                root_declaration
+                && hir_runtime_binding(
+                    *root_declaration, hir_process_scope_, true)) {
                 return std::nullopt;
             }
             return hir_direct_signal_binding(root);

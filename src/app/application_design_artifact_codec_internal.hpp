@@ -841,7 +841,7 @@ namespace codec_detail {
     {
         return std::tie(
             value.process, value.input, value.output, value.drivers,
-            value.guarded_kind, value.variants);
+            value.guarded_kind, value.variants, value.sources);
     }
 
     template <typename T>

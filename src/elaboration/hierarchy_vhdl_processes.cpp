@@ -88,6 +88,12 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             materialization.block_input_adapters) {
             record_lowering_census(
                 vhdl_generated_input_actual_occurrences_);
+            if (lower_compiled_vhdl_input_conversion(generated_lowerer,
+                    materialization.specialization, adapter.expression,
+                    adapter.destination, materialization.path,
+                    adapter.subtype, architecture)) {
+                continue;
+            }
             auto lowered = generated_lowerer.lower_hir_input_actual(
                 adapter.expression,
                 adapter.destination,
@@ -127,6 +133,11 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 return false;
             }
             record_lowering_census(vhdl_generated_concurrent_occurrences_);
+            if (lower_compiled_vhdl_formal_conversion(generated_lowerer,
+                    statement_id, materialization.path, architecture)) {
+                ++concurrent_order;
+                continue;
+            }
             const auto guard = materialization.region->kind
                     == semantic::vhdl::GenerateKind::block
                 ? materialization.region->condition

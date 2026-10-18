@@ -253,6 +253,93 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 70: VHDL port-association conversions, block-port shapes, triage closures
+
+Batch 70 implements steps 1 and 2 of `PORTCONV-PLAN-b69.md` and closes items
+from six new triage reports, `.local-artifacts/lrm-closure/triage/b70-*.md`.
+
+VHDL port associations (IEEE 1076-2008 6.5.6.3, 6.5.7.1, 14.7.3.3):
+- Each of these actuals now gives its formal the converted value in the same
+  simulation cycle, through a conversion program:
+  - a conversion function or type conversion of a signal (`f(s)`, `T(s)`);
+  - a static subelement or slice of a signal (`r.f`, `v(1 to 4)`);
+  - an output formal's conversion (`f(o) => s`) on an instance or a block
+    port map.
+- A conversion program is a resolver-style SimIR program. The runtime runs it
+  in the update phase whenever one of its source signals changes, and at
+  initialization. Resolved actuals keep the implicit-signal adapter.
+- A block port of an unconstrained array type takes the actual's index
+  ranges.
+- A composite block port of the actual's nominal type takes the actual's
+  layout.
+
+Other VHDL:
+- A qualified record aggregate (`T'(a, b, c)`) of a local record type (9.3.5).
+- Subtype index constraints (`a(T)`, tc1119/tc1126).
+- A user `bit_vector` type hides the predefined one (tc2436).
+- A `bus` signal formal (6.5.2).
+- Group templates from a package (6.9, 6.10).
+- Nested generic package instances bind their own generics (4.9).
+- Record-valued constants: generics, functions, locals and element
+  assignment (6.4.2.3).
+- An out port's default is the initial driving value of its actual
+  (14.7.3.4).
+- External names:
+  - an alias of an external name can be an assignment target;
+  - an absolute path starts at the root entity when a configuration is the
+    top;
+  - an unconstrained external subtype takes the object's shape (8.7).
+- An alias of a record element of a signal (6.6.2).
+- A character-literal bound of a user enumeration subtype (`range '0' to
+  '1'`) is the literal's position (5.2.2.1).
+- A signal initializer may call a static function.
+- `unaffected` in a conditional variable assignment (IEEE 1076-2019 10.6.3).
+- A package instance declared in an entity is visible in its architectures
+  (12.1).
+- `use lib.unit` may name a unit outside the elaborated closure; analysis
+  checks it (12.4).
+- An architecture of an entity with unconstrained array ports is not
+  analysis-elaborated on its own.
+- `slv(port'range)` for an unconstrained input port of a STD.STANDARD array
+  type.
+- The fixed-point and floating-point types are aggregate contexts (G.2, G.3).
+
+SystemVerilog:
+- Unqualified `srandom`, `get_randstate` and `set_randstate` in a class method
+  (18.13).
+- A static task called through a handle (8.10).
+- Continuous assignments that name a class scope are class-resolved
+  (`assign c = C#(3)::f(a);`).
+- String-keyed associative arrays held by an object can be read through a
+  handle (7.8.1).
+- A class-handle static cast (`Base'(x)`, 6.24.1).
+- A user type as a streaming slice size (11.4.14).
+- A function of a generate block called through an instance
+  (`s.blk.set()`, 23.6).
+- A local unpacked array element can be forced (10.6.2).
+- A string queue slice (7.10.1).
+- A class queue property initialized by a concatenation (10.10).
+- A constant function's element write of a multidimensional packed array
+  (13.4.3, 7.4.5).
+- A class extending a specialization with a class type actual is specialized
+  (8.25).
+- A base class's type parameter is substituted in derived-class property and
+  method-return types (8.25).
+- A continuous assignment with a non-default drive strength must target a net
+  (10.3.4).
+
+Measurement:
+- The six suites are running on the frozen `b70w1`, compared with Batch 69
+  (`b69w1`). The table will be added when the run completes.
+- Targeted reruns of the Batch 69 failures pass 50 more cases:
+  - 28 nvc;
+  - 9 VESTs;
+  - 12 Verilator, including t_bind2, t_interface_update and t_func_link;
+  - 1 ivtest, br_gh1222.
+- Known regression: nvc bounds22. It passed only because a delta-late port
+  adapter happened to trigger an assertion. The conversion program has no
+  check of an unconstrained function result's length.
+
 ### Batch 69: VHDL context-typed resolution, R2-SV array constants, access allocators, port expressions
 
 Batch 69 adds a design-wide VHDL resolution pass and finishes the R2-SV
@@ -337,8 +424,26 @@ Runner, out of scope (non-LRM expectations):
 Reverted after triage: per-element `'last_value` for composites. nvc
 signal22 and attr6 expect different behaviour; this is left open.
 
-Measurement: see the Batch 69 close notes below once the full run on the
-frozen `b69w1` completes.
+Measurement:
+- All six suites were run in full on the frozen `b69w1` and compared with
+  Batch 68 (`b68w1`): **51 new passes, no regressions**. ivtest
+  pow_reg_signed timed out while a build was running and passes on its own
+  in 49 s. ivtest param_string is now excluded.
+- The labelled ctest found three regressions and a stale diagnostic code.
+  They were fixed before the commit, after `b69w1` was frozen:
+  - the condition of a conditional expression is its first operand;
+  - slice actuals get the overload length check;
+  - `FSIM-SV-PP-025` is retired (2964 codes).
+  The labelled ctest then ends with 29 failures, two fewer than Batch 68.
+
+| Suite | Batch68 passes / in scope | Batch69 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2517 / 2570 | 2524 / 2572 | 254 |
+| sv-tests | 1440 / 1497 | 1440 / 1497 | 0 |
+| verilator | 1609 / 2134 | 1621 / 2124 | 291 |
+| vests | 3584 / 3646 | 3594 / 3646 | 2 |
+| nvc | 887 / 1260 | 907 / 1260 | 222 |
+| vhdl-compliance | 43 / 72 | 43 / 72 | 0 |
 
 ### Batch 68: R2-SV type operator and shared constant values, quick wins
 

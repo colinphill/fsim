@@ -365,6 +365,9 @@ SignalId Interpreter::add_signal(Signal signal)
     if (signal.vhdl_resolver) {
         // Each driver of a resolved VHDL signal starts at the signal's
         // initial value (IEEE 1076-2008 14.7.2).
+        for (const auto source : signal.vhdl_resolver->sources) {
+            impl_->vhdl_conversion_dependents[source].push_back(id);
+        }
         impl_->vhdl_resolvers.emplace(id, std::move(*signal.vhdl_resolver));
         impl_->vhdl_driver_initial_values.emplace(id, signal.initial_value);
     }

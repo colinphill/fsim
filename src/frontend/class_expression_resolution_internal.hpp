@@ -148,6 +148,13 @@ class Resolver final {
       Type type, const ClassSelection& selection);
   [[nodiscard]] Type canonicalize_selected_type(
       Type type, const Scope& scope) const;
+  // The actual of type parameter `named` of `owner` seen through a handle
+  // of `receiver`: the receiver's own actuals, a derived class's
+  // `extends owner #(...)` actuals, or the parameter default
+  // (IEEE 1800-2017 8.25, 8.13).
+  [[nodiscard]] std::optional<Type> class_type_parameter_actual(
+      const std::string& named, const SystemVerilogClassDeclaration& owner,
+      const Type& receiver, const Scope& scope) const;
   [[nodiscard]] std::optional<Type> resolve_class_scoped_type(
       const Type& type, const Scope& scope) const;
   [[nodiscard]] SystemVerilogClassMethod specialize_selected_method(

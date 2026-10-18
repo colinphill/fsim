@@ -2007,6 +2007,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // programs, last resolved values, and the signals whose drivers changed
     // since their resolver last ran.
     std::unordered_map<SignalId, VhdlSignalResolver> vhdl_resolvers;
+    // Signals whose port-association conversions read the key signal.
+    std::unordered_map<SignalId, std::vector<SignalId>>
+        vhdl_conversion_dependents;
     // Drivers of guarded signals disconnected by a null transaction
     // (IEEE 1076-2008 10.5.2.2); a later value reconnects them.
     std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;

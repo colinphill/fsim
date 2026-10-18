@@ -24,6 +24,8 @@
 #include "fsim/version.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <array>
 #include <fstream>
 #include <iterator>
@@ -1243,6 +1245,12 @@ std::optional<BuiltProject> load_design_artifact(
         : live_systemc->registries.front();
     auto compiled_class_specializations = semantic::sv::specialize_classes(
         *semantics, *constraint_hir);
+    if (std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr) {
+        for (const auto& error : compiled_class_specializations.errors) {
+            std::cerr << "[fsim-sv-class-spec] " << error.declaration_identity << ": "
+                      << error.message << '\n';
+        }
+    }
     auto built = BuiltProject {
         std::move(*runtime), std::move(*design_ir), std::move(*semantics),
         std::move(*constraint_hir), std::move(*vhdl_hir),

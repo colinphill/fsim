@@ -1838,13 +1838,24 @@ bool Lowerer::initialize_hir_declarations(
                         if (effective && !effective->constraints.empty()) {
                             const auto& constraint
                                 = effective->constraints.front();
-                            const auto left = constraint.left
-                                ? constraint.left
-                                : constraint.left_expression
-                                ? specialized_hir_unit_
-                                      ->evaluate_integral_expression(
-                                          *constraint.left_expression)
-                                : std::nullopt;
+                            // A character or identifier literal bound
+                            // (`range '0' to '1'`) names its position in
+                            // the enumeration type (IEEE 1076-2008 5.2.2).
+                            std::optional<std::int64_t> left;
+                            if (constraint.left_expression) {
+                                left = hir_resolver()
+                                           .vhdl_enumeration_literal_ordinal(
+                                               type_id,
+                                               *constraint.left_expression);
+                            }
+                            if (!left) {
+                                left = constraint.left;
+                            }
+                            if (!left && constraint.left_expression) {
+                                left = specialized_hir_unit_
+                                           ->evaluate_integral_expression(
+                                               *constraint.left_expression);
+                            }
                             if (left) {
                                 vhdl_enumeration_default = *left;
                             }
@@ -3088,6 +3099,116 @@ Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
         hir_vhdl_resolver_registers_->second };
 }
 
+std::optional<Lowerer::HirVhdlConversionProgram>
+Lowerer::lower_hir_vhdl_conversion_program(
+    const semantic::ExpressionId expression,
+    const SignalId destination,
+    const std::string_view hierarchy,
+    std::optional<semantic::vhdl::SubtypeIndication> vhdl_context)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    if (specialized_hir_unit_ == nullptr
+        || destination >= design_.signal_info_.size()) {
+        return std::nullopt;
+    }
+    const auto source = specialized_hir_unit_->find_expression(expression);
+    if (!source || source->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = source->vhdl->source;
+    description.scope = semantic::ScopeId { };
+    const auto& name = design_.signal_info_[destination].name;
+    description.name = "conversion_"
+        + name.substr(name.find_last_of('.') + 1U);
+    description.input_actual = expression;
+    description.input_actual_destination = destination;
+    description.input_actual_vhdl_context = std::move(vhdl_context);
+    description.input_actual_program = true;
+    description.kind = frontend::ProcessKind::VhdlProcess;
+    hir_vhdl_resolver_registers_.reset();
+    auto process = lower_hir_process_body(
+        description, frontend::Language::Vhdl2008, hierarchy);
+    if (!process || !hir_vhdl_resolver_registers_) {
+        return std::nullopt;
+    }
+    std::vector<SignalId> sources;
+    for (const auto& dependency : implicit_signal_dependencies_) {
+        if (std::ranges::find(sources, dependency.signal) == sources.end()) {
+            sources.push_back(dependency.signal);
+        }
+    }
+    if (sources.empty()) {
+        return std::nullopt;
+    }
+    // The runtime runs the program whenever a source changes; it is never
+    // scheduled itself.
+    process->initialize = false;
+    process->static_sensitivity.clear();
+    return HirVhdlConversionProgram {
+        HirVhdlResolverProgram { std::move(*process),
+            hir_vhdl_resolver_registers_->first,
+            hir_vhdl_resolver_registers_->second },
+        std::move(sources),
+    };
+}
+
+std::optional<Lowerer::HirVhdlFormalConversion>
+Lowerer::lower_hir_vhdl_formal_conversion(
+    const semantic::StatementId statement_id,
+    const std::string_view hierarchy)
+{
+    const auto statement = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_statement(statement_id)
+        : std::nullopt;
+    if (!statement || statement->vhdl == nullptr
+        || statement->vhdl->kind
+            != semantic::vhdl::StatementKind::signal_assignment
+        || !statement->vhdl->target) {
+        return std::nullopt;
+    }
+    const auto& input = *statement->vhdl;
+    const auto value = input.value
+        ? input.value
+        : input.waveform.size() == 1U && !input.waveform.front().delay
+        ? std::optional { input.waveform.front().value }
+        : std::nullopt;
+    const auto expression = value
+        ? specialized_hir_unit_->find_expression(*value)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto operand = specialized_hir_unit_->find_expression(
+        expression->vhdl->operands.front());
+    constexpr std::string_view implicit_prefix { "fsim__formal_conversion_" };
+    const auto target = specialized_hir_unit_->find_expression(*input.target);
+    if (!operand || operand->vhdl == nullptr
+        || operand->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || !input.label.starts_with(implicit_prefix)
+        || !target || target->vhdl == nullptr
+        || target->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto declaration = hir_target_declaration(*input.target);
+    const auto binding = declaration
+        ? hir_runtime_binding(*declaration, semantic::ScopeId { }, true)
+        : std::nullopt;
+    if (!binding || !binding->signal) {
+        return std::nullopt;
+    }
+    auto conversion = lower_hir_vhdl_conversion_program(
+        *value, *binding->signal, hierarchy, std::nullopt);
+    if (!conversion) {
+        return std::nullopt;
+    }
+    return HirVhdlFormalConversion { *binding->signal, std::move(*conversion) };
+}
+
 std::optional<Process> Lowerer::lower_hir_output_actual(
     const SignalId source,
     const semantic::ExpressionId expression,
@@ -4036,7 +4157,14 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     signal.integer_range->right),
             });
         }
-        if (description.input_actual_assignment_context) {
+        if (description.input_actual_program) {
+            const auto output = allocate_register(
+                signal.width, signal.source_domain);
+            process_.operations.emplace_back(CopyRegister {
+                output, *value });
+            hir_vhdl_resolver_registers_ = std::pair {
+                allocate_register(1U, frontend::ValueDomain::Bit2), output };
+        } else if (description.input_actual_assignment_context) {
             // Package declaration initializers are ordered startup actions:
             // publish the completed assignment into the startup baseline.
             process_.operations.emplace_back(WriteBlocking {
@@ -4051,7 +4179,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     : SignalUpdateDomain::generic,
             });
         }
-        record_readonly_signal_write(destination);
+        if (!description.input_actual_program) {
+            record_readonly_signal_write(destination);
+        }
     } else if (description.output_actual) {
         const auto source = *description.output_actual_source;
         const auto& signal = design_.signal_info_[source];
@@ -4625,7 +4755,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     std::optional<InstructionIndex> vhdl_trailing_wait;
     std::vector<Operation> process_termination;
     if (description.initial || description.final || executes_once
-        || description.vhdl_resolver) {
+        || description.vhdl_resolver || description.input_actual_program) {
         process_termination.emplace_back(Halt { });
     } else if (waits_before_first_execution
         || description.body_timed_always) {

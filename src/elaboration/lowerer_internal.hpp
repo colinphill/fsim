@@ -343,6 +343,27 @@ public:
     lower_hir_vhdl_resolver_process(SignalId signal,
         semantic::DeclarationId function, std::size_t driver_count,
         std::string_view hierarchy);
+    // A VHDL conversion of a port association (IEEE 1076-2008 6.5.7.1,
+    // 14.7.3): the program computes `destination`'s effective value from
+    // the signals it reads, in the same simulation cycle they change.
+    struct HirVhdlConversionProgram {
+        HirVhdlResolverProgram program;
+        std::vector<SignalId> sources;
+    };
+    [[nodiscard]] std::optional<HirVhdlConversionProgram>
+    lower_hir_vhdl_conversion_program(semantic::ExpressionId expression,
+        SignalId destination, std::string_view hierarchy,
+        std::optional<semantic::vhdl::SubtypeIndication> vhdl_context);
+    // The concurrent assignment the parser derives from an output port's
+    // formal conversion `f(formal) => actual`, as a conversion program of
+    // the actual signal.
+    struct HirVhdlFormalConversion {
+        SignalId destination { };
+        HirVhdlConversionProgram conversion;
+    };
+    [[nodiscard]] std::optional<HirVhdlFormalConversion>
+    lower_hir_vhdl_formal_conversion(semantic::StatementId statement,
+        std::string_view hierarchy);
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
 
@@ -482,6 +503,9 @@ private:
         std::optional<semantic::ExpressionId> input_actual;
         std::optional<SignalId> input_actual_destination;
         bool input_actual_assignment_context { };
+        // The input actual is a conversion program: its value goes to the
+        // resolver output register instead of an update of the destination.
+        bool input_actual_program { };
         std::optional<semantic::sv::TypeReference>
             input_actual_assignment_type;
         std::optional<semantic::vhdl::SubtypeIndication>

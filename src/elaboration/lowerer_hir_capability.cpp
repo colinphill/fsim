@@ -7058,9 +7058,10 @@ Lowerer::hir_container_object_binding(
     }
     const auto declaration_id = hir_referenced_declaration(
         expression_id);
-    if (!declaration_id) {
-        // A hierarchical name of another instance's unpacked array
-        // (`inst.mem`, IEEE 1800-2017 23.6).
+    // A hierarchical name of another instance's or generate block's
+    // unpacked array (`inst.mem`, `blk[0].mem`, IEEE 1800-2017 23.6).
+    const auto hierarchical_binding = [&]()
+        -> std::optional<HirContainerObjectBinding> {
         const auto expression = specialized_hir_unit_->find_expression(
             expression_id);
         if (!expression || expression->systemverilog == nullptr
@@ -7102,8 +7103,15 @@ Lowerer::hir_container_object_binding(
             lexical.resize(separator);
         }
         return std::nullopt;
+    };
+    if (!declaration_id) {
+        return hierarchical_binding();
     }
-    return hir_container_object_binding_for_declaration(*declaration_id);
+    if (auto binding
+        = hir_container_object_binding_for_declaration(*declaration_id)) {
+        return binding;
+    }
+    return hierarchical_binding();
 }
 
 std::optional<Lowerer::HirContainerObjectBinding>
@@ -8372,7 +8380,9 @@ Lowerer::hir_static_container_expression_type(
             base && base->type != nullptr && base->type->queue
             && (base->type->element_kind == ContainerElementKind::Packed
                 || base->type->element_kind
-                    == ContainerElementKind::Scalar)) {
+                    == ContainerElementKind::Scalar
+                || base->type->element_kind
+                    == ContainerElementKind::String)) {
             return *base->type;
         }
     }

@@ -3899,6 +3899,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         auto predefined_context = contextual_subtype != nullptr
             ? *contextual_subtype
             : *effective;
+        // A type mark retained only by spelling (a package subtype named in
+        // a callable-local declaration) resolves to its declaration first.
+        if (!predefined_context.type_mark.target.valid()
+            && effective->type_mark.target.valid()) {
+            predefined_context = *effective;
+        }
         auto spelling = std::string_view {
             predefined_context.type_mark.spelling
         };
@@ -3931,7 +3937,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             || same_vhdl_identifier(spelling, "std_logic_vector")
             || same_vhdl_identifier(spelling, "std_ulogic_vector")
             || same_vhdl_identifier(spelling, "signed")
-            || same_vhdl_identifier(spelling, "unsigned");
+            || same_vhdl_identifier(spelling, "unsigned")
+            // IEEE.FIXED_GENERIC_PKG and IEEE.FLOAT_GENERIC_PKG arrays of
+            // STD_ULOGIC (IEEE 1076-2008 G.2, G.3).
+            || same_vhdl_identifier(spelling, "unresolved_ufixed")
+            || same_vhdl_identifier(spelling, "unresolved_sfixed")
+            || same_vhdl_identifier(spelling, "unresolved_float")
+            || same_vhdl_identifier(spelling, "ufixed")
+            || same_vhdl_identifier(spelling, "sfixed")
+            || same_vhdl_identifier(spelling, "float");
         struct PredefinedElement {
             std::string_view array;
             std::string_view element;
@@ -5811,6 +5825,22 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     }
     const auto element_count
         = aggregate_expected_width / *element_width;
+    if (index_distance(*range->left, *range->right) + 1U
+        != element_count) {
+        // A context range taken from an unconstrained type's index subtype
+        // does not bound a named aggregate; its choices do (IEEE 1076-2008
+        // 9.3.3.3).
+        if (const auto named = hir_vhdl_named_aggregate_bounds(aggregate);
+            named
+            && index_distance(named->left, named->right) + 1U
+                == element_count) {
+            semantic::vhdl::RangeConstraint materialized;
+            materialized.left = named->left;
+            materialized.right = named->right;
+            resolved_range = std::move(materialized);
+            range = &*resolved_range;
+        }
+    }
     if (index_distance(*range->left, *range->right) + 1U
         != element_count) {
         report(
@@ -10460,6 +10490,17 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
         if (signal == design_.signal_by_name_.end()) {
             signal = design_.signal_by_name_.find(std::string { path });
         }
+        // An absolute pathname starts with the root design entity's simple
+        // name, also when a configuration names the root (8.7).
+        if (signal == design_.signal_by_name_.end() && absolute) {
+            const auto root_end = hierarchy_.find('.');
+            const auto path_rest = path.find('.');
+            if (path_rest != std::string_view::npos) {
+                signal = design_.signal_by_name_.find(
+                    hierarchy_.substr(0U, root_end)
+                    + std::string { path.substr(path_rest) });
+            }
+        }
     }
     const auto profile_domain
         = static_cast<frontend::ValueDomain>(declared_domain);
@@ -10468,11 +10509,33 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
         && width_parse.ptr == width_text.data() + width_text.size()
         && !domain_text.empty() && domain_parse.ec == std::errc { }
         && domain_parse.ptr == domain_text.data() + domain_text.size();
-    if (!valid_profile || signal == design_.signal_by_name_.end()
+    // An unconstrained array subtype (no static width, so no profile) takes
+    // the shape of the object denoted.
+    const bool unprofiled = !profile.starts_with(profile_prefix);
+    const bool declared_unconstrained = [&] {
+        if (external.operands.size() != 2U) {
+            return false;
+        }
+        const auto subtype_expression = specialized_hir_unit_->find_expression(
+            external.operands.back());
+        constexpr auto subtype_prefix = std::string_view { "@vhdl-subtype:" };
+        if (!subtype_expression || subtype_expression->vhdl == nullptr
+            || !subtype_expression->vhdl->text.starts_with(subtype_prefix)) {
+            return false;
+        }
+        semantic::vhdl::SubtypeIndication declared;
+        declared.type_mark.spelling
+            = subtype_expression->vhdl->text.substr(subtype_prefix.size());
+        const auto effective = hir_effective_vhdl_subtype(declared);
+        return effective && effective->unconstrained;
+    }();
+    if ((!valid_profile && !unprofiled)
+        || signal == design_.signal_by_name_.end()
         || signal->second >= design_.signal_info_.size()
-        || design_.signal_info_[signal->second].width != declared_width
-        || design_.signal_info_[signal->second].source_domain
-            != profile_domain) {
+        || (declared_width != 0U && !unprofiled && !declared_unconstrained
+            && (design_.signal_info_[signal->second].width != declared_width
+                || design_.signal_info_[signal->second].source_domain
+                    != profile_domain))) {
         report(
             "FSIM-ELAB-VHEXTERNAL-001",
             "VHDL external signal name does not match a bounded signal "
@@ -11087,9 +11150,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         auto width = runtime_width;
         const auto array_type = composite
             && composite->first == semantic::vhdl::TypeForm::array;
+        const auto record_type = composite
+            && composite->first == semantic::vhdl::TypeForm::record;
         if ((!width || (expected_width != 0U
                 && *width != expected_width))
-            && effective && (array_type || predefined_string_array)) {
+            && effective
+            && (array_type || record_type || predefined_string_array)) {
             if (runtime_width && *runtime_width == 0U) {
                 width = runtime_width;
             } else if (const auto subtype_width
@@ -11129,7 +11195,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && operand->vhdl->kind
                 == semantic::vhdl::ExpressionKind::aggregate
             && effective && has_expected_width
-            && (array_type || predefined_string_array)) {
+            && (array_type || record_type || predefined_string_array)) {
             return lower_hir_vhdl_aggregate(
                 operand_id, *width, &*effective);
         }
@@ -14184,7 +14250,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             const auto container = lower_hir_class_value_container(
                 access.operands[0], identity);
-            if (!container || container->container.type.string_indices
+            if (!container
                 || (container->container.type.element_kind
                         != ContainerElementKind::Packed
                     && container->container.type.element_kind
@@ -14192,8 +14258,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return std::nullopt;
             }
             const auto& type = container->container.type;
-            const auto index = lower_hir_expression(access.operands[1],
-                type.associative ? type.index_width : 32U);
+            // A string-keyed associative array is indexed by the string
+            // register (IEEE 1800-2017 7.8.1).
+            const auto index = type.string_indices
+                ? lower_hir_string_expression(access.operands[1])
+                : lower_hir_expression(access.operands[1],
+                      type.associative ? type.index_width : 32U);
             if (!index) {
                 return std::nullopt;
             }

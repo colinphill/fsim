@@ -967,6 +967,42 @@ private:
                     retained.kind = ActualKind::type;
                     retained.type = std::move(type_actual);
                     retained.expression.reset();
+                } else if (expression != nullptr
+                    && expression->kind == ExpressionKind::name) {
+                    // A class named as a type actual (`extends B#(tx)`) is
+                    // a class-handle type (IEEE 1800-2017 8.25).
+                    const auto owner_identity
+                        = class_declaration_identity(owner);
+                    const auto scope_end = owner_identity.rfind("::");
+                    const ClassDeclaration* named_class = scope_end
+                            != std::string::npos
+                        ? class_for(owner_identity.substr(0, scope_end)
+                              + "::" + expression->text)
+                        : nullptr;
+                    if (named_class == nullptr) {
+                        for (const auto& [candidate_identity, candidate] :
+                            classes_) {
+                            if (candidate->name != expression->text) {
+                                continue;
+                            }
+                            if (named_class != nullptr) {
+                                named_class = nullptr;
+                                break;
+                            }
+                            named_class = candidate;
+                        }
+                    }
+                    if (named_class != nullptr) {
+                        TypeReference type_actual;
+                        type_actual.value_form = TypeForm::class_handle;
+                        type_actual.class_identity
+                            = class_declaration_identity(*named_class);
+                        type_actual.target.source = expression->source;
+                        type_actual.target.spelling = expression->text;
+                        retained.kind = ActualKind::type;
+                        retained.type = std::move(type_actual);
+                        retained.expression.reset();
+                    }
                 }
             }
             if (actual.kind == ActualKind::expression

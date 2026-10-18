@@ -9,6 +9,7 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <iterator>
 #include <map>
@@ -446,6 +447,85 @@ namespace {
             const auto library = unit.library.empty()
                 ? std::string_view { "work" }
                 : std::string_view { unit.library };
+            // An unconstrained port takes its bounds from an actual
+            // (IEEE 1076-2008 6.5.6.3), which only a design that instantiates
+            // the entity supplies.
+            const auto unconstrained_port = std::ranges::any_of(
+                checked.vhdl_hir.units(), [&](const semantic::vhdl::Unit& entity) {
+                    if (entity.kind != semantic::vhdl::UnitKind::entity
+                        || entity.name != unit.primary_name) {
+                        return false;
+                    }
+                    return std::ranges::any_of(entity.declarations,
+                        [&](const semantic::DeclarationId id) {
+                            const auto& declarations
+                                = checked.vhdl_hir.declarations();
+                            const auto found = std::ranges::find(declarations,
+                                id, &semantic::vhdl::Declaration::id);
+                            if (found == declarations.end()
+                                || found->form
+                                    != semantic::vhdl::DeclarationForm::port
+                                || !found->subtype
+                                || !found->subtype->constraints.empty()) {
+                                return false;
+                            }
+                            if (found->subtype->unconstrained) {
+                                return true;
+                            }
+                            // Follow subtypes without constraints to an
+                            // unconstrained array type.
+                            const auto& types = checked.vhdl_hir.types();
+                            auto type_id = found->subtype->type_mark.target;
+                            if (!type_id.valid()) {
+                                auto spelling = std::string_view {
+                                    found->subtype->type_mark.spelling };
+                                if (const auto dot = spelling.find_last_of('.');
+                                    dot != std::string_view::npos) {
+                                    spelling.remove_prefix(dot + 1U);
+                                }
+                                static constexpr std::array<std::string_view, 10>
+                                    vectors { "std_logic_vector",
+                                        "std_ulogic_vector", "bit_vector",
+                                        "string", "signed", "unsigned",
+                                        "boolean_vector", "integer_vector",
+                                        "real_vector", "time_vector" };
+                                return std::ranges::any_of(vectors,
+                                    [&](const std::string_view name) {
+                                        return support::equal_ignoring_ascii_case(
+                                            spelling, name);
+                                    });
+                            }
+                            for (std::size_t depth = 0;
+                                 depth < 32U && type_id.valid(); ++depth) {
+                                const auto type = std::ranges::find(types,
+                                    type_id, &semantic::vhdl::TypeDefinition::id);
+                                if (type == types.end()) {
+                                    return false;
+                                }
+                                if (type->form == semantic::vhdl::TypeForm::array) {
+                                    return !type->array_dimensions.empty()
+                                        && std::ranges::all_of(
+                                            type->array_dimensions,
+                                            [](const auto& dimension) {
+                                                return dimension.unconstrained
+                                                    && !dimension.constraint;
+                                            });
+                                }
+                                if ((type->form
+                                        != semantic::vhdl::TypeForm::subtype
+                                    && type->form
+                                        != semantic::vhdl::TypeForm::alias)
+                                    || !type->base.constraints.empty()) {
+                                    return false;
+                                }
+                                type_id = type->base.type_mark.target;
+                            }
+                            return false;
+                        });
+                });
+            if (unconstrained_port) {
+                continue;
+            }
             const auto top = "vhdl:" + std::string { library } + "."
                 + support::encode_vhdl_identifier(
                     unit.primary_name, unit.extended_primary_name)

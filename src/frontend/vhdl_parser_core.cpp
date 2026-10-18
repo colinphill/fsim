@@ -1443,7 +1443,12 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             "the STD.REFLECTION " + simple_name + " type",
             "select VHDL-2019 or remove the reflection API use");
         type = *reflection;
-    } else if (simple_name == "bit" || simple_name == "bit_vector") {
+    } else if (simple_name == "bit"
+        || (simple_name == "bit_vector"
+            // A source type named BIT_VECTOR hides STD.STANDARD's
+            // (IEEE 1076-2008 12.3).
+            && !(spelling.find('.') == std::string::npos
+                && vhdl_source_declares_type(simple_name)))) {
         type.domain = ValueDomain::Bit2;
     } else if (simple_name == "std_logic" || simple_name == "std_logic_vector" || simple_name == "std_ulogic" || simple_name == "std_ulogic_vector") {
         type.domain = ValueDomain::Logic9;
