@@ -548,6 +548,22 @@ namespace codec_detail {
             return value >= runtime::simir::OutputFormat::binary
                 && value <= runtime::simir::OutputFormat::unformatted4;
         } else if constexpr (
+            std::same_as<T, runtime::simir::SvaKind>) {
+            return value >= runtime::simir::SvaKind::tick
+                && value <= runtime::simir::SvaKind::outcome;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::DynamicEventOperation>) {
+            return value >= runtime::simir::DynamicEventOperation::create
+                && value <= runtime::simir::DynamicEventOperation::triggered;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::VhdlShapedOperation>) {
+            return value >= runtime::simir::VhdlShapedOperation::create
+                && value <= runtime::simir::VhdlShapedOperation::append_packed;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::VhdlShapedAttribute>) {
+            return value >= runtime::simir::VhdlShapedAttribute::left
+                && value <= runtime::simir::VhdlShapedAttribute::ascending;
+        } else if constexpr (
             std::same_as<T, runtime::simir::StringMethodOperator>) {
             return value >= runtime::simir::StringMethodOperator::getc
                 && value
@@ -818,7 +834,8 @@ namespace codec_detail {
             value.string_elements,
             value.nested_elements,
             value.keys,
-            value.string_keys);
+            value.string_keys,
+            value.shape);
     }
 
     template <typename T>
@@ -1103,6 +1120,8 @@ namespace codec_detail {
                 static_cast<std::int64_t>(right)));
         }
         hasher.add_string(value.element_nominal_type);
+        hasher.add_bool(value.vhdl_shaped);
+        hasher.add_u64(value.vhdl_rank);
         hasher.add_u64(value.element_types.size());
         for (const auto& element_type : value.element_types) {
             append_process_layout_hash(hasher, element_type);

@@ -341,7 +341,9 @@ endmodule
     };
     assert(coverage("hit_check").passes == 1);
     assert(coverage("miss_check").failures == 1);
-    assert(coverage("unfinished_check").failures == 1);
+    // A sequence asserted without strong is weak (16.12.2): the attempt
+    // unfinished at $finish holds on the truncated trace.
+    assert(coverage("unfinished_check").vacuous == 1);
     assert(std::ranges::all_of(interpreted.coverage, [](const auto& value) {
         return value.attempts == 1;
     }));
@@ -356,7 +358,7 @@ endmodule
     }) == 1);
     auto outputs = interpreted.outputs;
     std::ranges::sort(outputs);
-    assert((outputs == std::vector<std::string> { "range end fail", "range miss fail", "range sequence pass" }));
+    assert((outputs == std::vector<std::string> { "range end pass", "range miss fail", "range sequence pass" }));
 }
 
 void test_scalar_sequence_combinators(const std::filesystem::path& directory)

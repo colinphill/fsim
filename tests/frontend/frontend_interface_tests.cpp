@@ -668,7 +668,8 @@ endmodule
         R"(module malformed_structure;
   sequence bad_header int value; 1; endsequence
   property bad_formals(, int value); 1; endproperty
-  checker bad_local; int = 1; endchecker
+  sequence bad_local; int = 1; 1; endsequence
+  checker bad_checker_local; int = 1; endchecker
 endmodule
 )",
         Language::SystemVerilog2017);
@@ -687,6 +688,12 @@ endmodule
                 malformed_structure.diagnostics,
                 [](const Diagnostic& diagnostic) {
                     return diagnostic.code == "FSIM-SV-PARSE-295";
+                })
+            // A checker variable is an ordinary data declaration (17.7).
+            && std::ranges::any_of(
+                malformed_structure.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PARSE-001";
                 }),
         "malformed assertion formal and local structure is diagnosed");
 
@@ -1131,7 +1138,7 @@ endmodule
         "malformed-sequence-structure.sv",
         R"(module malformed_sequence(input logic request);
   sequence bad_delay; request ## ; endsequence
-  sequence bad_element; ##1 request; endsequence
+  sequence bad_element; request ##1; endsequence
 endmodule
 )",
         Language::SystemVerilog2017);
@@ -1786,8 +1793,8 @@ endmodule
             [](const Diagnostic& diagnostic) {
                 return diagnostic.code == "FSIM-SV-SEM-201";
             })
-            == 1,
-        "unsupported executable property clock rejects exactly");
+            == 0,
+        "a property clock may be any event expression (16.5)");
 
     std::string resource_source {
         "module assertion_resource(input logic request);\n"

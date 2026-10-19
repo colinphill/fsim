@@ -1683,6 +1683,10 @@ template <typename Input>
             signal.skew = clocking_skew(
                 *input_signal.skew, scope, output.origin);
         }
+        if (input_signal.output_skew) {
+            signal.output_skew = clocking_skew(
+                *input_signal.output_skew, scope, output.origin);
+        }
         if (input_signal.expression) {
             signal.expression = expression(
                 *input_signal.expression, scope, output.origin);

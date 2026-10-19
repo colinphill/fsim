@@ -253,6 +253,118 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 75: VHDL shaped values, event handles, SVA monitor, clocking drives, forward hierarchical references
+
+Full run on the frozen `b74w1` (Batch 74, 1bcd447b), compared with Batch 73
+(`b73w1`):
+- New passes: Verilator 27, vests 6, nvc 12.
+- Losses: vests tc987/tc988 and Verilator t_constraint_dist_range timed out
+  under load. All three pass when rerun alone on `b74w1`.
+
+| Suite | Batch73 passes / in scope | Batch74 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2545 / 2565 | 2545 / 2564 | 262 |
+| sv-tests | 1441 / 1497 | 1441 / 1497 | 0 |
+| verilator | 1712 / 2076 | 1738 / 2071 | 344 |
+| vests | 3610 / 3646 | 3614 / 3646 | 2 |
+| nvc | 975 / 1245 | 987 / 1245 | 237 |
+| vhdl-compliance | 45 / 69 | 45 / 69 | 3 |
+
+Batch 75 is the architectural batch the owner asked for after Batch 74. It
+closes 52 corpus tests by targeted reruns (Verilator 32, nvc 15, vests 2,
+ivtest 2, sv-tests 1). The full six-suite run on the frozen `b75w1` is in
+progress; its table goes in the Batch 76 note. Plan and progress log:
+`.local-artifacts/lrm-closure/ARCH-PLAN-b75.md`; designs:
+`.local-artifacts/lrm-closure/triage/b75-*-design.md`.
+
+Per the owner, the 52 UVM sv-tests that fail on class-method lowering are
+parked until that project lands. `lrm_corpus.py run --parked FILE` records
+them as failures (stage `parked`) without running them, so tables stay
+comparable. The list is `.local-artifacts/lrm-closure/parked.tsv`.
+
+VHDL values whose bounds are known only at run time (R4):
+- A shaped value is a container register with one packed payload and a run-time
+  dope (`ContainerValue.shape`); one `VhdlShaped` operation creates, queries,
+  indexes, slices, compares and concatenates it. Codec schema 86.
+- Locals, constants and function results with non-static bounds, `'range`
+  loops over them, and aggregates whose context bounds are not static.
+- Access types designating unconstrained arrays have shaped heaps; `p.all`
+  and allocators with run-time bounds work (8.3, 9.3.7).
+- Signal initializers that do not fold run as a one-shot program at
+  elaboration. Local constants whose initializer does not fold keep the
+  value computed on entry (14.4.2.5).
+
+SystemVerilog event handles (R5):
+- Event locals and formals are 64-bit handles. `->e`, `@e` and
+  `e.triggered` work on handles through one `DynamicEvent` operation
+  (15.5).
+- A process whose event terms name no static signal lowers as
+  `always begin @(terms) body end`. Clocking events resolve through virtual
+  interfaces.
+
+Concurrent assertions (R8):
+- A property is parsed into one tree by the Table 16-3 precedence and
+  compiled to a plan (sequence matcher code plus property nodes). The
+  runtime monitor (`SvaOperation`, interpreter) runs every attempt. Its
+  outcomes drive the pass and fail actions and the coverage counters.
+  Properties with local variables, match items or several clocks still use
+  the old evaluator; `FSIM_SVA_TRACE=1` prints plans and fallback reasons.
+- `default disable iff` (16.15), with the innermost scope winning.
+  `$inferred_clock` and `$inferred_disable` (16.14.7).
+- Procedural concurrent assertions (16.14.6): the clock is inferred from
+  the always event control, and the assertion is enabled where the
+  statement executes.
+- `expect` (16.17) in processes and tasks.
+- Checker variables and procedures are instantiated per checker instance
+  (17.5, 17.7).
+- `@(e iff g)` waits for a true guard; x no longer triggers (9.4.2.3).
+- `$assertoff` stops new monitor attempts; running ones complete (20.12).
+- An `and` or `intersect` operand that can no longer match ends the
+  attempt, so `a within never` fails at once (16.9.5, 16.9.6).
+- At the end of simulation, an `s_nexttime` whose operand tick never came
+  fails (16.12.10). An attempt that holds on the truncated trace reports a
+  vacuous success, as the old evaluator did. A `cover sequence` attempt
+  that ends without a match counts as a failed attempt.
+- Unit tests updated to the LRM:
+  - an asserted sequence without `strong` is weak (16.12.2);
+  - both attempts of an unbounded `always` fail at the edge that
+    violates it;
+  - a property clock may be any event expression (16.5).
+
+Clocking blocks (14.3, 14.16):
+- A synchronous drive marks the clockvar's request pending. It matures
+  output-skew after the clocking event: at the next event, or at the current
+  one when that event has already happened in this time step. Previously a
+  zero-skew drive was an ordinary nonblocking assignment.
+- `input [skew] output [skew]` declares an inout clockvar with its own
+  skews. An inout clockvar samples with the default input skew.
+- A clockvar may name an expression (`input Q = {a, b}`, `output D =
+  {c, d}`).
+
+Hierarchical references (23.6, 23.8):
+- A process whose hierarchical name reaches an instance elaborated later
+  waits until an enclosing instance completes. Such instances include a
+  later sibling and an upward name through an ancestor. The process is then
+  lowered, or at the end of elaboration with an error if the name still does
+  not resolve.
+- The instance's specialization and materialization are kept alive for
+  that retry, together with its package-variable resolution.
+
+Out of scope (scripts/lrm_corpus.py):
+- Verilator t_udp_sequential: samples a UDP input that races a blocking
+  write at the same edge.
+- Verilator t_assert_pre: expects 6 pass actions where the LRM gives 9
+  (16.14.3).
+- Verilator t_sequence_within, t_property_range_ring,
+  t_property_until_implication, t_sequence_intersect_varlen,
+  t_cover_sequence and t_assert_disable_count: Verilator-specific attempt
+  counts.
+- The Verilator shell declares its clocks with an initial 0, as the C++
+  main sets them before the first evaluation (no time-0 edge).
+
+Labelled ctest: the same 28 known failures. The PSL release-closure digest in
+`docs/vhdl-psl-closure-audit.md` follows the catalog-count bump.
+
 ### Batch 74: class-property events, element members, VHDL attributes and aggregates, triage closures
 
 Full run on the frozen `b73w1` (Batch 73, 33a57ccb), compared with Batch 72

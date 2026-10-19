@@ -481,6 +481,7 @@ include/fsim/runtime/simir_signal_queries.hpp
 include/fsim/runtime/simir_specify.hpp
 include/fsim/runtime/simir_vital.hpp
 include/fsim/runtime/string_methods.hpp
+include/fsim/runtime/sva_engine.hpp
 include/fsim/runtime/svdpi_bridge.h
 include/fsim/runtime/systemverilog_chandle.hpp
 include/fsim/runtime/systemverilog_coverage_state.hpp
@@ -569,6 +570,7 @@ include/fsim/semantic/compiled_design_vhdl_resolution.hpp
 include/fsim/semantic/design_ir.hpp
 include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
+include/fsim/semantic/sva_plan.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/systemverilog_type_descriptor.hpp
@@ -1003,6 +1005,7 @@ src/elaboration/hierarchy_sv_type_layout_internal.hpp
 src/elaboration/hierarchy_systemc.cpp
 src/elaboration/hierarchy_udp.cpp
 src/elaboration/hierarchy_vhdl_associations.cpp
+src/elaboration/hierarchy_vhdl_elaboration_evaluation.cpp
 src/elaboration/hierarchy_vhdl_instance_worklist.cpp
 src/elaboration/hierarchy_vhdl_processes.cpp
 src/elaboration/hierarchy_vhdl_resolution.cpp
@@ -1020,11 +1023,13 @@ src/elaboration/lowerer_hir_let.cpp
 src/elaboration/lowerer_hir_math.cpp
 src/elaboration/lowerer_hir_process.cpp
 src/elaboration/lowerer_hir_statement.cpp
+src/elaboration/lowerer_hir_sva.cpp
 src/elaboration/lowerer_hir_synchronization.cpp
 src/elaboration/lowerer_hir_value_path.cpp
 src/elaboration/lowerer_hir_vhdl_access.cpp
 src/elaboration/lowerer_hir_vhdl_fixed.cpp
 src/elaboration/lowerer_hir_vhdl_float.cpp
+src/elaboration/lowerer_hir_vhdl_shaped.cpp
 src/elaboration/lowerer_hir_vhdl_special.cpp
 src/elaboration/lowerer_hir_vhdl_vital.cpp
 src/elaboration/lowerer_hir_vhdl_vital_delay.cpp
@@ -1121,6 +1126,7 @@ src/frontend/verilog_parser_randsequence.cpp
 src/frontend/verilog_parser_specify.cpp
 src/frontend/verilog_parser_standard_support.cpp
 src/frontend/verilog_parser_strength.cpp
+src/frontend/verilog_parser_sva.cpp
 src/frontend/verilog_parser_switch.cpp
 src/frontend/verilog_parser_types.cpp
 src/frontend/verilog_parser_udp.cpp
@@ -1227,6 +1233,7 @@ src/runtime/simir_container_helpers.hpp
 src/runtime/simir_container_values.cpp
 src/runtime/simir_containers.cpp
 src/runtime/simir_containers_part2.cpp
+src/runtime/simir_containers_shaped.cpp
 src/runtime/simir_coverage.cpp
 src/runtime/simir_driver_table.hpp
 src/runtime/simir_execution.cpp
@@ -1304,10 +1311,12 @@ src/runtime/simir_static_kernel_specialize.cpp
 src/runtime/simir_static_kernel_state.hpp
 src/runtime/simir_storage_census_internal.hpp
 src/runtime/simir_string_methods.cpp
+src/runtime/simir_sva.cpp
 src/runtime/simir_synchronization.cpp
 src/runtime/simir_systemverilog_wave.cpp
 src/runtime/simir_vital.cpp
 src/runtime/simir_vital_memory_path.cpp
+src/runtime/sva_engine.cpp
 src/runtime/svdpi.cpp
 src/runtime/systemverilog_chandle.cpp
 src/runtime/systemverilog_scalar.cpp
@@ -1419,6 +1428,7 @@ src/semantic/design_ir.cpp
 src/semantic/hierarchy_path.cpp
 src/semantic/integral_identity_memo.hpp
 src/semantic/model.cpp
+src/semantic/sva_plan.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
 src/semantic/systemverilog_type_descriptor.cpp

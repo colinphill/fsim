@@ -293,6 +293,48 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         return nullptr;
     }
 
+    const auto insert_heap = [&](ContainerType objects_type,
+                                 std::optional<HirVhdlShapedProfile> shaped)
+        -> HirVhdlAccessHeap* {
+        const auto maximum = std::min<std::uint64_t>(
+            maximum_container_elements(objects_type),
+            type.maximum_objects);
+        const auto objects = allocate_container_register(objects_type);
+        ContainerType ledger_type;
+        ledger_type.element_width = 1U;
+        ledger_type.two_state = true;
+        ledger_type.queue = true;
+        ledger_type.maximum_elements = std::min<std::uint64_t>(
+            maximum_container_elements(ledger_type),
+            std::numeric_limits<std::uint32_t>::max());
+        const auto ledger = allocate_container_register(ledger_type);
+        const auto [inserted, unused] = hir_vhdl_access_heaps_.emplace(
+            type.id.value(), HirVhdlAccessHeap {
+                objects, ledger, maximum, designated, std::move(shaped) });
+        (void)unused;
+        return &inserted->second;
+    };
+    // Objects of an unconstrained array type each keep their own bounds
+    // (IEEE 1076-2008 5.4.1, 9.3.7): the heap holds one shaped value per
+    // object.
+    if (!string_payload) {
+        if (auto profile = hir_vhdl_shaped_heap_profile(type)) {
+            if (const auto found = hir_vhdl_access_heaps_.find(
+                    type.id.value());
+                found != hir_vhdl_access_heaps_.end()) {
+                return &found->second;
+            }
+            ContainerType objects_type;
+            objects_type.element_kind = ContainerElementKind::Container;
+            objects_type.element_types = { profile->type };
+            objects_type.associative = true;
+            objects_type.index_width = 32U;
+            objects_type.two_state_indices = true;
+            objects_type.element_nominal_type = designated.type_mark.spelling;
+            return insert_heap(std::move(objects_type), std::move(profile));
+        }
+    }
+
     const auto normalize_range = [&](semantic::vhdl::RangeConstraint range)
         -> std::optional<semantic::vhdl::RangeConstraint> {
         if (range.kind != semantic::vhdl::RangeKind::array_index) {
@@ -928,23 +970,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     objects_type.index_width = 32U;
     objects_type.two_state_indices = true;
     objects_type.element_nominal_type = designated.type_mark.spelling;
-    const auto maximum = std::min<std::uint64_t>(
-        maximum_container_elements(objects_type),
-        type.maximum_objects);
-    const auto objects = allocate_container_register(objects_type);
-    ContainerType ledger_type;
-    ledger_type.element_width = 1U;
-    ledger_type.two_state = true;
-    ledger_type.queue = true;
-    ledger_type.maximum_elements = std::min<std::uint64_t>(
-        maximum_container_elements(ledger_type),
-        std::numeric_limits<std::uint32_t>::max());
-    const auto ledger = allocate_container_register(ledger_type);
-    const auto [inserted, unused] = hir_vhdl_access_heaps_.emplace(
-        type.id.value(), HirVhdlAccessHeap {
-            objects, ledger, maximum, designated });
-    (void)unused;
-    return &inserted->second;
+    return insert_heap(std::move(objects_type), std::nullopt);
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_object(
@@ -1486,6 +1512,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         if (heap == nullptr) {
             return std::nullopt;
         }
+        if (heap->shaped) {
+            return lower_hir_vhdl_shaped_allocator(
+                *heap, allocator_constraints, allocator_initializer, span);
+        }
         if (heap->designated_subtype.domain
             == semantic::vhdl::ValueDomain::string) {
             // Each STRING object has its own length. Its index range is
@@ -2026,6 +2056,11 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         *statement->vhdl->target);
     if (!target || target->vhdl == nullptr) {
         return false;
+    }
+    // An object of an unconstrained array type keeps its own bounds.
+    if (const auto shaped = lower_hir_vhdl_shaped_assignment(
+            *statement->vhdl->target, *statement->vhdl->value)) {
+        return *shaped;
     }
     if (const auto element = lower_hir_vhdl_access_element_assignment(
             *statement->vhdl->target, *statement->vhdl->value)) {

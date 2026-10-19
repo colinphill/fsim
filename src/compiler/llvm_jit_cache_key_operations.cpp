@@ -52,6 +52,7 @@ struct OperationCacheTraits;
     X(RandomDistribution, "RandomDistribution") \
     X(ScopeRandomize, "ScopeRandomize") \
     X(StochasticQueueOperation, "StochasticQueueOperation") \
+    X(SvaOperation, "SvaOperation") \
     X(VhdlEnvironmentTime, "VhdlEnvironmentTime") \
     X(ReadSignal, "ReadSignal") \
     X(SignalEvent, "SignalEvent") \
@@ -140,6 +141,7 @@ struct OperationCacheTraits;
     X(ContainerElementRead, "ContainerElementRead") \
     X(ContainerElementWrite, "ContainerElementWrite") \
     X(ContainerBitstream, "ContainerBitstream") \
+    X(VhdlShaped, "VhdlShaped") \
     X(VhdlEnvironmentDirectory, "VhdlEnvironmentDirectory") \
     X(VhdlEnvironmentGetCallPath, "VhdlEnvironmentGetCallPath") \
     X(PlaEvaluate, "PlaEvaluate") \
@@ -184,6 +186,7 @@ struct OperationCacheTraits;
     X(MailboxPut, "MailboxPut") \
     X(MailboxGet, "MailboxGet") \
     X(MailboxNum, "MailboxNum") \
+    X(DynamicEvent, "DynamicEvent") \
     X(SemaphoreCreate, "SemaphoreCreate") \
     X(SemaphoreGet, "SemaphoreGet") \
     X(SemaphorePut, "SemaphorePut") \
@@ -277,7 +280,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 197U);
+static_assert(operation_cache_tags.size() == 200U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 

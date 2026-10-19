@@ -1257,7 +1257,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-285` | error | Expected `;` after a clocking signal declaration. |
 | `FSIM-SV-PARSE-286` | error | Expected `endclocking` after a clocking block. |
 | `FSIM-SV-PARSE-287` | error | Expected `;` after default clocking skews. |
-| `FSIM-SV-PARSE-288` | error | Expected `;` after a default clocking declaration. |
+| `FSIM-SV-PARSE-288` | error | A default clocking or default disable iff declaration is malformed or lacks its `;`. |
 | `FSIM-SV-PARSE-289` | error | Expected `;` after a virtual-interface declaration. |
 | `FSIM-SV-PARSE-290` | error | Expected a sequence, property, or checker declaration/end-label name. |
 | `FSIM-SV-PARSE-291` | error | Expected `;` after a sequence, property, or checker declaration header. |
@@ -1834,6 +1834,7 @@ scheduler.
 | `FSIM-SV-SEM-420` | error | A foreach loop has more loop-variable positions than dimensions in its array (IEEE 1800-2017 12.7.3). |
 | `FSIM-SV-SEM-421` | error | A wildcard-imported identifier is referenced before a later conflicting declaration in the same scope. |
 | `FSIM-SV-SEM-422` | error | A Verilog (IEEE 1364-2005) function declares no input argument (IEEE 1364-2005 10.4.1). |
+| `FSIM-SV-SEM-423` | error | A design unit or generate block declares more than one `default disable iff` (IEEE 1800-2017 16.15). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -2099,7 +2100,6 @@ scheduler.
 | `FSIM-ELAB-SVFOREACH-003` | error | A `foreach` index is not a fresh name distinct from the collection. |
 | `FSIM-ELAB-SVFOREACH-004` | error | A `foreach` loop body attempts to assign its implicit read-only index. |
 | `FSIM-ELAB-SVEVENT-001` | error | A packed event expression has no readable signal dependencies. |
-| `FSIM-ELAB-SVEVENT-002` | error | Packed event-expression HIR is mixed with another event or timeout. |
 | `FSIM-ELAB-SVEVENT-003` | error | A packed event expression does not have an executable width from 1 through 64 bits. |
 | `FSIM-ELAB-SVEVENT-004` | error | A repeated event-control count is not an executable integral value. |
 | `FSIM-ELAB-SVEVENT-005` | error | A `wait_order` statement has no valid named-event operands. |
@@ -2803,6 +2803,7 @@ scheduler.
 | `FSIM-ELAB-SVSPEC-017` | error | A delayed timing-check reference or data terminal is not scalar. |
 | `FSIM-ELAB-SVSPEC-018` | error | A timing-check event-based or remain-active flag is not a static two-state value. |
 | `FSIM-ELAB-SVSPEC-019` | error | A controlled timing-check event lacks its required edge or contains an invalid scalar transition descriptor. |
+| `FSIM-ELAB-SVA-001` | error | A generated concurrent-property monitor call has malformed operands. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

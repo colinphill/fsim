@@ -349,6 +349,42 @@ class VerilogParser final : private detail::ParserBase {
   void parse_default_clocking(
       DesignUnit& unit,
       const Token& start);
+  // `default disable iff expression ;` (IEEE 1800-2017 16.15).
+  void parse_default_disable(
+      std::vector<Token>& condition,
+      const Token& start);
+  // Builds the process of a concurrent assertion directive whose property
+  // the concurrent-property monitor evaluates; false leaves the directive
+  // to the earlier evaluators.
+  // A concurrent property compiled for the concurrent-property monitor:
+  // its plan, the boolean guards and bound expressions the plan's tick
+  // samples, its clocking event and its disable condition.
+  struct SvaPrepared {
+      std::string plan;
+      std::vector<std::vector<Token>> guards;
+      std::vector<std::vector<Token>> bounds;
+      std::vector<Token> clock;
+      std::vector<Token> disable;
+  };
+  std::optional<SvaPrepared> prepare_sva_property(const DesignUnit& unit,
+      const SystemVerilogConcurrentAssertion& directive, std::string& reason);
+  // `$__fsim_sva_tick(site, plan, ...)` with the given start operand.
+  std::vector<Token> sva_tick_call(const SvaPrepared& prepared,
+      std::uint32_t site, std::span<const Token> start, const SourceSpan& span,
+      bool sampled = false);
+  // Replaces each `expect` statement of a scope's processes and tasks with
+  // the statements that evaluate its property (16.17).
+  void resolve_expect_statements(const DesignUnit& scope,
+      std::vector<Process>& processes,
+      std::vector<TaskDeclaration>& tasks);
+  bool resolve_sva_directive(DesignUnit& unit, std::size_t index);
+  // Moves the concurrent assertion statements of procedures to directives
+  // enabled by those procedures (IEEE 1800-2017 16.14.6).
+  void extract_procedural_assertions(
+      std::vector<Process>& processes,
+      std::vector<VariableDeclaration>& variables,
+      std::vector<SystemVerilogConcurrentAssertion>& directives,
+      std::vector<SystemVerilogAssertionDeclaration>& declarations);
 
   SystemVerilogClockingSkew parse_clocking_skew();
 
@@ -410,7 +446,8 @@ class VerilogParser final : private detail::ParserBase {
   SystemVerilogConcurrentAssertion parse_concurrent_assertion(
       const Token& start,
       SystemVerilogConcurrentAssertionKind kind,
-      std::optional<Token> label = std::nullopt);
+      std::optional<Token> label = std::nullopt,
+      bool expect = false);
 
   Statement parse_immediate_assertion(const Token& start);
 
@@ -843,9 +880,15 @@ class VerilogParser final : private detail::ParserBase {
       std::string_view text, const SourceSpan& span) const;
   std::optional<Statement> parse_generated_statement(
       std::vector<Token> tokens, const SourceSpan& span);
+  // Parses module items (variable declarations and procedures) from
+  // generated tokens into a unit.
+  void parse_generated_items(
+      std::vector<Token> tokens, const SourceSpan& span, DesignUnit& unit);
   std::vector<Token> balanced_tokens(TokenKind open, TokenKind close);
   // Rewritten randcase/randsequence blocks get distinct generated names.
   std::size_t generated_statement_counter_ {};
+  // The monitor sites of `expect` statements (16.17).
+  std::uint32_t expect_sites_ {};
   // Assignments nested in expressions (IEEE 1800-2017 11.3.6) run as
   // statements ahead of the statement that contains them.
   std::size_t statement_hoist_depth_ {};

@@ -557,6 +557,8 @@ struct GenerateBody {
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>
         systemverilog_concurrent_assertions;
+    // The innermost `default disable iff` condition of this block (16.15).
+    std::vector<Token> systemverilog_default_disable_tokens;
 };
 
 struct GenerateChoice {
@@ -650,6 +652,9 @@ struct SystemVerilogClockingSignal {
     std::string name;
     PortDirection direction { PortDirection::Unknown };
     std::optional<SystemVerilogClockingSkew> skew;
+    // `input [skew] output [skew]` declares an inout clockvar whose output
+    // skew is held here; `skew` is then its input skew (IEEE 1800-2017 14.3).
+    std::optional<SystemVerilogClockingSkew> output_skew;
     std::optional<Expression> expression;
     SourceSpan span;
 };
@@ -932,6 +937,11 @@ struct SystemVerilogAssertionDeclaration {
     // containing design-unit scope before ordinary assertion resolution.
     std::vector<SystemVerilogAssertionDeclaration> checker_declarations;
     std::vector<SystemVerilogConcurrentAssertion> checker_assertions;
+    // A checker's variable declarations and procedures as source tokens,
+    // and the variables they declare (IEEE 1800-2017 17.7, 17.5): each
+    // instance re-parses them with its actuals and renamed variables.
+    std::vector<std::vector<Token>> checker_items;
+    std::vector<std::string> checker_variables;
     SourceSpan span;
 };
 
@@ -984,6 +994,14 @@ struct SystemVerilogConcurrentAssertion {
         SystemVerilogAssertionRegion::Reactive
     };
     SourceSpan span;
+    // A procedural assertion (16.14.6): the unit variable its procedure sets
+    // when it reaches the statement, and the clock inferred from the
+    // procedure's event control (16.14.5); empty for a directive.
+    std::string procedural_enable;
+    std::vector<Token> procedural_clock;
+    // An `expect` statement (16.17): it blocks its procedure until its one
+    // attempt completes.
+    bool expect_statement { };
 };
 
 struct SystemVerilogCheckerConnection {
@@ -1607,6 +1625,8 @@ struct DesignUnit {
     std::vector<SystemVerilogClockingBlock> systemverilog_clocking_blocks;
     std::optional<std::string> systemverilog_default_clocking_block;
     SourceSpan systemverilog_default_clocking_span;
+    // The condition of `default disable iff` (16.15), empty when absent.
+    std::vector<Token> systemverilog_default_disable_tokens;
     std::vector<SystemVerilogAssertionDeclaration>
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>

@@ -1079,7 +1079,8 @@ void lower_suffix_operation(
                         FSIM_JIT_FRAME_STATE_READY_V2,
                         next_instruction);
                 } else if constexpr (
-                    std::is_same_v<OperationType, StochasticQueueOperation>) {
+                    std::is_same_v<OperationType, StochasticQueueOperation>
+                    || std::is_same_v<OperationType, SvaOperation>) {
                     return_result(
                         FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
                         instruction,
@@ -1341,6 +1342,7 @@ void lower_suffix_operation(
                     || std::is_same_v<OperationType, MailboxPut>
                     || std::is_same_v<OperationType, MailboxGet>
                     || std::is_same_v<OperationType, MailboxNum>
+                    || std::is_same_v<OperationType, DynamicEvent>
                     || std::is_same_v<OperationType, SemaphoreCreate>
                     || std::is_same_v<OperationType, SemaphoreGet>
                     || std::is_same_v<OperationType, SemaphorePut>) {

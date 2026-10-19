@@ -11189,12 +11189,58 @@ private:
                             && dimension.maximum.has_value();
                     });
         };
+        // An object declared with index constraints is constrained even
+        // when its bounds are known only when it is elaborated (IEEE
+        // 1076-2008 5.3.2.2, 6.4.2.1).
+        const auto constrained_object_prefix = [&] {
+            const auto prefix_expression = specialization_.find_expression(
+                expression.operands.front());
+            if (!prefix_expression || prefix_expression->vhdl == nullptr
+                || prefix_expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::name
+                || !prefix_expression->vhdl->referenced_name
+                || !prefix_expression->vhdl->referenced_name->selected) {
+                return false;
+            }
+            const auto object = specialization_.find_declaration(
+                *prefix_expression->vhdl->referenced_name->selected);
+            if (!object || object->vhdl == nullptr || !object->vhdl->subtype
+                || (object->vhdl->form != semantic::vhdl::DeclarationForm::variable
+                    && object->vhdl->form
+                        != semantic::vhdl::DeclarationForm::constant
+                    && object->vhdl->form
+                        != semantic::vhdl::DeclarationForm::signal)) {
+                return false;
+            }
+            auto current = *object->vhdl->subtype;
+            for (std::size_t depth { }; depth < 16U; ++depth) {
+                const auto constraints = std::ranges::count_if(
+                    current.constraints, [](const RangeConstraint& range) {
+                        return range.kind == RangeKind::array_index;
+                    });
+                if (constraints != 0) {
+                    return static_cast<std::size_t>(constraints)
+                        == prefix_profile.dimensions.size();
+                }
+                const auto* definition = current.type_mark.target.valid()
+                    ? type_definition(current.type_mark.target)
+                    : nullptr;
+                if (definition == nullptr
+                    || (definition->form != TypeForm::subtype
+                        && definition->form != TypeForm::alias)) {
+                    return false;
+                }
+                current = definition->base;
+            }
+            return false;
+        };
         const auto contextual_result
             = prefix_profile.kind == ProfileKind::array
             && (contextual_result_prefix(
                     expression.operands.front(), *prefix)
                 || interface_prefix()
-                || entity_generic_actual_prefix());
+                || entity_generic_actual_prefix()
+                || constrained_object_prefix());
         if (prefix_profile.kind == ProfileKind::record
             || std::ranges::any_of(
                 prefix_profile.dimensions,

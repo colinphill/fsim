@@ -830,6 +830,12 @@ struct Simulation::Impl {
 
     std::map<runtime::simir::ProcessId, PendingConcurrentAssertion>
         pending_concurrent_assertions;
+    // The end-of-simulation failure actions of each concurrent-property
+    // monitor process, keyed by design process.
+    std::map<runtime::simir::ProcessId, PendingConcurrentAssertion>
+        sva_obligations;
+    std::map<runtime::simir::ProcessId, PendingConcurrentAssertion>
+        sva_vacuous_obligations;
 
     bool concurrent_assertions_enabled { true };
 

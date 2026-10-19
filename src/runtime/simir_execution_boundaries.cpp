@@ -855,6 +855,11 @@ void Interpreter::Impl::handle_boundary(
         execute_stochastic_queue(process, *queue);
         return;
     }
+    if (const auto* sva
+        = fsim::runtime::simir::operation_get_if<SvaOperation>(&operation)) {
+        execute_sva(process, *sva);
+        return;
+    }
     if (const auto* pla
         = fsim::runtime::simir::operation_get_if<PlaEvaluate>(&operation)) {
         execute_pla(process, *pla);

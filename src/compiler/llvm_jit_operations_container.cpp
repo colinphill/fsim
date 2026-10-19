@@ -574,6 +574,12 @@ void ContainerOperationLowerer::lower(
         "bit-stream container operations are interpreter-only");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::VhdlShaped&)
+{
+    throw LlvmJitUnsupportedError(
+        "VHDL shaped array operations are interpreter-only");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerAggregateRead& value)
 {
     invoke(

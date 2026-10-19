@@ -687,6 +687,22 @@ void validate_prefix_operation(
                         input(*operation.statistic_code);
                         output(*operation.statistic_value);
                     }
+                } else if constexpr (
+                    std::is_same_v<OperationType, SvaOperation>) {
+                    if (operation.kind == SvaKind::tick) {
+                        record_use(operation.guards, index);
+                        record_use(operation.start, index);
+                        record_use(operation.disabled, index);
+                        constrain_width(operation.start, 1U, index);
+                        constrain_width(operation.disabled, 1U, index);
+                        for (const auto bound : operation.bounds) {
+                            record_use(bound, index);
+                        }
+                    } else if (operation.kind != SvaKind::outcome) {
+                        reject(process, index, "SVA operation kind is invalid");
+                    }
+                    record_definition(operation.result, index);
+                    constrain_width(operation.result, 32U, index);
                 } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
                     result.uses_containers = true;
                     if (operation.input_width == 0U

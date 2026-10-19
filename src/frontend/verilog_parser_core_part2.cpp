@@ -1085,7 +1085,10 @@ DesignUnit VerilogParser::parse_module(
         } else if (match_keyword("default")) {
             module_has_non_time_item_ = true;
             const auto default_start = previous();
-            if (!match_keyword("clocking")) {
+            if (at(TokenKind::Identifier) && current().text == "disable") {
+                parse_default_disable(
+                    unit.systemverilog_default_disable_tokens, default_start);
+            } else if (!match_keyword("clocking")) {
                 error(
                     default_start,
                     "FSIM-SV-SEM-187",

@@ -86,6 +86,9 @@ class Case:
     # Why a failure of this case is outside the IEEE LRMs (another
     # simulator's extension); a failing run is recorded as a skip.
     out_of_scope: str | None = None
+    # Why a known failure is not run (`run --parked`); it is recorded as a
+    # failure without running.
+    parked: str | None = None
     timeout: float | None = None
     # Governed UVM release whose precompiled library the case maps (sv-tests).
     uvm_release: str | None = None
@@ -344,7 +347,10 @@ def verilator_shell(top_text: str, module: str = "t", shell: str = "top",
     # The C++ main only drives clk and fastclk; other inputs keep their reset
     # value, so the shell leaves them unconnected.
     inputs = sorted(name for name in inputs if name in ("clk", "fastclk"))
-    decls = "\n".join(f"    reg {name};" for name in inputs)
+    # The C++ main sets the clocks to 0 before its first evaluation, so they
+    # have no time-0 edge: a declaration initializer sets a variable before
+    # any process starts without an update event (IEEE 1800-2017 6.8).
+    decls = "\n".join(f"    reg {name} = 0;" for name in inputs)
     ports = "\n".join(("      " + ("," if i else "") + f".{name} ({name})")
                       for i, name in enumerate(inputs))
     init0 = "".join(f"        {n} = 0;\n" for n in ("fastclk", "clk") if n in inputs)
@@ -956,7 +962,28 @@ VERILATOR_NONSTANDARD = {
     "t_sys_fread": "reads a file the Verilator driver generates",
     "t_assert_nonconsec_rep": "expects Verilator's count; the case notes "
         "other simulators differ",
-    "t_assert_pre": "counts actions of a time-zero clock edge race",
+    "t_property_range_ring": "expects a consequent failure at the tick after "
+        "its last possible start; it fails when no match remains (IEEE "
+        "1800-2017 16.12.6)",
+    "t_property_until_implication": "counts failures once per cycle; each "
+        "attempt fails separately (IEEE 1800-2017 16.14.1)",
+    "t_sequence_intersect_varlen": "counts nonblocking increments of attempts "
+        "failing in one time step with Verilator's failure timing; an attempt "
+        "fails when no match remains (IEEE 1800-2017 16.9.6)",
+    "t_cover_sequence": "expects Verilator's extra end-of-match count; the "
+        "case notes other simulators count 95",
+    "t_assert_disable_count": "reads $inferred_disable in a procedural "
+        "expression; it is only a formal argument default (IEEE 1800-2017 "
+        "16.14.7)",
+    "t_sequence_within": "expects Verilator's match counts; the case notes "
+        "other simulators differ (vacuous successes run the pass action, "
+        "IEEE 1800-2017 16.14.1)",
+    "t_assert_pre": "expects 6 pass-action runs; two assert and one cover "
+        "property each succeed three times (IEEE 1800-2017 16.14.3)",
+    # The shell sets clk without a time-0 edge; at the first clock edge the
+    # UDP's sample of its data input races the blocking write (4.7).
+    "t_udp_sequential": "samples a UDP input that races a blocking write at "
+        "the same clock edge",
     **{name: "procedurally assigns an output port declared with an "
         "implicit data type, which is a net (IEEE 1800-2017 23.2.2.3)"
         for name in ("t_langext_2", "t_langext_4", "t_langext_2012ext",
@@ -1852,7 +1879,8 @@ def prepare_uvm_libraries(cases: list[Case], fsim: Path, root: Path, out: Path,
     """Compile each UVM release that the selected cases use once, into a
     library `uvm` that the cases map, instead of compiling uvm_pkg.sv with
     every test."""
-    releases = sorted({c.uvm_release for c in cases if c.uvm_release and not c.skip})
+    releases = sorted({c.uvm_release for c in cases
+                       if c.uvm_release and not c.skip and not c.parked})
     for release in releases:
         # Absolute: each case maps the library from its own working directory.
         workspace = (out / "shared" / f"uvm-{release}").resolve()
@@ -2219,6 +2247,9 @@ def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
     if case.skip:
         record.update(status="skip", detail=case.skip)
         return record
+    if case.parked:
+        record.update(status="fail", stage="parked", detail=f"parked: {case.parked}")
+        return record
     workdir.mkdir(parents=True, exist_ok=True)
     for source, destination in case.copies:
         if chain_outputs and destination in chain_outputs:
@@ -2386,6 +2417,15 @@ def select_cases(args) -> list[Case]:
                 continue
             wanted.add((record["suite"], record["id"]))
         cases = [c for c in cases if (c.suite, c.id) in wanted]
+    if getattr(args, "parked", None):
+        # Known failures that are not run: lines `suite/id<TAB>reason`.
+        parked = {}
+        for line in args.parked.read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                key, _, reason = line.partition("\t")
+                parked[key.strip()] = reason.strip() or "known failure"
+        for case in cases:
+            case.parked = parked.get(f"{case.suite}/{case.id}")
     file_chains = {
         case.chain for case in cases
         if case.chain and any(case.chain.startswith(prefix)
@@ -2540,6 +2580,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--out", type=Path)
     p_run.add_argument("--keep", action="store_true", help="keep passing workspaces")
     p_run.add_argument("-q", "--quiet", action="store_true")
+    p_run.add_argument("--parked", type=Path,
+                       help="file of `suite/id<TAB>reason` known failures to "
+                            "record as failures without running")
     p_run.add_argument("--rerun-from", type=Path,
                        help="results.jsonl whose non-passing cases to re-run")
     p_run.add_argument("--rerun-code",

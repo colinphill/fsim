@@ -180,6 +180,7 @@ namespace fsim::runtime::simir {
         || operation_holds<VhdlEnvironmentCallPath>(operation)
         || operation_holds<VhdlEnvironmentGetCallPath>(operation)
         || operation_holds<StochasticQueueOperation>(operation)
+        || operation_holds<SvaOperation>(operation)
         || operation_holds<PlaEvaluate>(operation)
         || operation_holds<RandomDistribution>(operation)
         || operation_holds<TimeFormatControl>(operation)
@@ -194,6 +195,7 @@ namespace fsim::runtime::simir {
         || operation_holds<MailboxPut>(operation)
         || operation_holds<MailboxGet>(operation)
         || operation_holds<MailboxNum>(operation)
+        || operation_holds<DynamicEvent>(operation)
         || operation_holds<SemaphoreCreate>(operation)
         || operation_holds<SemaphoreGet>(operation)
         || operation_holds<SemaphorePut>(operation);

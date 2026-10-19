@@ -5886,7 +5886,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         if (uniform_rows && *first_row_width != 0U) {
             element->executable_width = *first_row_width;
             element_width = *first_row_width;
-            if (open_array_element) {
+            // A sole non-static range choice takes its length from the
+            // context (9.3.3.3); it is checked when the choice is evaluated.
+            const bool contextual_length = (range == nullptr || range->null
+                    || !range->left || !range->right)
+                && dimensions.size() <= 1U
+                && hir_vhdl_single_dynamic_range_aggregate(aggregate)
+                && aggregate_expected_width % *first_row_width == 0U;
+            if (open_array_element && !contextual_length) {
                 if (range == nullptr || range->null || !range->left
                     || !range->right) {
                     report(
@@ -6026,6 +6033,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             static_cast<std::uint32_t>(aggregate_expected_width),
         });
         return destination;
+    }
+    // A context whose bounds are known only at run time (a slice with
+    // non-static bounds) still fixes the length; positional elements and
+    // `others` are placed by position (IEEE 1076-2008 9.3.3.3).
+    if ((range == nullptr || range->null || !range->left || !range->right)
+        && element && element_width && *element_width != 0U
+        && aggregate_expected_width % *element_width == 0U
+        && aggregate_expected_width / *element_width != 0U
+        && std::ranges::all_of(
+            aggregate.associations, [&](const auto& association) {
+                return association.positional()
+                    || (aggregate.associations.size() == 1U
+                        && normalized_vhdl_choice(
+                               association.choice_spelling)
+                            == "others");
+            })) {
+        semantic::vhdl::RangeConstraint materialized;
+        materialized.left = 0;
+        materialized.right = static_cast<std::int64_t>(
+            aggregate_expected_width / *element_width - 1U);
+        resolved_range = std::move(materialized);
+        range = &*resolved_range;
     }
     if (!element || !element_width || range == nullptr || range->null
         || !range->left || !range->right
@@ -9543,6 +9572,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const frontend::SystemVerilogScalarKind scalar_context,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context)
 {
+    if (hir_vhdl_shaped_active()) {
+        if (auto shaped = lower_hir_vhdl_shaped_expression(
+                expression_id, expected_width)) {
+            return *shaped;
+        }
+    }
     if (const auto captured
         = hir_captured_update_indices_.find(expression_id.value());
         captured != hir_captured_update_indices_.end()) {
@@ -15706,6 +15741,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::name
         && expression->systemverilog->text.ends_with(".triggered")) {
+        const auto& text = expression->systemverilog->text;
+        if (const auto handle = hir_systemverilog_event_handle(
+                std::string_view { text }.substr(
+                    0U, text.size() - std::string_view { ".triggered" }.size()),
+                expression->systemverilog->scope)) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(DynamicEvent {
+                DynamicEventOperation::triggered, destination, *handle,
+                false });
+            return expected_width > 1U
+                ? std::optional { resize_register(
+                      destination, expected_width, false) }
+                : std::optional { destination };
+        }
         const auto event = hir_systemverilog_event_signal(
             expression_id, hir_process_scope_);
         if (!event) {
@@ -16127,6 +16177,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(SystemCommand {
             command, destination });
         result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && (expression->systemverilog->text == "$__fsim_sva_tick"
+            || expression->systemverilog->text == "$__fsim_sva_outcome")) {
+        result = lower_hir_sva_call(*expression->systemverilog, expected_width);
+        if (!result) {
+            return std::nullopt;
+        }
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call

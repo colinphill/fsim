@@ -14343,6 +14343,124 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
         });
         clocking_processes.push_back(std::move(process));
     };
+    const auto add_clocking_flag = [&](const std::string& full_name)
+        -> std::optional<SignalId> {
+        if (design_.signals_.size()
+            >= std::numeric_limits<SignalId>::max()) {
+            return std::nullopt;
+        }
+        const auto id = static_cast<SignalId>(design_.signals_.size());
+        SignalInfo info;
+        info.id = id;
+        info.name = full_name;
+        info.width = 1U;
+        info.type_name = "bit";
+        info.source_domain = frontend::ValueDomain::Bit2;
+        design_.signal_info_.push_back(std::move(info));
+        design_.signals_.emplace_back(full_name,
+            PackedLogic4(1U, Logic4::zero),
+            runtime::simir::ResolutionKind::none,
+            runtime::simir::ValueKind::logic4);
+        design_.signal_by_name_.insert_or_assign(full_name, id);
+        return id;
+    };
+    // A synchronous drive (IEEE 1800-2017 14.16) writes the clockvar's
+    // request and marks it pending. The drive matures at the clocking event,
+    // output skew later: at the next event, or at the current one when it
+    // already occurred in this time step.
+    const auto add_clocking_drive_process = [&](const std::string& name,
+                                                const SignalId request,
+                                                const SignalId pending,
+                                                const SignalId destination,
+                                                const SignalId event,
+                                                const runtime::simir::EdgeKind
+                                                    edge,
+                                                const runtime::SimulationTick
+                                                    delay) {
+        using runtime::simir::Binary;
+        using runtime::simir::BinaryOperator;
+        using runtime::simir::Branch;
+        using runtime::simir::LoadConstant;
+        using runtime::simir::SignalLastEvent;
+        using runtime::simir::SignalUpdateDomain;
+        using runtime::simir::UnknownBranchPolicy;
+        using runtime::simir::WriteUpdate;
+        const auto event_width = design_.signal_info_[event].width;
+        Process process;
+        process.name = path + "." + name;
+        process.scheduling_domain
+            = runtime::simir::ProcessSchedulingDomain::systemverilog;
+        // 0 pending, 1 elapsed, 2 zero, 3 occurred, 4 clock, 5 level,
+        // 6 at level, 7 condition, 8 request value, 9 cleared.
+        process.register_count = 10U;
+        process.register_value_kinds = {
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(frontend::ValueDomain::Logic4),
+            value_kind(frontend::ValueDomain::Logic4),
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(frontend::ValueDomain::Bit2),
+            value_kind(design_.signal_info_[request].source_domain),
+            value_kind(frontend::ValueDomain::Bit2),
+        };
+        process.static_sensitivity.push_back({ event, edge });
+        process.static_sensitivity.push_back(
+            { pending, runtime::simir::EdgeKind::any });
+        process.initialize = true;
+        process.operations.emplace_back(WaitSensitivity { });
+        process.operations.emplace_back(ReadSignal { 0U, pending });
+        process.operations.emplace_back(Branch {
+            0U, 3U, 0U, UnknownBranchPolicy::when_false });
+        process.operations.emplace_back(SignalLastEvent { 1U, event });
+        process.operations.emplace_back(LoadConstant {
+            2U, unsigned_value(0U, 64U) });
+        process.operations.emplace_back(Binary {
+            BinaryOperator::equal, 3U, 1U, 2U });
+        runtime::simir::RegisterId condition = 3U;
+        if (edge != runtime::simir::EdgeKind::any) {
+            process.operations.emplace_back(ReadSignal { 4U, event });
+            process.operations.emplace_back(LoadConstant {
+                5U,
+                unsigned_value(
+                    edge == runtime::simir::EdgeKind::posedge ? 1U : 0U,
+                    event_width) });
+            process.operations.emplace_back(Binary {
+                BinaryOperator::case_equal, 6U, 4U, 5U });
+            process.operations.emplace_back(Binary {
+                BinaryOperator::bit_and, 7U, 3U, 6U });
+            condition = 7U;
+        }
+        const auto apply = static_cast<runtime::simir::InstructionIndex>(
+            process.operations.size() + 1U);
+        process.operations.emplace_back(Branch {
+            condition, apply, 0U, UnknownBranchPolicy::when_false });
+        process.operations.emplace_back(ReadSignal { 8U, request });
+        if (delay == 0U) {
+            process.operations.emplace_back(WriteUpdate {
+                destination, 8U, SignalUpdateDomain::systemverilog_nba });
+        } else {
+            process.operations.emplace_back(WriteAfter {
+                destination, 8U, delay,
+                SignalUpdateDomain::systemverilog_nba });
+        }
+        process.operations.emplace_back(LoadConstant {
+            9U, unsigned_value(0U, 1U) });
+        process.operations.emplace_back(WriteBlocking { pending, 9U });
+        process.operations.emplace_back(Jump { 0U });
+        for (const auto signal : { destination, pending }) {
+            process.driver_regions.push_back({
+                signal,
+                0U,
+                static_cast<std::uint32_t>(std::min<std::size_t>(
+                    design_.signal_info_[signal].width,
+                    std::numeric_limits<std::uint32_t>::max())),
+                true,
+            });
+        }
+        clocking_processes.push_back(std::move(process));
+    };
     if (!unit.clocking_blocks.empty()) {
         for (const auto& block : unit.clocking_blocks) {
             if (block.event.size() != 1U
@@ -14396,27 +14514,79 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                 }
                 const auto member_name = block.name + "."
                     + member.name.spelling;
-                const auto* selected_skew = member.skew
+                const bool drives
+                    = member.direction == semantic::sv::Direction::output
+                    || member.direction == semantic::sv::Direction::inout;
+                const bool samples
+                    = member.direction == semantic::sv::Direction::input
+                    || member.direction == semantic::sv::Direction::inout;
+                // `input [skew] output [skew]` keeps its input skew in
+                // `skew` and its output skew in `output_skew` (14.3).
+                const auto* input_skew
+                    = member.direction == semantic::sv::Direction::input
+                        && member.skew
                     ? &*member.skew
-                    : member.direction == semantic::sv::Direction::input
-                    ? block.default_input_skew
-                        ? &*block.default_input_skew
-                        : nullptr
-                    : member.direction
-                            == semantic::sv::Direction::output
-                        && block.default_output_skew
+                    : member.direction == semantic::sv::Direction::inout
+                        && member.skew
+                    ? &*member.skew
+                    : block.default_input_skew
+                    ? &*block.default_input_skew
+                    : nullptr;
+                const auto* output_skew
+                    = member.direction == semantic::sv::Direction::output
+                        && member.skew
+                    ? &*member.skew
+                    : member.direction == semantic::sv::Direction::inout
+                        && member.output_skew
+                    ? &*member.output_skew
+                    : block.default_output_skew
                     ? &*block.default_output_skew
                     : nullptr;
-                auto delay = clocking_delay(
-                    selected_skew, member_name);
+                if (drives) {
+                    const auto delay = clocking_delay(
+                        output_skew, member_name);
+                    if (!delay) {
+                        continue;
+                    }
+                    auto drive_edge = clocking_edge(
+                        block.event.front().edge);
+                    if (output_skew != nullptr
+                        && output_skew->edge
+                            != semantic::sv::EdgeKind::any) {
+                        drive_edge = clocking_edge(output_skew->edge);
+                    }
+                    // A drive writes the request; an inout clockvar's
+                    // name reads its sample (14.16).
+                    const auto request = add_clocking_signal(
+                        samples ? member_name + "$drive" : member_name,
+                        actual->second);
+                    const auto pending = request
+                        ? add_clocking_flag(
+                              design_.signal_info_[*request].name
+                              + "$pending")
+                        : std::nullopt;
+                    if (!request || !pending) {
+                        continue;
+                    }
+                    add_clocking_drive_process(
+                        "$clocking$" + block.name + "$"
+                            + member.name.spelling + "$drive",
+                        *request,
+                        *pending,
+                        actual->second,
+                        event->second,
+                        drive_edge,
+                        *delay);
+                }
+                if (!samples) {
+                    continue;
+                }
+                auto delay = clocking_delay(input_skew, member_name);
                 if (!delay) {
                     continue;
                 }
-                if (member.direction
-                        == semantic::sv::Direction::input
-                    && (selected_skew == nullptr
-                        || selected_skew->one_step
-                        || !selected_skew->delay)) {
+                if (input_skew == nullptr || input_skew->one_step
+                    || !input_skew->delay) {
                     // SystemVerilog's default input skew is one time step.
                     // Keep the history signal one tick behind the event so
                     // an observed-region sample cannot see the active-region
@@ -14425,58 +14595,10 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                 }
                 auto selected_edge = clocking_edge(
                     block.event.front().edge);
-                if (selected_skew != nullptr
-                    && selected_skew->edge
+                if (input_skew != nullptr
+                    && input_skew->edge
                         != semantic::sv::EdgeKind::any) {
-                    selected_edge = clocking_edge(selected_skew->edge);
-                }
-                if (member.direction
-                        == semantic::sv::Direction::output
-                    && *delay != 0U) {
-                    const auto request = add_clocking_signal(
-                        member_name, actual->second);
-                    if (!request) {
-                        continue;
-                    }
-                    const bool edge_qualified
-                        = selected_skew != nullptr
-                        && selected_skew->edge
-                            != semantic::sv::EdgeKind::any;
-                    add_clocking_process(
-                        "$clocking$" + block.name + "$"
-                            + member.name.spelling + "$drive",
-                        *request,
-                        actual->second,
-                        edge_qualified ? event->second : *request,
-                        edge_qualified
-                            ? selected_edge
-                            : runtime::simir::EdgeKind::any,
-                        *delay,
-                        !edge_qualified,
-                        false);
-                    continue;
-                }
-                if (member.direction
-                    != semantic::sv::Direction::input) {
-                    const auto full_name = path + "." + member_name;
-                    signals.insert_or_assign(
-                        member_name, actual->second);
-                    signals.insert_or_assign(
-                        full_name, actual->second);
-                    design_.signal_by_name_.insert_or_assign(
-                        full_name, actual->second);
-                    // An inout clockvar reads its sample and drives the
-                    // signal (IEEE 1800-2017 14.3); keep the drive target
-                    // apart from the sampled copy registered below.
-                    if (member.direction
-                        == semantic::sv::Direction::inout) {
-                        design_.signal_by_name_.insert_or_assign(
-                            full_name + "$drive", actual->second);
-                    }
-                }
-                if (member.direction
-                    == semantic::sv::Direction::output) {
-                    continue;
+                    selected_edge = clocking_edge(input_skew->edge);
                 }
                 auto sample_source = actual->second;
                 if (*delay != 0U) {
@@ -14763,12 +14885,22 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     register_systemverilog_resolution_functions(unit);
     std::vector<CompiledSpecializationFailure>
         specialization_failures;
-    auto specialized = std::move(prepared_specialization);
+    // Heap-owned so a forward-deferred lowering below this instance keeps
+    // it alive past this frame.
+    const auto specialized_owner = std::make_shared<
+        std::optional<semantic::SpecializedHirUnit>>(
+        std::move(prepared_specialization));
+    auto& specialized = *specialized_owner;
     if (!specialized) {
         specialized = compiled_specialization(
             validated_compiled_, unit.id, actuals,
             &specialization_failures);
     }
+    systemverilog_specialization_owners_.push_back(specialized_owner);
+    struct SpecializationOwnerGuard {
+        std::vector<std::shared_ptr<const void>>& owners;
+        ~SpecializationOwnerGuard() { owners.pop_back(); }
+    } specialization_owner_guard { systemverilog_specialization_owners_ };
     for (const auto& failure : specialization_failures) {
         report(
             failure.code,
@@ -15007,20 +15139,23 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         return false;
     }
 
-    SystemVerilogHirMaterialization root_materialization {
-        &*specialized,
-        path,
-        std::move(port_aliases),
-        std::move(string_port_aliases),
-        std::move(container_port_aliases),
-        { },
-        { },
-        { },
-        { },
-        std::move(*root_alias_plan),
-        { },
-        context.type_owner_contexts,
-    };
+    const auto root_materialization_owner
+        = std::make_shared<SystemVerilogHirMaterialization>(
+            SystemVerilogHirMaterialization {
+                &*specialized,
+                path,
+                std::move(port_aliases),
+                std::move(string_port_aliases),
+                std::move(container_port_aliases),
+                { },
+                { },
+                { },
+                { },
+                std::move(*root_alias_plan),
+                { },
+                context.type_owner_contexts,
+            });
+    auto& root_materialization = *root_materialization_owner;
     std::vector<PendingVirtualInterfaceInitializer>
         pending_virtual_interface_initializers;
     auto unconnected_drive = semantic::sv::UnconnectedDrive::none;
@@ -15436,12 +15571,84 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             concurrent_order, generated_path)) {
         return false;
     }
+    ForwardDeferredSystemVerilogItems forward_missed;
     if ((!deferred_processes.empty() || !deferred_statements.empty())
         && !lower_deferred_systemverilog_processes(
             unit, *specialized, path, source_language, deferred_processes,
             lowerer, specialization_index, program_owner,
-            deferred_statements)) {
+            deferred_statements, &forward_missed)) {
         return false;
+    }
+    // Descendants' names reaching later siblings resolve now that this
+    // instance's subtree is complete; this instance's own wait for an
+    // enclosing one (IEEE 1800-2017 23.6).
+    lower_forward_deferred_systemverilog(path, false);
+    if (!forward_missed.processes.empty()
+        || !forward_missed.statements.empty()) {
+        // Package variables reached later resolve through this instance's
+        // type owners, as the frame's own lowerer does.
+        const auto resolve_package = [this,
+                                         materialization
+                                         = root_materialization_owner](
+                                         const auto& materialize) {
+            const auto* const contexts
+                = &materialization->type_owner_contexts;
+            const SystemVerilogPackedTypeResolver type_resolver {
+                [this, contexts](
+                    const semantic::SpecializedHirUnit& working,
+                    const semantic::sv::TypeReference& reference) {
+                    return compiled_systemverilog_packed_type(
+                        *compiled_, working, reference, *contexts);
+                }
+            };
+            const SystemVerilogPackedDefaultResolver default_resolver {
+                [this](const semantic::SpecializedHirUnit& working,
+                    const semantic::sv::TypeReference& reference,
+                    const std::size_t width) {
+                    return compiled_systemverilog_packed_default(
+                        *compiled_, working, reference, width);
+                }
+            };
+            const SystemVerilogPackedFallbackResolver fallback_resolver {
+                [](const PackedTypeMetadata& type, const std::size_t width) {
+                    return default_compiled_packed_value(type, width);
+                }
+            };
+            return materialize(*materialization->specialization,
+                type_resolver, default_resolver, fallback_resolver);
+        };
+        forward_deferred_systemverilog_.push_back({
+            &unit,
+            root_materialization_owner,
+            systemverilog_specialization_owners_,
+            path,
+            source_language,
+            std::move(forward_missed),
+            specialization_index,
+            program_owner,
+            [this, resolve_package](
+                const semantic::DeclarationId declaration) {
+                return resolve_package([&](const auto& specialization,
+                                           const auto& type_resolver,
+                                           const auto& default_resolver,
+                                           const auto& fallback_resolver) {
+                    return compiled_systemverilog_package_variable_signal(
+                        specialization, declaration, type_resolver,
+                        default_resolver, fallback_resolver);
+                });
+            },
+            [this, resolve_package](
+                const semantic::DeclarationId declaration) {
+                return resolve_package([&](const auto& specialization,
+                                           const auto& type_resolver,
+                                           const auto& default_resolver,
+                                           const auto& fallback_resolver) {
+                    return compiled_systemverilog_package_container_object(
+                        specialization, declaration, type_resolver,
+                        default_resolver, fallback_resolver);
+                });
+            },
+        });
     }
     if (!deferred_generated.empty()
         && !lower_deferred_generated_systemverilog(unit, source_language,
@@ -20613,6 +20820,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         return false;
     }
     const auto id = static_cast<SignalId>(design_.signals_.size());
+    bool runtime_initializer { };
     working_signals.insert_or_assign(declaration.name, id);
     working_signals.emplace(full_name, id);
     design_.signal_by_name_.emplace(full_name, id);
@@ -21031,7 +21239,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             }
         }
         const auto integer_range = info.integer_range;
-        if ((!value && !static_value)
+        // A signal's initial value that does not fold is evaluated when
+        // the declaration is elaborated (IEEE 1076-2008 14.4.2.5).
+        runtime_initializer = !value && !static_value
+            && declaration.form == semantic::vhdl::DeclarationForm::signal;
+        if ((!value && !static_value && !runtime_initializer)
             || (value && width > 64U)
             || (value && integer_range
                 && !integer_range->contains(*value))) {
@@ -21044,10 +21256,12 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     *compiled_, declaration.source));
             return false;
         }
-        initial = static_value && !enumeration_literal
-            ? *static_value
-            : compiled_vhdl_integral_value(
-                  *value, domain, width);
+        if (!runtime_initializer) {
+            initial = static_value && !enumeration_literal
+                ? *static_value
+                : compiled_vhdl_integral_value(
+                      *value, domain, width);
+        }
     }
     const auto runtime_domain = info.source_domain;
     design_.signal_info_.push_back(std::move(info));
@@ -21091,6 +21305,24 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     }
     if (shared_variable) {
         vhdl_unprotected_shared_signals_.insert(id);
+    }
+    if (runtime_initializer) {
+        const auto evaluated = evaluate_compiled_vhdl_value(
+            working_specialization, *declaration.initializer, id,
+            declaration.subtype, working_path, working_signals,
+            working_read_only_signals, container_objects);
+        if (!evaluated
+            || evaluated->width() != design_.signals_[id].initial_value.width()) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "compiled VHDL initializer for '"
+                    + declaration.name
+                    + "' is not a bounded integral value",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return false;
+        }
+        design_.signals_[id].initial_value = *evaluated;
     }
     return true;
 }
@@ -29377,6 +29609,7 @@ void HierarchyBuilder::add_root(
 
 void HierarchyBuilder::finalize()
 {
+    lower_forward_deferred_systemverilog({ }, true);
     finish();
 }
 

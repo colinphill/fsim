@@ -637,7 +637,10 @@ void Interpreter::Impl::execute_container(
     const DeleteContainer& operation)
 {
     auto& target = get_container_register(process, operation.target);
-    const bool aggregate = target.type.element_kind == ContainerElementKind::Aggregate;
+    // Aggregate and nested-container elements are value-owned in
+    // nested_elements.
+    const bool aggregate = target.type.element_kind == ContainerElementKind::Aggregate
+        || target.type.element_kind == ContainerElementKind::Container;
     const bool string_element = target.type.element_kind == ContainerElementKind::String;
     if (operation.index) {
         if (target.type.queue) {

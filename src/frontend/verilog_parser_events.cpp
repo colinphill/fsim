@@ -235,6 +235,46 @@ void VerilogParser::parse_default_clocking(
       span_from(start, previous());
 }
 
+void VerilogParser::parse_default_disable(
+    std::vector<Token>& condition,
+    const Token& start)
+{
+  advance();
+  expect_keyword("iff", false, "FSIM-SV-PARSE-288");
+  std::vector<Token> tokens;
+  int depth {};
+  while (!at(TokenKind::EndOfFile)
+      && !(depth == 0 && at(TokenKind::Semicolon))) {
+    const auto kind = current().kind;
+    if (kind == TokenKind::LeftParen || kind == TokenKind::LeftBracket
+        || kind == TokenKind::LeftBrace) {
+      ++depth;
+    } else if (kind == TokenKind::RightParen
+        || kind == TokenKind::RightBracket
+        || kind == TokenKind::RightBrace) {
+      --depth;
+    }
+    tokens.push_back(advance());
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after a default disable iff declaration",
+      "FSIM-SV-PARSE-288");
+  if (tokens.empty()) {
+    error(start, "FSIM-SV-PARSE-288",
+        "default disable iff requires a condition");
+    return;
+  }
+  if (!condition.empty()) {
+    error(
+        start,
+        "FSIM-SV-SEM-423",
+        "a scope can declare only one default disable iff");
+    return;
+  }
+  condition = std::move(tokens);
+}
+
 void VerilogParser::parse_clocking_block(
     DesignUnit& unit,
     const Token& start,
@@ -337,7 +377,7 @@ void VerilogParser::parse_clocking_block(
       skip_to_semicolon();
       continue;
     }
-    const auto direction = parse_direction();
+    auto direction = parse_direction();
     std::optional<SystemVerilogClockingSkew> skew;
     if (keyword("posedge") || keyword("negedge")
         || at(TokenKind::Hash)) {
@@ -349,14 +389,64 @@ void VerilogParser::parse_clocking_block(
             "an inout clocking signal cannot specify a skew");
       }
     }
+    // `input [skew] output [skew]` declares an inout clockvar with its own
+    // input and output skews (IEEE 1800-2017 14.3).
+    std::optional<SystemVerilogClockingSkew> output_skew;
+    if (direction == PortDirection::Input && match_keyword("output")) {
+      direction = PortDirection::Inout;
+      if (keyword("posedge") || keyword("negedge")
+          || at(TokenKind::Hash)) {
+        output_skew = parse_clocking_skew();
+      }
+    }
     do {
       const auto signal = expect_identifier("clocking signal name");
       SystemVerilogClockingSignal declaration;
       declaration.name = signal.text;
       declaration.direction = direction;
       declaration.skew = skew;
+      declaration.output_skew = output_skew;
       if (match(TokenKind::Assign)) {
+        const auto expression_begin = index_;
         declaration.expression = parse_expression();
+        // A clockvar names an expression (14.3): an input samples it and an
+        // output drives it as an lvalue. A hidden variable of the
+        // expression's type stands for it, continuously assigned from the
+        // expression or to the lvalue.
+        if (declaration.expression->kind != ExpressionKind::Identifier
+            && direction != PortDirection::Inout) {
+          const std::vector<Token> expression_tokens(
+              tokens_.begin() + static_cast<std::ptrdiff_t>(expression_begin),
+              tokens_.begin() + static_cast<std::ptrdiff_t>(index_));
+          const auto hidden
+              = "__fsim_clockvar$" + block.name + "$" + signal.text;
+          const auto expression_span = declaration.expression->span;
+          std::vector<Token> items = synthetic_tokens("var type(",
+              expression_span);
+          items.insert(items.end(), expression_tokens.begin(),
+              expression_tokens.end());
+          auto lexed = synthetic_tokens(") " + hidden + "; assign ",
+              expression_span);
+          items.insert(items.end(), lexed.begin(), lexed.end());
+          if (direction == PortDirection::Input) {
+            lexed = synthetic_tokens(hidden + " = ", expression_span);
+            items.insert(items.end(), lexed.begin(), lexed.end());
+            items.insert(items.end(), expression_tokens.begin(),
+                expression_tokens.end());
+            lexed = synthetic_tokens(";", expression_span);
+          } else {
+            items.insert(items.end(), expression_tokens.begin(),
+                expression_tokens.end());
+            lexed = synthetic_tokens(" = " + hidden + ";", expression_span);
+          }
+          items.insert(items.end(), lexed.begin(), lexed.end());
+          parse_generated_items(std::move(items), expression_span, unit);
+          Expression reference;
+          reference.kind = ExpressionKind::Identifier;
+          reference.text = hidden;
+          reference.span = expression_span;
+          declaration.expression = std::move(reference);
+        }
       }
       declaration.span = span_from(signal, previous());
 

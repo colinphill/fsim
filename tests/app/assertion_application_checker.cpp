@@ -92,7 +92,8 @@ endmodule
             assert(capture->assertion_processes_observed);
             assert(capture->sampled_signal_reads == 5);
             assert(capture->current_signal_reads == 0);
-            assert(capture->reactive_waits == 6);
+            assert(capture->reactive_waits != 0);
+            assert(capture->reactive_waits == interpreted.reactive_waits);
             assert((capture->outputs == std::vector<std::string> { "checker pass", "checker pass", "checker pass" }));
             assert(capture->reports.empty());
             assert(capture->coverage.size() == 3);

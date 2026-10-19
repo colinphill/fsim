@@ -281,6 +281,7 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<VcdControl>(operation)
         || fsim::runtime::simir::operation_holds<StochasticQueueOperation>(
             operation)
+        || fsim::runtime::simir::operation_holds<SvaOperation>(operation)
         || fsim::runtime::simir::operation_holds<PlaEvaluate>(operation)
         || fsim::runtime::simir::operation_holds<TimeFormatControl>(operation)
         || fsim::runtime::simir::operation_holds<WaitRegion>(operation)
@@ -313,6 +314,7 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<MailboxPut>(operation)
         || fsim::runtime::simir::operation_holds<MailboxGet>(operation)
         || fsim::runtime::simir::operation_holds<MailboxNum>(operation)
+        || fsim::runtime::simir::operation_holds<DynamicEvent>(operation)
         || fsim::runtime::simir::operation_holds<SemaphoreCreate>(operation)
         || fsim::runtime::simir::operation_holds<SemaphoreGet>(operation)
         || fsim::runtime::simir::operation_holds<SemaphorePut>(operation)

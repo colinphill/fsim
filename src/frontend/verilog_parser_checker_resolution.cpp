@@ -185,6 +185,18 @@ void VerilogParser::instantiate_checkers(DesignUnit& unit)
                 declaration.name,
                 instance.name + "$" + declaration.name);
         }
+        for (const auto& variable : checker->checker_variables) {
+            declaration_names.emplace(variable, instance.name + "$" + variable);
+        }
+        // The instance's own variables and procedures (17.5, 17.7).
+        for (const auto& item : checker->checker_items) {
+            if (item.empty()) {
+                continue;
+            }
+            parse_generated_items(
+                substitute_tokens(item, actuals, declaration_names, { }),
+                item.front().span, unit);
+        }
         for (const auto& source : checker->checker_declarations) {
             auto declaration = source;
             declaration.name = declaration_names.at(source.name);
@@ -268,6 +280,47 @@ void VerilogParser::instantiate_checkers(DesignUnit& unit)
         unit.systemverilog_concurrent_assertions.end(),
         std::make_move_iterator(assertions.begin()),
         std::make_move_iterator(assertions.end()));
+}
+
+void VerilogParser::parse_generated_items(
+    std::vector<Token> tokens, const SourceSpan& span, DesignUnit& unit)
+{
+    Token end;
+    end.kind = TokenKind::EndOfFile;
+    end.span = span;
+    tokens.push_back(std::move(end));
+    auto saved_tokens = std::move(tokens_);
+    const auto saved_index = index_;
+    const auto saved_synthetic_stream = synthetic_token_stream_;
+    tokens_ = std::move(tokens);
+    index_ = 0;
+    synthetic_token_stream_ = true;
+    while (!at_end()) {
+        const auto before = position();
+        if (keyword("initial")) {
+            unit.processes.push_back(parse_initial());
+        } else if (any_keyword(
+                       { "always", "always_ff", "always_comb", "always_latch" })) {
+            unit.processes.push_back(parse_always());
+        } else if (is_declaration_start()) {
+            parse_declaration(unit);
+        } else if (match_keyword("assign")) {
+            auto assignments
+                = parse_continuous_assignments(previous());
+            unit.concurrent_statements.insert(
+                unit.concurrent_statements.end(),
+                std::make_move_iterator(assignments.begin()),
+                std::make_move_iterator(assignments.end()));
+        } else {
+            advance();
+        }
+        if (position() == before) {
+            advance();
+        }
+    }
+    tokens_ = std::move(saved_tokens);
+    index_ = saved_index;
+    synthetic_token_stream_ = saved_synthetic_stream;
 }
 
 } // namespace fsim::frontend

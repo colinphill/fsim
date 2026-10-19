@@ -720,7 +720,8 @@ endmodule
     assert(compiled.current_signal_reads == 0);
     assert(reference.reactive_waits != 0);
     assert(reference.reactive_waits == compiled.reactive_waits);
-    assert(reference.action_handoffs != 0);
+    // A monitor process dispatches its actions after a reactive-region
+    // wait (reactive_waits above) rather than through forked handoffs.
     assert(reference.action_handoffs == compiled.action_handoffs);
     assert(std::ranges::find(
                reference.phases, fsim::runtime::SchedulerPhase::observed)

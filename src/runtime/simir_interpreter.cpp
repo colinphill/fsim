@@ -1745,6 +1745,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     "SimIR MailboxNum has an invalid register ID"
                 };
             }
+        } else if (const auto* event = operation_get_if<DynamicEvent>(&operation)) {
+            if (event->receiver >= process.register_count()
+                || event->destination >= process.register_count()) {
+                throw std::invalid_argument {
+                    "SimIR DynamicEvent has an invalid register ID"
+                };
+            }
         }
         if (const auto* active = operation_get_if<SignalActive>(&operation)) {
             const auto signal = process.operations().signal(active->signal);
@@ -4107,6 +4114,36 @@ void Interpreter::kill_dynamic_processes(
     const std::span<const ProcessId> design_processes)
 {
     impl_->kill_dynamic_processes(design_processes);
+}
+
+std::vector<Interpreter::SvaObligation> Interpreter::finish_sva_monitors()
+{
+    std::vector<SvaObligation> result;
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        const auto finished = monitor->finish();
+        if (std::getenv("FSIM_SVA_TRACE") != nullptr) {
+            std::cerr << "fsim sva: finish process " << key.first
+                      << " site " << key.second << " failures "
+                      << finished.failures << " holds " << finished.holds
+                      << '\n';
+        }
+        if (finished.failures != 0U || finished.holds != 0U) {
+            result.push_back(
+                { key.first, finished.failures, finished.holds });
+        }
+    }
+    return result;
+}
+
+void Interpreter::kill_sva_monitors(
+    const std::span<const ProcessId> design_processes)
+{
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        if (std::ranges::find(design_processes, key.first)
+            != design_processes.end()) {
+            monitor->kill();
+        }
+    }
 }
 
 PackedLogic4 Interpreter::read_debug_local(

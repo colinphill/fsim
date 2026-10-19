@@ -1155,8 +1155,13 @@ bool Lowerer::initialize_hir_declarations(
             // it; scalar constants keep the folding paths.
             const auto vector_constant
                 = hir_vhdl_local_vector_constant(*declaration->vhdl);
+            // A constant whose bounds are known only at run time is a shaped
+            // object (5.3.2.2).
+            const bool elaborated_constant = !vector_constant
+                && hir_vhdl_elaborated_constant(*declaration->vhdl);
             if (declaration->vhdl->form != Form::variable
-                && declaration->vhdl->form != Form::file && !vector_constant) {
+                && declaration->vhdl->form != Form::file && !vector_constant
+                && !elaborated_constant) {
                 // Constants, types, aliases, package instances, attributes,
                 // and nested subprograms remain available through HIR name
                 // resolution. Only variables and file objects own
@@ -1653,7 +1658,7 @@ bool Lowerer::initialize_hir_declarations(
         }
         auto binding = hir_runtime_binding(
             declaration_id, hir_process_scope_, false);
-        if (binding && active_hir_callable_
+        if (active_hir_callable_
             && declaration->vhdl != nullptr
             && declaration->vhdl->subtype) {
             const auto& frame
@@ -1694,10 +1699,41 @@ bool Lowerer::initialize_hir_declarations(
                 }
                 type_id = type->vhdl->base.type_mark.target;
             }
-            if (contextual_result) {
+            // `variable result : result_t` of a `return result_t of T`
+            // function has the call's result subtype (IEEE 1076-2019
+            // 4.2.1).
+            if (contextual_result && !binding && frame.type.width != 0U) {
+                HirRuntimeBinding local;
+                local.declaration = declaration_id;
+                local.kind = HirRuntimeBindingKind::local;
+                local.name = declaration->vhdl->name;
+                binding = std::move(local);
+            }
+            if (contextual_result && binding) {
                 binding->width = frame.type.width;
                 binding->domain = frame.type.domain;
                 binding->signed_value = frame.type.signed_value;
+                // A one-dimensional result has the call's length; its index
+                // range starts at the left of the natural index range.
+                const auto return_type = callable && callable->vhdl != nullptr
+                        && callable->vhdl->callable
+                    ? callable->vhdl->callable->return_type
+                    : std::nullopt;
+                const auto element_width = return_type
+                    ? hir_vhdl_vector_element_width(*return_type)
+                    : std::nullopt;
+                if (element_width && frame.type.width != 0U
+                    && frame.type.width % *element_width == 0U) {
+                    hir_callable_frames_[*active_hir_callable_]
+                        .vhdl_formal_ranges.try_emplace(
+                            declaration_id.value(),
+                            std::vector<std::optional<HirPackedRange>> {
+                                HirPackedRange { 0,
+                                    static_cast<std::int64_t>(
+                                        frame.type.width / *element_width)
+                                        - 1,
+                                    false } });
+                }
             }
         }
         if (declaration->vhdl != nullptr
@@ -1768,6 +1804,11 @@ bool Lowerer::initialize_hir_declarations(
                 local.signed_value = declared->signed_value;
                 binding = std::move(local);
             }
+        }
+        if ((!binding || binding->kind != HirRuntimeBindingKind::local)
+            && declaration->vhdl != nullptr
+            && lower_hir_vhdl_shaped_declaration(declaration_id)) {
+            continue;
         }
         if (!binding || binding->kind != HirRuntimeBindingKind::local) {
             if (declaration->vhdl != nullptr) {
@@ -1956,6 +1997,16 @@ bool Lowerer::initialize_hir_declarations(
                     : default_hir_value(
                           binding->width, binding->domain,
                           binding->integer_range) });
+        }
+        // Each activation of an automatic event declaration creates its
+        // own event (IEEE 1800-2017 15.5, 6.21).
+        if (!retained_static && !initializer
+            && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type
+            && declaration->systemverilog->type->target.spelling == "event"
+            && binding->width == 64U) {
+            process_.operations.emplace_back(DynamicEvent {
+                DynamicEventOperation::create, destination, 0U, false });
         }
         if (vhdl_file && initializer && !retained_static) {
             const auto path = lower_hir_string_expression(*initializer);
@@ -2180,6 +2231,7 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             return signal;
         };
+        bool dynamic_terms { };
         for (const auto& sensitivity : input.sensitivities) {
             if (sensitivity.signal == "*") {
                 description.wildcard_sensitivity = true;
@@ -2325,12 +2377,8 @@ std::optional<Process> Lowerer::lower_hir_process(
                 if (!signal) {
                     if (description.event_expression
                         || input.sensitivities.size() != 1U) {
-                        report(
-                            "FSIM-ELAB-SVEVENT-002",
-                            "packed process event-expression metadata is "
-                            "mixed with another event",
-                            hir_source_span(sensitivity.source));
-                        continue;
+                        dynamic_terms = true;
+                        break;
                     }
                     const auto width = hir_expression_width(
                         *sensitivity.expression, input.scope);
@@ -2384,10 +2432,18 @@ std::optional<Process> Lowerer::lower_hir_process(
                 continue;
             }
             if (!signal) {
-                return std::nullopt;
+                dynamic_terms = true;
+                break;
             }
             description.sensitivities.push_back(
                 { *signal, edge_kind(sensitivity.edge) });
+        }
+        if (dynamic_terms) {
+            description.sensitivities.clear();
+            description.event_expression.reset();
+            description.body_timed_always = true;
+            description.leading_wait.assign(
+                input.sensitivities.begin(), input.sensitivities.end());
         }
     } else {
         const auto& input = *source->vhdl;
@@ -3790,6 +3846,10 @@ void Lowerer::reset_hir_process_state()
 {
     hir_lowering_rejection_.reset();
     hir_virtual_interface_writes_.clear();
+    hir_vhdl_shaped_locals_.clear();
+    hir_vhdl_shaped_heap_views_.clear();
+    hir_vhdl_shaped_heap_profiles_.clear();
+    hir_vhdl_shaped_active_unit_ = nullptr;
     next_register_ = 0U;
     next_string_register_ = 0U;
     next_container_register_ = 0U;
@@ -4739,7 +4799,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 *guard, active, inactive, UnknownBranchPolicy::error };
             process_.operations[finish] = Jump { end };
         }
-    } else if (!lower_hir_statements(description.statements)) {
+    } else if ((!description.leading_wait.empty()
+                   && !lower_hir_sensitivity_wait(description.leading_wait,
+                       std::nullopt, { }, hir_source_span(description.source)))
+        || !lower_hir_statements(description.statements)) {
         process_ = { };
         hir_local_registers_.clear();
         hir_local_string_registers_.clear();

@@ -1123,6 +1123,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::StochasticQueueOperation>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::SvaOperation>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::PlaEvaluate>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::WaitPla>(operation)
@@ -1138,6 +1140,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 runtime::simir::MailboxGet>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::MailboxNum>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::DynamicEvent>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::SemaphoreCreate>(operation)
             || fsim::runtime::simir::operation_holds<

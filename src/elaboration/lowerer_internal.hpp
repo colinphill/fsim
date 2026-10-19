@@ -539,6 +539,10 @@ private:
         bool initial { };
         bool final { };
         bool body_timed_always { };
+        // An event control whose terms have no static signals (`always
+        // @(vif.d)`): the body begins by waiting on them (IEEE 1800-2017
+        // 9.2.2.1, 9.4.2).
+        std::vector<semantic::sv::Sensitivity> leading_wait;
         bool always_comb_or_latch { };
         // A source always_comb or always_latch first runs after every
         // initial and always procedure has started (IEEE 1800-2017
@@ -659,6 +663,168 @@ private:
     // evaluates one index choice (integer constants by default).
     // An aggregate whose only choice is one non-static range (IEEE
     // 1076-2008 9.3.3.3): `(l to r => e)` or `(a'range => e)`.
+    // A VHDL array object whose index ranges are known only when it is
+    // elaborated at run time (IEEE 1076-2008 5.3.2.2, 14.4.2.5).
+    struct HirVhdlShapedProfile {
+        // The array subtype the objects are declared with.
+        semantic::vhdl::SubtypeIndication subtype;
+        std::vector<semantic::vhdl::RangeConstraint> constraints;
+        semantic::vhdl::SubtypeIndication element_subtype;
+        std::size_t element_width { };
+        frontend::ValueDomain element_domain { frontend::ValueDomain::Unknown };
+        bool element_signed { };
+        PackedLogic4 element_default;
+        // The element's own statically shaped index ranges, when it is an
+        // array, and its leaf elements.
+        std::vector<VhdlShapeRange> inner;
+        std::size_t leaf_width { };
+        frontend::ValueDomain leaf_domain { frontend::ValueDomain::Unknown };
+        bool leaf_signed { };
+        ContainerType type;
+    };
+
+    struct HirVhdlShapedLocal {
+        ContainerRegisterId container { };
+        HirVhdlShapedProfile profile;
+        // An object designated by an access value (`p.all`, or `p` as a
+        // prefix, IEEE 1076-2008 8.1): the handle expression and its access
+        // type. Its container is valid only once bound.
+        std::optional<semantic::ExpressionId> heap_handle;
+        const semantic::vhdl::TypeDefinition* access_type { };
+    };
+    struct HirVhdlAccessHeap;
+    // A shaped object ready for operations: a heap object is read into a
+    // fresh container and written back after an update.
+    struct HirVhdlShapedBound {
+        HirVhdlShapedLocal local;
+        std::optional<RegisterId> handle;
+        ContainerRegisterId heap_objects { };
+    };
+    // An element (`v(i)`) or a leaf of an array element (`v(i)(j)`) of a
+    // shaped object.
+    struct HirVhdlShapedAccess {
+        const HirVhdlShapedLocal* local { };
+        std::vector<semantic::ExpressionId> selectors;
+        bool leaf { };
+    };
+    struct HirVhdlShapedAttributeUse {
+        const HirVhdlShapedLocal* local { };
+        VhdlShapedAttribute attribute { VhdlShapedAttribute::length };
+        std::uint32_t dimension { };
+    };
+    // `element` constrained by the element constraints along `owner`'s
+    // subtype chain (`t(open)(7 downto 0)`, IEEE 1076-2008 5.3.2.2), the
+    // outermost taking precedence.
+    [[nodiscard]] semantic::vhdl::SubtypeIndication
+    hir_vhdl_chain_element_subtype(
+        const semantic::vhdl::SubtypeIndication& owner,
+        semantic::vhdl::SubtypeIndication element) const;
+    // The length of a VHDL slice whose bounds differ by a constant
+    // (`v(i*8+7 downto i*8)`), or nullopt.
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_symbolic_slice_length(
+        semantic::ExpressionId slice) const;
+    // The element width of a one-dimensional array subtype, or nullopt.
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_vector_element_width(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // `open_array`: the profile of an unconstrained array type, whose
+    // bounds every object supplies.
+    [[nodiscard]] std::optional<HirVhdlShapedProfile> hir_vhdl_shaped_profile(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        bool open_array = false) const;
+    // The profile of the objects of an access type that designates an
+    // unconstrained array (IEEE 1076-2008 5.4.1), or nullopt.
+    [[nodiscard]] std::optional<HirVhdlShapedProfile>
+    hir_vhdl_shaped_heap_profile(
+        const semantic::vhdl::TypeDefinition& access_type) const;
+    // A local constant computed when its declaration is elaborated: one with
+    // run-time bounds, or an integer whose initializer does not fold.
+    [[nodiscard]] bool hir_vhdl_elaborated_constant(
+        const semantic::vhdl::Declaration& declaration) const;
+    // The profile of an array value with run-time bounds: a shaped object,
+    // a qualified one, or a concatenation with one (9.2.5).
+    [[nodiscard]] std::optional<HirVhdlShapedProfile>
+    hir_vhdl_shaped_value_profile(semantic::ExpressionId expression) const;
+    // Such a value in a container register of its own shape.
+    [[nodiscard]] std::optional<
+        std::pair<ContainerRegisterId, HirVhdlShapedProfile>>
+    lower_hir_vhdl_shaped_container(
+        semantic::ExpressionId expression, const frontend::SourceSpan& span);
+    // The index range of a packed array value of `profile`'s type whose own
+    // bounds the context does not give (9.3.3.3, 9.3.2).
+    [[nodiscard]] HirPackedRange hir_vhdl_shaped_packed_range(
+        const HirVhdlShapedProfile& profile, semantic::ExpressionId value,
+        std::size_t width) const;
+    // `value` in the element representation `domain` of a shaped payload.
+    [[nodiscard]] RegisterId conform_hir_vhdl_shaped_domain(
+        RegisterId value, frontend::ValueDomain domain);
+    // The run-time-shaped profile of the unconstrained array type of
+    // `subtype`, or nullopt.
+    [[nodiscard]] std::optional<HirVhdlShapedProfile>
+    hir_vhdl_shaped_open_profile(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // Whether this unit has any shaped object or shaped access type.
+    [[nodiscard]] bool hir_vhdl_shaped_active() const;
+    // The heap object denoted by `p.all`, or by `p` when `prefix`.
+    [[nodiscard]] const HirVhdlShapedLocal* hir_vhdl_shaped_heap_view(
+        semantic::ExpressionId expression, bool prefix) const;
+    // A shaped name used as the prefix of an index, slice or attribute.
+    [[nodiscard]] const HirVhdlShapedLocal* hir_vhdl_shaped_prefix(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirVhdlShapedBound> bind_hir_vhdl_shaped(
+        const HirVhdlShapedLocal& local, const frontend::SourceSpan& span);
+    void store_hir_vhdl_shaped(const HirVhdlShapedBound& bound);
+    // `new T(r)` or `new T'(v)` for a shaped heap (IEEE 1076-2008 9.3.7).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_shaped_allocator(
+        const HirVhdlAccessHeap& heap,
+        std::span<const semantic::vhdl::RangeConstraint> constraints,
+        std::optional<semantic::ExpressionId> initializer,
+        const frontend::SourceSpan& span);
+    [[nodiscard]] bool lower_hir_vhdl_shaped_declaration(
+        semantic::DeclarationId declaration);
+    [[nodiscard]] const HirVhdlShapedLocal* hir_vhdl_shaped_name(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] const HirVhdlShapedLocal* hir_vhdl_shaped_element(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::pair<const HirVhdlShapedLocal*,
+        std::span<const semantic::ExpressionId>>
+    hir_vhdl_shaped_element_selectors(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirVhdlShapedAttributeUse>
+    hir_vhdl_shaped_attribute(semantic::ExpressionId expression) const;
+    struct HirVhdlShapedSlice {
+        const HirVhdlShapedLocal* local { };
+        semantic::ExpressionId first;
+        semantic::ExpressionId last;
+        bool descending { };
+    };
+    [[nodiscard]] std::optional<HirVhdlShapedSlice> hir_vhdl_shaped_slice(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<VhdlShaped> lower_hir_vhdl_shaped_slice(
+        const HirVhdlShapedSlice& slice, VhdlShapedOperation operation);
+    [[nodiscard]] std::optional<HirVhdlShapedAccess> hir_vhdl_shaped_access(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<VhdlShaped> lower_hir_vhdl_shaped_access(
+        const HirVhdlShapedAccess& access, VhdlShapedOperation operation);
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_shaped_width(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<frontend::ValueDomain> hir_vhdl_shaped_domain(
+        semantic::ExpressionId expression) const;
+    // Lowers an element, attribute or whole-object read of a shaped object;
+    // nullopt when `expression` is none of these.
+    [[nodiscard]] std::optional<std::optional<RegisterId>>
+    lower_hir_vhdl_shaped_expression(
+        semantic::ExpressionId expression, std::size_t expected_width);
+    // A value assigned to (part of) a shaped object: `width` bits when
+    // known, an aggregate in the object's type.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_shaped_value(
+        semantic::ExpressionId value, const HirVhdlShapedProfile& profile,
+        std::optional<std::size_t> width);
+    [[nodiscard]] bool lower_hir_vhdl_shaped_whole_assignment(
+        ContainerRegisterId target, const HirVhdlShapedProfile& profile,
+        semantic::ExpressionId value);
+    // Lowers a variable assignment to a shaped object or one of its
+    // elements; nullopt when the target is neither.
+    [[nodiscard]] std::optional<bool> lower_hir_vhdl_shaped_assignment(
+        semantic::ExpressionId target, semantic::ExpressionId value);
     // The prefix of `x(x'range)`, a slice whose discrete range is its own
     // prefix's index range and so denotes the whole object (IEEE 1076-2008
     // 8.5).
@@ -847,6 +1013,9 @@ private:
     [[nodiscard]] bool lower_hir_virtual_interface_select_write(
         semantic::ExpressionId target, semantic::ExpressionId value,
         bool nonblocking, SignalUpdateDomain update_domain);
+    // Marks a clockvar's synchronous drive request pending (IEEE
+    // 1800-2017 14.16); a signal without a pending flag is not a clockvar.
+    void emit_clocking_drive_pending(SignalId request);
     // Writes `value` to the member in the instance the handle names.
     [[nodiscard]] bool lower_hir_virtual_interface_write(
         const HirVirtualInterfaceMember& member, RegisterId value,
@@ -1864,7 +2033,6 @@ private:
         semantic::ExpressionId expression);
     [[nodiscard]] bool is_hir_vhdl_access_expression(
         semantic::ExpressionId expression) const;
-    struct HirVhdlAccessHeap;
     [[nodiscard]] HirVhdlAccessHeap* hir_vhdl_access_heap(
         const semantic::vhdl::TypeDefinition& type,
         const frontend::SourceSpan& span,
@@ -2839,6 +3007,10 @@ private:
     lower_hir_dpi_function_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    // The generated concurrent-property monitor calls of an assertion
+    // process (runtime::simir::SvaOperation).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_sva_call(
+        const semantic::sv::Expression& call, std::size_t expected_width);
     [[nodiscard]] std::optional<RegisterId> lower_hir_function_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
@@ -3078,6 +3250,25 @@ private:
     [[nodiscard]] std::optional<HirChangeWatch>
     prepare_hir_change_notification(semantic::ExpressionId target);
     void finish_hir_change_notification(const HirChangeWatch& watch);
+    // The clocking event a lone `@cb` or `@vif.cb` names (IEEE 1800-2017
+    // 14.3, 25.9), or nullopt.
+    [[nodiscard]] std::optional<std::vector<semantic::sv::Sensitivity>>
+    hir_named_clocking_event(
+        std::span<const semantic::sv::Sensitivity> sensitivities,
+        semantic::ScopeId scope) const;
+    // Suspends until one of `sensitivities` occurs (IEEE 1800-2017 9.4.2):
+    // the lowering of an event control.
+    [[nodiscard]] bool lower_hir_sensitivity_wait(
+        std::span<const semantic::sv::Sensitivity> sensitivities,
+        std::optional<semantic::ExpressionId> wildcard_expression,
+        std::span<const semantic::StatementId> wildcard_statements,
+        const frontend::SourceSpan& span);
+    // The handle register of an automatic or callable event named `name`
+    // (or by `expression`), whose event object is created per activation
+    // (IEEE 1800-2017 15.5).
+    [[nodiscard]] std::optional<RegisterId> hir_systemverilog_event_handle(
+        std::string_view name, semantic::ScopeId scope,
+        std::optional<semantic::ExpressionId> expression = std::nullopt);
     [[nodiscard]] std::optional<SignalId> hir_local_event_notifier(
         semantic::DeclarationId declaration);
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, RegisterId>>
@@ -3192,6 +3383,17 @@ private:
     ElaboratedDesign& design_;
     // Writes of the current process through virtual interface handles.
     std::unordered_map<SignalId, std::size_t> hir_virtual_interface_writes_;
+    // VHDL objects with run-time index ranges, by declaration.
+    std::unordered_map<std::uint32_t, HirVhdlShapedLocal> hir_vhdl_shaped_locals_;
+    mutable std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
+        hir_vhdl_shaped_heap_views_;
+    // The array type an aggregate with a sole non-static range choice takes
+    // from its context while a concatenation is lowered (9.3.3.3).
+    std::optional<HirVhdlShapedProfile> hir_vhdl_shaped_context_profile_;
+    mutable std::unordered_map<std::uint32_t,
+        std::optional<HirVhdlShapedProfile>> hir_vhdl_shaped_heap_profiles_;
+    mutable const semantic::SpecializedHirUnit* hir_vhdl_shaped_active_unit_ { };
+    mutable bool hir_vhdl_shaped_active_types_ { };
     // When set, a single dynamic-range aggregate records whether its length
     // matches its context here instead of asserting it.
     std::optional<RegisterId>* hir_vhdl_aggregate_length_sink_ { };
@@ -3365,6 +3567,9 @@ private:
         ContainerRegisterId issued_handles { };
         std::uint64_t maximum_live_objects { };
         semantic::vhdl::SubtypeIndication designated_subtype;
+        // Objects of an unconstrained array type each keep their own
+        // bounds (IEEE 1076-2008 5.4.1, 9.3.7).
+        std::optional<HirVhdlShapedProfile> shaped;
     };
     std::unordered_map<std::uint32_t, HirVhdlAccessHeap>
         hir_vhdl_access_heaps_;

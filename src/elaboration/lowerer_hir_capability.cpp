@@ -6942,16 +6942,24 @@ Lowerer::hir_runtime_binding(
                     width = 64U;
                 }
             }
+            // An automatic or callable event holds the handle of its
+            // event object (IEEE 1800-2017 15.5, 6.21).
+            const bool event_handle = source.type
+                && source.type->target.spelling == "event"
+                && source.type->unpacked_dimensions.empty();
+            if (event_handle) {
+                width = 64U;
+            }
             if (!width) {
                 return std::nullopt;
             }
             result.width = *width;
-            const auto four_state = hir_systemverilog_type_four_state(
-                *source.type);
+            const auto four_state = !event_handle
+                && hir_systemverilog_type_four_state(*source.type);
             result.domain = four_state
                 ? frontend::ValueDomain::Logic4
                 : frontend::ValueDomain::Bit2;
-            result.signed_value = source.type->signed_value;
+            result.signed_value = !event_handle && source.type->signed_value;
         }
     } else {
         const auto& source = *declaration->vhdl;
@@ -12241,6 +12249,79 @@ Lowerer::hir_vhdl_attribute_profile(
                 }
             }
         }
+        // An object whose bounds do not fold in this frame (an up-level
+        // variable sized by its subprogram's formal) still has the length
+        // of its storage; with one bound and the direction that fixes its
+        // range (IEEE 1076-2008 5.3.2.2).
+        if (!range && index == 0U && prefix_profile->declaration
+            && !prefix_profile->type_prefix
+            && std::ranges::count_if(prefix_profile->subtype.constraints,
+                   [](const semantic::vhdl::RangeConstraint& constraint) {
+                       return constraint.kind
+                           == semantic::vhdl::RangeKind::array_index;
+                   }) == 1) {
+            const auto constraint = *std::ranges::find_if(
+                prefix_profile->subtype.constraints,
+                [](const semantic::vhdl::RangeConstraint& candidate) {
+                    return candidate.kind
+                        == semantic::vhdl::RangeKind::array_index;
+                });
+            const auto fold = [&](const std::optional<std::int64_t> value,
+                                  const std::optional<semantic::ExpressionId>
+                                      expression) -> std::optional<std::int64_t> {
+                if (value) {
+                    return value;
+                }
+                return expression ? hir_constant_integer(*expression)
+                                  : std::nullopt;
+            };
+            const auto left = fold(constraint.left, constraint.left_expression);
+            const auto right
+                = fold(constraint.right, constraint.right_expression);
+            std::size_t element_width { };
+            if (array != nullptr && array->element_subtype) {
+                const auto element = hir_effective_vhdl_subtype(
+                    hir_vhdl_chain_element_subtype(
+                        prefix_profile->subtype, *array->element_subtype));
+                if (element && element->executable_width) {
+                    element_width
+                        = static_cast<std::size_t>(*element->executable_width);
+                }
+            } else if (array == nullptr && predefined_array) {
+                element_width = terminal_builtin
+                        == semantic::vhdl::BuiltinTypeIdentity::
+                            std_standard_integer_vector
+                    ? static_cast<std::size_t>(
+                          frontend::vhdl_predefined_integer_storage_width(
+                              vhdl_standard_))
+                    : terminal_builtin
+                        == semantic::vhdl::BuiltinTypeIdentity::
+                            std_standard_string
+                    ? 8U
+                    : 1U;
+            }
+            const auto binding = hir_runtime_binding(
+                *prefix_profile->declaration, process_scope, false);
+            if ((left.has_value() != right.has_value()) && binding
+                && binding->width != 0U && element_width != 0U
+                && binding->width % element_width == 0U) {
+                const auto count = static_cast<std::int64_t>(
+                    binding->width / element_width);
+                semantic::vhdl::RangeConstraint storage_range = constraint;
+                storage_range.left_expression.reset();
+                storage_range.right_expression.reset();
+                if (left) {
+                    storage_range.left = *left;
+                    storage_range.right = constraint.descending
+                        ? *left - (count - 1) : *left + (count - 1);
+                } else {
+                    storage_range.right = *right;
+                    storage_range.left = constraint.descending
+                        ? *right + (count - 1) : *right - (count - 1);
+                }
+                range = std::move(storage_range);
+            }
+        }
         if (!range) {
             return fail(HirVhdlAttributeFailure::array_prefix);
         }
@@ -13703,6 +13784,9 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (const auto shaped = hir_vhdl_shaped_domain(expression_id)) {
+        return shaped;
     }
     if (hir_vhdl_now_expression(expression_id)
         || hir_vhdl_runtime_string_bound(expression_id)) {
@@ -16539,6 +16623,13 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (const auto shaped = hir_vhdl_shaped_width(expression_id)) {
+        return shaped;
+    }
+    // An array value with run-time bounds has no static width.
+    if (hir_vhdl_shaped_value_profile(expression_id)) {
+        return std::nullopt;
+    }
     // A bound iterator (`item` of a `with` clause) has its register's width.
     if (const auto captured
         = hir_captured_update_indices_.find(expression_id.value());
@@ -17915,6 +18006,13 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
             || !reference.interface_type.empty()
             || reference.value_form == semantic::sv::TypeForm::class_handle
             || !reference.class_identity.empty()) {
+            return 64U;
+        }
+        // An event value outside the module scope is the handle of its
+        // event object (IEEE 1800-2017 15.5).
+        if (reference.target.spelling == "event"
+            && reference.unpacked_dimensions.empty()
+            && !reference.container_form) {
             return 64U;
         }
         std::optional<std::size_t> width;
@@ -23256,6 +23354,10 @@ bool Lowerer::can_lower_hir_expression(
     const semantic::ScopeId process_scope,
     std::unordered_set<std::uint32_t>& visiting) const
 {
+    if (hir_vhdl_shaped_width(expression_id)
+        || hir_vhdl_shaped_value_profile(expression_id)) {
+        return true;
+    }
     if (const auto actual = hir_generic_actual(expression_id)) {
         return can_lower_hir_expression(*actual, process_scope, visiting);
     }
@@ -23712,6 +23814,21 @@ bool Lowerer::can_lower_hir_expression(
             && (source.text == "$signed" || source.text == "$unsigned")) {
             supported = source.operands.size() == 1U
                 && expression_supported(source.operands.front());
+            erase();
+            return supported;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == "$__fsim_sva_tick"
+                || source.text == "$__fsim_sva_outcome")) {
+            // The plan operand is a string literal; the others are packed.
+            supported = true;
+            for (std::size_t index = 0; index < source.operands.size();
+                ++index) {
+                if (index != 1U || source.text != "$__fsim_sva_tick") {
+                    supported = supported
+                        && expression_supported(source.operands[index]);
+                }
+            }
             erase();
             return supported;
         }

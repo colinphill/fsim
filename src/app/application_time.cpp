@@ -149,6 +149,9 @@ void visit_clocking_delays(
       if (signal.skew) {
         visit_skew(*signal.skew);
       }
+      if (signal.output_skew) {
+        visit_skew(*signal.output_skew);
+      }
     }
   }
 }
@@ -409,6 +412,9 @@ void visit_systemverilog_hir_delays(
       for (const auto& signal : block.signals) {
         if (signal.skew && signal.skew->delay) {
           visit_hir_delay(*signal.skew->delay, mode, function);
+        }
+        if (signal.output_skew && signal.output_skew->delay) {
+          visit_hir_delay(*signal.output_skew->delay, mode, function);
         }
       }
     }
@@ -1332,6 +1338,7 @@ void visit_systemverilog_hir_delays(
             visit_skew(clocking.default_output_skew);
             for (auto& signal : clocking.signals) {
                 visit_skew(signal.skew);
+                visit_skew(signal.output_skew);
             }
         }
     }

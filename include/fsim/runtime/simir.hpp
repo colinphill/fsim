@@ -558,6 +558,72 @@ struct ContainerBitstream {
     std::uint32_t slice { };
 };
 
+/// A VHDL array whose index ranges are known only at run time (IEEE
+/// 1076-2008 5.3.2.2) lives in a container register: one packed payload in
+/// the VHDL packed layout and one VhdlShapeRange per dimension.
+enum class VhdlShapedOperation : std::uint8_t {
+    // target := a new value of `type`; `operands` hold each dimension's
+    // left and right bound, `directions` whether it is descending, and
+    // every element is `value`.
+    create,
+    // value := `attribute` of dimension `dimension` of source (16.2.3).
+    query,
+    // value := source(operands...), each index checked (8.4). With
+    // `inner`, the trailing operands index the element's own statically
+    // shaped dimensions and the result is a `width`-bit leaf.
+    element_read,
+    // target(operands...) := value, addressed as for element_read.
+    element_write,
+    // value := the payload of source, which must be `width` bits.
+    to_packed,
+    // target keeps its bounds; its payload := value, of equal length
+    // (10.6.2.1).
+    from_packed,
+    // target keeps its bounds; its payload := source's, every dimension of
+    // equal length (10.6.2.1, 14.7.3.4).
+    assign,
+    // value := source(operands[0] to/downto operands[1]) of a one-dimensional
+    // value, `directions[0]` set for downto; the slice must be `width` bits
+    // (8.5).
+    slice_read,
+    // target(operands[0] to/downto operands[1]) := value, of equal length.
+    slice_write,
+    // value := whether source and target have equal lengths in every
+    // dimension and equal elements; bounds do not matter (9.2.3).
+    equal,
+    // value := whether source's payload equals the packed operands[0].
+    equal_packed,
+    // target := target & source of a one-dimensional value (9.2.5): the
+    // left bound and direction are target's unless it is null.
+    append,
+    // target := target & the packed operands[0], a whole number of
+    // elements.
+    append_packed,
+};
+
+enum class VhdlShapedAttribute : std::uint8_t {
+    left,
+    right,
+    low,
+    high,
+    length,
+    ascending,
+};
+
+struct VhdlShaped {
+    VhdlShapedOperation operation { VhdlShapedOperation::create };
+    ContainerRegisterId target { };
+    ContainerRegisterId source { };
+    RegisterId value { };
+    std::vector<RegisterId> operands;
+    std::vector<std::uint8_t> directions;
+    ContainerType type;
+    std::uint32_t dimension { };
+    VhdlShapedAttribute attribute { VhdlShapedAttribute::length };
+    std::uint32_t width { };
+    std::vector<VhdlShapeRange> inner;
+};
+
 struct ContainerAggregateRead {
     RegisterId destination { };
     ContainerRegisterId source { };
@@ -2635,6 +2701,20 @@ public:
     /// assertion re-enablement.
     void kill_dynamic_processes(
         std::span<const ProcessId> design_processes);
+    /// A concurrent assertion whose running attempts fail at the end of
+    /// simulation (IEEE 1800-2017 16.12.2).
+    struct SvaObligation {
+        ProcessId process { };
+        std::size_t failures { };
+        std::size_t holds { };
+    };
+    /// End every concurrent-property monitor and report, per process, the
+    /// running attempts that fail and those that hold on the truncated
+    /// trace.
+    [[nodiscard]] std::vector<SvaObligation> finish_sva_monitors();
+    /// Stop the running attempts of the selected processes' monitors
+    /// ($assertkill, IEEE 1800-2017 20.12).
+    void kill_sva_monitors(std::span<const ProcessId> design_processes);
     [[nodiscard]] PackedLogic4 read_debug_local(
         ProcessId process, std::size_t local_index) const;
     [[nodiscard]] std::string read_debug_string_local(

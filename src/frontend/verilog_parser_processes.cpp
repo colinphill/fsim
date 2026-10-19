@@ -779,6 +779,42 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.span = span_from(start, previous());
         return statement;
     }
+    // `expect (property_spec) action_block` (IEEE 1800-2017 16.17).
+    if (language_ == Language::SystemVerilog2017 && keyword("expect")
+        && at(TokenKind::LeftParen, 1)) {
+        const auto directive = advance();
+        Statement statement;
+        statement.kind = StatementKind::Null;
+        statement.procedural_concurrent_assertion
+            = std::make_shared<SystemVerilogConcurrentAssertion>(
+                parse_concurrent_assertion(directive,
+                    SystemVerilogConcurrentAssertionKind::Assert,
+                    std::nullopt, true));
+        statement.span = span_from(directive, previous());
+        return statement;
+    }
+    // A concurrent assertion statement in a procedure (IEEE 1800-2017
+    // 16.14.6).
+    if (language_ == Language::SystemVerilog2017
+        && (keyword("assert") || keyword("assume") || keyword("cover")
+            || keyword("restrict"))
+        && (keyword("property", 1) || keyword("sequence", 1))) {
+        const auto directive = advance();
+        const auto kind = directive.text == "assert"
+            ? SystemVerilogConcurrentAssertionKind::Assert
+            : directive.text == "assume"
+            ? SystemVerilogConcurrentAssertionKind::Assume
+            : directive.text == "cover"
+            ? SystemVerilogConcurrentAssertionKind::Cover
+            : SystemVerilogConcurrentAssertionKind::Restrict;
+        Statement statement;
+        statement.kind = StatementKind::Null;
+        statement.procedural_concurrent_assertion
+            = std::make_shared<SystemVerilogConcurrentAssertion>(
+                parse_concurrent_assertion(directive, kind));
+        statement.span = span_from(directive, previous());
+        return statement;
+    }
     if ((language_ == Language::SystemVerilog2017
             && match_keyword("assert"))
         || (at(TokenKind::Identifier)
@@ -1014,15 +1050,23 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         statement.span = span_from(start, previous());
         if (guard) {
             // `@(e iff g) S` waits for an occurrence of e at which g holds:
-            // `do @(e); while (!g); S` (IEEE 1800-2017 9.4.2.3).
+            // `do @(e); while (!((|g) === 1'b1)); S`: only a true guard
+            // lets the event trigger (IEEE 1800-2017 9.4.2.3).
             auto controlled = std::move(statement.statements);
             statement.statements.clear();
             Statement wait;
             wait.kind = StatementKind::Loop;
             wait.loop_runtime = true;
             wait.loop_post_test = true;
+            const auto guard_span = guard->span;
+            Expression holds { ExpressionKind::Binary, "===",
+                { Expression { ExpressionKind::Unary, "|",
+                      { std::move(*guard) }, guard_span },
+                    Expression { ExpressionKind::LogicLiteral, "1'b1", { },
+                        guard_span } },
+                guard_span };
             wait.condition = Expression { ExpressionKind::Unary, "!",
-                { std::move(*guard) }, statement.span };
+                { std::move(holds) }, statement.span };
             wait.statements.push_back(std::move(statement));
             wait.span = span_from(start, previous());
             if (controlled.empty()) {

@@ -13758,12 +13758,17 @@ Lowerer::lower_hir_function_call_value(
                 if (!type || type->vhdl == nullptr || !type->vhdl->element_subtype) {
                     return 1U;
                 }
-                // An unbounded element takes the actual's element
-                // constraints (IEEE 1076-2008 5.3.2.2).
-                const auto declared_element = actual_effective
-                    ? semantic::vhdl::constrained_element_subtype(
-                          *actual_effective, "", *type->vhdl->element_subtype)
+                // The formal's subtype may constrain the element
+                // (`t(open)(7 downto 0)`); an unbounded element takes the
+                // actual's element constraints (IEEE 1076-2008 5.3.2.2).
+                auto declared_element = formal_subtype
+                    ? hir_vhdl_chain_element_subtype(
+                          *formal_subtype, *type->vhdl->element_subtype)
                     : *type->vhdl->element_subtype;
+                if (actual_effective) {
+                    declared_element = semantic::vhdl::constrained_element_subtype(
+                        *actual_effective, "", std::move(declared_element));
+                }
                 const auto element = hir_effective_vhdl_subtype(declared_element)
                     .value_or(declared_element);
                 return element.executable_width ? *element.executable_width
@@ -15111,6 +15116,12 @@ std::optional<RegisterId> Lowerer::lower_hir_function_call(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width)
 {
+    // `r(i, j)` of a variable with run-time index ranges is an indexed
+    // name, not a call (IEEE 1076-2008 8.4).
+    if (auto shaped = lower_hir_vhdl_shaped_expression(
+            expression_id, expected_width)) {
+        return *shaped;
+    }
     if (const auto element = lower_hir_vhdl_defaulted_call_index(
             expression_id, expected_width)) {
         return element;
@@ -18226,6 +18237,14 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             // lifetime and is opened when its declarative part is elaborated.
             variables.push_back(child);
             vhdl_file_declarations.push_back(child);
+            continue;
+        }
+        // A constant whose value or bounds are known only when the
+        // declarative part is elaborated is computed then (IEEE 1076-2008
+        // 14.4.2.5).
+        if (record->vhdl != nullptr
+            && hir_vhdl_elaborated_constant(*record->vhdl)) {
+            variables.push_back(child);
             continue;
         }
         // A static variable of an automatic callable keeps its storage

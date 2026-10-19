@@ -237,7 +237,7 @@ namespace {
         constexpr std::string_view keywords[] = {
             "accept_on", "always", "and", "assert", "assume", "case",
             "default", "disable", "dist", "edge", "else", "endcase",
-            "endclocking", "eventually", "first_match", "iff", "if",
+            "endclocking", "eventually", "first_match", "iff", "if", "implies",
             "inside", "intersect", "matches", "negedge", "nexttime", "not",
             "null", "or", "posedge", "property", "reject_on", "restrict",
             "s_always", "s_eventually", "s_nexttime", "s_until",
@@ -699,7 +699,11 @@ void VerilogParser::structure_sequence_expression(
             && position + 1U < tokens.size()
             && tokens[position + 1U].kind == TokenKind::Hash
             && parentheses == 0 && brackets == 0 && braces == 0) {
-            append_element(std::move(element_tokens));
+            // A sequence may start with a cycle delay (A.2.10); it has no
+            // element before the delay.
+            if (position != 0U) {
+                append_element(std::move(element_tokens));
+            }
             element_tokens.clear();
             const auto delay_start = position;
             position += 2U;
@@ -729,6 +733,18 @@ void VerilogParser::structure_sequence_expression(
                 delay.range.span = tokens[position].span;
                 delay.span = span_from(tokens[delay_start], tokens[position]);
                 ++position;
+            } else if (const auto right = position < tokens.size()
+                           && tokens[position].kind == TokenKind::LeftParen
+                       ? matching_right_parenthesis(tokens, position)
+                       : std::nullopt;
+                right && *right > position + 1U) {
+                // `##(constant_expression)`.
+                delay.range.minimum_tokens.assign(
+                    tokens.begin() + static_cast<std::ptrdiff_t>(position),
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*right + 1U));
+                delay.range.span = span_from(tokens[position], tokens[*right]);
+                delay.span = span_from(tokens[delay_start], tokens[*right]);
+                position = *right + 1U;
             } else {
                 error(
                     tokens[delay_start],
@@ -1141,6 +1157,18 @@ void VerilogParser::structure_property_expression(
                 delay.range.minimum_tokens.push_back(tokens[position]);
                 delay.range.span = tokens[position].span;
                 delay.span = span_from(tokens[delay_start], tokens[position]);
+            } else if (const auto right = position < tokens.size()
+                           && tokens[position].kind == TokenKind::LeftParen
+                       ? matching_right_parenthesis(tokens, position)
+                       : std::nullopt;
+                right && *right > position + 1U) {
+                // `##(constant_expression)`.
+                delay.range.minimum_tokens.assign(
+                    tokens.begin() + static_cast<std::ptrdiff_t>(position),
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*right + 1U));
+                delay.range.span = span_from(tokens[position], tokens[*right]);
+                delay.span = span_from(tokens[delay_start], tokens[*right]);
+                position = *right;
             } else {
                 error(
                     tokens[delay_start],
@@ -1377,12 +1405,36 @@ VerilogParser::parse_assertion_declaration(
                     std::move(parsed_assertion));
             } else if (at(TokenKind::Backtick)) {
                 parse_directive(true);
-            } else {
+            } else if (any_keyword({ "always", "always_ff", "always_comb",
+                           "always_latch", "initial" })
+                || (is_declaration_start() && !instance_start())) {
+                // Checker variables and procedures (17.5, 17.7) are kept
+                // as tokens; each instance parses its own copy.
                 if (keyword("always")) {
                     diagnose_systemverilog_2023_annex(
                         SystemVerilogAnnexConstruct::checker_always,
                         current());
                 }
+                const auto item_begin = position();
+                DesignUnit scratch;
+                if (keyword("initial")) {
+                    scratch.processes.push_back(parse_initial());
+                } else if (any_keyword({ "always", "always_ff", "always_comb",
+                               "always_latch" })) {
+                    scratch.processes.push_back(parse_always());
+                } else {
+                    parse_declaration(scratch);
+                }
+                for (const auto& variable : scratch.variables) {
+                    declaration.checker_variables.push_back(variable.name);
+                }
+                for (const auto& signal : scratch.signals) {
+                    declaration.checker_variables.push_back(signal.name);
+                }
+                declaration.checker_items.emplace_back(
+                    tokens_.begin() + static_cast<std::ptrdiff_t>(item_begin),
+                    tokens_.begin() + static_cast<std::ptrdiff_t>(position()));
+            } else {
                 if (at(TokenKind::Identifier)
                     && assertion_local_type_keyword(current().text)
                     && at(TokenKind::Assign, 1)) {
@@ -1578,7 +1630,8 @@ SystemVerilogConcurrentAssertion
 VerilogParser::parse_concurrent_assertion(
     const Token& start,
     const SystemVerilogConcurrentAssertionKind kind,
-    const std::optional<Token> label)
+    const std::optional<Token> label,
+    const bool expect)
 {
     SystemVerilogConcurrentAssertion assertion;
     assertion.kind = kind;
@@ -1586,8 +1639,10 @@ VerilogParser::parse_concurrent_assertion(
         assertion.label = label->text;
         assertion.label_span = label->span;
     }
-    if (match_keyword("property")) {
+    // `expect (property_spec)` has no directive keyword (16.17).
+    if (expect || match_keyword("property")) {
         assertion.form = SystemVerilogConcurrentAssertionForm::Property;
+        assertion.expect_statement = expect;
     } else if (match_keyword("sequence")) {
         assertion.form = SystemVerilogConcurrentAssertionForm::Sequence;
         if (kind != SystemVerilogConcurrentAssertionKind::Cover) {

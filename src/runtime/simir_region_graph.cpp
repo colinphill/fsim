@@ -576,6 +576,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, ContainerElementRead>
             || std::is_same_v<T, ContainerElementWrite>
             || std::is_same_v<T, ContainerBitstream>
+            || std::is_same_v<T, VhdlShaped>
             || std::is_same_v<T, ContainerAggregateRead>
             || std::is_same_v<T, ContainerAggregateWrite>
             || std::is_same_v<T, CopyContainerAggregateElement>

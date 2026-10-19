@@ -2167,6 +2167,675 @@ bool Lowerer::lower_hir_statement(
     return notify(lowered);
 }
 
+std::optional<std::vector<semantic::sv::Sensitivity>>
+Lowerer::hir_named_clocking_event(
+    const std::span<const semantic::sv::Sensitivity> sensitivities,
+    const semantic::ScopeId scope) const
+{
+    if (sensitivities.size() != 1U
+        || sensitivities.front().expression
+        || sensitivities.front().edge
+            != semantic::sv::EdgeKind::any) {
+        return std::nullopt;
+    }
+    // The clocking blocks of the unit declaring the statement:
+    // an interface task called through a virtual interface
+    // keeps its own (IEEE 1800-2017 25.9).
+    const auto& scopes
+        = specialized_hir_unit_->design().semantics.scopes();
+    const auto scope_record = std::ranges::find(
+        scopes, scope, &semantic::Scope::id);
+    const auto selected = specialized_hir_unit_->design()
+        .find_unit(scope_record != scopes.end()
+                ? scope_record->unit
+                : specialized_hir_unit_->unit());
+    if (!selected || selected->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& blocks = selected->systemverilog->clocking_blocks;
+    const auto& name = sensitivities.front().signal;
+    const auto block = std::ranges::find(blocks, name,
+        &semantic::sv::ClockingBlock::name);
+    if (block != blocks.end() && !block->event.empty()) {
+        return block->event;
+    }
+    // `@(vif.cb)`: the clocking event of the instance the
+    // virtual interface names (IEEE 1800-2017 14.3, 25.9),
+    // waited on through that instance's clock.
+    const auto separator = name.find('.');
+    if (separator == std::string::npos
+        || name.find('.', separator + 1U) != std::string::npos) {
+        return std::nullopt;
+    }
+    const auto handle = hir_resolver().resolve_systemverilog(
+        std::string_view { name }.substr(0U, separator),
+        scope,
+        [](const semantic::CompiledDeclarationView& candidate) {
+            return candidate.systemverilog != nullptr
+                && candidate.systemverilog->type.has_value();
+        }, false).unique();
+    const auto handle_declaration = handle
+        ? specialized_hir_unit_->find_declaration(*handle)
+        : std::nullopt;
+    const auto interface_type = handle_declaration
+            && handle_declaration->systemverilog != nullptr
+        ? hir_systemverilog_virtual_interface_type(
+              *handle_declaration->systemverilog)
+        : std::nullopt;
+    if (!interface_type) {
+        return std::nullopt;
+    }
+    for (const auto& unit :
+        specialized_hir_unit_->design().systemverilog_units()) {
+        if (unit.name != interface_type->interface_type) {
+            continue;
+        }
+        const auto interface_block = std::ranges::find(
+            unit.clocking_blocks,
+            std::string_view { name }.substr(separator + 1U),
+            &semantic::sv::ClockingBlock::name);
+        if (interface_block == unit.clocking_blocks.end()
+            || interface_block->event.size() != 1U
+            || interface_block->event.front().expression
+            || interface_block->event.front().signal.find('.')
+                != std::string::npos) {
+            return std::nullopt;
+        }
+        auto event = interface_block->event.front();
+        event.signal = name.substr(0U, separator) + "."
+            + event.signal;
+        event.source_order = sensitivities.front()
+            .source_order;
+        return std::vector<semantic::sv::Sensitivity> { event };
+    }
+    return std::nullopt;
+}
+
+bool Lowerer::lower_hir_sensitivity_wait(
+    const std::span<const semantic::sv::Sensitivity> sensitivities,
+    const std::optional<semantic::ExpressionId> wildcard_expression,
+    const std::span<const semantic::StatementId> wildcard_statements,
+    const frontend::SourceSpan& span)
+{
+    if (sensitivities.empty()) {
+        return false;
+    }
+    emit_debug_point(DebugPointKind::wait, span);
+    // `@cb` and `@vif.cb` wait on the clocking event (IEEE 1800-2017
+    // 14.3).
+    if (const auto clocking = hir_named_clocking_event(
+            sensitivities, hir_process_scope_)) {
+        return lower_hir_sensitivity_wait(
+            *clocking, wildcard_expression, wildcard_statements, span);
+    }
+    // `@e` of an automatic or callable event waits on its event
+    // object (IEEE 1800-2017 15.5.2).
+    if (sensitivities.size() == 1U
+        && sensitivities.front().edge == semantic::sv::EdgeKind::any) {
+        if (const auto handle = hir_systemverilog_event_handle(
+                sensitivities.front().signal, hir_process_scope_,
+                sensitivities.front().expression)) {
+            process_.operations.emplace_back(DynamicEvent {
+                DynamicEventOperation::wait, 0U, *handle, false });
+            return true;
+        }
+    }
+    if (sensitivities.size() == 1U
+        && sensitivities.front().signal == "*") {
+        const auto dependencies = wildcard_expression
+            ? hir_signal_dependencies(
+                  *wildcard_expression, hir_process_scope_)
+            : hir_statement_signal_dependencies(
+                  wildcard_statements, hir_process_scope_);
+        if (dependencies.empty()) {
+            report(
+                "FSIM-ELAB-062",
+                "dynamic wildcard event control has no readable signal "
+                "dependencies",
+                hir_source_span(sensitivities.front().source));
+            return true;
+        }
+        process_.operations.emplace_back(WaitOn {
+            dependencies,
+            std::vector<runtime::simir::EdgeKind>(
+                dependencies.size(),
+                runtime::simir::EdgeKind::any),
+        });
+        return true;
+    }
+
+    // `@(vif.member)`: wait on the member of every instance the handle
+    // may name, until the selected member has the event (25.9).
+    if (sensitivities.size() == 1U
+        && !sensitivities.front().expression
+        && sensitivities.front().signal.find('.') != std::string::npos
+        && !hir_named_signal(
+            sensitivities.front().signal, hir_process_scope_,
+            sensitivities.front().source_order)) {
+        if (const auto member = hir_virtual_interface_member(
+                sensitivities.front().signal, hir_process_scope_)) {
+            const auto edge = sensitivities.front().edge;
+            if (edge != semantic::sv::EdgeKind::any && member->width != 1U) {
+                return false;
+            }
+            const auto baseline = lower_hir_virtual_interface_read(*member);
+            if (!baseline) {
+                return false;
+            }
+            const auto loop = static_cast<InstructionIndex>(
+                process_.operations.size());
+            std::vector<SignalId> candidates;
+            for (const auto& [identity, signal] : member->candidates) {
+                (void)identity;
+                candidates.push_back(signal);
+            }
+            process_.operations.emplace_back(WaitOn {
+                candidates,
+                std::vector<runtime::simir::EdgeKind>(
+                    candidates.size(), runtime::simir::EdgeKind::any),
+            });
+            const auto current = lower_hir_virtual_interface_read(*member);
+            if (!current) {
+                return false;
+            }
+            const auto happened = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            if (edge == semantic::sv::EdgeKind::any) {
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, happened, *current,
+                    *baseline });
+                process_.operations.emplace_back(UnaryNot {
+                    happened, happened });
+            } else {
+                // A posedge leaves 0 or arrives at 1; a negedge leaves 1
+                // or arrives at 0 (IEEE 1800-2017 table 9-2).
+                const bool rising
+                    = edge == semantic::sv::EdgeKind::positive;
+                const auto target = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                const auto start = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(LoadConstant {
+                    target, PackedLogic4 { 1U,
+                        rising ? Logic4::one : Logic4::zero } });
+                process_.operations.emplace_back(LoadConstant {
+                    start, PackedLogic4 { 1U,
+                        rising ? Logic4::zero : Logic4::one } });
+                const auto same = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, same, *current,
+                    *baseline });
+                process_.operations.emplace_back(UnaryNot { same, same });
+                const auto arrived = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, arrived, *current, target });
+                const auto left = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, left, *baseline, start });
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_or, arrived, arrived, left });
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_and, happened, same, arrived });
+            }
+            process_.operations.emplace_back(CopyRegister {
+                *baseline, *current });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                happened, branch + 1U, loop,
+                UnknownBranchPolicy::when_false });
+            return true;
+        }
+    }
+    if (sensitivities.size() == 1U
+        && sensitivities.front().edge
+            == semantic::sv::EdgeKind::any
+        && sensitivities.front().expression) {
+        if (const auto event_array
+            = hir_systemverilog_event_array_selection(
+                *sensitivities.front().expression,
+                hir_process_scope_)) {
+            return lower_hir_systemverilog_event_array_dispatch(
+                *event_array,
+                hir_source_span(sensitivities.front().source),
+                [&](const SignalId event) {
+                    process_.operations.emplace_back(WaitOn {
+                        { event },
+                        { runtime::simir::EdgeKind::any },
+                    });
+                    return true;
+                },
+                true);
+        }
+    }
+    std::vector<SignalId> named_events;
+    named_events.reserve(sensitivities.size());
+    const bool all_named_events = std::ranges::all_of(
+        sensitivities,
+        [&](const semantic::sv::Sensitivity& sensitivity) {
+            if (sensitivity.edge != semantic::sv::EdgeKind::any) {
+                return false;
+            }
+            const auto event = sensitivity.expression
+                ? hir_systemverilog_event_signal(
+                      *sensitivity.expression, hir_process_scope_)
+                : std::optional<SignalId> { };
+            if (!event) {
+                return false;
+            }
+            named_events.push_back(*event);
+            return true;
+        });
+    if (all_named_events) {
+        process_.operations.emplace_back(WaitOn {
+            std::move(named_events),
+            std::vector<runtime::simir::EdgeKind>(
+                sensitivities.size(), runtime::simir::EdgeKind::any),
+        });
+        return true;
+    }
+
+    const auto general = std::ranges::find_if(
+        sensitivities,
+        [](const semantic::sv::Sensitivity& sensitivity) {
+            return sensitivity.expression.has_value();
+        });
+    // A wait on an automatic variable compares its value (9.4.2).
+    const bool local_event = std::ranges::any_of(sensitivities,
+        [&](const semantic::sv::Sensitivity& sensitivity) {
+            return !sensitivity.expression
+                && !hir_named_signal(sensitivity.signal,
+                    hir_process_scope_, sensitivity.source_order)
+                && (hir_local_event_variable(sensitivity.signal,
+                        hir_process_scope_, sensitivity.source_order)
+                    || hir_named_class_property(sensitivity.signal,
+                        hir_process_scope_, sensitivity.source_order)
+                    || hir_local_string_event(sensitivity.signal,
+                        hir_process_scope_, sensitivity.source_order));
+        });
+    if (general == sensitivities.end() && !local_event) {
+        std::vector<SignalId> signals;
+        std::vector<runtime::simir::EdgeKind> edges;
+        signals.reserve(sensitivities.size());
+        edges.reserve(sensitivities.size());
+        // A member of a virtual interface (`@(posedge vif.clk)`) waits
+        // on that member of whichever instance the handle names when
+        // the wait begins (IEEE 1800-2017 25.9).
+        if (sensitivities.size() == 1U
+            && !hir_named_signal(
+                sensitivities.front().signal, hir_process_scope_,
+                sensitivities.front().source_order)) {
+            const auto& sensitivity = sensitivities.front();
+            const auto member = hir_virtual_interface_member(
+                sensitivity.signal, hir_process_scope_);
+            if (!member && hierarchical_reference_missed_) {
+                // Interface instances are bound in the retry pass.
+                return false;
+            }
+            const auto handle = member && !member->candidates.empty()
+                ? lower_hir_virtual_interface_member_handle(*member)
+                : std::nullopt;
+            const bool scalar_edges = member
+                && (sensitivity.edge == semantic::sv::EdgeKind::any
+                    || std::ranges::all_of(member->candidates,
+                        [&](const auto& candidate) {
+                            return design_.signal_info_[
+                                       candidate.second].width == 1U;
+                        }));
+            if (handle && scalar_edges) {
+                std::vector<InstructionIndex> exits;
+                for (const auto& [identity, signal] : member->candidates) {
+                    const auto constant
+                        = load_constant(unsigned_value(identity, 64U),
+                            frontend::ValueDomain::Bit2);
+                    const auto selected = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, selected, *handle,
+                        constant });
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        selected, branch + 1U, 0U,
+                        UnknownBranchPolicy::when_false });
+                    process_.operations.emplace_back(WaitOn {
+                        std::vector<SignalId> { signal },
+                        std::vector<runtime::simir::EdgeKind> {
+                            event_edge(sensitivity.edge) } });
+                    exits.push_back(static_cast<InstructionIndex>(
+                        process_.operations.size()));
+                    process_.operations.emplace_back(Jump { 0U });
+                    process_.operations[branch] = Branch {
+                        selected, branch + 1U,
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()),
+                        UnknownBranchPolicy::when_false };
+                }
+                const auto end = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                for (const auto exit : exits) {
+                    process_.operations[exit] = Jump { end };
+                }
+                return true;
+            }
+        }
+        for (const auto& sensitivity : sensitivities) {
+            auto found = hir_named_signal(
+                sensitivity.signal, hir_process_scope_,
+                sensitivity.source_order);
+            if (!found && sensitivity.edge == semantic::sv::EdgeKind::any) {
+                found = hir_change_notifier(sensitivity.signal,
+                    hir_process_scope_, sensitivity.source_order);
+            }
+            if (!found) {
+                report(
+                    "FSIM-ELAB-059",
+                    "unknown wait signal '" + sensitivity.signal + "'",
+                    hir_source_span(sensitivity.source));
+                return true;
+            }
+            if (sensitivity.edge != semantic::sv::EdgeKind::any
+                && design_.signal_info_[*found].width == 0U) {
+                report(
+                    "FSIM-ELAB-060",
+                    "dynamic edge-qualified wait signal '"
+                        + sensitivity.signal + "' must be non-empty",
+                    hir_source_span(sensitivity.source));
+                return true;
+            }
+            signals.push_back(*found);
+            edges.push_back(event_edge(sensitivity.edge));
+        }
+        process_.operations.emplace_back(WaitOn {
+            std::move(signals), std::move(edges) });
+        return true;
+    }
+    struct EventExpressionState {
+        std::optional<semantic::ExpressionId> expression;
+        std::optional<SignalId> signal;
+        std::optional<RegisterId> local;
+        std::optional<HirNamedClassProperty> class_property;
+        // An automatic string: the notifier wakes the wait, and the
+        // value decides whether it changed in this activation.
+        std::optional<StringRegisterId> string_local;
+        StringRegisterId string_baseline { };
+        semantic::sv::EdgeKind edge { semantic::sv::EdgeKind::any };
+        std::size_t width { };
+        RegisterId baseline { };
+    };
+    std::vector<EventExpressionState> expressions;
+    std::vector<SignalId> dependencies;
+    expressions.reserve(sensitivities.size());
+    for (const auto& sensitivity : sensitivities) {
+        EventExpressionState state;
+        state.expression = sensitivity.expression;
+        state.edge = sensitivity.edge;
+
+        std::optional<std::size_t> width;
+        const auto dependency_start = dependencies.size();
+        if (state.expression) {
+            width = hir_expression_width(
+                *state.expression, hir_process_scope_);
+            auto expression_dependencies = hir_signal_dependencies(
+                *state.expression, hir_process_scope_);
+            dependencies.insert(
+                dependencies.end(),
+                expression_dependencies.begin(),
+                expression_dependencies.end());
+            hir_local_event_notifiers(*state.expression, dependencies);
+        } else if (const auto found = hir_named_signal(
+                       sensitivity.signal, hir_process_scope_,
+                       sensitivity.source_order)) {
+            state.signal = *found;
+            width = design_.signal_info_[*found].width;
+            dependencies.push_back(*found);
+        } else if (const auto property = hir_named_class_property(
+                       sensitivity.signal, hir_process_scope_,
+                       sensitivity.source_order)) {
+            const auto notifier = hir_class_heap_notifier();
+            if (!notifier) {
+                return false;
+            }
+            state.class_property = *property;
+            width = property->width;
+            dependencies.push_back(*notifier);
+        } else if (const auto text = hir_local_string_event(
+                       sensitivity.signal, hir_process_scope_,
+                       sensitivity.source_order);
+            text && sensitivity.edge == semantic::sv::EdgeKind::any) {
+            const auto notifier = hir_local_event_notifier(text->first);
+            if (!notifier) {
+                return false;
+            }
+            state.signal = *notifier;
+            state.string_local = text->second;
+            width = 1U;
+            dependencies.push_back(*notifier);
+        } else if (const auto change = hir_change_notifier(
+                       sensitivity.signal, hir_process_scope_,
+                       sensitivity.source_order);
+            change
+            && sensitivity.edge == semantic::sv::EdgeKind::any) {
+            state.signal = *change;
+            width = 1U;
+            dependencies.push_back(*change);
+        } else if (const auto local = hir_local_event_variable(
+                       sensitivity.signal, hir_process_scope_,
+                       sensitivity.source_order)) {
+            state.local = local->second;
+            width = register_width(local->second);
+            if (const auto notifier = hir_local_event_notifier(
+                    local->first)) {
+                dependencies.push_back(*notifier);
+            }
+        } else {
+            report(
+                "FSIM-ELAB-059",
+                "unknown wait signal '" + sensitivity.signal + "'",
+                hir_source_span(sensitivity.source));
+            return true;
+        }
+        if (dependencies.size() == dependency_start) {
+            report(
+                "FSIM-ELAB-SVEVENT-001",
+                "packed event expression has no readable signal "
+                "dependencies",
+                hir_source_span(sensitivity.source));
+            return true;
+        }
+        if (!width || *width == 0U || *width > 64U
+            || (state.edge != semantic::sv::EdgeKind::any
+                && *width != 1U)) {
+            report(
+                "FSIM-ELAB-SVEVENT-003",
+                state.edge == semantic::sv::EdgeKind::any
+                    ? "packed event expression must have an executable "
+                      "width from 1 through 64 bits"
+                    : "edge-qualified event expression must be an "
+                      "executable scalar",
+                hir_source_span(sensitivity.source));
+            return true;
+        }
+        state.width = *width;
+        std::optional<RegisterId> baseline;
+        if (state.class_property) {
+            baseline = lower_hir_named_class_property(
+                *state.class_property);
+        } else if (state.expression) {
+            baseline = lower_hir_expression(
+                *state.expression, state.width);
+        } else if (state.local) {
+            baseline = allocate_register(
+                state.width, register_domain(*state.local));
+            process_.operations.emplace_back(CopyRegister {
+                *baseline, *state.local });
+        } else {
+            baseline = allocate_register(
+                state.width,
+                design_.signal_info_[*state.signal].source_domain);
+            process_.operations.emplace_back(ReadSignal {
+                *baseline, *state.signal });
+        }
+        if (!baseline) {
+            return false;
+        }
+        state.baseline = *baseline;
+        if (state.string_local) {
+            state.string_baseline = allocate_string_register();
+            process_.operations.emplace_back(CopyStringRegister {
+                state.string_baseline, *state.string_local });
+        }
+        expressions.push_back(std::move(state));
+    }
+    std::ranges::sort(dependencies);
+    dependencies.erase(
+        std::ranges::unique(dependencies).begin(),
+        dependencies.end());
+    const auto evaluation = static_cast<InstructionIndex>(
+        process_.operations.size() + 1U);
+    process_.operations.emplace_back(WaitOn {
+        dependencies,
+        std::vector<runtime::simir::EdgeKind>(
+            dependencies.size(), runtime::simir::EdgeKind::any),
+    });
+    const auto logical_not = [&](const RegisterId input) {
+        const auto output = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalNot { output, input });
+        return output;
+    };
+    const auto logical = [&](const LogicalBinaryOperator operation,
+                             const RegisterId lhs,
+                             const RegisterId rhs) {
+        const auto output = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalBinary {
+            operation, output, lhs, rhs });
+        return output;
+    };
+    std::vector<RegisterId> matches;
+    matches.reserve(expressions.size());
+    for (auto& state : expressions) {
+        if (state.string_local) {
+            const auto current_text = allocate_string_register();
+            process_.operations.emplace_back(CopyStringRegister {
+                current_text, *state.string_local });
+            const auto changed = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(CompareStrings {
+                changed, state.string_baseline, current_text, true });
+            matches.push_back(changed);
+            process_.operations.emplace_back(CopyStringRegister {
+                state.string_baseline, current_text });
+            continue;
+        }
+        std::optional<RegisterId> current;
+        if (state.class_property) {
+            current = lower_hir_named_class_property(
+                *state.class_property);
+        } else if (state.expression) {
+            current = lower_hir_expression(
+                *state.expression, state.width);
+        } else if (state.local) {
+            current = allocate_register(
+                state.width, register_domain(*state.local));
+            process_.operations.emplace_back(CopyRegister {
+                *current, *state.local });
+        } else {
+            current = allocate_register(
+                state.width,
+                design_.signal_info_[*state.signal].source_domain);
+            process_.operations.emplace_back(ReadSignal {
+                *current, *state.signal });
+        }
+        if (!current) {
+            return false;
+        }
+        const auto equal = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal,
+            equal,
+            state.baseline,
+            *current,
+        });
+        auto matched = logical_not(equal);
+        if (state.edge != semantic::sv::EdgeKind::any) {
+            const auto zero = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            const auto one = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 1U) });
+            process_.operations.emplace_back(
+                LoadConstant { one, unsigned_value(1U, 1U) });
+            const auto previous_forbidden = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            const auto current_forbidden = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal,
+                previous_forbidden,
+                state.baseline,
+                state.edge == semantic::sv::EdgeKind::positive
+                    ? one
+                    : zero,
+            });
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal,
+                current_forbidden,
+                *current,
+                state.edge == semantic::sv::EdgeKind::positive
+                    ? zero
+                    : one,
+            });
+            matched = logical(
+                LogicalBinaryOperator::logical_and,
+                matched,
+                logical_not(previous_forbidden));
+            matched = logical(
+                LogicalBinaryOperator::logical_and,
+                matched,
+                logical_not(current_forbidden));
+        }
+        matches.push_back(matched);
+        process_.operations.emplace_back(CopyRegister {
+            state.baseline, *current });
+    }
+    auto matched = matches.front();
+    for (std::size_t index = 1U; index < matches.size(); ++index) {
+        matched = logical(
+            LogicalBinaryOperator::logical_or,
+            matched,
+            matches[index]);
+    }
+    const auto branch = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch {
+        matched, 0U, 0U, UnknownBranchPolicy::when_false });
+    const auto rewait = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto dependency_count = dependencies.size();
+    process_.operations.emplace_back(WaitOn {
+        std::move(dependencies),
+        std::vector<runtime::simir::EdgeKind>(
+            dependency_count, runtime::simir::EdgeKind::any),
+    });
+    process_.operations.emplace_back(Jump { evaluation });
+    const auto satisfied = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[branch] = Branch {
+        matched,
+        satisfied,
+        rewait,
+        UnknownBranchPolicy::when_false,
+    };
+    return true;
+}
+
 bool Lowerer::lower_hir_statement_unsuspended(
     const semantic::StatementId statement_id)
 {
@@ -2673,564 +3342,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                       const std::span<const semantic::StatementId> wildcard_statements
                                       = { })
         -> bool {
-        if (sensitivities.empty()) {
-            return false;
-        }
-        emit_debug_point(DebugPointKind::wait, span);
-        if (sensitivities.size() == 1U
-            && sensitivities.front().signal == "*") {
-            const auto dependencies = wildcard_expression
-                ? hir_signal_dependencies(
-                      *wildcard_expression, hir_process_scope_)
-                : hir_statement_signal_dependencies(
-                      wildcard_statements, hir_process_scope_);
-            if (dependencies.empty()) {
-                report(
-                    "FSIM-ELAB-062",
-                    "dynamic wildcard event control has no readable signal "
-                    "dependencies",
-                    hir_source_span(sensitivities.front().source));
-                return true;
-            }
-            process_.operations.emplace_back(WaitOn {
-                dependencies,
-                std::vector<runtime::simir::EdgeKind>(
-                    dependencies.size(),
-                    runtime::simir::EdgeKind::any),
-            });
-            return true;
-        }
-
-        // `@(vif.member)`: wait on the member of every instance the handle
-        // may name, until the selected member has the event (25.9).
-        if (sensitivities.size() == 1U
-            && !sensitivities.front().expression
-            && sensitivities.front().signal.find('.') != std::string::npos
-            && !hir_named_signal(
-                sensitivities.front().signal, hir_process_scope_,
-                sensitivities.front().source_order)) {
-            if (const auto member = hir_virtual_interface_member(
-                    sensitivities.front().signal, hir_process_scope_)) {
-                const auto edge = sensitivities.front().edge;
-                if (edge != semantic::sv::EdgeKind::any && member->width != 1U) {
-                    return false;
-                }
-                const auto baseline = lower_hir_virtual_interface_read(*member);
-                if (!baseline) {
-                    return false;
-                }
-                const auto loop = static_cast<InstructionIndex>(
-                    process_.operations.size());
-                std::vector<SignalId> candidates;
-                for (const auto& [identity, signal] : member->candidates) {
-                    (void)identity;
-                    candidates.push_back(signal);
-                }
-                process_.operations.emplace_back(WaitOn {
-                    candidates,
-                    std::vector<runtime::simir::EdgeKind>(
-                        candidates.size(), runtime::simir::EdgeKind::any),
-                });
-                const auto current = lower_hir_virtual_interface_read(*member);
-                if (!current) {
-                    return false;
-                }
-                const auto happened = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                if (edge == semantic::sv::EdgeKind::any) {
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::case_equal, happened, *current,
-                        *baseline });
-                    process_.operations.emplace_back(UnaryNot {
-                        happened, happened });
-                } else {
-                    // A posedge leaves 0 or arrives at 1; a negedge leaves 1
-                    // or arrives at 0 (IEEE 1800-2017 table 9-2).
-                    const bool rising
-                        = edge == semantic::sv::EdgeKind::positive;
-                    const auto target = allocate_register(
-                        1U, frontend::ValueDomain::Logic4);
-                    const auto start = allocate_register(
-                        1U, frontend::ValueDomain::Logic4);
-                    process_.operations.emplace_back(LoadConstant {
-                        target, PackedLogic4 { 1U,
-                            rising ? Logic4::one : Logic4::zero } });
-                    process_.operations.emplace_back(LoadConstant {
-                        start, PackedLogic4 { 1U,
-                            rising ? Logic4::zero : Logic4::one } });
-                    const auto same = allocate_register(
-                        1U, frontend::ValueDomain::Bit2);
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::case_equal, same, *current,
-                        *baseline });
-                    process_.operations.emplace_back(UnaryNot { same, same });
-                    const auto arrived = allocate_register(
-                        1U, frontend::ValueDomain::Bit2);
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::case_equal, arrived, *current, target });
-                    const auto left = allocate_register(
-                        1U, frontend::ValueDomain::Bit2);
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::case_equal, left, *baseline, start });
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::bit_or, arrived, arrived, left });
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::bit_and, happened, same, arrived });
-                }
-                process_.operations.emplace_back(CopyRegister {
-                    *baseline, *current });
-                const auto branch = static_cast<InstructionIndex>(
-                    process_.operations.size());
-                process_.operations.emplace_back(Branch {
-                    happened, branch + 1U, loop,
-                    UnknownBranchPolicy::when_false });
-                return true;
-            }
-        }
-        if (sensitivities.size() == 1U
-            && sensitivities.front().edge
-                == semantic::sv::EdgeKind::any
-            && sensitivities.front().expression) {
-            if (const auto event_array
-                = hir_systemverilog_event_array_selection(
-                    *sensitivities.front().expression,
-                    hir_process_scope_)) {
-                return lower_hir_systemverilog_event_array_dispatch(
-                    *event_array,
-                    hir_source_span(sensitivities.front().source),
-                    [&](const SignalId event) {
-                        process_.operations.emplace_back(WaitOn {
-                            { event },
-                            { runtime::simir::EdgeKind::any },
-                        });
-                        return true;
-                    },
-                    true);
-            }
-        }
-        std::vector<SignalId> named_events;
-        named_events.reserve(sensitivities.size());
-        const bool all_named_events = std::ranges::all_of(
-            sensitivities,
-            [&](const semantic::sv::Sensitivity& sensitivity) {
-                if (sensitivity.edge != semantic::sv::EdgeKind::any) {
-                    return false;
-                }
-                const auto event = sensitivity.expression
-                    ? hir_systemverilog_event_signal(
-                          *sensitivity.expression, hir_process_scope_)
-                    : std::optional<SignalId> { };
-                if (!event) {
-                    return false;
-                }
-                named_events.push_back(*event);
-                return true;
-            });
-        if (all_named_events) {
-            process_.operations.emplace_back(WaitOn {
-                std::move(named_events),
-                std::vector<runtime::simir::EdgeKind>(
-                    sensitivities.size(), runtime::simir::EdgeKind::any),
-            });
-            return true;
-        }
-
-        const auto general = std::ranges::find_if(
-            sensitivities,
-            [](const semantic::sv::Sensitivity& sensitivity) {
-                return sensitivity.expression.has_value();
-            });
-        // A wait on an automatic variable compares its value (9.4.2).
-        const bool local_event = std::ranges::any_of(sensitivities,
-            [&](const semantic::sv::Sensitivity& sensitivity) {
-                return !sensitivity.expression
-                    && !hir_named_signal(sensitivity.signal,
-                        hir_process_scope_, sensitivity.source_order)
-                    && (hir_local_event_variable(sensitivity.signal,
-                            hir_process_scope_, sensitivity.source_order)
-                        || hir_named_class_property(sensitivity.signal,
-                            hir_process_scope_, sensitivity.source_order)
-                        || hir_local_string_event(sensitivity.signal,
-                            hir_process_scope_, sensitivity.source_order));
-            });
-        if (general == sensitivities.end() && !local_event) {
-            std::vector<SignalId> signals;
-            std::vector<runtime::simir::EdgeKind> edges;
-            signals.reserve(sensitivities.size());
-            edges.reserve(sensitivities.size());
-            // A member of a virtual interface (`@(posedge vif.clk)`) waits
-            // on that member of whichever instance the handle names when
-            // the wait begins (IEEE 1800-2017 25.9).
-            if (sensitivities.size() == 1U
-                && !hir_named_signal(
-                    sensitivities.front().signal, hir_process_scope_,
-                    sensitivities.front().source_order)) {
-                const auto& sensitivity = sensitivities.front();
-                const auto member = hir_virtual_interface_member(
-                    sensitivity.signal, hir_process_scope_);
-                if (!member && hierarchical_reference_missed_) {
-                    // Interface instances are bound in the retry pass.
-                    return false;
-                }
-                const auto handle = member && !member->candidates.empty()
-                    ? lower_hir_virtual_interface_member_handle(*member)
-                    : std::nullopt;
-                const bool scalar_edges = member
-                    && (sensitivity.edge == semantic::sv::EdgeKind::any
-                        || std::ranges::all_of(member->candidates,
-                            [&](const auto& candidate) {
-                                return design_.signal_info_[
-                                           candidate.second].width == 1U;
-                            }));
-                if (handle && scalar_edges) {
-                    std::vector<InstructionIndex> exits;
-                    for (const auto& [identity, signal] : member->candidates) {
-                        const auto constant
-                            = load_constant(unsigned_value(identity, 64U),
-                                frontend::ValueDomain::Bit2);
-                        const auto selected = allocate_register(
-                            1U, frontend::ValueDomain::Bit2);
-                        process_.operations.emplace_back(Binary {
-                            BinaryOperator::case_equal, selected, *handle,
-                            constant });
-                        const auto branch = static_cast<InstructionIndex>(
-                            process_.operations.size());
-                        process_.operations.emplace_back(Branch {
-                            selected, branch + 1U, 0U,
-                            UnknownBranchPolicy::when_false });
-                        process_.operations.emplace_back(WaitOn {
-                            std::vector<SignalId> { signal },
-                            std::vector<runtime::simir::EdgeKind> {
-                                event_edge(sensitivity.edge) } });
-                        exits.push_back(static_cast<InstructionIndex>(
-                            process_.operations.size()));
-                        process_.operations.emplace_back(Jump { 0U });
-                        process_.operations[branch] = Branch {
-                            selected, branch + 1U,
-                            static_cast<InstructionIndex>(
-                                process_.operations.size()),
-                            UnknownBranchPolicy::when_false };
-                    }
-                    const auto end = static_cast<InstructionIndex>(
-                        process_.operations.size());
-                    for (const auto exit : exits) {
-                        process_.operations[exit] = Jump { end };
-                    }
-                    return true;
-                }
-            }
-            for (const auto& sensitivity : sensitivities) {
-                auto found = hir_named_signal(
-                    sensitivity.signal, hir_process_scope_,
-                    sensitivity.source_order);
-                if (!found && sensitivity.edge == semantic::sv::EdgeKind::any) {
-                    found = hir_change_notifier(sensitivity.signal,
-                        hir_process_scope_, sensitivity.source_order);
-                }
-                if (!found) {
-                    report(
-                        "FSIM-ELAB-059",
-                        "unknown wait signal '" + sensitivity.signal + "'",
-                        hir_source_span(sensitivity.source));
-                    return true;
-                }
-                if (sensitivity.edge != semantic::sv::EdgeKind::any
-                    && design_.signal_info_[*found].width == 0U) {
-                    report(
-                        "FSIM-ELAB-060",
-                        "dynamic edge-qualified wait signal '"
-                            + sensitivity.signal + "' must be non-empty",
-                        hir_source_span(sensitivity.source));
-                    return true;
-                }
-                signals.push_back(*found);
-                edges.push_back(event_edge(sensitivity.edge));
-            }
-            process_.operations.emplace_back(WaitOn {
-                std::move(signals), std::move(edges) });
-            return true;
-        }
-        struct EventExpressionState {
-            std::optional<semantic::ExpressionId> expression;
-            std::optional<SignalId> signal;
-            std::optional<RegisterId> local;
-            std::optional<HirNamedClassProperty> class_property;
-            // An automatic string: the notifier wakes the wait, and the
-            // value decides whether it changed in this activation.
-            std::optional<StringRegisterId> string_local;
-            StringRegisterId string_baseline { };
-            semantic::sv::EdgeKind edge { semantic::sv::EdgeKind::any };
-            std::size_t width { };
-            RegisterId baseline { };
-        };
-        std::vector<EventExpressionState> expressions;
-        std::vector<SignalId> dependencies;
-        expressions.reserve(sensitivities.size());
-        for (const auto& sensitivity : sensitivities) {
-            EventExpressionState state;
-            state.expression = sensitivity.expression;
-            state.edge = sensitivity.edge;
-
-            std::optional<std::size_t> width;
-            const auto dependency_start = dependencies.size();
-            if (state.expression) {
-                width = hir_expression_width(
-                    *state.expression, hir_process_scope_);
-                auto expression_dependencies = hir_signal_dependencies(
-                    *state.expression, hir_process_scope_);
-                dependencies.insert(
-                    dependencies.end(),
-                    expression_dependencies.begin(),
-                    expression_dependencies.end());
-                hir_local_event_notifiers(*state.expression, dependencies);
-            } else if (const auto found = hir_named_signal(
-                           sensitivity.signal, hir_process_scope_,
-                           sensitivity.source_order)) {
-                state.signal = *found;
-                width = design_.signal_info_[*found].width;
-                dependencies.push_back(*found);
-            } else if (const auto property = hir_named_class_property(
-                           sensitivity.signal, hir_process_scope_,
-                           sensitivity.source_order)) {
-                const auto notifier = hir_class_heap_notifier();
-                if (!notifier) {
-                    return false;
-                }
-                state.class_property = *property;
-                width = property->width;
-                dependencies.push_back(*notifier);
-            } else if (const auto text = hir_local_string_event(
-                           sensitivity.signal, hir_process_scope_,
-                           sensitivity.source_order);
-                text && sensitivity.edge == semantic::sv::EdgeKind::any) {
-                const auto notifier = hir_local_event_notifier(text->first);
-                if (!notifier) {
-                    return false;
-                }
-                state.signal = *notifier;
-                state.string_local = text->second;
-                width = 1U;
-                dependencies.push_back(*notifier);
-            } else if (const auto change = hir_change_notifier(
-                           sensitivity.signal, hir_process_scope_,
-                           sensitivity.source_order);
-                change
-                && sensitivity.edge == semantic::sv::EdgeKind::any) {
-                state.signal = *change;
-                width = 1U;
-                dependencies.push_back(*change);
-            } else if (const auto local = hir_local_event_variable(
-                           sensitivity.signal, hir_process_scope_,
-                           sensitivity.source_order)) {
-                state.local = local->second;
-                width = register_width(local->second);
-                if (const auto notifier = hir_local_event_notifier(
-                        local->first)) {
-                    dependencies.push_back(*notifier);
-                }
-            } else {
-                report(
-                    "FSIM-ELAB-059",
-                    "unknown wait signal '" + sensitivity.signal + "'",
-                    hir_source_span(sensitivity.source));
-                return true;
-            }
-            if (dependencies.size() == dependency_start) {
-                report(
-                    "FSIM-ELAB-SVEVENT-001",
-                    "packed event expression has no readable signal "
-                    "dependencies",
-                    hir_source_span(sensitivity.source));
-                return true;
-            }
-            if (!width || *width == 0U || *width > 64U
-                || (state.edge != semantic::sv::EdgeKind::any
-                    && *width != 1U)) {
-                report(
-                    "FSIM-ELAB-SVEVENT-003",
-                    state.edge == semantic::sv::EdgeKind::any
-                        ? "packed event expression must have an executable "
-                          "width from 1 through 64 bits"
-                        : "edge-qualified event expression must be an "
-                          "executable scalar",
-                    hir_source_span(sensitivity.source));
-                return true;
-            }
-            state.width = *width;
-            std::optional<RegisterId> baseline;
-            if (state.class_property) {
-                baseline = lower_hir_named_class_property(
-                    *state.class_property);
-            } else if (state.expression) {
-                baseline = lower_hir_expression(
-                    *state.expression, state.width);
-            } else if (state.local) {
-                baseline = allocate_register(
-                    state.width, register_domain(*state.local));
-                process_.operations.emplace_back(CopyRegister {
-                    *baseline, *state.local });
-            } else {
-                baseline = allocate_register(
-                    state.width,
-                    design_.signal_info_[*state.signal].source_domain);
-                process_.operations.emplace_back(ReadSignal {
-                    *baseline, *state.signal });
-            }
-            if (!baseline) {
-                return false;
-            }
-            state.baseline = *baseline;
-            if (state.string_local) {
-                state.string_baseline = allocate_string_register();
-                process_.operations.emplace_back(CopyStringRegister {
-                    state.string_baseline, *state.string_local });
-            }
-            expressions.push_back(std::move(state));
-        }
-        std::ranges::sort(dependencies);
-        dependencies.erase(
-            std::ranges::unique(dependencies).begin(),
-            dependencies.end());
-        const auto evaluation = static_cast<InstructionIndex>(
-            process_.operations.size() + 1U);
-        process_.operations.emplace_back(WaitOn {
-            dependencies,
-            std::vector<runtime::simir::EdgeKind>(
-                dependencies.size(), runtime::simir::EdgeKind::any),
-        });
-        const auto logical_not = [&](const RegisterId input) {
-            const auto output = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LogicalNot { output, input });
-            return output;
-        };
-        const auto logical = [&](const LogicalBinaryOperator operation,
-                                 const RegisterId lhs,
-                                 const RegisterId rhs) {
-            const auto output = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LogicalBinary {
-                operation, output, lhs, rhs });
-            return output;
-        };
-        std::vector<RegisterId> matches;
-        matches.reserve(expressions.size());
-        for (auto& state : expressions) {
-            if (state.string_local) {
-                const auto current_text = allocate_string_register();
-                process_.operations.emplace_back(CopyStringRegister {
-                    current_text, *state.string_local });
-                const auto changed = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(CompareStrings {
-                    changed, state.string_baseline, current_text, true });
-                matches.push_back(changed);
-                process_.operations.emplace_back(CopyStringRegister {
-                    state.string_baseline, current_text });
-                continue;
-            }
-            std::optional<RegisterId> current;
-            if (state.class_property) {
-                current = lower_hir_named_class_property(
-                    *state.class_property);
-            } else if (state.expression) {
-                current = lower_hir_expression(
-                    *state.expression, state.width);
-            } else if (state.local) {
-                current = allocate_register(
-                    state.width, register_domain(*state.local));
-                process_.operations.emplace_back(CopyRegister {
-                    *current, *state.local });
-            } else {
-                current = allocate_register(
-                    state.width,
-                    design_.signal_info_[*state.signal].source_domain);
-                process_.operations.emplace_back(ReadSignal {
-                    *current, *state.signal });
-            }
-            if (!current) {
-                return false;
-            }
-            const auto equal = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(Binary {
-                BinaryOperator::case_equal,
-                equal,
-                state.baseline,
-                *current,
-            });
-            auto matched = logical_not(equal);
-            if (state.edge != semantic::sv::EdgeKind::any) {
-                const auto zero = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                const auto one = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(
-                    LoadConstant { zero, unsigned_value(0U, 1U) });
-                process_.operations.emplace_back(
-                    LoadConstant { one, unsigned_value(1U, 1U) });
-                const auto previous_forbidden = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                const auto current_forbidden = allocate_register(
-                    1U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(Binary {
-                    BinaryOperator::case_equal,
-                    previous_forbidden,
-                    state.baseline,
-                    state.edge == semantic::sv::EdgeKind::positive
-                        ? one
-                        : zero,
-                });
-                process_.operations.emplace_back(Binary {
-                    BinaryOperator::case_equal,
-                    current_forbidden,
-                    *current,
-                    state.edge == semantic::sv::EdgeKind::positive
-                        ? zero
-                        : one,
-                });
-                matched = logical(
-                    LogicalBinaryOperator::logical_and,
-                    matched,
-                    logical_not(previous_forbidden));
-                matched = logical(
-                    LogicalBinaryOperator::logical_and,
-                    matched,
-                    logical_not(current_forbidden));
-            }
-            matches.push_back(matched);
-            process_.operations.emplace_back(CopyRegister {
-                state.baseline, *current });
-        }
-        auto matched = matches.front();
-        for (std::size_t index = 1U; index < matches.size(); ++index) {
-            matched = logical(
-                LogicalBinaryOperator::logical_or,
-                matched,
-                matches[index]);
-        }
-        const auto branch = static_cast<InstructionIndex>(
-            process_.operations.size());
-        process_.operations.emplace_back(Branch {
-            matched, 0U, 0U, UnknownBranchPolicy::when_false });
-        const auto rewait = static_cast<InstructionIndex>(
-            process_.operations.size());
-        const auto dependency_count = dependencies.size();
-        process_.operations.emplace_back(WaitOn {
-            std::move(dependencies),
-            std::vector<runtime::simir::EdgeKind>(
-                dependency_count, runtime::simir::EdgeKind::any),
-        });
-        process_.operations.emplace_back(Jump { evaluation });
-        const auto satisfied = static_cast<InstructionIndex>(
-            process_.operations.size());
-        process_.operations[branch] = Branch {
-            matched,
-            satisfied,
-            rewait,
-            UnknownBranchPolicy::when_false,
-        };
-        return true;
+        return lower_hir_sensitivity_wait(
+            sensitivities, wildcard_expression, wildcard_statements, span);
     };
     const auto lower_repeated_event_wait = [&](const auto& sensitivities,
                                                const std::optional<semantic::ExpressionId> event,
@@ -3356,6 +3469,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
             *target);
         if (!target_expression) {
             return assignment_rejected(__LINE__);
+        }
+        // A variable with run-time index ranges (IEEE 1076-2008 10.6.2.1).
+        if (!signal_assignment && statement->vhdl != nullptr) {
+            if (const auto shaped
+                = lower_hir_vhdl_shaped_assignment(*target, *value)) {
+                return *shaped || assignment_rejected(__LINE__);
+            }
         }
         // A packed member of an interface array element's signal
         // (`bus[2].data.d = v`, IEEE 1800-2017 25.4, 7.2) is a constant
@@ -9374,6 +9494,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 binding->signal = drive->second;
             }
         }
+        // Any write of an output clockvar's request is a synchronous drive
+        // (14.16).
+        if (binding && binding->signal) {
+            emit_clocking_drive_pending(*binding->signal);
+        }
         // A whole unpacked structure from its packed image, as a class
         // property holds it (IEEE 1800-2017 7.2, 10.4.1).
         if (!binding && statement->systemverilog != nullptr && !nonblocking
@@ -9922,13 +10047,31 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 };
             }
         }
-        const auto vhdl_dynamic_slice_width
-            = target_is_selected && slice && !constant_selection
-                && target_expression->vhdl != nullptr
-                && (!hir_constant_integer(target_operands[1])
-                    || !hir_constant_integer(target_operands[2]))
-            ? hir_expression_width(*value, hir_process_scope_)
-            : std::nullopt;
+        // A dynamic slice takes the length of its value, or of its own
+        // bounds when they differ by a constant (`v(i+7 downto i) :=
+        // (others => '1')`, IEEE 1076-2008 8.5, 9.3.3.3).
+        const bool vhdl_dynamic_slice = target_is_selected && slice
+            && !constant_selection && target_expression->vhdl != nullptr
+            && (!hir_constant_integer(target_operands[1])
+                || !hir_constant_integer(target_operands[2]));
+        // The target's own length wins: a value such as an aggregate with a
+        // non-static range choice has no width of its own.
+        std::optional<std::size_t> vhdl_dynamic_slice_width;
+        if (vhdl_dynamic_slice) {
+            const auto prefix_subtype
+                = hir_vhdl_expression_subtype(target_operands[0]);
+            const auto element_width = prefix_subtype
+                ? hir_vhdl_vector_element_width(*prefix_subtype)
+                : std::nullopt;
+            if (const auto length = hir_vhdl_symbolic_slice_length(*target);
+                length && *length != 0U && element_width) {
+                vhdl_dynamic_slice_width = *length * *element_width;
+            }
+        }
+        if (vhdl_dynamic_slice && !vhdl_dynamic_slice_width) {
+            vhdl_dynamic_slice_width
+                = hir_expression_width(*value, hir_process_scope_);
+        }
         if (!dynamic_vhdl_selection && vhdl_dynamic_slice_width) {
             if (*vhdl_dynamic_slice_width == 0U
                 || *vhdl_dynamic_slice_width
@@ -10563,6 +10706,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 || (value_expression->vhdl->kind
                         == semantic::vhdl::ExpressionKind::binary
                     && value_expression->vhdl->text == "&"));
+        // An operand of the concatenation may have bounds known only at run
+        // time (`(1 to i => '1') & ...`); it takes the target's array type.
+        struct ShapedContextGuard {
+            std::optional<HirVhdlShapedProfile>& slot;
+            std::optional<HirVhdlShapedProfile> saved;
+            ~ShapedContextGuard() { slot = std::move(saved); }
+        } shaped_context { hir_vhdl_shaped_context_profile_,
+            hir_vhdl_shaped_context_profile_ };
+        if (vhdl_concatenation && target_subtype) {
+            if (auto profile = hir_vhdl_shaped_open_profile(*target_subtype)) {
+                hir_vhdl_shaped_context_profile_ = std::move(profile);
+            }
+        }
         if (statement->vhdl != nullptr) {
             const auto concatenation_width = vhdl_concatenation
                 ? hir_expression_width(
@@ -17375,6 +17531,154 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 restore_scope();
                 return true;
             }
+            // `for i in x'range` of an array whose bounds are known only at
+            // run time: the parameter takes each index from x'left towards
+            // x'right (IEEE 1076-2008 10.10, 16.2.3).
+            if (vhdl_loop_declaration && statement->vhdl->loop_initial
+                && !statement->vhdl->loop_limit) {
+                const auto attribute = specialized_hir_unit_->find_expression(
+                    *statement->vhdl->loop_initial);
+                const bool reverse = attribute && attribute->vhdl != nullptr
+                    && attribute->vhdl->text == "'reverse_range";
+                const auto* local = attribute && attribute->vhdl != nullptr
+                        && attribute->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::call
+                        && (attribute->vhdl->text == "'range" || reverse)
+                        && !attribute->vhdl->operands.empty()
+                    ? hir_vhdl_shaped_prefix(attribute->vhdl->operands.front())
+                    : nullptr;
+                const auto parameter = hir_local_registers_.find(
+                    vhdl_loop_declaration->value());
+                std::optional<std::uint32_t> dimension;
+                if (local != nullptr) {
+                    dimension = 0U;
+                    if (attribute->vhdl->operands.size() == 2U) {
+                        const auto selected = hir_constant_integer(
+                            attribute->vhdl->operands[1]);
+                        dimension = selected && *selected >= 1
+                                && static_cast<std::size_t>(*selected)
+                                    <= local->profile.constraints.size()
+                            ? std::optional { static_cast<std::uint32_t>(
+                                  *selected - 1) }
+                            : std::nullopt;
+                    }
+                }
+                if (local != nullptr && dimension
+                    && parameter != hir_local_registers_.end()
+                    && register_domain(parameter->second)
+                        == frontend::ValueDomain::Integer) {
+                    const auto parameter_register = parameter->second;
+                    const auto width = register_width(parameter_register);
+                    const auto bound = bind_hir_vhdl_shaped(*local, span);
+                    if (!bound) {
+                        restore_scope();
+                        return false;
+                    }
+                    const auto query = [&](const VhdlShapedAttribute which,
+                                           const std::size_t query_width) {
+                        const auto destination = allocate_register(query_width,
+                            which == VhdlShapedAttribute::ascending
+                                ? frontend::ValueDomain::Boolean
+                                : frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(VhdlShaped {
+                            VhdlShapedOperation::query,
+                            { },
+                            bound->local.container,
+                            destination,
+                            { },
+                            { },
+                            { },
+                            *dimension,
+                            which,
+                            static_cast<std::uint32_t>(query_width),
+                            { },
+                        });
+                        return destination;
+                    };
+                    const auto start = query(reverse ? VhdlShapedAttribute::right
+                                                     : VhdlShapedAttribute::left, width);
+                    const auto remaining = query(VhdlShapedAttribute::length, 64U);
+                    const auto ascending = query(VhdlShapedAttribute::ascending, 1U);
+                    // The step is +1 along an ascending range and -1 along a
+                    // descending one; 'reverse_range walks the other way.
+                    const auto plus = load_integer(1, width, frontend::ValueDomain::Integer);
+                    const auto minus = load_integer(-1, width, frontend::ValueDomain::Integer);
+                    const auto step = allocate_register(width, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(CopyRegister { step,
+                        reverse ? plus : minus });
+                    const auto keep_step = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        ascending, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto take_ascending = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(CopyRegister { step,
+                        reverse ? minus : plus });
+                    const auto after_step = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations[keep_step] = Branch {
+                        ascending, take_ascending, after_step,
+                        UnknownBranchPolicy::when_false };
+                    process_.operations.emplace_back(CopyRegister {
+                        parameter_register, start });
+                    const auto zero = load_integer(0, 64U, frontend::ValueDomain::Integer);
+                    const auto one = load_integer(1, 64U, frontend::ValueDomain::Integer);
+                    const auto loop_start = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    const auto active = allocate_register(1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::greater_signed, active, remaining, zero });
+                    const auto loop_branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        active, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto body = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    LoopControlContext loop;
+                    loop.label = label;
+                    loop_controls_.push_back(std::move(loop));
+                    if (!lower_hir_statements(statements)) {
+                        loop_controls_.pop_back();
+                        restore_scope();
+                        return false;
+                    }
+                    auto control = std::move(loop_controls_.back());
+                    loop_controls_.pop_back();
+                    const auto advance = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    patch_hir_jumps(control.continue_jumps, advance);
+                    const auto left = allocate_register(64U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::subtract_signed, left, remaining, one });
+                    process_.operations.emplace_back(CopyRegister { remaining, left });
+                    // The last step may leave the parameter's subtype; it is
+                    // not read again.
+                    const auto next = allocate_register(width, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::add_signed, next, parameter_register, step });
+                    const auto more = allocate_register(1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::greater_signed, more, remaining, zero });
+                    const auto more_branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        more, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto store_next = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(CopyRegister {
+                        parameter_register, next });
+                    process_.operations.emplace_back(Jump { loop_start });
+                    const auto end = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations[loop_branch] = Branch {
+                        active, body, end, UnknownBranchPolicy::when_false };
+                    process_.operations[more_branch] = Branch {
+                        more, store_next, end, UnknownBranchPolicy::when_false };
+                    patch_hir_jumps(control.break_jumps, end);
+                    restore_scope();
+                    return true;
+                }
+            }
             if (vhdl_loop_declaration
                 && (!vhdl_first_static || !vhdl_last_static)) {
                 report(
@@ -20059,28 +20363,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             // `@(cb)` names a clocking block's clocking event (IEEE
             // 1800-2017 14.3).
-            const auto named_clocking_event = [&]()
-                -> std::optional<std::vector<semantic::sv::Sensitivity>> {
-                if (input.sensitivities.size() != 1U
-                    || input.sensitivities.front().expression
-                    || input.sensitivities.front().edge
-                        != semantic::sv::EdgeKind::any) {
-                    return std::nullopt;
-                }
-                const auto selected = specialized_hir_unit_->design()
-                    .find_unit(specialized_hir_unit_->unit());
-                if (!selected || selected->systemverilog == nullptr) {
-                    return std::nullopt;
-                }
-                const auto& blocks = selected->systemverilog->clocking_blocks;
-                const auto block = std::ranges::find(blocks,
-                    input.sensitivities.front().signal,
-                    &semantic::sv::ClockingBlock::name);
-                if (block == blocks.end() || block->event.empty()) {
-                    return std::nullopt;
-                }
-                return block->event;
-            }();
+            const auto named_clocking_event = hir_named_clocking_event(
+                input.sensitivities, input.scope);
             const auto& sensitivities = named_clocking_event
                 ? *named_clocking_event
                 : input.sensitivities;
@@ -20368,6 +20652,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         return false;
                     }
                 }
+            }
+            // An automatic or callable event triggers its event object
+            // (IEEE 1800-2017 15.5.1).
+            if (const auto handle = hir_systemverilog_event_handle(
+                    { }, hir_process_scope_, *input.target)) {
+                process_.operations.emplace_back(DynamicEvent {
+                    DynamicEventOperation::trigger, 0U, *handle,
+                    input.assignment_kind
+                        == semantic::sv::AssignmentKind::nonblocking });
+                return true;
             }
             if (!binding || !binding->signal) {
                 report(
@@ -23152,6 +23446,41 @@ bool Lowerer::hir_local_event_waited(
     return waited_local_declarations_->contains(declaration.value());
 }
 
+std::optional<RegisterId> Lowerer::hir_systemverilog_event_handle(
+    const std::string_view name,
+    const semantic::ScopeId scope,
+    const std::optional<semantic::ExpressionId> expression)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    auto declaration = expression
+        ? hir_referenced_declaration(*expression)
+        : std::nullopt;
+    if (!declaration && !name.empty() && name.find('.') == std::string_view::npos) {
+        declaration = hir_resolver().resolve_systemverilog(name, scope,
+            [](const semantic::CompiledDeclarationView& candidate) {
+                return candidate.systemverilog != nullptr
+                    && candidate.systemverilog->type.has_value();
+            }, false).unique();
+    }
+    const auto record = declaration
+        ? specialized_hir_unit_->find_declaration(*declaration)
+        : std::nullopt;
+    if (!record || record->systemverilog == nullptr
+        || !record->systemverilog->type
+        || record->systemverilog->type->target.spelling != "event") {
+        return std::nullopt;
+    }
+    const auto binding = hir_runtime_binding(
+        *declaration, hir_process_scope_, true);
+    if (!binding || !binding->local || binding->signal
+        || binding->width != 64U) {
+        return std::nullopt;
+    }
+    return binding->local;
+}
+
 std::optional<SignalId> Lowerer::hir_local_event_notifier(
     const semantic::DeclarationId declaration)
 {
@@ -23782,6 +24111,22 @@ bool Lowerer::lower_hir_virtual_interface_select_write(
     return true;
 }
 
+void Lowerer::emit_clocking_drive_pending(const SignalId request)
+{
+    if (request >= design_.signal_info_.size()) {
+        return;
+    }
+    const auto pending = design_.signal_by_name_.find(
+        design_.signal_info_[request].name + "$pending");
+    if (pending == design_.signal_by_name_.end()) {
+        return;
+    }
+    const auto one = load_constant(
+        unsigned_value(1U, 1U), frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(WriteUpdate {
+        pending->second, one, SignalUpdateDomain::systemverilog_nba });
+}
+
 bool Lowerer::lower_hir_virtual_interface_write(
     const HirVirtualInterfaceMember& member,
     const RegisterId value,
@@ -23806,6 +24151,7 @@ bool Lowerer::lower_hir_virtual_interface_write(
         if (nonblocking) {
             process_.operations.emplace_back(WriteUpdate {
                 signal, value, update_domain });
+            emit_clocking_drive_pending(signal);
         } else {
             process_.operations.emplace_back(WriteBlocking { signal, value });
         }

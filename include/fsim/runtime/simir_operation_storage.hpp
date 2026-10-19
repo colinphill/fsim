@@ -28,7 +28,7 @@ using ValueOperationGroup = OperationGroup<LoadConstant, CopyRegister, ConvertTo
     Binary, Insert, DynamicInsert, DynamicPartInsert,
     IntegerUnary, IntegerBinary, IntegerCheck,
     ConditionalSelect, RandomValue, RandomDistribution, ScopeRandomize,
-    StochasticQueueOperation, VhdlEnvironmentTime>;
+    StochasticQueueOperation, SvaOperation, VhdlEnvironmentTime>;
 
 using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastValue, SignalLastEvent,
     SignalActive,
@@ -70,7 +70,7 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     ContainerStringRead, ContainerStringWrite, FormatContainerPattern,
     ContainerElementRead, ContainerElementWrite,
     VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate,
-    ContainerBitstream>;
+    ContainerBitstream, VhdlShaped>;
 
 using FileOperationGroup = OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
     FileWriteString, FileReadLine, FileEndOfFile,
@@ -83,7 +83,7 @@ using SchedulingOperationGroup = OperationGroup<WaitFor, WaitRegion, WaitOn, Wai
     ProcessKill, ProcessSuspend, ProcessResume,
     ProcessGetRandState, ProcessSetRandState, ProcessSrandom,
     MailboxCreate, MailboxPut, MailboxGet,
-    MailboxNum, SemaphoreCreate, SemaphoreGet, SemaphorePut>;
+    MailboxNum, SemaphoreCreate, SemaphoreGet, SemaphorePut, DynamicEvent>;
 
 using ControlOperationGroup = OperationGroup<Jump, Call, Return,
     CallableFramePush, CallableFramePop, Branch, DebugPoint, Assert, Report,
@@ -330,7 +330,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 197);
+    == 200);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

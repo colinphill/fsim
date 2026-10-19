@@ -97,6 +97,29 @@ struct MailboxNum {
     RegisterId receiver { };
 };
 
+/// A SystemVerilog event that is a value rather than a module signal: an
+/// automatic or class event, an event argument (IEEE 1800-2017 15.5). Its
+/// 64-bit handle is copied by assignment, which shares the event (15.5.5);
+/// 0 is null.
+enum class DynamicEventOperation : std::uint8_t {
+    // destination := a new event.
+    create,
+    // Trigger receiver's event (15.5.1); `->>` when nonblocking.
+    trigger,
+    // Suspend until receiver's event is next triggered (9.4.2).
+    wait,
+    // destination := whether receiver's event was triggered in the current
+    // time step (15.5.3).
+    triggered,
+};
+
+struct DynamicEvent {
+    DynamicEventOperation operation { DynamicEventOperation::create };
+    RegisterId destination { };
+    RegisterId receiver { };
+    bool nonblocking { };
+};
+
 struct SemaphoreCreate {
     RegisterId destination { };
     RegisterId keys { };
@@ -685,6 +708,30 @@ struct StochasticQueueOperation {
     RareOptionalId<RegisterId> statistic_value;
     RegisterId status { };
     RareOptionalId<RegisterId> result;
+};
+
+enum class SvaKind : std::uint8_t {
+    // Advance the monitor one clock tick; result := the number of outcomes.
+    tick,
+    // result := the next outcome (runtime::sva::Outcome).
+    outcome,
+};
+
+/// The concurrent-property monitor of one assertion directive (IEEE
+/// 1800-2017 16.14). The process owning the operation owns the monitor; the
+/// first tick creates it from `plan` (an encoded semantic::sva::Plan) and the
+/// per-instance `bounds`. `guards` packs the sampled guard values, guard i in
+/// bit i; `start` and `disabled` are 1-bit flags. `result` is 32 bits.
+struct SvaOperation {
+    SvaKind kind { SvaKind::tick };
+    std::uint32_t site { };
+    std::string plan;
+    RegisterId guards { };
+    std::uint32_t guard_count { };
+    RegisterId start { };
+    RegisterId disabled { };
+    std::vector<RegisterId> bounds;
+    RegisterId result { };
 };
 
 enum class PlaLogicKind : std::uint8_t {

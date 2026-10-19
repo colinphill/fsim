@@ -563,6 +563,7 @@ struct ContainerOperationLowerer {
     void lower(const runtime::simir::ContainerElementRead&);
     void lower(const runtime::simir::ContainerElementWrite&);
     void lower(const runtime::simir::ContainerBitstream&);
+    void lower(const runtime::simir::VhdlShaped&);
     void lower(const runtime::simir::ContainerAggregateRead&);
     void lower(const runtime::simir::ContainerAggregateWrite&);
     void lower(const runtime::simir::CopyContainerAggregateElement&);

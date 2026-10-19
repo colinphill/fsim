@@ -555,6 +555,7 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/systemverilog_class_specialization.cpp
   src/semantic/systemverilog_type_descriptor.cpp
   src/semantic/systemverilog_hir.cpp
+  src/semantic/sva_plan.cpp
   src/semantic/vhdl_hir.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
 fsim_configure_subsystem_library(fsim_semantic)
@@ -609,6 +610,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_resolution_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_engine.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_sva.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_randsequence.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_interface_types.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_checker_resolution.cpp"
@@ -812,8 +814,11 @@ add_library(
     src/runtime/simir_container_bridge.cpp
     src/runtime/simir_containers.cpp
     src/runtime/simir_containers_part2.cpp
+    src/runtime/simir_containers_shaped.cpp
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
+    src/runtime/simir_sva.cpp
+    src/runtime/sva_engine.cpp
     src/runtime/simir_execution_part2.cpp
     src/runtime/simir_fused_cone.cpp
     src/runtime/simir_static_kernel.cpp
@@ -935,9 +940,12 @@ endif()
       src/elaboration/lowerer_sensitivity.cpp
       src/elaboration/lowerer_hir_statement.cpp
       src/elaboration/lowerer_hir_synchronization.cpp
+      src/elaboration/hierarchy_vhdl_elaboration_evaluation.cpp
       src/elaboration/lowerer_hir_vhdl_access.cpp
       src/elaboration/lowerer_hir_vhdl_fixed.cpp
       src/elaboration/lowerer_hir_vhdl_float.cpp
+      src/elaboration/lowerer_hir_sva.cpp
+      src/elaboration/lowerer_hir_vhdl_shaped.cpp
       src/elaboration/lowerer_hir_vhdl_special.cpp
       src/elaboration/lowerer_hir_vhdl_vital.cpp
       src/elaboration/lowerer_hir_vhdl_vital_delay.cpp

@@ -15,6 +15,7 @@
 #include "simir_signal_storage.hpp"
 #include "simir_process_storage.hpp"
 #include "simir_process_program.hpp"
+#include "fsim/runtime/sva_engine.hpp"
 #include <deque>
 
 #include <algorithm>
@@ -1146,6 +1147,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool callable_registers_suspended { };
         // A mailbox wake result must survive stale sibling activation captures.
         std::optional<RegisterId> pending_mailbox_result;
+        // The dynamic event handle this process waits on, if any.
+        std::optional<std::uint64_t> pending_dynamic_event;
         std::optional<StringRegisterId> pending_mailbox_string_result;
         std::optional<ProcessId> fork_parent;
         std::optional<InstructionIndex> fork_site;
@@ -3468,9 +3471,19 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // startup execution stages the write without materializing a register
     // frame or retaining the operation body.
     std::vector<MailboxState> mailboxes;
+    struct DynamicEventState {
+        std::vector<ProcessId> waiters;
+        std::optional<SimulationTick> last_trigger;
+    };
+    std::vector<DynamicEventState> dynamic_events;
     std::vector<SemaphoreState> semaphores;
     std::unordered_map<std::int32_t, StochasticQueueState>
         stochastic_queues;
+    // The concurrent-property monitor of each assertion directive, by
+    // owning process and directive site (IEEE 1800-2017 16.14).
+    std::map<std::pair<ProcessId, std::uint32_t>,
+        std::unique_ptr<sva::Monitor>>
+        sva_monitors;
     std::vector<ModulePath> module_paths;
     std::vector<ModuleTimingCheck> module_timing_checks;
     std::vector<ModuleTimingCheckState> module_timing_check_states;
@@ -4396,6 +4409,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const ContainerElementRead&);
     void execute_container(ProcessState&, const ContainerElementWrite&);
     void execute_container(ProcessState&, const ContainerBitstream&);
+    void execute_container(ProcessState&, const VhdlShaped&);
     void execute_container(ProcessState&, const ContainerAggregateRead&);
     void execute_container(ProcessState&, const ContainerAggregateWrite&);
     void execute_container(
@@ -4411,6 +4425,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_string(ProcessState&, const StringMethod&);
     void execute_stochastic_queue(
         ProcessState&, const StochasticQueueOperation&);
+    void execute_sva(ProcessState&, const SvaOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);
     void execute_random_distribution(ProcessState&, const RandomDistribution&);
 

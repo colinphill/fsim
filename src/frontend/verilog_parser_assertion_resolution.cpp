@@ -17,6 +17,10 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
     std::vector<const GenerateBody*> outer;
     std::vector<std::string> genvars;
     const auto resolve_body = [&](GenerateBody& body) {
+        extract_procedural_assertions(body.processes, body.variables,
+            body.systemverilog_concurrent_assertions,
+            body.systemverilog_assertion_declarations);
+        resolve_expect_statements(unit, body.processes, body.tasks);
         if (body.systemverilog_concurrent_assertions.empty()) {
             return;
         }
@@ -38,11 +42,55 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
                 scratch.systemverilog_assertion_declarations.end(),
                 source.systemverilog_assertion_declarations.begin(),
                 source.systemverilog_assertion_declarations.end());
+            // The innermost default disable iff applies (16.15).
+            if (!source.systemverilog_default_disable_tokens.empty()) {
+                scratch.systemverilog_default_disable_tokens
+                    = source.systemverilog_default_disable_tokens;
+            }
         };
         for (const auto* enclosing : outer) {
             add_body(*enclosing);
         }
         add_body(body);
+        // An inherited module default resolves its names in the module
+        // scope (16.15), so a name a block redeclares is qualified upward
+        // by the module name (23.8).
+        if (!unit.systemverilog_default_disable_tokens.empty()
+            && std::ranges::none_of(outer, [](const GenerateBody* enclosing) {
+                   return !enclosing->systemverilog_default_disable_tokens.empty();
+               })
+            && body.systemverilog_default_disable_tokens.empty()) {
+            const auto redeclared = [&](const std::string& name) {
+                const auto declares = [&](const GenerateBody& source) {
+                    return std::ranges::any_of(source.signals,
+                               [&](const auto& item) { return item.name == name; })
+                        || std::ranges::any_of(source.variables,
+                            [&](const auto& item) { return item.name == name; });
+                };
+                return declares(body)
+                    || std::ranges::any_of(outer, [&](const GenerateBody* enclosing) {
+                           return declares(*enclosing);
+                       });
+            };
+            auto& condition = scratch.systemverilog_default_disable_tokens;
+            for (std::size_t position = 0; position < condition.size(); ++position) {
+                if (condition[position].kind != TokenKind::Identifier
+                    || (position > 0U
+                        && condition[position - 1U].kind == TokenKind::Dot)
+                    || !redeclared(condition[position].text)) {
+                    continue;
+                }
+                auto module_name = condition[position];
+                module_name.text = unit.name;
+                auto dot = condition[position];
+                dot.kind = TokenKind::Dot;
+                dot.text = ".";
+                condition.insert(condition.begin()
+                        + static_cast<std::ptrdiff_t>(position),
+                    { module_name, dot });
+                position += 2U;
+            }
+        }
         scratch.systemverilog_concurrent_assertions
             = std::move(body.systemverilog_concurrent_assertions);
         body.systemverilog_concurrent_assertions.clear();
@@ -91,6 +139,10 @@ void VerilogParser::resolve_generate_assertion_references(DesignUnit& unit)
 
 void VerilogParser::resolve_assertion_references(DesignUnit& unit)
 {
+    extract_procedural_assertions(unit.processes, unit.variables,
+        unit.systemverilog_concurrent_assertions,
+        unit.systemverilog_assertion_declarations);
+    resolve_expect_statements(unit, unit.processes, unit.tasks);
     const auto design_names = assertion_design_unit_names(unit);
     resolve_assertion_declaration_references(unit);
     using namespace assertion_resolution_detail;
@@ -98,8 +150,31 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
     for (std::size_t index = 0;
         index < unit.systemverilog_concurrent_assertions.size();
         ++index) {
+        if (resolve_sva_directive(unit, index)) {
+            continue;
+        }
         const auto& directive = unit.systemverilog_concurrent_assertions[index];
+        if (!directive.procedural_enable.empty()) {
+            Token location;
+            location.kind = TokenKind::Identifier;
+            location.text = "assert";
+            location.span = directive.span;
+            error(directive.property_tokens.empty()
+                    ? location
+                    : directive.property_tokens.front(),
+                "FSIM-SV-SEM-200",
+                "the procedural concurrent assertion cannot be evaluated");
+            continue;
+        }
         if (directive.property_tokens.empty()) {
+            continue;
+        }
+        if (!unit.systemverilog_default_disable_tokens.empty()
+            && std::ranges::none_of(directive.property_tokens,
+                [](const Token& token) { return token.text == "disable"; })) {
+            error(directive.property_tokens.front(), "FSIM-SV-SEM-200",
+                "the concurrent property under a default disable iff "
+                "cannot be evaluated");
             continue;
         }
         std::span<const Token> predicate_tokens {

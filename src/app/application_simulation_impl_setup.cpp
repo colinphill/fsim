@@ -2005,6 +2005,7 @@ Simulation::Impl::Impl(
                     const std::vector<runtime::simir::ProcessId>
                         selected_processes { selected.begin(), selected.end() };
                     interpreter->kill_dynamic_processes(selected_processes);
+                    interpreter->kill_sva_monitors(selected_processes);
                     std::erase_if(
                         pending_concurrent_assertions,
                         [&](const auto& item) {
@@ -2278,7 +2279,9 @@ Simulation::Impl::Impl(
                 }
                 if (fields.size() < 4U
                     || (fields[2] != "failure"
-                        && fields[2] != "vacuous")) {
+                        && fields[2] != "vacuous"
+                        && fields[2] != "obligation"
+                        && fields[2] != "obligation-vacuous")) {
                     throw std::runtime_error {
                         "malformed pending concurrent-assertion marker"
                     };
@@ -2287,7 +2290,8 @@ Simulation::Impl::Impl(
                 pending.process = interpreter->dynamic_process_root(process);
                 pending.design_process = interpreter->design_process(process);
                 pending.kind = fields[1];
-                pending.vacuous = fields[2] == "vacuous";
+                pending.vacuous = fields[2] == "vacuous"
+                    || fields[2] == "obligation-vacuous";
                 pending.name = fields[3];
                 const auto parsed_slot = std::from_chars(
                     fields[0].data(),
@@ -2390,6 +2394,17 @@ Simulation::Impl::Impl(
                     action.source.path = std::move(*path);
                     pending.actions.push_back(std::move(action));
                 }
+                if (fields[2] == "obligation") {
+                    // The actions of a monitor attempt that is still
+                    // obligated when simulation ends.
+                    sva_obligations[pending.design_process] = std::move(pending);
+                    return;
+                }
+                if (fields[2] == "obligation-vacuous") {
+                    sva_vacuous_obligations[pending.design_process]
+                        = std::move(pending);
+                    return;
+                }
                 const auto attempt = pending.process;
                 pending_concurrent_assertions[attempt] = std::move(pending);
                 return;
@@ -2452,6 +2467,7 @@ Simulation::Impl::Impl(
                                 concurrent_assertion_design_processes.end()
                             };
                         interpreter->kill_dynamic_processes(processes);
+                        interpreter->kill_sva_monitors(processes);
                         pending_concurrent_assertions.clear();
                     }
                 } else if (control == "assertpasson") {
@@ -2927,7 +2943,32 @@ void Simulation::Impl::finish_concurrent_assertions(
     const SimulationTick time,
     const std::uint64_t delta)
 {
+    std::vector<std::pair<runtime::simir::ProcessId,
+        const PendingConcurrentAssertion*>>
+        finished;
     for (const auto& [process, pending] : pending_concurrent_assertions) {
+        finished.emplace_back(process, &pending);
+    }
+    for (const auto& obligation : interpreter
+             ? interpreter->finish_sva_monitors()
+             : std::vector<runtime::simir::Interpreter::SvaObligation> { }) {
+        if (const auto found = sva_obligations.find(obligation.process);
+            found != sva_obligations.end()) {
+            for (std::size_t count = 0; count < obligation.failures;
+                ++count) {
+                finished.emplace_back(obligation.process, &found->second);
+            }
+        }
+        if (const auto found
+            = sva_vacuous_obligations.find(obligation.process);
+            found != sva_vacuous_obligations.end()) {
+            for (std::size_t count = 0; count < obligation.holds; ++count) {
+                finished.emplace_back(obligation.process, &found->second);
+            }
+        }
+    }
+    for (const auto& [process, pending_entry] : finished) {
+        const auto& pending = *pending_entry;
         const auto index = ensure_concurrent_assertion_coverage(
             pending.design_process, pending.slot, pending.kind, pending.name);
         auto& coverage = concurrent_assertion_coverage[index];

@@ -1842,6 +1842,7 @@ struct ClockingSignal {
     Name name;
     Direction direction { Direction::unknown };
     std::optional<ClockingSkew> skew;
+    std::optional<ClockingSkew> output_skew;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
 };

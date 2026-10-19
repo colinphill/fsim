@@ -1584,6 +1584,7 @@ struct Sensitivity {
 
 struct CaseAlternative;
 struct FunctionDeclaration;
+struct SystemVerilogConcurrentAssertion;
 struct ProcedureDeclaration;
 
 struct SystemVerilogImport {
@@ -1794,6 +1795,11 @@ struct Statement {
     CaseMatchKind case_matches_wildcard { CaseMatchKind::Exact };
     CaseQualifier case_qualifier { CaseQualifier::None };
     support::RareVector<CaseAlternative> case_alternatives;
+    // A concurrent assertion statement in a procedure (IEEE 1800-2017
+    // 16.14.6); assertion resolution moves it to its design unit and leaves
+    // the statement that enables its attempts.
+    std::shared_ptr<SystemVerilogConcurrentAssertion>
+        procedural_concurrent_assertion;
     // Declarations directly owned by a procedural block. VHDL-2019
     // sequential blocks admit the complete process-declarative surface;
     // RareVector keeps the added region pointer-dormant on ordinary

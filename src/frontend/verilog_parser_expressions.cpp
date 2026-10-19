@@ -1504,6 +1504,13 @@ Expression VerilogParser::parse_primary_impl()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
+            } else if (canonical == "$__fsim_sva_tick"
+                || canonical == "$__fsim_sva_outcome") {
+                // The concurrent-property monitor of a generated assertion
+                // process.
+                expression.call_result_width = 32;
+                expression.call_result_domain = ValueDomain::Integer;
+                expression.call_result_signed = true;
             } else if (canonical == "$typename") {
                 require_file_call(1, "one expression or data type");
                 expression.call_result_domain = ValueDomain::String;

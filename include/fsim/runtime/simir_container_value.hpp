@@ -28,6 +28,16 @@ enum class ContainerElementKind : std::uint8_t {
   Aggregate,
 };
 
+/// One index range of a VHDL array value whose bounds are known only at run
+/// time (IEEE 1076-2008 5.3.2.2); fixed when the object is elaborated.
+struct VhdlShapeRange {
+  std::int64_t left{};
+  std::int64_t right{};
+  bool descending{};
+  friend bool operator==(const VhdlShapeRange&,
+                         const VhdlShapeRange&) = default;
+};
+
 struct ContainerType {
   ContainerElementKind element_kind{ContainerElementKind::Packed};
   SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
@@ -52,6 +62,12 @@ struct ContainerType {
   // Aggregate elements retain one profile and optional name per member.
   std::vector<ContainerType> element_types;
   std::vector<std::string> member_names;
+  // A VHDL array with run-time index ranges: one packed payload element in
+  // the VHDL packed layout (leftmost element in the most significant bits),
+  // elements of `element_width` bits, and `vhdl_rank` ranges in the value's
+  // shape.
+  bool vhdl_shaped{};
+  std::uint32_t vhdl_rank{};
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
 };
@@ -68,6 +84,8 @@ struct ContainerValue {
   // active element vector. Other container kinds keep this empty.
   std::vector<PackedLogic4> keys;
   std::vector<std::string> string_keys;
+  // The index ranges of a VHDL shaped value; empty for every other value.
+  std::vector<VhdlShapeRange> shape;
   ContainerValue() = default;
   // Retain the original packed-container construction surface while the
   // additional storages remain an internal representation detail.

@@ -1106,6 +1106,10 @@ void Interpreter::Impl::execute(ProcessId id)
                     std::is_same_v<OperationType, StochasticQueueOperation>) {
                     execute_stochastic_queue(process, op);
                     ++process.pc;
+                } else if constexpr (
+                    std::is_same_v<OperationType, SvaOperation>) {
+                    execute_sva(process, op);
+                    ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, PlaEvaluate>) {
                     execute_pla(process, op);
                     ++process.pc;
@@ -1897,6 +1901,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     || std::is_same_v<OperationType, MailboxPut>
                     || std::is_same_v<OperationType, MailboxGet>
                     || std::is_same_v<OperationType, MailboxNum>
+                    || std::is_same_v<OperationType, DynamicEvent>
                     || std::is_same_v<OperationType, SemaphoreCreate>
                     || std::is_same_v<OperationType, SemaphoreGet>
                     || std::is_same_v<OperationType, SemaphorePut>) {

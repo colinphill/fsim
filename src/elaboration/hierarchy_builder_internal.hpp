@@ -625,6 +625,17 @@ private:
         std::string_view standard,
         std::string_view declaring_unit_compatibility_profile,
         const semantic::vhdl::Declaration& declaration);
+    // The value of `expression` computed by running it at elaboration, as
+    // the initial value of `destination`; nullopt when it cannot run.
+    std::optional<PackedLogic4> evaluate_compiled_vhdl_value(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression,
+        SignalId destination,
+        const std::optional<semantic::vhdl::SubtypeIndication>& subtype,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
     // A composite VHDL constant whose elements are not single logic values,
     // materialized as a read-only signal named `name` holding its static
     // value; nullopt when the constant keeps the folding paths.
@@ -1473,6 +1484,13 @@ private:
     // references named instances that did not exist yet (an interface
     // instance's members); called once the unit's children are
     // instantiated.
+    // With `missed`, an item whose hierarchical reference still names an
+    // occurrence not yet elaborated is returned there instead of reported.
+    struct ForwardDeferredSystemVerilogItems {
+        std::vector<semantic::ProcessId> processes;
+        std::vector<std::pair<semantic::StatementId, std::size_t>>
+            statements;
+    };
     bool lower_deferred_systemverilog_processes(
         const semantic::sv::Unit& unit,
         const semantic::SpecializedHirUnit& specialized,
@@ -1483,7 +1501,39 @@ private:
         std::size_t specialization_index,
         std::optional<std::uint32_t> program_owner,
         const std::vector<std::pair<semantic::StatementId, std::size_t>>&
-            deferred_statements = { });
+            deferred_statements = { },
+        ForwardDeferredSystemVerilogItems* missed = nullptr);
+    // A hierarchical name may reach an occurrence elaborated after the
+    // referencing instance, such as a later sibling or an upward name
+    // resolved through an ancestor (IEEE 1800-2017 23.6, 23.8). Such items
+    // keep their instance's materialization and the specializations of its
+    // ancestors alive until an enclosing instance completes, or the whole
+    // design at finalize().
+    struct ForwardDeferredSystemVerilogLowering {
+        const semantic::sv::Unit* unit { };
+        std::shared_ptr<SystemVerilogHirMaterialization> materialization;
+        std::vector<std::shared_ptr<const void>> owners;
+        std::string path;
+        frontend::Language source_language {
+            frontend::Language::SystemVerilog2017
+        };
+        ForwardDeferredSystemVerilogItems items;
+        std::size_t specialization_index { };
+        std::optional<std::uint32_t> program_owner;
+        std::function<std::optional<SignalId>(semantic::DeclarationId)>
+            package_signal;
+        std::function<std::optional<ContainerObjectId>(
+            semantic::DeclarationId)>
+            package_container;
+    };
+    // Retries the forward-deferred items of instances below `ancestor`, or
+    // all of them with an empty ancestor; `final` reports what still misses.
+    void lower_forward_deferred_systemverilog(
+        std::string_view ancestor, bool final);
+    std::vector<ForwardDeferredSystemVerilogLowering>
+        forward_deferred_systemverilog_;
+    std::vector<std::shared_ptr<const void>>
+        systemverilog_specialization_owners_;
     // Append a lowered SystemVerilog concurrent statement to the
     // specialization's processes; a program's statements are reactive.
     void publish_systemverilog_concurrent_occurrence(

@@ -14,6 +14,7 @@ constexpr std::uint64_t synchronization_handle_tag_mask =
     UINT64_C(0xffff000000000000);
 constexpr std::uint64_t mailbox_handle_tag = UINT64_C(0x4d42000000000000);
 constexpr std::uint64_t semaphore_handle_tag = UINT64_C(0x5345000000000000);
+constexpr std::uint64_t event_handle_tag = UINT64_C(0x4556000000000000);
 constexpr std::uint64_t synchronization_handle_payload_mask =
     UINT64_C(0x0000ffffffffffff);
 constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
@@ -303,6 +304,82 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
           process.cold().current_source);
     }
     return true;
+  }
+
+  if (const auto* event = operation_get_if<DynamicEvent>(&operation)) {
+    // A null handle names no event: a trigger has no effect and a wait
+    // never resumes (IEEE 1800-2017 15.5.5).
+    const auto event_from_handle = [&](const RegisterId id)
+        -> DynamicEventState* {
+      const auto handle = receiver_handle(id);
+      if (handle == 0U) {
+        return nullptr;
+      }
+      if ((handle & synchronization_handle_tag_mask) != event_handle_tag) {
+        process.pc = instruction;
+        fail(process, "event handle has the wrong kind");
+      }
+      const auto encoded = handle & synchronization_handle_payload_mask;
+      if (encoded == 0 || encoded > dynamic_events.size()) {
+        process.pc = instruction;
+        fail(process, "event handle is outside the live object range");
+      }
+      return &dynamic_events[static_cast<std::size_t>(encoded - 1U)];
+    };
+    switch (event->operation) {
+    case DynamicEventOperation::create: {
+      if (dynamic_events.size() >= maximum_synchronization_objects) {
+        process.pc = instruction;
+        fail(process, "event object limit is exhausted");
+      }
+      dynamic_events.emplace_back();
+      write_process_register(process, event->destination,
+          PackedLogic4::from_aval_bval(
+              64, event_handle_tag | dynamic_events.size(), 0));
+      process.status = ProcessStatus::running;
+      return true;
+    }
+    case DynamicEventOperation::trigger: {
+      const auto handle = receiver_handle(event->receiver);
+      if (auto* state = event_from_handle(event->receiver)) {
+        state->last_trigger = scheduler.now();
+        auto waiters = std::move(state->waiters);
+        state->waiters.clear();
+        for (const auto waiter : waiters) {
+          auto& target = get_process(waiter);
+          if (target.halted || target.status != ProcessStatus::waiting
+              || target.cold().pending_dynamic_event != handle) {
+            continue;
+          }
+          target.cold().pending_dynamic_event.reset();
+          (void)wake(waiter);
+        }
+      }
+      process.status = ProcessStatus::running;
+      return true;
+    }
+    case DynamicEventOperation::wait: {
+      const auto handle = receiver_handle(event->receiver);
+      if (auto* state = event_from_handle(event->receiver)) {
+        state->waiters.push_back(process.id);
+      }
+      process.cold().pending_dynamic_event = handle;
+      process.status = ProcessStatus::waiting;
+      notify_execution_point(
+          process, instruction, ExecutionPointKind::process_suspend,
+          process.cold().current_source);
+      return true;
+    }
+    case DynamicEventOperation::triggered: {
+      const auto* state = event_from_handle(event->receiver);
+      const bool triggered = state != nullptr && state->last_trigger
+          && *state->last_trigger == scheduler.now();
+      write_process_register(process, event->destination,
+          PackedLogic4::from_aval_bval(1, triggered ? 1U : 0U, 0));
+      process.status = ProcessStatus::running;
+      return true;
+    }
+    }
   }
 
   if (const auto* num = operation_get_if<MailboxNum>(&operation)) {

@@ -915,6 +915,55 @@ using namespace runtime::simir;
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 32U, index);
                 } else if constexpr (
+                    std::is_same_v<OperationType, VhdlShaped>) {
+                    // Interpreter-only (recorded below); its registers still
+                    // take part in the process's definitions and uses.
+                    using runtime::simir::VhdlShapedOperation;
+                    for (const auto operand : operation.operands) {
+                        record_use(operand, index);
+                    }
+                    switch (operation.operation) {
+                    case VhdlShapedOperation::create:
+                    case VhdlShapedOperation::element_write:
+                    case VhdlShapedOperation::from_packed:
+                    case VhdlShapedOperation::slice_write:
+                        record_use(operation.value, index);
+                        break;
+                    case VhdlShapedOperation::query:
+                    case VhdlShapedOperation::element_read:
+                    case VhdlShapedOperation::to_packed:
+                    case VhdlShapedOperation::slice_read:
+                    case VhdlShapedOperation::equal:
+                    case VhdlShapedOperation::equal_packed:
+                        record_definition(operation.value, index);
+                        if (operation.width != 0U) {
+                            constrain_width(
+                                operation.value, operation.width, index);
+                        }
+                        break;
+                    case VhdlShapedOperation::assign:
+                    case VhdlShapedOperation::append:
+                    case VhdlShapedOperation::append_packed:
+                        break;
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, DynamicEvent>) {
+                    using runtime::simir::DynamicEventOperation;
+                    if (operation.operation != DynamicEventOperation::create) {
+                        record_use(operation.receiver, index);
+                        constrain_width(operation.receiver, 64U, index);
+                    }
+                    if (operation.operation == DynamicEventOperation::create
+                        || operation.operation
+                            == DynamicEventOperation::triggered) {
+                        record_definition(operation.destination, index);
+                        constrain_width(operation.destination,
+                            operation.operation
+                                    == DynamicEventOperation::create
+                                ? 64U : 1U,
+                            index);
+                    }
+                } else if constexpr (
                     std::is_same_v<OperationType, SemaphoreCreate>) {
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
@@ -1437,6 +1486,13 @@ using namespace runtime::simir;
                 &process.operations[index])) {
             record_unsupported(
                 index, "bit-stream container operations are interpreter-only");
+        }
+        // VHDL arrays with run-time bounds run in the interpreter.
+        if (fsim::runtime::simir::operation_get_if<
+                runtime::simir::VhdlShaped>(
+                &process.operations[index])) {
+            record_unsupported(
+                index, "VHDL shaped array operations are interpreter-only");
         }
         if (!supports_wide_register_operation(
                 process.operations[index])) {

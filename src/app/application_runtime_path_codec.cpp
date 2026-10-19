@@ -363,6 +363,13 @@ template <typename ProcessTable>
                             && item.destination
                                 < process_template.register_count;
                         error = "MailboxNum has an invalid register ID";
+                    } else if constexpr (
+                        std::is_same_v<Type, runtime::simir::DynamicEvent>) {
+                        valid = item.receiver
+                                    < process_template.register_count
+                            && item.destination
+                                < process_template.register_count;
+                        error = "DynamicEvent has an invalid register ID";
                     }
                 },
                 operation);

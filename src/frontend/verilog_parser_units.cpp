@@ -2202,6 +2202,12 @@ std::vector<Instance> VerilogParser::parse_instances() {
 // assertion context.
 bool VerilogParser::parse_generate_concurrent_assertion(GenerateBody& body)
 {
+  if (language_ == Language::SystemVerilog2017 && keyword("default")
+      && keyword("disable", 1) && keyword("iff", 2)) {
+    const auto start = advance();
+    parse_default_disable(body.systemverilog_default_disable_tokens, start);
+    return true;
+  }
   const bool labeled = at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
       && at(TokenKind::Identifier, 2)
       && contains_word({ "assert", "assume", "cover", "restrict" },

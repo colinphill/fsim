@@ -888,7 +888,8 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
     const std::size_t specialization_index,
     const std::optional<std::uint32_t> program_owner,
     const std::vector<std::pair<semantic::StatementId, std::size_t>>&
-        deferred_statements)
+        deferred_statements,
+    ForwardDeferredSystemVerilogItems* const missed)
 {
     for (const auto& [statement_id, order] : deferred_statements) {
         const auto statement = specialized.find_statement(statement_id);
@@ -897,9 +898,18 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
             ? statement->systemverilog->source
             : unit.source;
         lowerer.reset_hierarchical_reference_state();
+        const auto diagnostics_before = diagnostics_.size();
+        lowerer.set_hierarchical_reference_retry(missed != nullptr);
         auto lowered = lower_cached_systemverilog_concurrent_statement(
             unit, specialized, lowerer, statement_id, source_language,
             unit.declarations, path, order, program_owner);
+        lowerer.set_hierarchical_reference_retry(false);
+        if (!lowered && missed != nullptr
+            && lowerer.hierarchical_reference_missed()) {
+            diagnostics_.resize(diagnostics_before);
+            missed->statements.emplace_back(statement_id, order);
+            continue;
+        }
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -923,8 +933,17 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
             ? process->systemverilog->source
             : unit.source;
         lowerer.reset_hierarchical_reference_state();
+        const auto diagnostics_before = diagnostics_.size();
+        lowerer.set_hierarchical_reference_retry(missed != nullptr);
         auto lowered = lowerer.lower_hir_process(
             process_id, source_language, path);
+        lowerer.set_hierarchical_reference_retry(false);
+        if (!lowered && missed != nullptr
+            && lowerer.hierarchical_reference_missed()) {
+            diagnostics_.resize(diagnostics_before);
+            missed->processes.push_back(process_id);
+            continue;
+        }
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -944,6 +963,58 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
             lowerer, unit, specialization, program_owner);
     }
     return true;
+}
+
+void HierarchyBuilder::lower_forward_deferred_systemverilog(
+    const std::string_view ancestor, const bool final)
+{
+    auto pending = std::move(forward_deferred_systemverilog_);
+    forward_deferred_systemverilog_.clear();
+    for (auto& entry : pending) {
+        if (!ancestor.empty()
+            && !(entry.path.size() > ancestor.size()
+                && entry.path.starts_with(ancestor)
+                && entry.path[ancestor.size()] == '.')) {
+            forward_deferred_systemverilog_.push_back(std::move(entry));
+            continue;
+        }
+        auto& materialization = *entry.materialization;
+        Lowerer lowerer {
+            design_,
+            materialization.signals,
+            materialization.read_only_signals,
+            materialization.string_objects,
+            materialization.read_only_strings,
+            materialization.container_objects,
+            materialization.read_only_containers,
+            diagnostics_,
+        };
+        lowerer.set_specialized_hir_unit(materialization.specialization);
+        lowerer.set_ancestor_systemverilog_specializations(
+            &materialization.type_owner_contexts);
+        lowerer.set_systemverilog_interface_handles(
+            &systemverilog_interface_handles_, &systemverilog_interface_types_);
+        lowerer.set_hir_container_declaration_bindings(
+            &materialization.container_declaration_bindings);
+        {
+            const auto& disable_labels = systemverilog_disable_labels();
+            lowerer.set_disable_labels(
+                &disable_labels.targets, &disable_labels.declared);
+        }
+        lowerer.set_systemverilog_program_owner(entry.program_owner);
+        lowerer.set_package_constant_signal(entry.package_signal);
+        lowerer.set_package_container_object(entry.package_container);
+        ForwardDeferredSystemVerilogItems missed;
+        static_cast<void>(lower_deferred_systemverilog_processes(
+            *entry.unit, *materialization.specialization, entry.path,
+            entry.source_language, entry.items.processes, lowerer,
+            entry.specialization_index, entry.program_owner,
+            entry.items.statements, final ? nullptr : &missed));
+        if (!missed.processes.empty() || !missed.statements.empty()) {
+            entry.items = std::move(missed);
+            forward_deferred_systemverilog_.push_back(std::move(entry));
+        }
+    }
 }
 
 } // namespace fsim::elaboration
