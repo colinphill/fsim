@@ -578,7 +578,11 @@ void Interpreter::Impl::complete_process(
                                         : resume->source;
     auto& target = process_from_handle(process, source);
     clear_wait_timeout(process);
-    if (kill != nullptr && !target.halted) {
+    // Killing a finished process still kills its live descendants
+    // (IEEE 1800-2017 9.7).
+    if (kill != nullptr && target.halted) {
+        cancel_fork_descendants(target);
+    } else if (kill != nullptr) {
         cancel_fork_descendants(target);
         if (target.id == process.id) {
             snapshot_callable_context(target);

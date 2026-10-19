@@ -305,8 +305,14 @@ enum class Truth : std::uint8_t { False, True, Unknown };
     const Operator operation,
     PackedLogic4 left,
     PackedLogic4 right,
-    const bool signed_values) {
+    const bool signed_values,
+    const bool signed_exponent) {
   if (has_unknown(left) || has_unknown(right)) {
+    return PackedLogic4(left.width(), Logic4::x);
+  }
+  // Division or modulus by zero yields x (IEEE 1800-2017 11.4.2).
+  if ((operation == Operator::Divide || operation == Operator::Modulo)
+      && is_zero(right)) {
     return PackedLogic4(left.width(), Logic4::x);
   }
   if (operation == Operator::Add) return add_known(left, right);
@@ -315,7 +321,9 @@ enum class Truth : std::uint8_t { False, True, Unknown };
   }
   if (operation == Operator::Multiply) return multiply_known(left, right);
   if (operation == Operator::Power) {
-    return power_known(left, right, signed_values);
+    // The exponent is self-determined (11.4.3): its own signedness
+    // decides whether it is negative.
+    return power_known(left, right, signed_exponent);
   }
   bool left_negative = false;
   bool right_negative = false;
@@ -622,7 +630,8 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
     if (node.operation >= Operator::Add
         && node.operation <= Operator::Modulo) {
       values.push_back(arithmetic(
-          node.operation, std::move(left), std::move(right), signed_values));
+          node.operation, std::move(left), std::move(right), signed_values,
+          right_node.profile.signed_value));
     } else if (node.operation >= Operator::BitwiseAnd
                && node.operation <= Operator::BitwiseXor) {
       values.push_back(bitwise(node.operation, left, right));
@@ -657,6 +666,41 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
     std::string canonical_identity,
     std::vector<SystemVerilogConstraintVariableId> variables,
     SystemVerilogConstraintExpression expression) {
+  // `-4` and profile conversions of constants are constants, so
+  // comparisons with them bound their variable's domain (18.5).
+  for (bool folded = true; folded;) {
+    folded = false;
+    for (auto& node : expression.nodes) {
+      if ((node.operation != Operator::UnaryPlus
+              && node.operation != Operator::UnaryMinus)
+          || node.operands.size() != 1U) {
+        continue;
+      }
+      const auto& operand = expression.nodes[node.operands.front()];
+      const auto from = operand.constant.width();
+      const auto to = node.profile.width;
+      if (operand.operation != Operator::Constant || from == 0U
+          || from > 64U || to == 0U || to > 64U
+          || operand.constant.is_logic9()
+          || operand.constant.low_word().bval != 0U) {
+        continue;
+      }
+      auto bits = operand.constant.low_word().aval;
+      if (from < 64U) {
+        bits &= (std::uint64_t{1} << from) - 1U;
+        if (operand.profile.signed_value
+            && ((bits >> (from - 1U)) & 1U) != 0U) {
+          bits |= ~((std::uint64_t{1} << from) - 1U);
+        }
+      }
+      if (node.operation == Operator::UnaryMinus) bits = ~bits + 1U;
+      if (to < 64U) bits &= (std::uint64_t{1} << to) - 1U;
+      node.constant = PackedLogic4::from_aval_bval(to, bits, 0U);
+      node.operation = Operator::Constant;
+      node.operands.clear();
+      folded = true;
+    }
+  }
   std::set<SystemVerilogConstraintVariableId> declared(
       variables.begin(), variables.end());
   for (const auto& node : expression.nodes) {
@@ -685,10 +729,9 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
       throw std::invalid_argument{
           "constraint expression root is not a scalar predicate"};
     }
-    if (result.get(0) == Logic4::x || result.get(0) == Logic4::z) {
-      throw std::invalid_argument{
-          "constraint expression predicate has an illegal four-state result"};
-    }
+    // An unknown result (`0 ** -1`, division by zero) is not true, so the
+    // candidate does not satisfy the constraint (IEEE 1800-2017 18.5,
+    // 11.4.5, 11.4.2).
     return result.get(0) == Logic4::one
         ? SystemVerilogConstraintClauseState::Satisfied
         : SystemVerilogConstraintClauseState::Violated;

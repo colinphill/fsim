@@ -132,8 +132,30 @@ void Resolver::run() {
     for (auto& instance : unit.instances) {
       for (auto& override_value : instance.parameter_overrides) {
         substitute_class_parameter_references(override_value.value, scope);
+        // A class-scoped type actual (`m #(C#(8)::t) u ();`), including
+        // one through a class typedef (`m #(c8_t::t) u ();`) that parses
+        // as a scoped name.
+        if (!override_value.type_value
+            && override_value.value.kind == ExpressionKind::Identifier
+            && override_value.value.text.find("::") != std::string::npos) {
+          Type named;
+          named.named_type = override_value.value.text;
+          named.spelling = named.named_type;
+          if (auto scoped = resolve_class_scoped_type(named, scope)) {
+            override_value.type_value = std::move(*scoped);
+          }
+        } else if (override_value.type_value) {
+          if (auto scoped = resolve_class_scoped_type(
+                  *override_value.type_value, scope)) {
+            override_value.type_value = std::move(*scoped);
+          }
+        }
       }
     }
+    // A typedef of a class-scoped type (`typedef C#(8)::t t_t;`) names
+    // the type of that class specialization (IEEE 1800-2017 8.25.1).
+    resolve_scoped_types(unit.type_aliases, scope);
+    resolve_scoped_types(unit.ports, scope);
     resolve_scoped_types(unit.signals, scope);
     resolve_scoped_types(unit.variables, scope);
     add_objects(scope, unit.signals);
@@ -457,6 +479,7 @@ void Resolver::hydrate_task_bodies() {
 }
 void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited) {
   auto scope = inherited;
+  resolve_scoped_types(body.type_aliases, scope);
   resolve_scoped_types(body.signals, scope);
   resolve_scoped_types(body.variables, scope);
   add_objects(scope, body.signals);
@@ -1162,6 +1185,8 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     Type type, const ClassSelection& selection) {
   std::map<std::string, Type, std::less<>> bindings;
   std::vector<bool> assigned(selection.declaration->parameters.size());
+  std::vector<const Expression*> value_actuals(
+      selection.declaration->parameters.size());
   std::size_t next_positional{};
   for (const auto& actual :
        selection.type.systemverilog_class_parameter_actuals) {
@@ -1186,6 +1211,9 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     const auto& formal = selection.declaration->parameters[formal_index];
     if (formal.kind == ParameterKind::Type && actual.type_actual) {
       bindings.insert_or_assign(formal.name, *actual.type_actual);
+    } else if (formal.kind != ParameterKind::Type
+               && actual.value.kind != ExpressionKind::Invalid) {
+      value_actuals[formal_index] = &actual.value;
     }
   }
   for (std::size_t index = 0;
@@ -1195,6 +1223,34 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         && formal.default_type) {
       bindings.insert_or_assign(formal.name, *formal.default_type);
     }
+  }
+  // Value parameters size the selected type's ranges (`C#(8)::t` with
+  // `typedef logic [W-1:0] t`).
+  std::vector<std::pair<std::string, const Expression*>> values;
+  bool any_value_actual{};
+  for (std::size_t index = 0;
+       index < selection.declaration->parameters.size(); ++index) {
+    const auto& formal = selection.declaration->parameters[index];
+    if (formal.kind == ParameterKind::Type) continue;
+    any_value_actual = any_value_actual || value_actuals[index] != nullptr;
+    values.emplace_back(formal.name, value_actuals[index] != nullptr
+        ? value_actuals[index]
+        : formal.default_value.kind != ExpressionKind::Invalid
+        ? &formal.default_value
+        : nullptr);
+  }
+  // Type parameters bound here also type the selected type's members
+  // (`typedef struct packed {T a;} t`), with their own value-parameter
+  // ranges (`localparam type T = logic [W-1:0]`).
+  std::map<std::string, Type> type_bindings;
+  for (const auto& [name, bound] : bindings) {
+    type_bindings.emplace(name, any_value_actual
+        ? specialize_selected_class_type(bound, values, {})
+        : bound);
+  }
+  if (any_value_actual || !type_bindings.empty()) {
+    type = specialize_selected_class_type(
+        std::move(type), values, type_bindings);
   }
   const auto substitute = [&](const auto& self, Type retained) -> Type {
     const auto outer_container = retained.systemverilog_container;
@@ -1218,6 +1274,47 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     return retained;
   };
   return substitute(substitute, std::move(type));
+}
+void Resolver::resolve_class_scoped_members(
+    Type& type, const Scope& scope) const {
+  bool changed{};
+  for (auto& member : type.packed_members) {
+    for (auto& nested : member.nested_types) {
+      if (auto scoped = resolve_class_scoped_type(nested, scope)) {
+        nested = std::move(*scoped);
+        member.domain = nested.domain;
+        member.is_signed = nested.is_signed;
+        changed = true;
+      } else if (!nested.packed_members.empty()) {
+        const auto before = nested.width();
+        resolve_class_scoped_members(nested, scope);
+        changed = changed || nested.width() != before;
+      }
+    }
+  }
+  if (!changed || type.packed_members.empty()
+      || !type.systemverilog_packed_dimensions.empty()) {
+    return;
+  }
+  const bool is_union = type.packed_aggregate == PackedAggregateKind::Union;
+  if (!is_union && type.packed_aggregate != PackedAggregateKind::Struct) {
+    return;
+  }
+  std::uint64_t total{};
+  for (const auto& member : type.packed_members) {
+    const auto width = member.width();
+    if (!width || *width == 0U) return;
+    total = is_union ? std::max(total, *width) : total + *width;
+  }
+  if (!is_union) {
+    auto offset = total;
+    for (auto& member : type.packed_members) {
+      offset -= *member.width();
+      member.lsb_offset = offset;
+    }
+  }
+  type.packed_range = PackedRange{
+      static_cast<std::int64_t>(total - 1U), 0, true};
 }
 [[nodiscard]] Type Resolver::canonicalize_selected_type(
     Type type, const Scope& scope) const {
@@ -1263,6 +1360,23 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   ClassSelection selection{owners.front(), class_type(*owners.front())};
   selection.type.systemverilog_class_parameter_actuals =
       type.systemverilog_class_parameter_actuals;
+  // `typedef C#(8) c8_t; c8_t::t`: the typedef's specialization actuals.
+  if (selection.type.systemverilog_class_parameter_actuals.empty()) {
+    const auto owner_name = type.named_type.substr(0U, separator);
+    std::string lexical = scope.lexical_identity;
+    for (;;) {
+      const auto owner_alias = class_aliases_.find(
+          lexical + "::" + owner_name);
+      if (owner_alias != class_aliases_.end()) {
+        selection.type.systemverilog_class_parameter_actuals =
+            owner_alias->second->systemverilog_class_parameter_actuals;
+        break;
+      }
+      const auto parent = lexical.rfind("::");
+      if (parent == std::string::npos) break;
+      lexical.resize(parent);
+    }
+  }
   std::size_t next_positional{};
   for (auto& actual : selection.type.systemverilog_class_parameter_actuals) {
     std::size_t formal_index = next_positional++;
@@ -1868,7 +1982,8 @@ void Resolver::retain_result_type(
             method->method->return_type,
             method->owner->canonical_identity);
         if (const auto& named = method->method->return_type.named_type;
-            !named.empty() && class_identity(*receiver_type)) {
+            !named.empty() && class_identity(*receiver_type)
+            && !method->method->return_type.systemverilog_container) {
           if (auto actual = class_type_parameter_actual(
                   named, *method->owner, *receiver_type, scope)) {
             type = std::move(*actual);
@@ -1940,7 +2055,8 @@ void Resolver::retain_result_type(
     // class's `extends Base #(T)` clause, or its default (IEEE 1800-2017
     // 8.25, 8.13).
     if (const auto& named = match.property->declaration.type.named_type;
-        !type_actual_found && !named.empty()) {
+        !type_actual_found && !named.empty()
+        && !match.property->declaration.type.systemverilog_container) {
       if (auto actual = class_type_parameter_actual(
               named, *match.owner, *receiver_type, scope)) {
         type = std::move(*actual);

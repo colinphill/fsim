@@ -719,6 +719,7 @@ class VerilogParser final : private detail::ParserBase {
   void parse_typedef(
       DesignUnit& unit,
       const Token& start);
+  bool parse_local_type_parameter(DesignUnit& local_declarations);
 
   void parse_nettype(
       DesignUnit& unit,

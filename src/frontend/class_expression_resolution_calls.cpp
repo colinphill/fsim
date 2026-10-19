@@ -779,6 +779,43 @@ void Resolver::retain_task_profile(
             {},
             expression.operands[index].span};
       }
+      // A name in the inline constraint that is not a member of the
+      // randomized object, or is `local::`-qualified, denotes the calling
+      // scope's object (IEEE 1800-2017 18.7, 18.7.1).
+      const auto resolve_caller_names = [&](const auto& self,
+                                            Expression& node) -> void {
+        if (node.kind == ExpressionKind::Identifier) {
+          constexpr std::string_view local_prefix{"local::"};
+          if (node.text.starts_with(local_prefix)) {
+            // Outside a class the lowerer binds `local::` names itself.
+            const auto name = node.text.substr(local_prefix.size());
+            if (scope.class_owner != nullptr
+                && !scope.objects.contains(name)
+                && find_property(scope.class_owner->canonical_identity, name)
+                       .property) {
+              node.text = name;
+              resolve_expression(node, scope);
+            }
+            return;
+          }
+          if (node.text.find('.') == std::string::npos
+              && node.text.find("::") == std::string::npos
+              && !find_property(receiver_identity, node.text).property
+              && scope.class_owner != nullptr
+              && !scope.objects.contains(node.text)
+              && find_property(scope.class_owner->canonical_identity,
+                     node.text).property) {
+            resolve_expression(node, scope);
+          }
+          return;
+        }
+        for (auto& operand : node.operands) self(self, operand);
+      };
+      for (auto& choices : expression.aggregate_choice_expressions) {
+        for (auto& choice : choices) {
+          resolve_caller_names(resolve_caller_names, choice);
+        }
+      }
       Type result{
           ValueDomain::Integer,
           "int",

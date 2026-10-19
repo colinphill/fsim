@@ -352,7 +352,19 @@ class Lowerer final {
       if (!operand) return std::nullopt;
       const auto target = std::string_view{expression.text}.substr(9U);
       auto profile = builder_.profile(*operand);
-      if (target == "signed" || target == "unsigned") {
+      const auto separator = target.find(':');
+      if (separator != std::string_view::npos
+          && (target.substr(0, separator) == "signed"
+              || target.substr(0, separator) == "unsigned")) {
+        // A typedef cast resolved to its signedness and width.
+        const auto width = decimal(target.substr(separator + 1U));
+        if (!width || *width == 0U || *width > 4096U) {
+          error_ = "constraint cast width is out of range";
+          return std::nullopt;
+        }
+        profile.signed_value = target.substr(0, separator) == "signed";
+        profile.width = static_cast<std::size_t>(*width);
+      } else if (target == "signed" || target == "unsigned") {
         profile.signed_value = target == "signed";
       } else if (const auto width = decimal(target)) {
         if (*width == 0U || *width > 4096U) {
@@ -705,6 +717,15 @@ class Lowerer final {
             : selected;
       }
       return membership;
+    }
+    // A solve-before ordering in a foreach body orders the element
+    // variables without changing the solution set (IEEE 1800-2017 18.5.10).
+    if (expression.kind == sv::ConstraintExpressionKind::solve_before
+        && !iterators_.empty()) {
+      return builder_.constant(low_value(1, 1),
+          runtime::SystemVerilogConstraintVariableProfile{
+              runtime::SystemVerilogConstraintDomainKind::BitVector,
+              1, false, "bit", false});
     }
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U) {
@@ -1677,8 +1698,24 @@ lower_systemverilog_solve_before(
           &semantic::sv::ConstraintBinding::specialization_identity);
       if (binding == item.bindings.end()) return std::nullopt;
       const auto variable = variables.find(binding->canonical_identity);
-      if (variable == variables.end()) return std::nullopt;
-      result.push_back(variable->second);
+      if (variable != variables.end()) {
+        result.push_back(variable->second);
+        continue;
+      }
+      // An array item orders every element variable of the array
+      // (IEEE 1800-2017 18.5.10).
+      const auto prefix = binding->canonical_identity + "[";
+      bool element { };
+      for (auto candidate = variables.lower_bound(prefix);
+           candidate != variables.end()
+           && candidate->first.starts_with(prefix);
+           ++candidate) {
+        result.push_back(candidate->second);
+        element = true;
+      }
+      // An item with no materialized variables orders nothing; the
+      // ordering never changes the solution set (18.5.10).
+      static_cast<void>(element);
     }
     return result;
   };

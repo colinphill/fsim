@@ -3976,6 +3976,42 @@ private:
         if (const auto* record = vhdl_record_definition(subtype)) {
             return evaluate_vhdl_record_aggregate(*expression->vhdl, *record);
         }
+        // `(1 to n => '1')`: one range choice gives the aggregate its bounds
+        // (IEEE 1076-2008 9.3.3.3).
+        if (expression->vhdl->associations.size() == 1U
+            && expression->vhdl->associations.front().choices.size() == 1U) {
+            const auto& association = expression->vhdl->associations.front();
+            const auto choice = unit_.find_expression(
+                association.choices.front());
+            if (choice && choice->vhdl != nullptr
+                && (choice->vhdl->kind == vhdl::ExpressionKind::binary
+                    || choice->vhdl->kind == vhdl::ExpressionKind::slice)
+                && choice->vhdl->operands.size() == 2U
+                && (support::equal_ignoring_ascii_case(choice->vhdl->text, "to")
+                    || support::equal_ignoring_ascii_case(
+                        choice->vhdl->text, "downto"))) {
+                const auto left = vhdl_integer_expression(
+                    choice->vhdl->operands[0]);
+                const auto right = vhdl_integer_expression(
+                    choice->vhdl->operands[1]);
+                const bool descending = support::equal_ignoring_ascii_case(
+                    choice->vhdl->text, "downto");
+                const auto fill = evaluate_vhdl_value(association.value);
+                const auto width = left && right
+                        && (descending ? *left >= *right : *left <= *right)
+                    ? vhdl_range_width(*left, *right)
+                    : std::nullopt;
+                if (width && fill
+                    && fill->kind == VhdlConstantValue::Kind::packed
+                    && fill->packed.bits.size() == 1U
+                    && vhdl_known_bits(fill->packed.bits)
+                    && consume_constant_work_unit(*width)) {
+                    return vhdl_packed_value(
+                        std::string(*width, fill->packed.bits.front()),
+                        *left, *right);
+                }
+            }
+        }
         if (!vhdl_aggregate_uses_others(
                 expression->vhdl->associations.front())) {
             const auto array_info
@@ -6525,6 +6561,28 @@ private:
         constexpr std::string_view qualified_prefix {
             vhdl::qualified_expression_prefix
         };
+        // `T'(aggregate)`: the qualifying type is the aggregate's context
+        // (IEEE 1076-2008 9.3.5).
+        if (expression.text.starts_with(qualified_prefix)
+            && expression.operands.size() == 1U) {
+            const auto operand = unit_.find_expression(
+                expression.operands.front());
+            if (operand && operand->vhdl != nullptr
+                && operand->vhdl->kind == vhdl::ExpressionKind::aggregate) {
+                vhdl::SubtypeIndication qualified_type;
+                qualified_type.type_mark.spelling
+                    = expression.text.substr(qualified_prefix.size());
+                if (const auto effective
+                    = CompiledDesignResolver { unit_ }
+                          .effective_vhdl_subtype(
+                              qualified_type, expression.scope)) {
+                    if (auto value = evaluate_vhdl_aggregate(
+                            expression.operands.front(), *effective)) {
+                        return value;
+                    }
+                }
+            }
+        }
         if (name.starts_with(qualified_prefix)) {
             name.erase(0U, qualified_prefix.size());
         }
@@ -12799,6 +12857,26 @@ private:
             const auto operand = expression.operands[argument++];
             if (conversion == 's') {
                 auto text = evaluate_string(operand);
+                // An integral value formats as its bytes, most significant
+                // first, without leading NULs (IEEE 1800-2017 21.2.1.2).
+                if (!text) {
+                    if (const auto value = evaluate(operand)) {
+                        std::set<ExpressionId> active;
+                        const auto width = std::clamp<std::uint64_t>(
+                            systemverilog_expression_width(unit_, operand, active)
+                                .value_or(64U), 8U, 64U);
+                        text.emplace();
+                        for (auto shift = static_cast<int>((width + 7U) / 8U) * 8 - 8;
+                             shift >= 0; shift -= 8) {
+                            const auto byte = static_cast<char>(
+                                (static_cast<std::uint64_t>(*value) >> shift)
+                                & 0xffU);
+                            if (byte != '\0' || !text->empty()) {
+                                text->push_back(byte);
+                            }
+                        }
+                    }
+                }
                 if (!text) {
                     return std::nullopt;
                 }
@@ -12828,6 +12906,28 @@ private:
             std::size_t natural { };
             if (conversion == 'c') {
                 result.push_back(static_cast<char>(bits & 0xffU));
+                continue;
+            }
+            // %p of an enumeration value is its literal name; of another
+            // integral value, its unpadded decimal (IEEE 1800-2017 21.2.1.7).
+            if (conversion == 'p') {
+                if (const auto* literals
+                    = systemverilog_enumeration_literals(operand)) {
+                    if (const auto literal_index
+                        = systemverilog_enumeration_index(*literals, *value)) {
+                        result += (*literals)[*literal_index].name;
+                        continue;
+                    }
+                }
+                if (is_signed && width < 64U
+                    && ((bits >> (width - 1U)) & 1U) != 0U) {
+                    result += std::to_string(
+                        static_cast<std::int64_t>(bits | ~mask));
+                } else if (is_signed && width == 64U) {
+                    result += std::to_string(static_cast<std::int64_t>(bits));
+                } else {
+                    result += std::to_string(bits);
+                }
                 continue;
             }
             if (conversion == 'd') {

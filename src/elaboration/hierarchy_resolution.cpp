@@ -2009,6 +2009,25 @@ void HierarchyBuilder::finish()
     }
     validate_process_drivers();
     initialize_constant_driven_nets();
+    // A multi-bit VHDL scalar's projected transactions are marked as one
+    // value (IEEE 1076-2008 10.5.2.2).
+    for (std::size_t index = 0U; index < design_.signal_info_.size()
+         && index < design_.signals_.size(); ++index) {
+        const auto& info = design_.signal_info_[index];
+        const bool vhdl_scalar = info.vhdl_array == nullptr
+            && info.packed_members.empty() && info.width > 1U
+            && info.width <= std::numeric_limits<std::uint32_t>::max()
+            && (info.vhdl_physical != nullptr || info.integer_range
+                || !info.enumeration_literals.empty()
+                || (info.source_domain == frontend::ValueDomain::Integer
+                    && info.systemverilog_net_type.empty()
+                    && info.systemverilog_scalar
+                        == frontend::SystemVerilogScalarKind::None));
+        if (vhdl_scalar) {
+            design_.signals_[index].vhdl_scalar_width
+                = static_cast<std::uint32_t>(info.width);
+        }
+    }
     design_.finalize_process_rows();
     std::stable_sort(
         design_.systemc_objects_.begin(),

@@ -776,13 +776,16 @@ namespace {
             }
             return true;
         };
-        if (!consume_integer() || index >= text.size()
-            || text[index] != '.') {
-            return false;
-        }
-        ++index;
         if (!consume_integer()) {
             return false;
+        }
+        // The fraction is optional: READ of a REAL accepts an integer
+        // literal value such as "+4" (IEEE 1076-2008 16.4).
+        if (index < text.size() && text[index] == '.') {
+            ++index;
+            if (!consume_integer()) {
+                return false;
+            }
         }
         if (index < text.size()
             && (text[index] == 'e' || text[index] == 'E')) {

@@ -1514,15 +1514,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     for (const auto& element : op.elements) {
                         elements.push_back(
                             { get_register(process, element.source),
-                                element.delay });
+                                projected_element_delay(process, element) });
                     }
+                    const auto rejection = projected_rejection(
+                        op.rejection, elements);
                     ++process.pc;
                     schedule_projected_waveform(
                         process.id,
                         op.signal,
                         elements,
                         std::nullopt,
-                        op.rejection,
+                        rejection,
                         op.mode);
                 } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
                     auto value = get_register(process, op.source);
@@ -1594,15 +1596,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     for (const auto& element : op.elements) {
                         elements.push_back(
                             { get_register(process, element.source),
-                                element.delay });
+                                projected_element_delay(process, element) });
                     }
+                    const auto rejection = projected_rejection(
+                        op.rejection, elements);
                     ++process.pc;
                     schedule_projected_waveform(
                         process.id,
                         op.signal,
                         elements,
                         op.offset,
-                        op.rejection,
+                        rejection,
                         op.mode);
                 } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
                     auto value = get_register(process, op.source);
@@ -1815,8 +1819,10 @@ void Interpreter::Impl::execute(ProcessId id)
                     for (const auto& element : op.elements) {
                         elements.push_back(
                             { get_register(process, element.source),
-                                element.delay });
+                                projected_element_delay(process, element) });
                     }
+                    const auto rejection = projected_rejection(
+                        op.rejection, elements);
                     const auto offset = selected_offset(op.selection);
                     ++process.pc;
                     schedule_projected_waveform(
@@ -1824,7 +1830,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.signal,
                         elements,
                         offset,
-                        op.rejection,
+                        rejection,
                         op.mode);
                 } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
                     (void)op;
@@ -2546,6 +2552,39 @@ void Interpreter::Impl::execute(ProcessId id)
             }
         }
     }
+}
+
+SimulationTick Interpreter::Impl::projected_element_delay(
+    ProcessState& process, const ProjectedWaveformElement& element)
+{
+    if (!element.delay_source) {
+        return element.delay;
+    }
+    WaitFor wait;
+    wait.delay = element.delay;
+    wait.source = element.delay_source;
+    wait.source_width = element.delay_source_width;
+    wait.source_signed = true;
+    const auto payload = get_register(process, *element.delay_source);
+    // An unknown or negative TIME is an error the bounded runtime treats as
+    // an immediate transaction.
+    if (payload.width() != element.delay_source_width
+        || payload.low_word().bval != 0U
+        || (element.delay_source_width != 0U
+            && payload.get(element.delay_source_width - 1U) == Logic4::one)) {
+        return SimulationTick { 0U };
+    }
+    return normalized_dynamic_wait_delay(wait, payload);
+}
+
+SimulationTick Interpreter::Impl::projected_rejection(
+    const SimulationTick rejection,
+    const std::vector<ProjectedWaveformValue>& elements)
+{
+    if (rejection != std::numeric_limits<SimulationTick>::max()) {
+        return rejection;
+    }
+    return elements.empty() ? SimulationTick { 0U } : elements.front().delay;
 }
 
 } // namespace fsim::runtime::simir

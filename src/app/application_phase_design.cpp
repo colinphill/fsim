@@ -1246,6 +1246,16 @@ std::optional<BuiltProject> load_design_artifact(
     auto compiled_class_specializations = semantic::sv::specialize_classes(
         *semantics, *constraint_hir);
     if (std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr) {
+        for (const auto& specialization :
+            compiled_class_specializations.specializations) {
+            std::cerr << "[fsim-sv-class-spec] specialization "
+                      << specialization.specialization_identity << '\n';
+        }
+        for (const auto& [declaration, identity] :
+            compiled_class_specializations.declaration_specializations) {
+            std::cerr << "[fsim-sv-class-spec] declaration "
+                      << declaration.value() << " -> " << identity << '\n';
+        }
         for (const auto& error : compiled_class_specializations.errors) {
             std::cerr << "[fsim-sv-class-spec] " << error.declaration_identity << ": "
                       << error.message << '\n';

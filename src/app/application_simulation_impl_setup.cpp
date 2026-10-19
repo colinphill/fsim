@@ -1009,7 +1009,8 @@ Simulation::Impl::Impl(
         },
         [this](const auto handle, const auto property, const auto& value) {
             assign_property_value(
-                class_heap.property(handle, property), property, value);
+                class_heap.property(handle, property), property, value,
+                class_heap.object(handle).specialization_identity);
         },
         [this](const auto property) {
             const auto [owner, name] = static_property_parts(property);
@@ -1378,7 +1379,8 @@ Simulation::Impl::Impl(
             const runtime::PackedLogic4& value) {
             const auto before = packed_class_snapshot();
             assign_property_value(
-                class_heap.property(handle, property), property, value);
+                class_heap.property(handle, property), property, value,
+                class_heap.object(handle).specialization_identity);
             notify_class_changes(before);
         });
     interpreter->set_class_method_call_context_hook(

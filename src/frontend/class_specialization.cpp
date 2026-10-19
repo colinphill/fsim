@@ -509,6 +509,7 @@ void diagnose(
       type.packed_range.reset();
     }
   }
+  bool layout_changed = false;
   for (auto& member : type.packed_members) {
     if (member.packed_range_expression) {
       const auto left = evaluate(
@@ -519,10 +520,46 @@ void diagnose(
         member.packed_range = PackedRange{
             *left, *right, *left >= *right};
         member.packed_range_expression.reset();
+        layout_changed = true;
       }
     }
     for (auto& nested : member.nested_types) {
       nested = specialize_type(std::move(nested), values, types);
+    }
+    // A member typed by a type parameter (`T a;`) takes the bound type.
+    if (member.nested_types.empty() && !member.packed_range
+        && !member.packed_range_expression) {
+      if (const auto replacement = types.find(member.spelling);
+          replacement != types.end()) {
+        auto bound = specialize_type(replacement->second, values, types);
+        member.domain = bound.domain;
+        member.is_signed = bound.is_signed;
+        member.nested_types.push_back(std::move(bound));
+        layout_changed = true;
+      }
+    }
+  }
+  // Re-lay out a packed structure whose member widths changed.
+  if (layout_changed && type.packed_aggregate == PackedAggregateKind::Struct
+      && type.systemverilog_packed_dimensions.empty()) {
+    std::uint64_t total{};
+    bool concrete = true;
+    for (const auto& member : type.packed_members) {
+      const auto width = member.width();
+      if (!width || *width == 0U) {
+        concrete = false;
+        break;
+      }
+      total += *width;
+    }
+    if (concrete) {
+      auto offset = total;
+      for (auto& member : type.packed_members) {
+        offset -= *member.width();
+        member.lsb_offset = offset;
+      }
+      type.packed_range = PackedRange{
+          static_cast<std::int64_t>(total - 1U), 0, true};
     }
   }
   if (type.systemverilog_container) {
@@ -599,6 +636,29 @@ void collect_declarations(
 }
 
 }  // namespace
+
+// A type selected from a class specialization (`C#(8)::t`): its type and
+// value parameters take the selection's actuals, then the formals'
+// defaults, in declaration order (IEEE 1800-2017 8.25).
+namespace class_resolution_detail {
+Type specialize_selected_class_type(Type type,
+    const std::vector<std::pair<std::string, const Expression*>>& values,
+    const std::map<std::string, Type>& types);
+}  // namespace class_resolution_detail
+
+Type class_resolution_detail::specialize_selected_class_type(Type type,
+    const std::vector<std::pair<std::string, const Expression*>>& values,
+    const std::map<std::string, Type>& types) {
+  ValueEnvironment environment;
+  for (const auto& [name, expression] : values) {
+    if (expression == nullptr) continue;
+    if (const auto value = evaluate(*expression, environment)) {
+      environment.insert_or_assign(name, *value);
+    }
+  }
+  return specialize_type(std::move(type), environment, types);
+}
+
 
 bool SystemVerilogClassSpecializationResult::ok() const {
   return !has_errors(diagnostics);

@@ -673,7 +673,39 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     if (!object_range && value_range) {
         object_range = value_range;
     }
-    if (!object_range && !initializer) {
+    // `new T'(a.all)` with `a` of this access type copies an object of the
+    // heap's own shape.
+    const bool same_heap_initializer = !object_range && initializer && [&] {
+        auto value_id = *initializer;
+        for (std::size_t depth = 0U; depth < 16U; ++depth) {
+            const auto qualified = specialized_hir_unit_->find_expression(
+                value_id);
+            if (!qualified || qualified->vhdl == nullptr
+                || qualified->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || !qualified->vhdl->text.starts_with(
+                    semantic::vhdl::qualified_expression_prefix)
+                || qualified->vhdl->operands.size() != 1U) {
+                break;
+            }
+            value_id = qualified->vhdl->operands.front();
+        }
+        const auto value = specialized_hir_unit_->find_expression(value_id);
+        if (!value || value->vhdl == nullptr
+            || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            || (value->vhdl->text != "@vhdl-dereference"
+                && value->vhdl->text != "@vhdl-member:all")
+            || value->vhdl->operands.size() != 1U) {
+            return false;
+        }
+        const auto prefix_subtype = hir_vhdl_expression_subtype(
+            value->vhdl->operands.front());
+        const auto* prefix_type = prefix_subtype
+            ? hir_vhdl_access_type_definition(*prefix_subtype)
+            : nullptr;
+        return prefix_type != nullptr && prefix_type->id == type.id;
+    }();
+    if (!object_range && (!initializer || same_heap_initializer)) {
         if (const auto found = hir_vhdl_access_heaps_.find(type.id.value());
             found != hir_vhdl_access_heaps_.end()) {
             return &found->second;
@@ -961,7 +993,15 @@ Lowerer::lower_hir_vhdl_access_string_object(
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }
-    const auto prefix = expression->vhdl->operands.front();
+    return lower_hir_vhdl_access_string_handle(
+        expression->vhdl->operands.front(),
+        hir_source_span(expression->vhdl->source));
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_hir_vhdl_access_string_handle(
+    const semantic::ExpressionId prefix, const frontend::SourceSpan& span)
+{
     const auto access_subtype = hir_vhdl_expression_subtype(prefix);
     const auto* type = access_subtype
         ? hir_vhdl_access_type_definition(*access_subtype)
@@ -974,7 +1014,6 @@ Lowerer::lower_hir_vhdl_access_string_object(
         || !hir_vhdl_predefined_string_type(*designated)) {
         return std::nullopt;
     }
-    const auto span = hir_source_span(expression->vhdl->source);
     auto* heap = hir_vhdl_access_heap(
         *type, span, &*access_subtype);
     const auto handle = lower_hir_expression(prefix, 32U);
@@ -1537,7 +1576,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 *width,
                 vhdl_value_domain(heap->designated_subtype.domain));
             const auto initial = hir_vhdl_default_value(
-                heap->designated_subtype, *width);
+                heap->designated_subtype, *width, 0U, true);
             process_.operations.emplace_back(LoadConstant {
                 *value, initial ? *initial : unsigned_value(0U, *width) });
         }
@@ -1981,6 +2020,39 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
             process_.operations.emplace_back(CopyStringRegister {
                 *line_binding->local, *initial });
             return true;
+        }
+        // `new string(1 to n)`: a STRING of n CHARACTER'LEFT (NUL)
+        // elements (IEEE 1076-2008 9.3.7, 6.4.2.3).
+        if (assigned_line->vhdl->text == "@vhdl-new"
+            && assigned_line->vhdl->operands.size() == 1U) {
+            const auto subtype = specialized_hir_unit_->find_expression(
+                assigned_line->vhdl->operands.front());
+            const auto bound = subtype && subtype->vhdl != nullptr
+                    && subtype->vhdl->operands.size() == 1U
+                ? specialized_hir_unit_->find_expression(
+                      subtype->vhdl->operands.front())
+                : std::nullopt;
+            if (bound && bound->vhdl != nullptr
+                && bound->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+                && (bound->vhdl->text == "to" || bound->vhdl->text == "downto")
+                && bound->vhdl->operands.size() == 2U) {
+                const auto left = hir_constant_integer(bound->vhdl->operands[0]);
+                const auto right
+                    = hir_constant_integer(bound->vhdl->operands[1]);
+                if (left && right) {
+                    const auto descending = bound->vhdl->text == "downto";
+                    const auto count = descending
+                        ? (*left >= *right ? *left - *right + 1 : 0)
+                        : (*right >= *left ? *right - *left + 1 : 0);
+                    if (count >= 0 && count <= (std::int64_t { 1 } << 24)) {
+                        process_.operations.emplace_back(LoadStringConstant {
+                            *line_binding->local,
+                            std::string(static_cast<std::size_t>(count),
+                                '\0') });
+                        return true;
+                    }
+                }
+            }
         }
     }
     const auto member = hir_vhdl_member_selection(

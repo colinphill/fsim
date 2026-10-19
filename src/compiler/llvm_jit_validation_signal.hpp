@@ -352,6 +352,10 @@ template <typename OperationType, typename ExactSignalWidth,
         }
         std::optional<runtime::SimulationTick> previous_delay;
         for (const auto& element : operation.elements) {
+            if (element.delay_source) {
+                reject(process, index,
+                    "projected waveform has a run-time element delay");
+            }
             record_use(element.source, index);
             constrain_width(
                 element.source, target_width, index);
@@ -483,6 +487,10 @@ template <typename OperationType, typename ExactSignalWidth,
         std::optional<runtime::SimulationTick> previous_delay;
         std::optional<RegisterId> first_source;
         for (const auto& element : operation.elements) {
+            if (element.delay_source) {
+                reject(process, index,
+                    "projected waveform has a run-time element delay");
+            }
             record_use(element.source, index);
             if (first_source) {
                 unify_registers(
@@ -716,6 +724,10 @@ template <typename OperationType, typename ExactSignalWidth,
         std::optional<runtime::SimulationTick> previous_delay;
         std::optional<RegisterId> first_source;
         for (const auto& element : operation.elements) {
+            if (element.delay_source) {
+                reject(process, index,
+                    "projected waveform has a run-time element delay");
+            }
             record_use(element.source, index);
             if (first_source) {
                 unify_registers(

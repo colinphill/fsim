@@ -2010,6 +2010,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Signals whose port-association conversions read the key signal.
     std::unordered_map<SignalId, std::vector<SignalId>>
         vhdl_conversion_dependents;
+    // Per signal: nonzero when its bits form one VHDL scalar.
+    std::unordered_map<SignalId, std::uint32_t> vhdl_scalar_widths;
     // Drivers of guarded signals disconnected by a null transaction
     // (IEEE 1076-2008 10.5.2.2); a later value reconnects them.
     std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;
@@ -4165,6 +4167,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] PackedLogic4& get_register(ProcessState& process,
         RegisterId id);
+    // A waveform element's delay, evaluated now when it is run-time
+    // valued (IEEE 1076-2008 10.5.2.1).
+    [[nodiscard]] SimulationTick projected_element_delay(
+        ProcessState& process, const ProjectedWaveformElement& element);
+    // The rejection limit; the sentinel maximum takes the first element's
+    // delay (the default inertial rejection, 10.5.2.1).
+    [[nodiscard]] static SimulationTick projected_rejection(
+        SimulationTick rejection,
+        const std::vector<ProjectedWaveformValue>& elements);
 
     [[nodiscard]] std::string& get_string_register(
         ProcessState& process,
@@ -5388,7 +5399,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::vector<
             std::pair<PackedLogic4, SimulationTick>>& elements,
         const SimulationTick rejection,
-        const ProjectedDelayMode mode);
+        const ProjectedDelayMode mode,
+        const std::vector<bool>* retained_old = nullptr);
 
     void schedule_projected_waveform(
         const ProcessId process,

@@ -785,7 +785,8 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
 void Simulation::Impl::assign_property_value(
     runtime::SystemVerilogClassPropertyValue& destination,
     const std::string_view canonical_identity,
-    const runtime::PackedLogic4& value)
+    const runtime::PackedLogic4& value,
+    const std::string_view object_specialization)
 {
     if (destination.kind
         == runtime::SystemVerilogClassPropertyKind::ClassHandle) {
@@ -796,17 +797,42 @@ void Simulation::Impl::assign_property_value(
             };
         }
         const auto [owner, name] = static_property_parts(canonical_identity);
-        const auto& specialization = class_specialization(owner);
+        // The property's type comes from the specialization of the object
+        // that holds it, or of the base it inherits the property from: a
+        // type parameter's actual can be a class (IEEE 1800-2017 8.25).
+        const auto* specialization = &class_specialization(owner);
+        for (auto current = object_specialization;
+             !current.empty();) {
+            const auto& candidate = class_specialization(current);
+            if (std::ranges::any_of(candidate.properties,
+                    [&](const auto& property) {
+                        return property.owner_identity == owner
+                            && property.name == name;
+                    })) {
+                specialization = &candidate;
+                break;
+            }
+            if (!candidate.base) {
+                break;
+            }
+            current = candidate.base->specialization_identity;
+        }
         const auto property = std::ranges::find_if(
-            specialization.properties, [&](const auto& candidate) {
+            specialization->properties, [&](const auto& candidate) {
                 return candidate.owner_identity == owner
                     && candidate.name == name;
             });
-        if (property == specialization.properties.end()) {
+        if (property == specialization->properties.end()) {
             throw std::out_of_range {
                 "SystemVerilog class property profile '"
                 + std::string { canonical_identity } + "' is not available"
             };
+        }
+        if (std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr) {
+            std::cerr << "[fsim-sv-class-spec] assign " << canonical_identity
+                      << " object=" << object_specialization
+                      << " selected=" << specialization->specialization_identity
+                      << " type=" << property->type.class_identity << '\n';
         }
         if (word.aval != 0) {
             (void)class_heap.checked_cast(

@@ -734,6 +734,14 @@ private:
         semantic::ExpressionId index,
         std::size_t source_width,
         std::uint32_t base_offset = 0U);
+    /// The runtime base of an indexed part-select `v[b +: n]`/`v[b -: n]`
+    /// as a bit index of `v`; a multidimensional packed `v` selects whole
+    /// elements of its first dimension (IEEE 1800-2017 7.4.6, 11.5.1).
+    [[nodiscard]] std::optional<runtime::simir::DynamicIndex>
+    lower_hir_dynamic_part_index(
+        semantic::ExpressionId slice,
+        std::size_t source_width,
+        std::uint32_t base_offset = 0U);
     [[nodiscard]] std::optional<runtime::simir::DynamicPartIndex>
     lower_hir_vhdl_dynamic_slice(
         semantic::ExpressionId expression,
@@ -960,6 +968,9 @@ private:
         semantic::ScopeId scope, std::string_view object) const;
     // The defined methods of the protected body that `name`
     // (`object.method`) selects when its prefix denotes a protected object.
+    [[nodiscard]] std::optional<semantic::CompiledVhdlPackageMember>
+    hir_vhdl_protected_instance(
+        semantic::ScopeId scope, std::string_view object) const;
     [[nodiscard]] std::vector<semantic::CompiledVhdlCallableResolution>
     hir_vhdl_protected_method_resolutions(const semantic::vhdl::Name& name,
         semantic::ScopeId scope, bool function) const;
@@ -1674,6 +1685,10 @@ private:
     lower_hir_systemverilog_coverage_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    [[nodiscard]] bool hir_systemverilog_own_element_member(
+        semantic::ExpressionId expression_id) const;
+    [[nodiscard]] std::optional<bool> hir_systemverilog_packed_element_signed(
+        semantic::ExpressionId expression_id) const;
     [[nodiscard]] bool hir_systemverilog_type_signed(
         const semantic::sv::TypeReference& type,
         std::optional<semantic::ScopeId> use_scope = std::nullopt) const;
@@ -1838,6 +1853,10 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_access_shape_subtype(
         const semantic::vhdl::TypeDefinition& type) const;
+    // The STRING object an access value designates.
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_vhdl_access_string_handle(
+        semantic::ExpressionId prefix, const frontend::SourceSpan& span);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_access_expression(
         semantic::ExpressionId expression,
@@ -3099,6 +3118,9 @@ private:
         std::vector<HirGenericBinding> generic_bindings;
         std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
             static_integer_bindings;
+        // Type parameters this frame binds to class handles (8.25), by
+        // name.
+        std::vector<std::string> handle_type_parameters;
         // Per-dimension shape facts: a present empty range means the caller
         // did not prove that dimension and it must not use type-level bounds.
         std::unordered_map<std::uint32_t,

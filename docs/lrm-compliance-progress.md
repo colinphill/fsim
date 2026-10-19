@@ -253,6 +253,94 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 71: class type-parameter handles, dynamic VHDL delays, class-scoped typedefs, triage closures
+
+Batch 71 fixes the Batch 70 regression (80 UVM cases in sv-tests) and closes
+items from the triage reports in `.local-artifacts/lrm-closure/triage/b71-*.md`.
+
+SystemVerilog classes and constraints:
+- A class property or method formal typed by a type parameter bound to a
+  class holds a handle (8.25). Methods get one frame per handle-typed
+  specialization.
+- `typedef C#(8)::t t_t;`, a class-typedef owner (`c8_t::t`), a class-scoped
+  type parameter actual (`m #(C#(8)::p_type)`), and port and struct-member
+  types of that form (`struct packed { C#(1)::t f; }`) now name the
+  specialized type (8.25.1). A struct member typed by a class type parameter
+  takes the bound type, and the struct is laid out again.
+- Constraints:
+  - wide random variables equal to state variables;
+  - `solve ... before` on arrays and inside `foreach`;
+  - typedef casts;
+  - `randomize() with` names from the caller's scope, including
+    `a.b.randomize() with {a.b.x}` (18.7);
+  - an X predicate is violated rather than an error;
+  - division by zero yields X;
+  - `**` uses the exponent's own signedness.
+- Killing a halted process cancels its fork descendants (9.7). A `time`
+  formal converts a real actual.
+
+Other SystemVerilog:
+- Nonblocking writes of a memory element bit (`mem[i][j] <= v`).
+- `+:`/`-:` on multidimensional packed arrays.
+- Packed shapes through indexed members and typedef'd multidimensional
+  members.
+- Generate-block constants are published as `blk.NAME` (23.6).
+- `localparam type` in a function.
+- An ANSI port with a type but no direction inherits the previous direction
+  (23.2.2.3).
+- A packed array of a named type has elements of that type's width, both in
+  lowering and in parameter evaluation (7.4.1).
+- Struct-parameter member selection uses the computed member offset.
+- An ANSI port typed by one of the module's type parameters
+  (`parameter type T ... (T io)`) is a data port, not an interface port
+  (23.2.2).
+- Constant `$sformatf` `%p` and integral `%s`.
+
+VHDL:
+- Dynamic `after` delays: waveform elements carry a runtime delay source
+  (IEEE 1076-2008 10.5.2.1).
+- Aggregates of literals or static signal names as port actuals use
+  conversion programs.
+- Overlapping `case?` wildcard choices are legal (10.9). A scalar matching
+  selector may have a range choice (`when '0' to '1'`).
+- Protected methods of a type from a generic-package instance bind that
+  instance's generics, including the private variables' types (5.6.2, 4.9).
+- Other fixes:
+  - `S'TRANSACTION` starts at `'1'`;
+  - a user `TO_STRING` overload hides the predefined one;
+  - CHARACTER operands of `&`;
+  - an access string's `'length` and bounds;
+  - `new string(L to R)` on a LINE;
+  - a record aggregate in `=`;
+  - a record element as a signal-class procedure actual;
+  - a REAL read without a fraction (`"+4"`, nvc textio7); the
+    `vhdl_textio_read_overloads_20261013` fixture now expects `"12"` to read
+    as 12.0;
+  - `function f is new f` template lookup;
+  - string-literal generic formals (`"+" => ...`).
+
+Measurement: targeted reruns of the Batch 70 (`b70w1`) failures pass 50
+cases. Of these:
+- 22 Verilator: t_class_type_param_upcast(_all),
+  t_constraint_global_random(_simple), t_constraint_operators,
+  t_constraint_state, t_disable_fork_nested, t_enum_param_xref, t_gen_alw,
+  t_math_insert_bound, t_mod_param_class_typedef1/2/3/4/5/6,
+  t_class_param_typedef6, t_struct_with_param_class,
+  t_process_kill_descendant, t_randomize_from_randomized_class,
+  t_randomize_member_select, t_sv_bus_mux_demux;
+- 22 nvc: access3, access5, attr19, case11, cond5, const7, conv5, implicit2,
+  issue29, issue185, issue705, issue714, issue732, issue750, proc5, proc6,
+  textio7, view1, view2, view5, wait21, wait23;
+- 3 VESTs: tc1207, tc1347, tc1350;
+- 3 ivtest: pow_reg_signed, pr1755629, pr1828642.
+
+The UVM cases and VESTs tc987 recovered as well; they are not counted.
+Verilator t_time_sscanf expects `%t` without `$timeformat` precision
+rounding, which contradicts the xsim-checked `sv_sscanf_time_batch58`
+fixture and 21.3.4.3; it stays open. The
+six-suite run on the frozen `b71w1` is in progress; its table will be added
+with Batch 72.
+
 ### Batch 70: VHDL port-association conversions, block-port shapes, triage closures
 
 Batch 70 implements steps 1 and 2 of `PORTCONV-PLAN-b69.md` and closes items
@@ -329,8 +417,18 @@ SystemVerilog:
   (10.3.4).
 
 Measurement:
-- The six suites are running on the frozen `b70w1`, compared with Batch 69
-  (`b69w1`). The table will be added when the run completes.
+- All six suites were run on the frozen `b70w1` and compared with Batch 69
+  (`b69w1`):
+  - New passes: nvc 28, VESTs 9, Verilator 14, ivtest 1 (52 in all).
+  - Losses:
+    - sv-tests: 80 UVM cases failed at compile. The new type-parameter
+      substitution for class properties replaced the queue type of
+      `REQ m_last_req_buffer[$]` in `uvm_sequencer_param_base` with its
+      element class. Fixed in Batch 71: container-typed properties and
+      method results are no longer substituted.
+    - nvc bounds22 (see below).
+    - VESTs tc987 timed out under load. Its compile takes about 75 s in
+      Batch 69 too, and it passes on its own.
 - Targeted reruns of the Batch 69 failures pass 50 more cases:
   - 28 nvc;
   - 9 VESTs;
@@ -339,6 +437,15 @@ Measurement:
 - Known regression: nvc bounds22. It passed only because a delta-late port
   adapter happened to trigger an assertion. The conversion program has no
   check of an unconstrained function result's length.
+
+| Suite | Batch69 passes / in scope | Batch70 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2524 / 2572 | 2525 / 2572 | 254 |
+| sv-tests | 1440 / 1497 | 1360 / 1497 | 0 |
+| verilator | 1621 / 2124 | 1635 / 2124 | 291 |
+| vests | 3594 / 3646 | 3602 / 3646 | 2 |
+| nvc | 907 / 1260 | 934 / 1260 | 222 |
+| vhdl-compliance | 43 / 72 | 43 / 72 | 0 |
 
 ### Batch 69: VHDL context-typed resolution, R2-SV array constants, access allocators, port expressions
 

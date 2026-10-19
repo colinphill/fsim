@@ -362,6 +362,9 @@ SignalId Interpreter::add_signal(Signal signal)
             impl_->direct_wide_signal_logic9_plane3.end(),
             plane3.begin(), plane3.end());
     }
+    if (signal.vhdl_scalar_width != 0U) {
+        impl_->vhdl_scalar_widths.emplace(id, signal.vhdl_scalar_width);
+    }
     if (signal.vhdl_resolver) {
         // Each driver of a resolved VHDL signal starts at the signal's
         // initial value (IEEE 1076-2008 14.7.2).

@@ -118,8 +118,17 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                       generic_callables_valid = false;
                       continue;
                   }
+                  // `function f is new f ...` names its template, not the
+                  // instance it declares (IEEE 1076-2008 4.4).
                   const auto template_resolution = resolver.resolve_vhdl(
-                      template_name, declaration->vhdl->scope);
+                      template_name, declaration->vhdl->scope,
+                      [](const semantic::CompiledDeclarationView& view) {
+                          return view.vhdl == nullptr
+                              || (view.vhdl->form
+                                      != Form::generic_function_instance
+                                  && view.vhdl->form
+                                      != Form::generic_procedure_instance);
+                      });
                   const auto template_id = template_resolution.unique();
                   if (!template_id) {
                       append_diagnostic(

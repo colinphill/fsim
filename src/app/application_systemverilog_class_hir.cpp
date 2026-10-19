@@ -707,6 +707,56 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
             expression.operands = { std::move(receiver) };
         }
     }
+    // `T'(x)` with a typedef of a packed integral type casts to its width
+    // and signedness (IEEE 1800-2017 6.24.1).
+    if (constexpr std::string_view cast_prefix { "@sv-cast:" };
+        expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text.starts_with(cast_prefix)) {
+        const auto target = expression.text.substr(cast_prefix.size());
+        const bool builtin = target == "signed" || target == "unsigned"
+            || target == "byte" || target == "shortint" || target == "int"
+            || target == "longint" || target == "integer" || target == "bit"
+            || target == "logic" || target == "reg" || target == "time"
+            || (!target.empty()
+                && std::ranges::all_of(target, [](const char c) {
+                       return c >= '0' && c <= '9';
+                   }));
+        for (const auto& candidate : hir_.declarations()) {
+            if (builtin
+                || candidate.form != sv::DeclarationForm::typedef_declaration
+                || candidate.name != target || !candidate.type
+                || candidate.type->packed_dimensions.size() > 1U) {
+                continue;
+            }
+            const auto& type = *candidate.type;
+            const auto& spelling = type.target.spelling;
+            std::optional<std::uint64_t> width;
+            if (type.packed_range && type.packed_range->left
+                && type.packed_range->right
+                && (spelling == "bit" || spelling == "logic"
+                    || spelling == "reg")) {
+                const auto left = *type.packed_range->left;
+                const auto right = *type.packed_range->right;
+                width = static_cast<std::uint64_t>(
+                    (left > right ? left - right : right - left) + 1);
+            } else if (!type.packed_range) {
+                width = spelling == "byte" ? 8U
+                    : spelling == "shortint" ? 16U
+                    : spelling == "int" || spelling == "integer" ? 32U
+                    : spelling == "longint" ? 64U
+                    : spelling == "bit" || spelling == "logic"
+                        || spelling == "reg"
+                    ? std::optional<std::uint64_t> { 1U }
+                    : std::nullopt;
+            }
+            if (width && *width != 0U && *width <= 4096U) {
+                expression.text = std::string { cast_prefix }
+                    + (type.signed_value ? "signed:" : "unsigned:")
+                    + std::to_string(*width);
+            }
+            break;
+        }
+    }
     auto foreach_iterator = enclosing_foreach;
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U

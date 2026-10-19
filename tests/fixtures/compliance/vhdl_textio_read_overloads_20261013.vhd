@@ -83,9 +83,10 @@ begin
     end if;
     deallocate(l);
 
+    -- An integer literal is a REAL value without a fraction (nvc textio7).
     write(l, string'("12"));
     read(l, r, good);
-    if good or l.all /= "" then
+    if not good or r /= 12.0 or l.all /= "" then
       failures := failures + 1;
     end if;
     deallocate(l);

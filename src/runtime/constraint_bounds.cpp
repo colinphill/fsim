@@ -387,6 +387,63 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
   }
   if (hard.empty()) return {};
   auto keys = bounded_keys(hard, random);
+  // A value the variable is compared equal to under a guard
+  // (`if (c) x == 'h333`) is a candidate even when the guard keeps the
+  // comparison from bounding the domain (18.5.6, 18.5.7).
+  const auto sign_bit = profile.signed_value
+      ? std::uint64_t{1} << (profile.width - 1U)
+      : std::uint64_t{};
+  const auto width_mask = profile.width == 64U
+      ? std::numeric_limits<std::uint64_t>::max()
+      : (std::uint64_t{1} << profile.width) - 1U;
+  for (const auto& clause : clauses) {
+    if (!depends(clause)) continue;
+    const auto& nodes = clause.expression->nodes;
+    const auto is_variable = [&](std::size_t id) {
+      for (std::size_t depth = 0; depth < 4U && id < nodes.size(); ++depth) {
+        const auto& node = nodes[id];
+        if (node.operation == Operator::Variable) {
+          return node.variable == variable;
+        }
+        if (node.operation != Operator::UnaryPlus
+            || node.operands.size() != 1U) {
+          return false;
+        }
+        id = node.operands.front();
+      }
+      return false;
+    };
+    for (const auto& node : nodes) {
+      if (node.operation != Operator::Equal || node.operands.size() != 2U) {
+        continue;
+      }
+      for (std::size_t side = 0; side < 2U; ++side) {
+        const auto& other = nodes[node.operands[1U - side]];
+        if (!is_variable(node.operands[side])
+            || other.operation != Operator::Constant
+            || other.constant.width() == 0U || other.constant.width() > 64U
+            || other.constant.is_logic9()
+            || other.constant.low_word().bval != 0U) {
+          continue;
+        }
+        const auto from = other.constant.width();
+        auto bits = other.constant.low_word().aval;
+        if (from < 64U) {
+          bits &= (std::uint64_t{1} << from) - 1U;
+          if (other.profile.signed_value
+              && ((bits >> (from - 1U)) & 1U) != 0U) {
+            bits |= ~((std::uint64_t{1} << from) - 1U);
+          }
+        }
+        const auto key = (bits & width_mask) ^ sign_bit;
+        if (std::ranges::any_of(hard, [&](const auto& range) {
+              return range.low <= key && key <= range.high;
+            })) {
+          keys.push_back(key);
+        }
+      }
+    }
+  }
   for (const auto& clause : clauses) {
     if (!clause.soft || !depends(clause)) continue;
     const auto preferred = intersected(hard,
@@ -435,6 +492,40 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
         }
         node.operation = Operator::Constant;
         node.constant = value->second;
+      }
+      // A substituted state value read through a profile conversion
+      // (UnaryPlus) is itself a constant of the conversion's profile, so
+      // `x == state` bounds `x` like `x == 10` (18.5).
+      for (bool folded = true; folded;) {
+        folded = false;
+        for (auto& node : expression.nodes) {
+          if (node.operation != Operator::UnaryPlus
+              || node.operands.size() != 1U) {
+            continue;
+          }
+          const auto& operand = expression.nodes[node.operands.front()];
+          const auto from = operand.constant.width();
+          const auto to = node.profile.width;
+          if (operand.operation != Operator::Constant || from == 0U
+              || from > 64U || to == 0U || to > 64U
+              || operand.constant.is_logic9()
+              || operand.constant.low_word().bval != 0U) {
+            continue;
+          }
+          auto bits = operand.constant.low_word().aval;
+          if (from < 64U) {
+            bits &= (std::uint64_t{1} << from) - 1U;
+            if (operand.profile.signed_value
+                && ((bits >> (from - 1U)) & 1U) != 0U) {
+              bits |= ~((std::uint64_t{1} << from) - 1U);
+            }
+          }
+          if (to < 64U) bits &= (std::uint64_t{1} << to) - 1U;
+          node.constant = PackedLogic4::from_aval_bval(to, bits, 0U);
+          node.operation = Operator::Constant;
+          node.operands.clear();
+          folded = true;
+        }
       }
       copy.expression = std::make_shared<const SystemVerilogConstraintExpression>(
           std::move(expression));

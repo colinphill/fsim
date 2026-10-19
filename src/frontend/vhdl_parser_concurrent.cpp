@@ -2,6 +2,8 @@
 #include "vhdl_parser_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <unordered_map>
 
 namespace fsim::frontend {
@@ -1229,11 +1231,19 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
   // converted by the actual part's function when there is one. The parser
   // grouped `f(a) => x, f(b) => y` as subelements of a port `f`.
   std::size_t counter{};
+  const auto same_vhdl_name = [](const std::string_view left,
+                                 const std::string_view right) {
+    return std::ranges::equal(left, right, [](const char a, const char b) {
+      return std::tolower(static_cast<unsigned char>(a))
+          == std::tolower(static_cast<unsigned char>(b));
+    });
+  };
   for (auto& instance : unit.instances) {
     // The formal ports of a component instance come from its component
     // declaration; those of an entity instance, after every unit is parsed,
     // from an entity of the same design file.
     std::vector<VhdlComponentPort> ports;
+    std::vector<std::pair<std::string, Expression>> generic_actuals;
     if (instance.vhdl_component_instance && entities == nullptr) {
       const auto component = std::ranges::find_if(
           unit.vhdl_component_declarations,
@@ -1270,6 +1280,34 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         view.type = port.type;
         view.direction = port.direction;
         ports.push_back(std::move(view));
+      }
+      // The formal's index constraints may name the entity's generics,
+      // which denote this instance's generic actuals (IEEE 1076-2008
+      // 6.5.6.3); the implicit signal below is declared in the instantiating
+      // scope, where only those actuals are visible.
+      std::size_t positional{};
+      for (const auto& generic : entity->parameters) {
+        if (generic.kind != ParameterKind::Value) {
+          ++positional;
+          continue;
+        }
+        const ParameterOverride* actual = nullptr;
+        for (const auto& candidate : instance.parameter_overrides) {
+          if (candidate.name && same_vhdl_name(*candidate.name, generic.name)) {
+            actual = &candidate;
+          }
+        }
+        if (actual == nullptr && positional < instance.parameter_overrides.size()
+            && !instance.parameter_overrides[positional].name) {
+          actual = &instance.parameter_overrides[positional];
+        }
+        ++positional;
+        if (actual != nullptr && !actual->default_box && !actual->type_value
+            && actual->value.kind != ExpressionKind::Invalid) {
+          generic_actuals.emplace_back(generic.name, actual->value);
+        } else if (generic.default_value.kind != ExpressionKind::Invalid) {
+          generic_actuals.emplace_back(generic.name, generic.default_value);
+        }
       }
     } else {
       continue;
@@ -1322,6 +1360,25 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         signal.name = implicit;
         signal.type = port->type;
         signal.span = span;
+        if (!generic_actuals.empty()) {
+          const auto substitute = [&](const auto& self, Expression& node) -> void {
+            if (node.kind == ExpressionKind::Identifier) {
+              for (const auto& [name, value] : generic_actuals) {
+                if (same_vhdl_name(node.text, name)) {
+                  node = value;
+                  return;
+                }
+              }
+            }
+            for (auto& operand : node.operands) {
+              self(self, operand);
+            }
+          };
+          for (auto& constraint : signal.type.vhdl_array_constraints) {
+            substitute(substitute, constraint.left);
+            substitute(substitute, constraint.right);
+          }
+        }
         unit.signals.push_back(std::move(signal));
         const Expression implicit_name { ExpressionKind::Identifier, implicit, { }, span };
         PortConnection formal;

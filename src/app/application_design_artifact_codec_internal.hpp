@@ -831,7 +831,7 @@ namespace codec_detail {
             value.implicit_driver, value.implicit_drive_strength,
             value.charge_strength, value.charge_decay,
             value.systemverilog_scalar, value.event_variable,
-            value.vhdl_resolver);
+            value.vhdl_resolver, value.vhdl_scalar_width);
     }
 
     template <typename T>

@@ -1297,7 +1297,7 @@ end architecture;
     const auto malformed = parse_text(
         "vhdl2008-malformed-alias-signature.vhd",
         "architecture rtl of e is\n  signal Value : bit;\n"
-        "  alias Selected : bit is Value [];\nbegin\nend architecture;\n",
+        "  alias Selected : bit is Value [integer;\nbegin\nend architecture;\n",
         Language::Vhdl2008, VhdlStandard::Vhdl2008);
     require(!malformed.ok() && diagnostics_with_code(malformed, "FSIM-VHDL-PARSE-236") == 1 && diagnostics_with_code(malformed, "FSIM-FE-VHSTD-003") == 0,
         "malformed syntax is distinguished from revision availability");

@@ -4134,6 +4134,25 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_ = { };
             return std::nullopt;
         }
+        // A conversion function's array result must match the formal's
+        // length (IEEE 1076-2008 14.7.3.3, 5.3.2.2).
+        if (description.input_actual_program && signal.vhdl_array) {
+            if (const auto shape = hir_vhdl_function_result_shape(
+                    actual, hir_process_scope_);
+                shape && !shape->null_range && shape->width != 0U
+                && shape->width != signal.width) {
+                const auto mismatch = load_constant(
+                    unsigned_value(0U, 1U), frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(Assert {
+                    mismatch,
+                    "VHDL port conversion result length does not match "
+                    "its formal",
+                    AssertionSeverity::failure,
+                    runtime_source_location(
+                        hir_source_span(description.source)),
+                });
+            }
+        }
         if (register_width(*value) != signal.width) {
             value = resize_register(
                 *value, signal.width, extend_signed);

@@ -84,7 +84,9 @@ void VerilogParser::parse_parameter_overrides(
         || keyword("signed") || keyword("unsigned")
         || keyword("string") || keyword("virtual")
         || keyword("struct") || keyword("union") || keyword("enum")
-        || at(TokenKind::LeftBracket);
+        || at(TokenKind::LeftBracket)
+        // A class specialization (`C#(8)::t`) is never an expression.
+        || (at(TokenKind::Identifier) && at(TokenKind::Hash, 1));
   };
   const auto parse_actual = [&](ParameterOverride& override) {
     // `type(...)` is a type actual (6.23) unless it begins a constant
@@ -269,8 +271,16 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           add_port_expression({}, std::move(internal), span));
     } else {
       const bool explicit_generic_interface = keyword("interface");
+      // A type parameter of this unit names a data type, not an interface
+      // (`parameter type T ... (T io)`, IEEE 1800-2017 23.2.2).
+      const bool known_data_type = at(TokenKind::Identifier)
+          && std::ranges::any_of(unit.parameters,
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.kind == ParameterKind::Type
+                    && parameter.name == current().text;
+              });
       const bool typed_interface =
-          at(TokenKind::Identifier)
+          at(TokenKind::Identifier) && !known_data_type
           && !keyword_reserved(keyword_set_, current().text)
           && ((at(TokenKind::Dot, 1)
                && at(TokenKind::Identifier, 2)
@@ -380,14 +390,32 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       VerilogTypeSpec spec = inherited;
       bool declared_here = false;
       inherited_interface.reset();
-      if (is_direction_keyword()) {
+      // `int b` after `input int a`, or a first port `logic [3:0] p`: an
+      // ANSI port whose omitted direction is inherited, or inout for the
+      // first port (IEEE 1800-2017 23.2.2.3).
+      const bool typed_without_direction
+          = language_ == Language::SystemVerilog2017
+          && !is_direction_keyword()
+          && (have_inherited_type ? inherited.direction
+                                        != PortDirection::Unknown
+                                  : unit.ports.empty())
+          && (keyword("int") || keyword("integer") || keyword("logic")
+              || keyword("bit") || keyword("byte") || keyword("shortint")
+              || keyword("longint") || keyword("time") || keyword("real")
+              || keyword("reg") || keyword("var")
+              || (is_named_type_reference_start()
+                  && at(TokenKind::Identifier, 1)));
+      if (is_direction_keyword() || typed_without_direction) {
         const auto direction_token = current();
         note_port_style(true, direction_token);
         (void)require_standard(
             "an ANSI module-port declaration",
             StandardRevision::Verilog2001,
             direction_token);
-        spec.direction = parse_direction();
+        spec.direction = typed_without_direction
+            ? (have_inherited_type ? inherited.direction
+                                   : PortDirection::Inout)
+            : parse_direction();
         spec.type = default_port_net_type();
         if (at(TokenKind::Identifier)
             && declaration_word_standard(current().text)

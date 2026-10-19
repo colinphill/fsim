@@ -13,6 +13,8 @@
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <ranges>
 #include <set>
@@ -6647,6 +6649,25 @@ SystemVerilogClassHirExecution::execute(
                 *item->value, handle, environment,
                 assignment_context_width(*item->target));
             if (!value) {
+                if (std::getenv("FSIM_CLASS_HIR_TRACE") != nullptr) {
+                    const auto dump = [&](const auto& self,
+                                          const semantic::ExpressionId id,
+                                          const int depth) -> void {
+                        const auto* node = expression(id);
+                        if (node == nullptr || depth > 3) {
+                            return;
+                        }
+                        std::cerr << "[fsim-class-hir] " << std::string(
+                                         static_cast<std::size_t>(depth) * 2U,
+                                         ' ')
+                                  << "kind=" << static_cast<int>(node->kind)
+                                  << " text=" << node->text << '\n';
+                        for (const auto operand : node->operands) {
+                            self(self, operand, depth + 1);
+                        }
+                    };
+                    dump(dump, *item->value, 0);
+                }
                 throw std::invalid_argument {
                     "class HIR assignment expression is not executable"
                 };

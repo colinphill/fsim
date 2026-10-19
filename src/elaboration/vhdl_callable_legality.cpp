@@ -54,9 +54,16 @@ namespace {
         const auto actual = expression_domain(
             specialization, *formal.initializer);
         const auto expected = formal.subtype->domain;
+        // A string literal is a value of any one-dimensional array of
+        // character-literal elements, such as BIT_VECTOR (IEEE 1076-2008
+        // 9.3.2).
+        const bool string_literal_array = actual
+                == semantic::vhdl::ValueDomain::string
+            && (expected == semantic::vhdl::ValueDomain::bit2
+                || expected == semantic::vhdl::ValueDomain::logic9);
         return actual == semantic::vhdl::ValueDomain::unknown
             || expected == semantic::vhdl::ValueDomain::unknown
-            || actual == expected;
+            || actual == expected || string_literal_array;
     }
 
     class Validator final {

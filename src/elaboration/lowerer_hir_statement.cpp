@@ -4648,10 +4648,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && selected.text != "+:" && selected.text != "-:"
                 && (nonblocking
                     || !hir_constant_selection(*target, hir_process_scope_));
+            // `mem[i][j] <= v` publishes only bit `j` of the element at
+            // update time, like a one-bit indexed part-select (10.4.2).
+            const bool nonblocking_memory_bit = index && nonblocking
+                && selected.text == "index"
+                && selected.operands.size() == 2U && element
+                && element->width > 1U;
             const bool dynamic_memory_part
-                = slice && selected.operands.size() == 3U
-                && (selected.text == "+:" || selected.text == "-:"
-                    || constant_memory_range)
+                = ((slice && selected.operands.size() == 3U
+                       && (selected.text == "+:" || selected.text == "-:"
+                           || constant_memory_range))
+                    || nonblocking_memory_bit)
                 && packed_element && element->type != nullptr
                 && element->selected_type == element->type
                 && direct_container_object && !element->local
@@ -5939,10 +5946,19 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return true;
         }
-        if (target_expression->systemverilog != nullptr
+        const bool memory_bit_target
+            = target_expression->systemverilog != nullptr
             && target_expression->systemverilog->kind
-                == semantic::sv::ExpressionKind::slice
-            && target_expression->systemverilog->operands.size() == 3U) {
+                == semantic::sv::ExpressionKind::index
+            && target_expression->systemverilog->text == "index"
+            && target_expression->systemverilog->operands.size() == 2U
+            && nonblocking;
+        if (target_expression->systemverilog != nullptr
+            && ((target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::slice
+                    && target_expression->systemverilog->operands.size()
+                        == 3U)
+                || memory_bit_target)) {
             const auto& selection
                 = *target_expression->systemverilog;
             const auto& input = *statement->systemverilog;
@@ -5988,12 +6004,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
-                const bool indexed_part = selection.text == "+:"
-                    || selection.text == "-:";
+                const bool indexed_part = memory_bit_target
+                    || selection.text == "+:" || selection.text == "-:";
                 const auto first_bound
                     = hir_constant_integer(selection.operands[1]);
-                const auto second_bound
-                    = hir_constant_integer(selection.operands[2]);
+                const auto second_bound = memory_bit_target
+                    ? std::optional<std::int64_t> { 1 }
+                    : hir_constant_integer(selection.operands[2]);
                 // An indexed part-select with a constant base is a constant
                 // range select.
                 const bool constant_range = !indexed_part
@@ -6018,8 +6035,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::optional<std::size_t> width;
                 std::optional<DynamicIndex> dynamic;
                 if (!constant_range) {
-                    width = hir_dynamic_part_width(
-                        *target, hir_process_scope_);
+                    width = memory_bit_target
+                        ? std::optional<std::size_t> { 1U }
+                        : hir_dynamic_part_width(
+                              *target, hir_process_scope_);
                     if (width) {
                         dynamic = lower_hir_dynamic_index(
                             selection.operands.front(),
@@ -6093,7 +6112,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             dynamic->right,
                             dynamic->base_offset,
                             static_cast<std::uint32_t>(*width),
-                            constant_range || selection.text == "+:",
+                            constant_range || memory_bit_target
+                                || selection.text == "+:",
                             dynamic->left >= dynamic->right,
                         }, { }
                     });
@@ -7121,12 +7141,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
             auto root = *target;
             for (;;) {
                 const auto view = specialized_hir_unit_->find_expression(root);
+                // A member of a generate-block element (`Byte[1].s`) is
+                // itself the hierarchical object being selected.
                 if (!view || view->systemverilog == nullptr
                     || (view->systemverilog->kind
                             != semantic::sv::ExpressionKind::index
                         && view->systemverilog->kind
                             != semantic::sv::ExpressionKind::slice)
-                    || view->systemverilog->operands.empty()) {
+                    || view->systemverilog->operands.empty()
+                    || view->systemverilog->text.starts_with("index.")
+                    || view->systemverilog->text.starts_with("@sv-select:")) {
                     break;
                 }
                 root = view->systemverilog->operands.front();
@@ -7135,11 +7159,34 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return std::nullopt;
             }
             const auto root_view = specialized_hir_unit_->find_expression(root);
+            // Only a packed object; an unpacked memory of a generate block
+            // is not a signal vector here.
+            const bool selected_member_root = root_view
+                && root_view->systemverilog != nullptr
+                && (root_view->systemverilog->text.starts_with("index.")
+                    || root_view->systemverilog->text.starts_with(
+                        "@sv-select:"))
+                && [&] {
+                       const auto member_declaration
+                           = hir_target_declaration(root);
+                       const auto record = member_declaration
+                           ? specialized_hir_unit_->find_declaration(
+                                 *member_declaration)
+                           : std::nullopt;
+                       return !(record && record->systemverilog != nullptr
+                           && record->systemverilog->type
+                           && (!record->systemverilog->type
+                                    ->unpacked_dimensions.empty()
+                               || record->systemverilog->type
+                                      ->container_form))
+                           && !hir_container_object_binding(root);
+                   }();
             if (!root_view || root_view->systemverilog == nullptr
-                || root_view->systemverilog->kind
-                    != semantic::sv::ExpressionKind::name
-                || root_view->systemverilog->text.find('.')
-                    == std::string::npos) {
+                || (!selected_member_root
+                    && (root_view->systemverilog->kind
+                            != semantic::sv::ExpressionKind::name
+                        || root_view->systemverilog->text.find('.')
+                            == std::string::npos))) {
                 return std::nullopt;
             }
             if (const auto root_declaration = hir_target_declaration(root);
@@ -8220,7 +8267,48 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 procedural_delay = *primary;
             }
         }
+        // A waveform whose element delays are computed when it executes
+        // (`after period / 2`, IEEE 1076-2008 10.5.2.1).
+        bool dynamic_vhdl_waveform { };
         if (statement->vhdl != nullptr && signal_assignment) {
+            const auto& input = *statement->vhdl;
+            const auto delay_expression = [](const auto& delay) {
+                return delay.primary.expression.has_value();
+            };
+            dynamic_vhdl_waveform = std::ranges::any_of(input.waveform,
+                [&](const auto& element) {
+                    return element.delay
+                        && !delay_magnitude(element.delay->primary)
+                        && delay_expression(*element.delay);
+                })
+                || (input.waveform.size() <= 1U && input.delay
+                    && (input.waveform.empty() || !input.waveform.front().delay)
+                    && !delay_magnitude(input.delay->primary)
+                    && delay_expression(*input.delay));
+        }
+        if (statement->vhdl != nullptr && signal_assignment
+            && dynamic_vhdl_waveform) {
+            const auto& input = *statement->vhdl;
+            const auto transport = input.delay_mechanism
+                == semantic::vhdl::DelayMechanism::transport;
+            const auto rejection = input.rejection_limit
+                ? delay_magnitude(input.rejection_limit->primary)
+                : std::optional<runtime::SimulationTick> {
+                      transport ? 0U
+                                : std::numeric_limits<
+                                      runtime::SimulationTick>::max()
+                  };
+            if (!rejection) {
+                return assignment_rejected(__LINE__);
+            }
+            vhdl_projected_assignment = VhdlProjectedAssignment {
+                0U,
+                *rejection,
+                transport
+                    ? ProjectedDelayMode::transport
+                    : ProjectedDelayMode::inertial,
+            };
+        } else if (statement->vhdl != nullptr && signal_assignment) {
             const auto& input = *statement->vhdl;
             const auto element_delay = !input.waveform.empty()
                     && input.waveform.front().delay
@@ -8438,6 +8526,51 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }();
             const auto* value_context
                 = string_context ? &*string_context : nullptr;
+            // `line := new string(1 to n)`: n CHARACTER'LEFT (NUL)
+            // elements (IEEE 1076-2008 9.3.7, 6.4.2.3).
+            if (!signal_assignment && !nonblocking
+                && string_binding->kind == HirStringBindingKind::local
+                && string_binding->local) {
+                const auto allocator = specialized_hir_unit_->find_expression(
+                    *value);
+                const auto subtype = allocator && allocator->vhdl != nullptr
+                        && allocator->vhdl->text == "@vhdl-new"
+                        && allocator->vhdl->operands.size() == 1U
+                    ? specialized_hir_unit_->find_expression(
+                          allocator->vhdl->operands.front())
+                    : std::nullopt;
+                const auto bound = subtype && subtype->vhdl != nullptr
+                        && subtype->vhdl->operands.size() == 1U
+                    ? specialized_hir_unit_->find_expression(
+                          subtype->vhdl->operands.front())
+                    : std::nullopt;
+                if (bound && bound->vhdl != nullptr
+                    && bound->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::binary
+                    && (bound->vhdl->text == "to"
+                        || bound->vhdl->text == "downto")
+                    && bound->vhdl->operands.size() == 2U) {
+                    const auto left
+                        = hir_constant_integer(bound->vhdl->operands[0]);
+                    const auto right
+                        = hir_constant_integer(bound->vhdl->operands[1]);
+                    if (left && right) {
+                        const auto descending = bound->vhdl->text == "downto";
+                        const auto count = descending
+                            ? (*left >= *right ? *left - *right + 1 : 0)
+                            : (*right >= *left ? *right - *left + 1 : 0);
+                        if (count <= (std::int64_t { 1 } << 24)) {
+                            process_.operations.emplace_back(
+                                LoadStringConstant {
+                                    *string_binding->local,
+                                    std::string(
+                                        static_cast<std::size_t>(count),
+                                        '\0') });
+                            return true;
+                        }
+                    }
+                }
+            }
             if (signal_assignment || nonblocking
                 || !can_lower_hir_string_expression(
                     *target, hir_process_scope_)
@@ -9310,6 +9443,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         static_cast<std::int64_t>(source_width - 1U), 0,
                         base_offset, false };
                 }
+            } else if (slice && target_expression->systemverilog != nullptr) {
+                dynamic_selection = lower_hir_dynamic_part_index(
+                    *target, source_width, base_offset);
             } else {
                 dynamic_selection = lower_hir_dynamic_index(
                     target_operands[0],
@@ -10063,7 +10199,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             ? source_scalar_kind
             : scalar_context;
         if (statement->vhdl != nullptr && signal_assignment
-            && statement->vhdl->waveform.size() > 1U) {
+            && (statement->vhdl->waveform.size() > 1U
+                || dynamic_vhdl_waveform)) {
             if (!binding->signal || !vhdl_projected_assignment) {
                 return assignment_rejected(__LINE__);
             }
@@ -10123,9 +10260,41 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         converted, *element_value });
                     element_value = converted;
                 }
-                const auto delay = element.delay
-                    ? delay_magnitude(element.delay->primary)
+                const auto* element_delay_source = element.delay
+                    ? &*element.delay
+                    : statement->vhdl->waveform.size() == 1U
+                        && statement->vhdl->delay
+                    ? &*statement->vhdl->delay
+                    : nullptr;
+                const auto delay = element_delay_source != nullptr
+                    ? delay_magnitude(element_delay_source->primary)
                     : std::optional<runtime::SimulationTick> { 0U };
+                // A run-time delay is evaluated when the assignment
+                // executes; its order is not checked statically.
+                if (!delay && element_delay_source != nullptr
+                    && dynamic_vhdl_waveform) {
+                    // TIME values are counts of the resolution limit, as
+                    // for a runtime `wait for` timeout.
+                    const auto duration = element_delay_source->primary
+                            .expression
+                        ? lower_hir_expression(
+                              *element_delay_source->primary.expression, 64U)
+                        : std::nullopt;
+                    if (!duration || register_width(*duration) != 64U) {
+                        return assignment_rejected(__LINE__);
+                    }
+                    ProjectedWaveformElement dynamic_element {
+                        *element_value,
+                        element_delay_source->primary.magnitude != 0U
+                            ? element_delay_source->primary.magnitude
+                            : 1U,
+                        std::nullopt, 0U };
+                    dynamic_element.delay_source = *duration;
+                    dynamic_element.delay_source_width = 64U;
+                    waveform.push_back(std::move(dynamic_element));
+                    previous_delay.reset();
+                    continue;
+                }
                 if (!delay || (previous_delay
                         && *delay <= *previous_delay)) {
                     report(
@@ -10137,7 +10306,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
                 previous_delay = *delay;
                 waveform.push_back(ProjectedWaveformElement {
-                    *element_value, *delay });
+                    *element_value, *delay, std::nullopt, 0U });
             }
             const auto& projected = *vhdl_projected_assignment;
             if (dynamic_vhdl_selection) {
@@ -11731,12 +11900,49 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         const auto pattern = pattern_text(choice);
                         const auto expression
                             = specialized_hir_unit_->find_expression(choice);
+                        // A scalar selector may name a range of values
+                        // (IEEE 1076-2008 10.9).
+                        if (*selector_width == 1U && expression
+                            && expression->vhdl != nullptr
+                            && expression->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::call
+                            && (expression->vhdl->text
+                                    == "@vhdl-case-range-to"
+                                || expression->vhdl->text
+                                    == "@vhdl-case-range-downto")
+                            && std::ranges::all_of(
+                                expression->vhdl->operands,
+                                [&](const semantic::ExpressionId bound) {
+                                    return vhdl_locally_static_expression(
+                                        *specialized_hir_unit_, bound);
+                                })) {
+                            continue;
+                        }
                         const auto choice_span = expression
                                 && expression->vhdl != nullptr
                             ? hir_source_span(expression->vhdl->source)
                             : hir_source_span(alternative.source);
                         if (!pattern
                             || pattern->size() != *selector_width) {
+                            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
+                                != nullptr) {
+                                std::cerr << "[fsim-hir-lower] matching-choice"
+                                          << " selector_width="
+                                          << *selector_width << " kind="
+                                          << (expression
+                                                     && expression->vhdl
+                                                         != nullptr
+                                                 ? static_cast<int>(
+                                                       expression->vhdl->kind)
+                                                 : -1)
+                                          << " text="
+                                          << (expression
+                                                     && expression->vhdl
+                                                         != nullptr
+                                                 ? expression->vhdl->text
+                                                 : std::string { })
+                                          << '\n';
+                            }
                             report(
                                 "FSIM-ELAB-VHDLMATCH-002",
                                 "bounded matching choices must be locally "
@@ -11746,10 +11952,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             valid = false;
                             continue;
                         }
+                        // Wildcard choices may overlap; only a value that
+                        // matches two choices when the statement executes
+                        // is an error (IEEE 1076-2008 10.9). An identical
+                        // choice repeats a value.
                         if (std::ranges::any_of(
                                 prior_patterns,
                                 [&](const std::string& prior) {
-                                    return patterns_overlap(prior, *pattern);
+                                    return prior == *pattern
+                                        && patterns_overlap(prior, *pattern);
                                 })) {
                             report(
                                 "FSIM-ELAB-VHDLMATCH-003",

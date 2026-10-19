@@ -15166,6 +15166,100 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             return false;
         }
     }
+    // Constants of the selected conditional generate blocks, for a
+    // hierarchical reference from another scope (`u.blk.P`, IEEE
+    // 1800-2017 23.6, 27.6).
+    {
+        const auto selected_regions = specialized->selected_generates();
+        const auto publish_regions = [&](const auto& self,
+                                         const std::vector<
+                                             semantic::sv::GenerateRegion>&
+                                             regions,
+                                         const std::string& prefix,
+                                         const std::string& inherited)
+            -> void {
+            for (const auto& region : regions) {
+                // An `else` alternative sharing its `if` label is nested
+                // without a label of its own.
+                const auto& label
+                    = region.label.empty() ? inherited : region.label;
+                if (region.kind == semantic::sv::GenerateKind::iterative) {
+                    continue;
+                }
+                if (std::ranges::find(selected_regions, region.declaration)
+                    == selected_regions.end()) {
+                    self(self, region.nested, prefix, label);
+                    continue;
+                }
+                if (label.empty()) {
+                    continue;
+                }
+                const auto path = prefix + label + ".";
+                for (const auto declaration_id : region.declarations) {
+                    const auto declaration
+                        = specialized->find_declaration(declaration_id);
+                    const auto form = declaration && declaration->systemverilog
+                            != nullptr
+                        ? std::optional { declaration->systemverilog->form }
+                        : std::nullopt;
+                    if (form != semantic::sv::DeclarationForm::parameter
+                        && form != semantic::sv::DeclarationForm::local_parameter
+                        && form
+                            != semantic::sv::DeclarationForm::
+                                enumeration_literal) {
+                        continue;
+                    }
+                    const auto name = path + declaration->systemverilog->name;
+                    if (!published_parameter_names.insert(name).second) {
+                        continue;
+                    }
+                    std::string constant_error;
+                    std::optional<HirSystemVerilogConstant> constant;
+                    if (declaration->systemverilog->initializer) {
+                        constant = evaluate_hir_systemverilog_constant(
+                            *specialized,
+                            *declaration->systemverilog->initializer,
+                            constant_error);
+                    }
+                    if (!constant
+                        && form
+                            == semantic::sv::DeclarationForm::
+                                enumeration_literal) {
+                        if (const auto value
+                            = specialized->evaluate_integral_declaration(
+                                declaration_id)) {
+                            HirSystemVerilogConstant ordinal;
+                            ordinal.packed
+                                = runtime::PackedLogic4::from_aval_bval(32U,
+                                    static_cast<std::uint64_t>(*value)
+                                        & 0xffffffffU,
+                                    0U);
+                            ordinal.width = 32U;
+                            ordinal.signed_value = true;
+                            ordinal.domain = frontend::ValueDomain::Integer;
+                            constant = std::move(ordinal);
+                        }
+                    }
+                    if (constant && declaration->systemverilog->type
+                        && hir_systemverilog_explicit_integral_type(
+                            *declaration->systemverilog->type)) {
+                        constant = convert_hir_systemverilog_constant(
+                            std::move(*constant),
+                            *declaration->systemverilog->type,
+                            constant_error, &*specialized);
+                    }
+                    if (!constant) {
+                        continue;
+                    }
+                    specialization.parameter_identity_values.emplace_back(
+                        name, constant->canonical());
+                }
+                self(self, region.nested, path, std::string { });
+            }
+        };
+        publish_regions(publish_regions, unit.generates, std::string { },
+            std::string { });
+    }
     const auto specify_path_begin
         = design_.verilog_specify_paths_.size();
     validate_verilog_specify(
@@ -17032,13 +17126,27 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             child_interface_specialization,
             *formal_declaration.subtype,
             formal_declaration.scope);
+        // A string or bit-string literal actual of an unconstrained formal
+        // gives it the literal's length from the index subtype's left bound
+        // (IEEE 1076-2008 9.3.2, 6.5.6.3).
+        const auto literal_length = [&]() -> std::optional<std::uint64_t> {
+            if (!expression || expression->vhdl == nullptr
+                || expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::string_literal
+                || !expression->vhdl->decoded_string
+                || expression->vhdl->decoded_string->empty()) {
+                return std::nullopt;
+            }
+            return expression->vhdl->decoded_string->size();
+        }();
         if (formal_signal_type && formal_signal_type->vhdl_array
             && binding.expression && expression
             && expression->vhdl != nullptr
-            && expression->vhdl->kind
-                == semantic::vhdl::ExpressionKind::aggregate
-            && expression->vhdl->text
-                == "@vhdl-formal-subelements") {
+            && ((expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && expression->vhdl->text
+                    == "@vhdl-formal-subelements")
+                || literal_length)) {
             // An unconstrained array port associated by its formal
             // subelements takes its effective bounds from those formal
             // choices. Keep this in the producer that materializes the
@@ -17049,7 +17157,8 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 && source_array.dimensions.size() == 1U
                 && source_array.dimensions.front().unconstrained
                 && !source_array.dimensions.front().range
-                && !expression->vhdl->associations.empty()) {
+                && (!expression->vhdl->associations.empty()
+                    || literal_length)) {
                 const auto& source_dimension
                     = source_array.dimensions.front();
                 semantic::vhdl::SubtypeIndication index_subtype;
@@ -17162,6 +17271,20 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     && discrete_index_type
                     && valid_index_base_range
                     && exact_element_stride;
+                if (literal_length && supported_choices
+                    && builtin_one_bit_element && index_base_range
+                    && *literal_length
+                        < static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int64_t>::max())) {
+                    const auto count
+                        = static_cast<std::int64_t>(*literal_length);
+                    const auto left = index_base_range->left;
+                    intervals.push_back(*index_descending
+                            ? FormalIndexInterval { left - count + 1, left }
+                            : FormalIndexInterval { left, left + count - 1 });
+                } else if (literal_length) {
+                    supported_choices = false;
+                }
                 for (const auto& association
                     : expression->vhdl->associations) {
                     if (!supported_choices
@@ -20679,6 +20802,20 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         // A static function call or other constant expression evaluates as
         // a constant would (IEEE 1076-2008 6.4.2.3, 9.4.1).
         if (!value && !static_value) {
+            if (const auto array = working_specialization
+                    .evaluate_vhdl_packed_array_expression(
+                        *declaration.initializer);
+                array && !array->elements.empty()) {
+                std::string bits;
+                for (const auto& element : array->elements) {
+                    bits += element.bits;
+                }
+                if (bits.size() == width) {
+                    static_value = PackedLogic4::from_logic9_msb_string(bits);
+                }
+            }
+        }
+        if (!value && !static_value) {
             if (const auto evaluated = working_specialization
                     .evaluate_vhdl_constant_expression(
                         *declaration.initializer)) {
@@ -23168,10 +23305,33 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                             && compiled_vhdl_name_equal(candidate.name,
                                 simple_name_of(reference.spelling));
                     });
+                // `p.t`: a type of a package instance or of a generic
+                // package formal (IEEE 1076-2008 4.9, 6.5.5).
+                const auto instance_selected = [&] {
+                    const auto dot = reference.spelling.rfind('.');
+                    if (dot == std::string::npos || dot == 0U) {
+                        return false;
+                    }
+                    const auto prefix = simple_name_of(
+                        std::string_view { reference.spelling }.substr(0U, dot));
+                    return std::ranges::any_of(
+                        compiled_->vhdl_hir.declarations(),
+                        [&](const semantic::vhdl::Declaration& candidate) {
+                            return (candidate.form
+                                        == semantic::vhdl::DeclarationForm::
+                                            package_instance
+                                    || candidate.form
+                                        == semantic::vhdl::DeclarationForm::
+                                            generic_package)
+                                && compiled_vhdl_name_equal(
+                                    candidate.name, prefix);
+                        });
+                }();
                 if (profile.type_class == SubtypeClass::unknown
                     && linked_subtype.unspecified_class
                         == semantic::vhdl::UnspecifiedTypeClass::none
-                    && !generic_type_visible && !alias_named) {
+                    && !generic_type_visible && !alias_named
+                    && !instance_selected) {
                     report(
                         "FSIM-ELAB-VHTYPE-006",
                         "VHDL type '" + reference.spelling
@@ -24482,10 +24642,14 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             connection_source);
         incompatible_alias = true;
     }
+    // A record of integer elements is checked element by element by its
+    // subtype, not as one integer (IEEE 1076-2008 5.3.3).
+    const bool composite_actual = actual_info.vhdl_array
+        || !actual_info.packed_members.empty();
     if (formal_domain == frontend::ValueDomain::Integer
         && actual_info.source_domain
             == frontend::ValueDomain::Integer
-        && !integer_array_formal) {
+        && !integer_array_formal && !composite_actual) {
         const auto formal_integer_range
             = executable_integer_range(
                 formal_domain,

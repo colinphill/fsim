@@ -591,7 +591,8 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
     const std::vector<
         std::pair<PackedLogic4, SimulationTick>>& elements,
     const SimulationTick rejection,
-    const ProjectedDelayMode mode)
+    const ProjectedDelayMode mode,
+    const std::vector<bool>* const retained_old)
 {
     if (elements.empty()) {
         throw std::invalid_argument(
@@ -656,16 +657,24 @@ void Interpreter::Impl::schedule_projected_scalar_waveform(
             ++index) {
             marked[index] = true;
         }
-        const auto threshold = first_time - rejection;
-        for (std::size_t index = 0; index < old_count; ++index) {
-            marked[index] = transactions[index].time < threshold;
-        }
-        for (std::size_t index = transactions.size() - 1;
-            index-- > 0;) {
-            if (!marked[index] && marked[index + 1]
-                && transactions[index].value
-                    == transactions[index + 1].value) {
-                marked[index] = true;
+        if (retained_old != nullptr && retained_old->size() == old_count) {
+            // The scalar this bit belongs to decided which of its old
+            // transactions survive.
+            for (std::size_t index = 0; index < old_count; ++index) {
+                marked[index] = (*retained_old)[index];
+            }
+        } else {
+            const auto threshold = first_time - rejection;
+            for (std::size_t index = 0; index < old_count; ++index) {
+                marked[index] = transactions[index].time < threshold;
+            }
+            for (std::size_t index = transactions.size() - 1;
+                index-- > 0;) {
+                if (!marked[index] && marked[index + 1]
+                    && transactions[index].value
+                        == transactions[index + 1].value) {
+                    marked[index] = true;
+                }
             }
         }
 
@@ -954,6 +963,74 @@ void Interpreter::Impl::schedule_projected_waveform(
             });
         return;
     }
+    // The bits of a multi-bit VHDL scalar keep or reject their old
+    // transactions together, by comparing whole values (IEEE 1076-2008
+    // 10.5.2.2); the bits of an array are separate scalars.
+    std::optional<std::vector<bool>> scalar_retained;
+    if (mode == ProjectedDelayMode::inertial && first == 0U
+        && width == target_width) {
+        const auto scalar = vhdl_scalar_widths.find(signal);
+        if (scalar != vhdl_scalar_widths.end() && scalar->second == width) {
+            const auto first_time = scheduler.now() + elements.front().delay;
+            std::vector<const std::vector<ProjectedTransaction>*> bits(width);
+            bool aligned = true;
+            std::size_t old_count = std::numeric_limits<std::size_t>::max();
+            for (std::size_t bit = 0; bit < width && aligned; ++bit) {
+                const auto driver = projected_drivers.find(ProjectedDriverKey {
+                    process, signal, static_cast<std::uint32_t>(bit) });
+                static const std::vector<ProjectedTransaction> empty;
+                bits[bit] = driver == projected_drivers.end()
+                    ? &empty : &driver->second.transactions;
+                std::size_t kept { };
+                while (kept < bits[bit]->size()
+                    && (*bits[bit])[kept].time < first_time) {
+                    ++kept;
+                }
+                if (old_count == std::numeric_limits<std::size_t>::max()) {
+                    old_count = kept;
+                } else if (kept != old_count) {
+                    aligned = false;
+                }
+            }
+            for (std::size_t index = 0; aligned && index < old_count;
+                 ++index) {
+                for (std::size_t bit = 1; bit < width; ++bit) {
+                    if ((*bits[bit])[index].time != (*bits[0])[index].time) {
+                        aligned = false;
+                        break;
+                    }
+                }
+            }
+            if (aligned && old_count != 0U
+                && old_count != std::numeric_limits<std::size_t>::max()) {
+                const auto threshold = first_time - rejection;
+                const auto old_value_equals_next = [&](const std::size_t index) {
+                    for (std::size_t bit = 0; bit < width; ++bit) {
+                        const auto here = (*bits[bit])[index].value;
+                        const auto next = index + 1U < old_count
+                            ? (*bits[bit])[index + 1U].value
+                            : elements.front().value.get_logic9(bit);
+                        if (here != next) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                std::vector<bool> retained(old_count + 1U, true);
+                for (std::size_t index = 0; index < old_count; ++index) {
+                    retained[index] = (*bits[0])[index].time < threshold;
+                }
+                for (std::size_t index = old_count; index-- > 0;) {
+                    if (!retained[index] && retained[index + 1U]
+                        && old_value_equals_next(index)) {
+                        retained[index] = true;
+                    }
+                }
+                retained.pop_back();
+                scalar_retained = std::move(retained);
+            }
+        }
+    }
     std::vector<
         std::pair<PackedLogic4, SimulationTick>>
         scalar_elements;
@@ -976,7 +1053,8 @@ void Interpreter::Impl::schedule_projected_waveform(
             static_cast<std::uint32_t>(first + bit),
             scalar_elements,
             rejection,
-            mode);
+            mode,
+            scalar_retained ? &*scalar_retained : nullptr);
     }
 }
 

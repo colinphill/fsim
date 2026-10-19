@@ -2325,6 +2325,56 @@ Lowerer::hir_class_property_profile(
         ? frontend::ValueDomain::Logic4
         : frontend::ValueDomain::Bit2;
     result.signed_value = selected->type.signed_value;
+    // A property typed by a type parameter whose actual is a class holds a
+    // handle (IEEE 1800-2017 8.25); the access carries the actual class.
+    const auto typed_by_type_parameter = [&] {
+        if (selected->type.target.spelling.empty()) {
+            return false;
+        }
+        for (const auto& candidate :
+            specialized_hir_unit_->design().systemverilog_hir.classes()) {
+            if (std::ranges::find(candidate.properties,
+                    selected->canonical_identity,
+                    &semantic::sv::ClassProperty::canonical_identity)
+                == candidate.properties.end()) {
+                continue;
+            }
+            return std::ranges::any_of(candidate.parameters,
+                [&](const semantic::sv::ClassParameter& parameter) {
+                    return parameter.type_parameter
+                        && parameter.name == selected->type.target.spelling;
+                });
+        }
+        return false;
+    };
+    // Inside a method frame that binds the property's type parameter to a
+    // class handle, the shared body reads the handle.
+    const bool frame_handle_type = !selected->type.target.spelling.empty()
+        && active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()
+        && std::ranges::find(
+               hir_callable_frames_[*active_hir_callable_]
+                   .handle_type_parameters,
+               selected->type.target.spelling)
+            != hir_callable_frames_[*active_hir_callable_]
+                   .handle_type_parameters.end()
+        && typed_by_type_parameter();
+    // The access names the property's class itself unless its type
+    // parameter's actual is a class.
+    const bool handle_actual_class = !access.class_identity.empty()
+        && !(selected->owner_identity.empty()
+            || std::string_view { access.class_identity }.starts_with(
+                selected->owner_identity));
+    if ((instance && handle_actual_class
+            && selected->type.class_identity.empty()
+            && selected->type.value_form
+                != semantic::sv::TypeForm::class_handle
+            && typed_by_type_parameter())
+        || (instance && frame_handle_type)) {
+        result.width = 64U;
+        result.domain = frontend::ValueDomain::Bit2;
+        result.signed_value = false;
+    }
     result.static_storage = selected->static_storage;
     result.writable = !selected->constant && !selected->parameter;
     return result;
@@ -2966,6 +3016,46 @@ Lowerer::hir_inline_constraints(
                 return folded;
             }
             output.kind = TemplateKind::Name;
+            // `a.b.m` through the randomized handle `a.b` names its member
+            // `m` (IEEE 1800-2017 18.7).
+            if (randomized_object && source.text.find('.') != std::string::npos) {
+                const auto spelling = [&](const auto& self,
+                                          const semantic::ExpressionId handle,
+                                          const std::size_t depth)
+                    -> std::optional<std::string> {
+                    const auto node = specialized_hir_unit_->find_expression(
+                        handle);
+                    if (!node || node->systemverilog == nullptr || depth > 16U) {
+                        return std::nullopt;
+                    }
+                    const auto& value = *node->systemverilog;
+                    if (value.kind == semantic::sv::ExpressionKind::name) {
+                        return value.text;
+                    }
+                    if (value.kind
+                            == semantic::sv::ExpressionKind::class_property
+                        && value.text.starts_with(property_prefix)
+                        && value.operands.size() == 1U) {
+                        const auto receiver = self(self,
+                            value.operands.front(), depth + 1U);
+                        const auto separator = value.text.rfind("::");
+                        if (!receiver || separator == std::string::npos) {
+                            return std::nullopt;
+                        }
+                        return *receiver + "."
+                            + value.text.substr(separator + 2U);
+                    }
+                    return std::nullopt;
+                };
+                if (const auto handle
+                    = spelling(spelling, *randomized_object, 0U);
+                    handle && source.text.size() > handle->size() + 1U
+                    && source.text.starts_with(*handle)
+                    && source.text[handle->size()] == '.') {
+                    output.text = source.text.substr(handle->size() + 1U);
+                    return output;
+                }
+            }
             // A name the randomized object does not declare resolves in
             // the calling scope (IEEE 1800-2017 18.7); pass its value.
             const auto declaration = runtime_values != nullptr
@@ -3653,6 +3743,42 @@ Lowerer::bind_hir_class_actuals(
             }
             actual.domain = frontend::ValueDomain::String;
             return actual;
+        }
+        // A formal typed by a class type parameter whose actual is a class
+        // handle holds a handle (IEEE 1800-2017 8.25); the method body is
+        // shared by every specialization.
+        const auto class_type_parameter = [&] {
+            for (const auto& candidate :
+                specialized_hir_unit_->design().systemverilog_hir.classes()) {
+                if (!std::ranges::any_of(candidate.methods,
+                        [&](const semantic::sv::ClassMethod& method) {
+                            return method.declaration == callable_declaration;
+                        })) {
+                    continue;
+                }
+                return std::ranges::any_of(candidate.parameters,
+                    [&](const semantic::sv::ClassParameter& parameter) {
+                        return parameter.type_parameter
+                            && parameter.name
+                                == formal_record.type->target.spelling;
+                    });
+            }
+            return false;
+        };
+        if (formal_record.type->class_identity.empty()
+            && !formal_record.type->target.spelling.empty()
+            && class_type_parameter()) {
+            const auto actual_record
+                = specialized_hir_unit_->find_expression(expression);
+            if (actual_record && actual_record->systemverilog != nullptr
+                && !actual_record->systemverilog->class_identity.empty()
+                && hir_expression_width(expression, process_scope)
+                    .value_or(0U) == 64U) {
+                actual.width = 64U;
+                actual.domain = frontend::ValueDomain::Bit2;
+                actual.signed_value = false;
+                return actual;
+            }
         }
         const auto width = hir_systemverilog_type_width(
             *formal_record.type);
@@ -5771,6 +5897,37 @@ Lowerer::lower_hir_class_callable_invocation(
         return std::nullopt;
     }
 
+    // The class type parameters of the method's class, by name.
+    std::vector<std::string_view> class_type_parameters;
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        if (std::ranges::any_of(candidate.methods,
+                [&](const semantic::sv::ClassMethod& method) {
+                    return method.declaration == profile.declaration;
+                })) {
+            for (const auto& parameter : candidate.parameters) {
+                if (parameter.type_parameter) {
+                    class_type_parameters.push_back(parameter.name);
+                }
+            }
+        }
+    }
+    const auto type_parameter_handle_formal
+        = [&](const semantic::DeclarationId formal,
+              const HirClassMethodActual& actual) {
+              const auto record = specialized_hir_unit_->find_declaration(
+                  formal);
+              return actual.width == 64U && !actual.string
+                  && !actual.container
+                  && actual.domain == frontend::ValueDomain::Bit2
+                  && record && record->systemverilog != nullptr
+                  && record->systemverilog->type
+                  && record->systemverilog->type->class_identity.empty()
+                  && std::ranges::find(class_type_parameters,
+                         std::string_view {
+                             record->systemverilog->type->target.spelling })
+                      != class_type_parameters.end();
+          };
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
     if (profile.interface_receiver) {
@@ -5786,7 +5943,15 @@ Lowerer::lower_hir_class_callable_invocation(
     } else {
         const auto callable_key = systemverilog_task_callable_key(
             profile.declaration);
-        const auto key = std::to_string(callable_key);
+        auto key = std::to_string(callable_key);
+        // A type-parameter formal bound to a class handle takes its own
+        // frame (IEEE 1800-2017 8.25).
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            if (type_parameter_handle_formal(formals[index],
+                    profile.actuals[index])) {
+                key += ":h" + std::to_string(index);
+            }
+        }
         const auto found = hir_callable_indices_.find(key);
         if (found != hir_callable_indices_.end()) {
             frame_index = found->second;
@@ -5878,6 +6043,17 @@ Lowerer::lower_hir_class_callable_invocation(
                 frame.container_output_defaults.push_back(std::nullopt);
                 frame.invocation_strings.push_back(
                     frame.string_arguments.back());
+            } else if (type_parameter_handle_formal(
+                           formal, profile.actuals[index])) {
+                frame.handle_type_parameters.push_back(
+                    record->systemverilog->type->target.spelling);
+                frame.arguments.push_back(allocate_register(
+                    64U, frontend::ValueDomain::Bit2));
+                frame.string_arguments.push_back({ });
+                frame.container_arguments.push_back({ });
+                frame.container_output_defaults.push_back(std::nullopt);
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
             } else {
                 const auto binding = hir_runtime_binding(
                     formal, scope, false);
@@ -12459,7 +12635,7 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
             && declaration->systemverilog != nullptr
             && declaration->systemverilog->type
             && !declaration->systemverilog->type->container_form
-            && formal_kind == Kind::None && spelling != "time"
+            && formal_kind == Kind::None
             && spelling != "chandle" && spelling != "string"
             && spelling != "event";
         if (real_kind(formal_kind) && actual_kind == Kind::None) {
@@ -15869,6 +16045,26 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 binding->signal_storage_domain = binding->domain;
                 binding->width = *width;
                 binding->domain = *domain;
+            }
+        } else if (binding && !selected_actual
+            && binding->kind == HirRuntimeBindingKind::signal) {
+            // A record element (`s.a`) is a signal actual denoting only its
+            // element (IEEE 1076-2008 4.2.2.3, 8.3).
+            if (const auto member = hir_vhdl_member_selection(
+                    (*actuals)[index]);
+                member && !member->index && member->width != 0U
+                && member->domain != frontend::ValueDomain::Unknown
+                && member->offset <= binding->width
+                && member->width <= binding->width - member->offset
+                && member->width != binding->width) {
+                binding->signal_selection = HirConstantSelection {
+                    member->offset, member->width };
+                binding->signal_selection_expression = (*actuals)[index];
+                binding->signal_storage_width = binding->width;
+                binding->signal_storage_domain = binding->domain;
+                binding->width = member->width;
+                binding->domain = member->domain;
+                binding->signed_value = member->signed_value;
             }
         }
         if (!binding || binding->kind != HirRuntimeBindingKind::signal

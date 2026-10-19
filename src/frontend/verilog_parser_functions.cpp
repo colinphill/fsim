@@ -216,7 +216,8 @@ FunctionDeclaration VerilogParser::parse_function(
   DesignUnit local_declarations;
   while (!at_end() && !keyword("endfunction")) {
     const auto before = position();
-    if (match_keyword("typedef")) {
+    if (parse_local_type_parameter(local_declarations)) {
+    } else if (match_keyword("typedef")) {
       const auto alias_count = local_declarations.type_aliases.size();
       parse_typedef(local_declarations, previous());
       if (local_declarations.type_aliases.size() > alias_count) {
@@ -843,7 +844,8 @@ TaskDeclaration VerilogParser::parse_task(
   DesignUnit local_declarations;
   while (!at_end() && !keyword("endtask")) {
     const auto before = position();
-    if (match_keyword("typedef")) {
+    if (parse_local_type_parameter(local_declarations)) {
+    } else if (match_keyword("typedef")) {
       const auto alias_count = local_declarations.type_aliases.size();
       parse_typedef(local_declarations, previous());
       if (local_declarations.type_aliases.size() > alias_count) {
@@ -1192,6 +1194,39 @@ void VerilogParser::validate_task_body(
         }
       };
   inspect(inspect, task.statements);
+}
+
+}  // namespace fsim::frontend
+
+namespace fsim::frontend {
+
+// `localparam type T = logic [7:0];` in a subroutine is a local type
+// declaration (IEEE 1800-2017 6.20.3, A.2.8 block_item_declaration).
+bool VerilogParser::parse_local_type_parameter(DesignUnit& local_declarations)
+{
+  if (!(keyword("localparam") || keyword("parameter")) || !keyword("type", 1)
+      || !at(TokenKind::Identifier, 2) || !at(TokenKind::Assign, 3)) {
+    return false;
+  }
+  const auto start = advance();
+  (void)advance();
+  const auto name = advance();
+  (void)advance();
+  auto type = parse_parameter_type();
+  expect(TokenKind::Semicolon, "';' after local type parameter",
+      "FSIM-SV-PARSE-197");
+  packed_typedef_types_.insert_or_assign(name.text, type);
+  current_procedural_types_.insert_or_assign(name.text, type);
+  local_declarations.type_aliases.push_back({ name.text,
+      std::move(type),
+      cover(start.span, previous().span),
+      { },
+      TypeDeclarationKind::SystemVerilogTypedef,
+      { },
+      { },
+      { },
+      false });
+  return true;
 }
 
 }  // namespace fsim::frontend

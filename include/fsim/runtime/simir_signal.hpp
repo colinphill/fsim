@@ -86,6 +86,10 @@ struct Signal {
       SystemVerilogScalarKind::None};
   bool event_variable { };
   std::optional<VhdlSignalResolver> vhdl_resolver;
+  // Nonzero for a VHDL scalar (integer, enumeration, physical or floating
+  // point) wider than one bit: its bits form one scalar whose projected
+  // transactions are kept or rejected together (IEEE 1076-2008 10.5.2.2).
+  std::uint32_t vhdl_scalar_width { };
 
   Signal() = default;
   Signal(

@@ -12,6 +12,10 @@
 
 namespace fsim::frontend::class_resolution_detail {
 
+Type specialize_selected_class_type(Type type,
+    const std::vector<std::pair<std::string, const Expression*>>& values,
+    const std::map<std::string, Type>& types);
+
 struct Scope {
   std::string library;
   std::string compilation_unit_identity;
@@ -99,6 +103,8 @@ class Resolver final {
     for (auto& declaration : declarations) {
       if (auto scoped = resolve_class_scoped_type(declaration.type, scope)) {
         declaration.type = std::move(*scoped);
+      } else {
+        resolve_class_scoped_members(declaration.type, scope);
       }
     }
   }
@@ -157,6 +163,9 @@ class Resolver final {
       const Type& receiver, const Scope& scope) const;
   [[nodiscard]] std::optional<Type> resolve_class_scoped_type(
       const Type& type, const Scope& scope) const;
+  // Resolves class-scoped member types of a packed aggregate
+  // (`struct packed { C#(1)::t f; }`) and re-lays it out.
+  void resolve_class_scoped_members(Type& type, const Scope& scope) const;
   [[nodiscard]] SystemVerilogClassMethod specialize_selected_method(
       SystemVerilogClassMethod method,
       const ClassSelection& selection,

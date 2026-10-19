@@ -164,6 +164,8 @@ public:
                 actuals.push_back({ actual.formal, actual.kind,
                     actual.expression, actual.type, std::nullopt,
                     std::nullopt, actual.source });
+                normalize_type_actual(actuals.back(), *found->second,
+                    actuals.size() - 1U, declaration_identity(declaration.id));
             }
             const auto errors = result_.errors.size();
             const auto specializations = result_.specializations.size();
@@ -200,6 +202,8 @@ public:
                 actuals.push_back({ actual.formal, actual.kind,
                     actual.expression, actual.type, std::nullopt,
                     std::nullopt, actual.source });
+                normalize_type_actual(actuals.back(), *found->second,
+                    actuals.size() - 1U, request.declaration_identity);
             }
             (void)specialize(*found->second, actuals, request.source);
         }
@@ -911,37 +915,17 @@ private:
         return result;
     }
 
-    std::optional<std::string> specialize_relation(
-        const ClassDeclaration& owner, const ClassRelation& relation,
-        const RelationKind kind, const Environment& environment)
+    // A type parameter's actual written as a name (`B#(tx)`, parsed as an
+    // expression) denotes the named type (IEEE 1800-2017 8.25).
+    void normalize_type_actual(ResolvedActual& retained,
+        const ClassDeclaration& target_declaration, const std::size_t index,
+        const std::string_view owner_identity) const
     {
-        const auto* target = relation_target(relation, owner);
-        if (target == nullptr) {
-            return std::nullopt;
-        }
-        const bool interface_relation = kind != RelationKind::base;
-        if (interface_relation != target->interface_class
-            || (kind == RelationKind::extended_interface
-                && !owner.interface_class)
-            || (kind == RelationKind::implemented_interface
-                && owner.interface_class)) {
-            report(ClassSpecializationErrorKind::incompatible_relation,
-                class_declaration_identity(owner), relation.source,
-                "class relation '" + relation.name
-                    + "' has an incompatible class/interface kind");
-            return std::nullopt;
-        }
-        std::vector<ResolvedActual> actuals;
-        actuals.reserve(relation.actuals.size());
-        for (std::size_t index = 0; index < relation.actuals.size(); ++index) {
-            const auto& actual = relation.actuals[index];
-            ResolvedActual retained { actual.formal, actual.kind,
-                actual.expression, actual.type, std::nullopt,
-                std::nullopt, actual.source };
+        const auto* target = &target_declaration;
             const ClassParameter* formal { };
-            if (actual.formal) {
+            if (retained.formal) {
                 const auto found = std::ranges::find(
-                    target->parameters, *actual.formal,
+                    target->parameters, *retained.formal,
                     &ClassParameter::name);
                 if (found != target->parameters.end())
                     formal = &*found;
@@ -971,12 +955,11 @@ private:
                     && expression->kind == ExpressionKind::name) {
                     // A class named as a type actual (`extends B#(tx)`) is
                     // a class-handle type (IEEE 1800-2017 8.25).
-                    const auto owner_identity
-                        = class_declaration_identity(owner);
                     const auto scope_end = owner_identity.rfind("::");
                     const ClassDeclaration* named_class = scope_end
-                            != std::string::npos
-                        ? class_for(owner_identity.substr(0, scope_end)
+                            != std::string_view::npos
+                        ? class_for(std::string {
+                                        owner_identity.substr(0, scope_end) }
                               + "::" + expression->text)
                         : nullptr;
                     if (named_class == nullptr) {
@@ -1005,6 +988,37 @@ private:
                     }
                 }
             }
+    }
+
+    std::optional<std::string> specialize_relation(
+        const ClassDeclaration& owner, const ClassRelation& relation,
+        const RelationKind kind, const Environment& environment)
+    {
+        const auto* target = relation_target(relation, owner);
+        if (target == nullptr) {
+            return std::nullopt;
+        }
+        const bool interface_relation = kind != RelationKind::base;
+        if (interface_relation != target->interface_class
+            || (kind == RelationKind::extended_interface
+                && !owner.interface_class)
+            || (kind == RelationKind::implemented_interface
+                && owner.interface_class)) {
+            report(ClassSpecializationErrorKind::incompatible_relation,
+                class_declaration_identity(owner), relation.source,
+                "class relation '" + relation.name
+                    + "' has an incompatible class/interface kind");
+            return std::nullopt;
+        }
+        std::vector<ResolvedActual> actuals;
+        actuals.reserve(relation.actuals.size());
+        for (std::size_t index = 0; index < relation.actuals.size(); ++index) {
+            const auto& actual = relation.actuals[index];
+            ResolvedActual retained { actual.formal, actual.kind,
+                actual.expression, actual.type, std::nullopt,
+                std::nullopt, actual.source };
+            normalize_type_actual(retained, *target, index,
+                class_declaration_identity(owner));
             if (actual.kind == ActualKind::expression
                 && retained.kind == ActualKind::expression
                 && retained.expression) {

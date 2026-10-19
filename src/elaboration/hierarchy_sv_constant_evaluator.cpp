@@ -6,6 +6,7 @@
 
 #include <boost/multiprecision/cpp_int.hpp>
 
+#include <array>
 #include <algorithm>
 #include <unordered_map>
 #include <bit>
@@ -468,13 +469,68 @@ void convert_to_two_state(Value& value)
                     *type.packed_range->right_expression);
             }
         }
-        if (left && right) {
-            const auto distance = support::index_distance(*left, *right);
-            if (distance != std::numeric_limits<std::uint64_t>::max()) {
-                return distance + 1U;
-            }
+        if (!left || !right) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        const auto distance = support::index_distance(*left, *right);
+        if (distance == std::numeric_limits<std::uint64_t>::max()) {
+            return std::nullopt;
+        }
+        const auto extent = distance + 1U;
+        // A packed array of a named packed type (`w_t [1:0]`) has elements
+        // of that type's width (IEEE 1800-2017 7.4.1).
+        const auto& spelling = type.target.spelling;
+        static constexpr std::array<std::string_view, 17> builtin {
+            "logic", "bit", "reg", "int", "integer", "byte", "shortint",
+            "longint", "time", "wire", "signed", "unsigned", "struct",
+            "union", "enum", "implicit", "string"
+        };
+        if (specialization == nullptr || spelling.empty()
+            || type.packed_dimensions.size() > 1U
+            || !type.target.target.valid()
+            || std::ranges::find(builtin, std::string_view { spelling })
+                != builtin.end()
+            || spelling.starts_with('@')
+            || spelling.find(' ') != std::string::npos
+            || !visiting.insert(type.target.target.value()).second) {
+            return extent;
+        }
+        auto element = type;
+        element.packed_range.reset();
+        element.packed_dimensions.clear();
+        element.signed_value = false;
+        const auto element_width
+            = resolved_type_width(element, specialization, visiting);
+        visiting.erase(type.target.target.value());
+        const auto effective
+            = semantic::CompiledDesignResolver { *specialization }
+                  .effective_systemverilog_type(
+                      element, specialization->scope());
+        // A reference that repeats its typedef's own range denotes the
+        // typedef itself.
+        const auto boundary = [&](const std::optional<std::int64_t> value,
+                                  const std::optional<semantic::ExpressionId>
+                                      expression) {
+            return value ? value
+                : expression
+                ? specialization->evaluate_integral_expression(*expression)
+                : std::nullopt;
+        };
+        if (effective && effective->packed_range
+            && boundary(effective->packed_range->left,
+                   effective->packed_range->left_expression)
+                == left
+            && boundary(effective->packed_range->right,
+                   effective->packed_range->right_expression)
+                == right) {
+            return element_width.value_or(extent);
+        }
+        if (!element_width || *element_width <= 1U
+            || *element_width
+                > std::numeric_limits<std::uint64_t>::max() / extent) {
+            return extent;
+        }
+        return extent * *element_width;
     }
     if (specialization != nullptr) {
         const auto effective

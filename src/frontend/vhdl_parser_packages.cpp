@@ -464,7 +464,9 @@ void VhdlParser::parse_vhdl_generic_associations(
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto association_start = current();
     ParameterOverride actual;
-    if (at(TokenKind::Identifier)
+    // A generic function formal may be an operator symbol (`"=" => eq`,
+    // IEEE 1076-2008 6.5.7.2).
+    if ((at(TokenKind::Identifier) || at(TokenKind::StringLiteral))
         && at(TokenKind::Arrow, 1)) {
       saw_named = true;
       const auto name = advance();

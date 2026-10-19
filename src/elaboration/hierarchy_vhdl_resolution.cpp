@@ -190,11 +190,13 @@ bool vhdl_static_signal_name(
     }
     const auto& source = *expression->vhdl;
     using Kind = semantic::vhdl::ExpressionKind;
+    // Record subelements only: an element or slice of an array actual keeps
+    // its adapter, which closed VHDL kernels schedule as a member process.
     if (source.kind == Kind::name) {
-        return depth != 0U || source.text.find('.') != std::string::npos;
+        return source.text.find('.') != std::string::npos;
     }
     if ((source.kind != Kind::index && source.kind != Kind::slice)
-        || source.operands.size() < 2U) {
+        || source.operands.size() < 2U || depth != 0U) {
         return false;
     }
     for (std::size_t index = 1U; index < source.operands.size(); ++index) {
@@ -229,6 +231,31 @@ bool vhdl_conversion_actual(
         return true;
     }
     const auto expression = specialization.find_expression(actual);
+    // Subelement associations or an aggregate of signal names and literals
+    // (`p(0) => '1', p(1) => x`) give the formal the actuals' value in the
+    // same cycle and at initialization (IEEE 1076-2008 6.5.7.1, 14.7.5.2).
+    if (expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && !expression->vhdl->associations.empty()
+        && std::ranges::all_of(expression->vhdl->associations,
+            [&](const semantic::vhdl::AggregateAssociation& association) {
+                const auto value = specialization.find_expression(
+                    association.value);
+                if (!value || value->vhdl == nullptr) {
+                    return false;
+                }
+                const auto kind = value->vhdl->kind;
+                return kind == semantic::vhdl::ExpressionKind::logic_literal
+                    || kind == semantic::vhdl::ExpressionKind::integer_literal
+                    || kind == semantic::vhdl::ExpressionKind::string_literal
+                    || kind == semantic::vhdl::ExpressionKind::boolean_literal
+                    || vhdl_static_signal_name(
+                        specialization, association.value)
+                    || (kind == semantic::vhdl::ExpressionKind::name
+                        && value->vhdl->text.find('.') == std::string::npos);
+            })) {
+        return true;
+    }
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
         || expression->vhdl->operands.size() != 1U

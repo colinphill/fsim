@@ -1052,6 +1052,11 @@ struct WriteProjected {
 struct ProjectedWaveformElement {
     RegisterId source { };
     SimulationTick delay { };
+    /// A delay computed when the assignment executes (IEEE 1076-2008
+    /// 10.5.2.1): `delay` is then the tick scale applied to the TIME value
+    /// held in delay_source, as for a dynamic WaitFor.
+    std::optional<RegisterId> delay_source { };
+    std::uint32_t delay_source_width { };
 
     friend bool operator==(
         const ProjectedWaveformElement&,

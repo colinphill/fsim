@@ -253,10 +253,13 @@ struct Simulation::Impl {
     [[nodiscard]] static runtime::PackedLogic4 packed_property_value(
         const runtime::SystemVerilogClassPropertyValue& value);
 
+    // `object_specialization` names the specialization of the object that
+    // holds the property; a static property has none.
     void assign_property_value(
         runtime::SystemVerilogClassPropertyValue& destination,
         const std::string_view canonical_identity,
-        const runtime::PackedLogic4& value);
+        const runtime::PackedLogic4& value,
+        std::string_view object_specialization = { });
 
     [[nodiscard]] runtime::PackedLogic4 invoke_class_container(
         const runtime::SystemVerilogClassHandle receiver,

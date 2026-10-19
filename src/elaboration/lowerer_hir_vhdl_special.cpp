@@ -444,6 +444,36 @@ const semantic::vhdl::TypeDefinition* Lowerer::hir_vhdl_protected_type(
                    : nullptr;
 }
 
+std::optional<semantic::CompiledVhdlPackageMember>
+Lowerer::hir_vhdl_protected_instance(
+    const semantic::ScopeId scope, const std::string_view object) const
+{
+    const auto object_id = find_vhdl_object(
+        *specialized_hir_unit_, scope, object);
+    const auto declaration = object_id
+        ? specialized_hir_unit_->find_declaration(*object_id)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->subtype) {
+        return std::nullopt;
+    }
+    semantic::vhdl::Name type_name;
+    type_name.spelling = declaration->vhdl->subtype->type_mark.spelling;
+    const auto members = hir_resolver().resolve_vhdl_package_members(
+        type_name, declaration->vhdl->scope);
+    std::optional<semantic::CompiledVhdlPackageMember> instance;
+    for (const auto& candidate : members.candidates) {
+        if (!candidate.package_instance) {
+            continue;
+        }
+        if (instance && !(*instance == candidate)) {
+            return std::nullopt;
+        }
+        instance = candidate;
+    }
+    return instance;
+}
+
 std::vector<semantic::CompiledVhdlCallableResolution>
 Lowerer::hir_vhdl_protected_method_resolutions(
     const semantic::vhdl::Name& name, const semantic::ScopeId scope,
@@ -462,6 +492,15 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     if (body == nullptr) {
         return result;
     }
+    // A protected type declared in an instance of a generic package has
+    // that instance's generic actuals (IEEE 1076-2008 4.9, 5.6.2).
+    std::optional<semantic::DeclarationId> package_instance;
+    semantic::CompiledBindingFrame generic_bindings;
+    if (const auto instance
+        = hir_vhdl_protected_instance(scope, selected->object)) {
+        package_instance = instance->package_instance;
+        generic_bindings = instance->generic_bindings;
+    }
     for (const auto member_id : body->protected_members) {
         const auto* member = find_vhdl_declaration(
             *specialized_hir_unit_, member_id);
@@ -471,7 +510,8 @@ Lowerer::hir_vhdl_protected_method_resolutions(
             || !equal_ignoring_ascii_case(member->name, selected->member)) {
             continue;
         }
-        result.push_back({ member_id, member_id, std::nullopt, { } });
+        result.push_back(
+            { member_id, member_id, package_instance, generic_bindings });
     }
     return result;
 }
@@ -585,8 +625,21 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     if (!anchor) {
         return std::nullopt;
     }
-    return const_cast<Lowerer*>(this)->hir_vhdl_protected_object_storage(
+    // Private variables of a protected type from a generic package
+    // instance are typed by that instance's generic actuals.
+    auto* const lowerer = const_cast<Lowerer*>(this);
+    const auto instance = hir_vhdl_protected_instance(
+        scope, selected->object);
+    if (instance) {
+        lowerer->hir_generic_binding_frames_.push_back(
+            instance->generic_bindings);
+    }
+    auto storage = lowerer->hir_vhdl_protected_object_storage(
         *anchor, *body);
+    if (instance) {
+        lowerer->hir_generic_binding_frames_.pop_back();
+    }
+    return storage;
 }
 
 std::string Lowerer::hir_vhdl_local_protected_key(
