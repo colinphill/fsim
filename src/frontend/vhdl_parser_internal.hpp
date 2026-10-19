@@ -445,6 +445,9 @@ private:
   // user-defined attribute of the object applies through the alias (IEEE
   // 1076-2008 6.6.2).
   std::unordered_map<std::string, std::string> vhdl_object_alias_targets_;
+  // Entity class (signal, constant, variable) of each object name declared
+  // so far, for `attribute a of all : signal` (IEEE 1076-2008 7.2).
+  std::unordered_map<std::string, std::string> vhdl_object_classes_;
   // Type mark of each subtype declared in this design file; a type
   // declaration maps to itself. Resolves `T'BASE` (IEEE 1076-2008 16.2.2).
   std::unordered_map<std::string, std::string> vhdl_subtype_type_marks_;

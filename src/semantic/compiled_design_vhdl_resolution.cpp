@@ -1382,6 +1382,18 @@ private:
                 user_overloads = false;
             }
         }
+        // A relation in a BOOLEAN context that no user overload returning
+        // BOOLEAN accepts is the predefined one (`if a = b` with a user
+        // "=" returning BIT, IEEE 1076-2008 9.2.3, 12.5).
+        if (user_overloads && relational(record.text) && expected
+            && expected->builtin == "boolean"
+            && std::ranges::none_of(functions(record),
+                [&](const Callable& callable) {
+                    return applicable(callable, record, expected);
+                })) {
+            annotate_type(record.id, *expected);
+            user_overloads = false;
+        }
         if (!user_overloads && relational(record.text)) {
             // Both operands of a predefined relation have one type (9.2.3).
             std::vector<TypeKey> common;

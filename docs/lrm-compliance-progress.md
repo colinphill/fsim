@@ -253,6 +253,108 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 74: class-property events, element members, VHDL attributes and aggregates, triage closures
+
+Full run on the frozen `b73w1` (Batch 73, 33a57ccb), compared with Batch 72
+(`b72w1`):
+- New passes: ivtest 11, sv-tests 1, Verilator 26, vests 4, nvc 10,
+  vhdl-compliance 1.
+- Losses: Verilator t_lparam_assign_iface_typedef4,
+  t_param_type_struct_member and t_string_byte; all three are fixed in this
+  batch.
+
+| Suite | Batch72 passes / in scope | Batch73 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2534 / 2572 | 2545 / 2565 | 261 |
+| sv-tests | 1440 / 1497 | 1441 / 1497 | 0 |
+| verilator | 1689 / 2115 | 1712 / 2076 | 339 |
+| vests | 3606 / 3646 | 3610 / 3646 | 2 |
+| nvc | 965 / 1251 | 975 / 1245 | 237 |
+| vhdl-compliance | 44 / 69 | 45 / 69 | 3 |
+
+Batch 74 closes 42 corpus tests by targeted reruns (Verilator 25, nvc 11,
+vests 6). The owner closed it below the usual 50: quick closures had become
+costly, and the next batch is an architectural one. The full six-suite run
+on the frozen `b74w1` is in progress; its table goes in the Batch 75 note.
+Triage reports: `.local-artifacts/lrm-closure/triage/b74-*.md`.
+
+SystemVerilog events, classes and interfaces:
+- `@(p)`, `@(obj.p)` and `->h.ev` on class event properties use the
+  object's heap notifier. Event properties are 1-bit two-state values
+  (15.5, 8.4).
+- Interface method receivers resolve through `@instance:` callable frames.
+  A virtual interface property of a class object (`obj.vif.m`) and a vif
+  with a modport selection are accepted (25.9).
+- A virtual interface write reaches the member of whichever instance the
+  handle names at run time. It is no longer counted as a static driver of
+  every candidate in the DRV-001 check (25.9, 6.5).
+- An inout clockvar's synchronous drive writes its signal, not the sample
+  (14.16).
+- Parenless enumeration methods on a packed-structure member
+  (`s.m.name`, 6.19.5).
+- Packed class snapshots carry class-handle properties, so change
+  detection sees handle updates.
+
+SystemVerilog values and assignments:
+- Element-relative member selects of unpacked arrays (`u[i].m[j]`, with a
+  dynamic inner select in assignments). foreach bounds over `index.`
+  member shapes are fixed.
+- Locator and reduction methods with a `with` clause run as element loops
+  when the predicate graph cannot be built (7.12). A discarded locator or
+  reduction call without side effects is a no-op (13.4.1).
+- An assignment pattern can be assigned to a constant slice of a fixed
+  array (`a[3:1] = '{...}`, 7.4.6, 10.9.1).
+- An anonymous struct or a typedef in a nested procedural block is a type
+  of its own, so its members can be selected and written (7.2).
+- `$dimensions` of an array of `bit`, `logic` or `reg` does not count a
+  packed dimension; a string element counts as one (20.7).
+- Uninitialized packed locals of constant functions start at x or 0
+  (13.4.3). Streaming slice types with literal dimensions and modport
+  expressions with constant `[N]` segments are parsed.
+
+VHDL:
+- `'VALUE` of physical types (new string operator `vhdl_physical_value`),
+  of REAL and of CHARACTER (16.2). Attributes of process-local physical
+  types work. Physical unit scales are 64-bit (5.2.4.1).
+- A subtype of STD_LOGIC or STD_LOGIC_VECTOR keeps its resolution
+  (6.3, 4.6).
+- A static element of a multidimensional array (`s(v, i)`) is a slice
+  actual of an output port (6.5.7.1).
+- `f(i, j)` is an indexed call of a function whose formals all have
+  defaults (8.4).
+- An aggregate whose only choice is a non-static range has that range's
+  length. In `=` and `/=`, a different length makes the arrays unequal
+  instead of failing (9.3.3.3, 9.2.3).
+- A relation in a BOOLEAN context that no user overload returning BOOLEAN
+  accepts is the predefined relation (9.2.3, 12.5).
+- `s(s'range)` on a STRING is the whole string (8.5).
+- Array `+`/`-` uses the longer operand's length. A SIGNED name or slice
+  operand sign-extends from its own width (numeric_std).
+- `all:` and `others:` attribute specifications by object class
+  (7.2). `l.all(i)` and `l.all'length` are implicit dereferences, while
+  `l.all(a to b)` keeps the explicit dereference (8.3). TextIO reads into
+  a static slice.
+
+Regressions fixed during the batch:
+- nvc issue152: the `.all'` rewrite is limited to `'length`.
+- nvc synopsys2: sign extension is limited to name and slice operands.
+- ctest `vhdl_access_implicit_dereference_20261013`: a slice after `.all`
+  is not rewritten.
+- The type-parameter member resolution of Batch 73 had been lost from the
+  working tree; it is restored from the Batch 73 commit.
+
+Out of scope (scripts/lrm_corpus.py):
+- Verilator t_foreach, t_lint_assigneqexpr, t_math_pow3 and
+  t_union_unpacked.
+- Verilator t_cover_toggle_underscore: mixes continuous and procedural
+  assignments to one variable (6.5).
+- Verilator t_assert_disable_count: uses `$inferred_disable` outside a
+  default argument (16.14.7).
+- Verilator t_queue: compares `%p` spacing.
+- ivtest br_gh1178b: uses SystemVerilog `logic` in Verilog-2005 mode.
+
+Labelled ctest: the same 28 known failures.
+
 ### Batch 73: generic frames, case choices, change events, queue methods, triage closures
 
 Full run on the frozen `b72w1`, compared with Batch 71 (`b71w1`):

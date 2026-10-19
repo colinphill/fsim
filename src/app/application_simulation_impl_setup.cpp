@@ -1012,15 +1012,16 @@ Simulation::Impl::Impl(
                 class_heap.property(handle, property), property, value,
                 class_heap.object(handle).specialization_identity);
         },
-        [this](const auto property) {
+        [this](const auto property, const auto handle) {
             const auto [owner, name] = static_property_parts(property);
-            return packed_property_value(
-                class_static_store.property(owner, name));
+            return packed_property_value(class_static_store.property(
+                static_property_specialization(owner, handle), name));
         },
-        [this](const auto property, const auto& value) {
+        [this](const auto property, const auto& value, const auto handle) {
             const auto [owner, name] = static_property_parts(property);
-            assign_property_value(
-                class_static_store.property(owner, name), property, value);
+            assign_property_value(class_static_store.property(
+                static_property_specialization(owner, handle), name),
+                property, value);
         });
     class_hir_execution.set_class_handle_container_write_service(
         [this](const auto owner, const auto property, const auto key,
@@ -1375,6 +1376,8 @@ Simulation::Impl::Impl(
         [this](const std::uint64_t handle, const std::string_view property) {
             return packed_property_value(class_heap.property(handle, property));
         });
+    class_heap_change_signal = built.design.find_signal(
+        "$sv_class_heap_change");
     interpreter->set_class_property_write_hook(
         [this](const std::uint64_t handle,
             const std::string_view property,

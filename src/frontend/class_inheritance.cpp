@@ -639,8 +639,18 @@ bool validate_systemverilog_class_inheritance(
             method->canonical_identity);
       }
     }
+    // An implementation inherited from a base class resolves the conflict
+    // as a local one does (IEEE 1800-2017 8.26.6).
+    const auto implemented_by_base = [&](const std::string& name) {
+      return std::ranges::any_of(inherited, [&](const auto* method) {
+        const auto* owner = method_owner(*method, classes);
+        return method->name == name && !method->is_pure
+            && (owner == nullptr || !owner->is_interface);
+      });
+    };
     for (const auto& [name, identities] : inherited_interface_methods) {
-      if (identities.size() < 2U || local_names.contains(name)) continue;
+      if (identities.size() < 2U || local_names.contains(name)
+          || implemented_by_base(name)) continue;
       diagnose(
           diagnostics,
           "FSIM-SV-CLASS-INHERIT-012",

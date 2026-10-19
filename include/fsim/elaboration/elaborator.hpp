@@ -1064,6 +1064,12 @@ private:
     std::unordered_map<
         std::string, runtime::simir::ContainerObjectId>
         container_by_name_;
+    // Construction draft: per process, the writes through a virtual
+    // interface handle to each candidate instance member; the instance
+    // they reach is known only at run time (IEEE 1800-2017 25.9).
+    std::unordered_map<std::string,
+        std::unordered_map<runtime::simir::SignalId, std::size_t>>
+        virtual_interface_write_counts_;
     // Construction draft: the class specialization each declaration's
     // parameterized class type selects (`Box#(7) a;`), computed once.
     std::optional<std::unordered_map<std::uint32_t, std::string>>

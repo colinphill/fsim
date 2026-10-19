@@ -95,16 +95,6 @@ namespace {
         return true;
     }
 
-    [[nodiscard]] std::optional<std::string> anonymous_aggregate_signature(
-        const frontend::Type& type, const semantic::ScopeId scope)
-    {
-        std::string result = std::to_string(scope.value()) + '|';
-        if (!append_anonymous_type_signature(result, type)) {
-            return std::nullopt;
-        }
-        return result;
-    }
-
     [[nodiscard]] bool systemverilog_net(const frontend::Type& type)
     {
         if (!type.systemverilog_net_type.empty()) {
@@ -114,6 +104,16 @@ namespace {
     }
 
 } // namespace
+
+[[nodiscard]] std::optional<std::string> anonymous_aggregate_signature(
+    const frontend::Type& type, const semantic::ScopeId scope)
+{
+    std::string result = std::to_string(scope.value()) + '|';
+    if (!append_anonymous_type_signature(result, type)) {
+        return std::nullopt;
+    }
+    return result;
+}
 
 [[nodiscard]] sv::PackedRange SystemVerilogHirBuilder::packed_range(
     const frontend::PackedRangeExpression& range,

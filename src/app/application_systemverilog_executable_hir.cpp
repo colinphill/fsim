@@ -1348,6 +1348,83 @@ namespace {
                         element, container.span, scope, parent));
                 }
             }
+            // An anonymous structure or union of a block-local declaration
+            // is a type of its own, as at module level (IEEE 1800-2017
+            // 7.2, 7.3); its members name its fields.
+            const auto aggregate_form = output.value_form.value_or(
+                sv::TypeForm::unresolved);
+            if (input.named_type.empty() && !input.packed_members.empty()
+                && !input.systemverilog_container
+                && (aggregate_form == sv::TypeForm::packed_structure
+                    || aggregate_form == sv::TypeForm::packed_union
+                    || aggregate_form == sv::TypeForm::tagged_union
+                    || aggregate_form == sv::TypeForm::unpacked_structure
+                    || aggregate_form == sv::TypeForm::unpacked_union)) {
+                const auto signature = systemverilog_hir_detail::
+                    anonymous_aggregate_signature(input, scope);
+                if (signature) {
+                    if (const auto existing
+                        = anonymous_aggregate_types_.find(*signature);
+                        existing != anonymous_aggregate_types_.end()) {
+                        output.target.target = existing->second;
+                        if (input.systemverilog_type_of) {
+                            output.type_of = expression(
+                                *input.systemverilog_type_of, scope, parent);
+                        }
+                        return output;
+                    }
+                }
+                const auto type_source = output.target.source;
+                const auto type_origin = origin(
+                    type_source, parent,
+                    "anonymous SystemVerilog aggregate type");
+                const auto name = "@anonymous-aggregate:"
+                    + std::to_string(type_source.value()) + ":"
+                    + std::to_string(parent.value());
+                const auto base = output;
+                const auto type_id = model_.add_type(scope,
+                    semantic::TypeKind::implicit, name, base.target,
+                    type_source, type_origin);
+                output.target.target = type_id;
+                sv::TypeDefinition definition;
+                definition.id = type_id;
+                definition.form = aggregate_form;
+                definition.name = name;
+                definition.base = base;
+                definition.source = type_source;
+                definition.origin = type_origin;
+                for (const auto& member : input.packed_members) {
+                    frontend::Type member_type;
+                    member_type.domain = member.domain;
+                    member_type.spelling = member.spelling;
+                    member_type.packed_range = member.packed_range;
+                    member_type.is_signed = member.is_signed;
+                    member_type.packed_range_expression
+                        = member.packed_range_expression;
+                    if (!member.nested_types.empty()) {
+                        member_type = member.nested_types.front();
+                    }
+                    auto converted = type_reference(
+                        member_type, member.span, scope, type_origin);
+                    if (!converted.target.target.valid()
+                        && member.nested_types.empty()) {
+                        converted.target.target = find_type(
+                            scope, member.spelling);
+                    }
+                    definition.members.push_back({ member.name,
+                        std::move(converted),
+                        member.lsb_offset,
+                        source(member.span),
+                        member.initializer
+                            ? expression(
+                                  *member.initializer, scope, type_origin)
+                            : std::nullopt });
+                }
+                hir_.mutable_types().push_back(std::move(definition));
+                if (signature) {
+                    anonymous_aggregate_types_.emplace(*signature, type_id);
+                }
+            }
             // `type(expression)` as a data type (IEEE 1800-2017 6.23).
             if (input.systemverilog_type_of) {
                 output.type_of = expression(*input.systemverilog_type_of, scope, parent);
@@ -2324,6 +2401,8 @@ namespace {
         sv::Hir& hir_;
         systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder_;
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
+        std::unordered_map<std::string, semantic::TypeId>
+            anonymous_aggregate_types_;
         std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;
         std::set<std::uint32_t> claimed_expressions_;
         std::optional<ExpressionCandidateIndex> expression_identity_candidate_index_;

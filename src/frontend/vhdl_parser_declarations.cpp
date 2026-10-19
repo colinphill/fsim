@@ -1366,6 +1366,11 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   }
   for (const auto& specified : entity_names) {
     vhdl_attribute_values_[name].insert_or_assign(specified, value);
+    // `all` and `others` apply to the named entity class only.
+    if (specified == "all" || specified == "others") {
+      vhdl_attribute_values_[name].insert_or_assign(
+          specified + ":" + vhdl_name(entity_class.text), value);
+    }
   }
   unit.vhdl_attributes.push_back(
       VhdlAttributeDeclaration{name,
@@ -1785,6 +1790,7 @@ void VhdlParser::parse_signal_declaration(
           span_from(start, previous())};
       declaration.default_value = default_value;
       declaration.vhdl_guarded_kind = guarded_kind;
+      vhdl_object_classes_.insert_or_assign(canonical, "signal");
       if (guarded_kind != 0U) {
         vhdl_guarded_signal_names_.insert(canonical);
       } else {

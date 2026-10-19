@@ -4620,7 +4620,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
     if (value->kind == ExpressionKind::class_static_property
         || value->text.starts_with(static_property_prefix)) {
         const auto identity = marker_payload(*value, static_property_prefix);
-        const auto packed = read_static_property_(identity);
+        const auto packed = read_static_property_(identity, handle);
         const auto* property = static_class_property(
             specializations_, identity,
             value->referenced_name
@@ -6696,7 +6696,7 @@ SystemVerilogClassHirExecution::execute(
                     == semantic::sv::ExpressionKind::class_static_property
                 || target->text.starts_with(static_prefix)) {
                 write_static_property_(
-                    marker_payload(*target, static_prefix), *value);
+                    marker_payload(*target, static_prefix), *value, handle);
                 continue;
             }
             if (target->kind == semantic::sv::ExpressionKind::name) {

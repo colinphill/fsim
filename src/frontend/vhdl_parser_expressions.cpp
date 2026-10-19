@@ -13,6 +13,7 @@ namespace fsim::frontend {
 
 void VhdlParser::note_vhdl_access_object(
     const std::string& name, const Type& type) {
+  vhdl_object_classes_.insert_or_assign(name, "variable");
   auto mark = std::string_view { type.spelling };
   if (const auto dot = mark.find_last_of('.'); dot != std::string_view::npos) {
     mark.remove_prefix(dot + 1U);
@@ -1213,7 +1214,41 @@ Expression VhdlParser::parse_primary()
         while (match(TokenKind::Dot)) {
             const auto part = expect_identifier("selected name");
             const auto canonical_part = vhdl_name(part.text);
-            if (canonical_part == "all") {
+            // A parenthesized range after `.all` is a slice, which stays an
+            // explicit dereference.
+            const auto parenthesized_range = [&] {
+                int depth { };
+                for (std::size_t offset { };; ++offset) {
+                    const auto& token = current(offset);
+                    if (token.kind == TokenKind::EndOfFile) {
+                        return false;
+                    }
+                    if (token.kind == TokenKind::LeftParen) {
+                        ++depth;
+                    } else if (token.kind == TokenKind::RightParen) {
+                        if (--depth == 0) {
+                            return false;
+                        }
+                    } else if (depth == 1
+                        && token.kind == TokenKind::Identifier
+                        && (vhdl_name(token.text) == "to"
+                            || vhdl_name(token.text) == "downto"
+                            || vhdl_name(token.text) == "range")) {
+                        return true;
+                    }
+                }
+            };
+            if (canonical_part == "all" && !saw_dereference
+                && ((at(TokenKind::Apostrophe)
+                        && at(TokenKind::Identifier, 1)
+                        && vhdl_name(current(1).text) == "length")
+                    || (at(TokenKind::LeftParen)
+                        && !parenthesized_range()))) {
+                // `l.all'length` and `l.all(i)` are the implicit
+                // dereferences `l'length` and `l(i)` (IEEE 1076-2008 8.3).
+                selected.text = canonical;
+                selected.span = cover(name.span, part.span);
+            } else if (canonical_part == "all") {
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
                 selected = Expression { ExpressionKind::Call,
@@ -1344,6 +1379,17 @@ Expression VhdlParser::parse_primary()
                          && alias->second != alias->first;
                          alias = vhdl_object_alias_targets_.find(alias->second)) {
                         found = values->second.find(alias->second);
+                    }
+                    if (const auto object_class
+                        = vhdl_object_classes_.find(entity);
+                        found == values->second.end()
+                        && object_class != vhdl_object_classes_.end()) {
+                        found = values->second.find(
+                            "others:" + object_class->second);
+                        if (found == values->second.end()) {
+                            found = values->second.find(
+                                "all:" + object_class->second);
+                        }
                     }
                     if (found == values->second.end()) {
                         found = values->second.find("others");

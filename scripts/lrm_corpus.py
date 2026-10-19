@@ -569,7 +569,8 @@ ICARUS_NONSTANDARD = {
     # SystemVerilog constructs in Icarus's default Verilog-2005 mode (Batch
     # 65 triage, triage/b65-c/INDEX.md).
     **{name: "uses SystemVerilog constructs in Verilog-2005 mode" for name in (
-        "automatic_error4", "br_gh531", "br_gh788", "br_gh1178c", "pr872",
+        "automatic_error4", "br_gh531", "br_gh788", "br_gh1178b", "br_gh1178c",
+        "pr872",
         "random", "string12")},
     # Non-standard input or implementation-defined output.
     "param_string_compare": "applies ==? to string operands (IEEE 1800-2017 "
@@ -731,6 +732,7 @@ VERILATOR_NONSTANDARD = {
     # implementation-defined (IEEE 1800-2017 21.2.1.7); these compare
     # against Verilator's own spelling.
     "t_queue_slice": "compares %p text against Verilator's element spacing",
+    "t_queue": "compares %p text against Verilator's element spacing",
     # A synchronous drive targets a clockvar expression, not a
     # concatenation (IEEE 1800-2023 14.16); the test notes this.
     "t_clocking_drive_concat": "drives a concatenation of clockvars",
@@ -739,9 +741,31 @@ VERILATOR_NONSTANDARD = {
     # (IEEE 1800-2017 6.5).
     "t_cover_toggle": "mixes continuous and procedural assignments to one "
         "struct variable",
+    "t_cover_toggle_underscore": "mixes continuous and procedural "
+        "assignments to one struct variable",
+    # $inferred_disable is only a default actual argument (IEEE 1800-2017
+    # 16.14.7); the test uses it in procedural and disable iff positions.
+    "t_assert_disable_count": "uses $inferred_disable outside a default "
+        "argument",
     "t_disable_fork_instances": "calls push_back on a function-result "
         "temporary",
     "t_func_call_super_arg": "uses the Verilator $c extension",
+    # Names are declared before use (IEEE 1800-2017 6.20.2, 8.25).
+    "t_param_fwdref": "class parameter default names a later parameter",
+    "t_class_param": "class parameter used before its declaration",
+    # Class parameters are reached through the class scope (8.25).
+    "t_class_param_extends": "reads a class parameter through a handle",
+    # An interface class extends interface classes (8.26.2).
+    "t_sched_noninlined_virt_func_suspendable": "interface class with an "
+        "implements clause",
+    "t_link_default_type_param": "uses the Verilator $c extension",
+    "t_timing_initial_always": "uses the Verilator $c extension",
+    "t_sys_stacktrace": "uses the Verilator $stacktrace task",
+    "t_opt_const_no_expand": "needs a Verilator C++ DPI companion file",
+    "t_opt_const_no_opt": "needs a Verilator C++ DPI companion file",
+    # A select applies to a name, not a method-call result
+    # (IEEE 1800-2017 11.5.1).
+    "t_bitsel_concat": "selects bits of a method-call result",
     # Calling a method through a null handle is an error (IEEE 1800-2017
     # 8.4).
     "t_randomize_null_object": "expects randomize() through a null handle "
@@ -761,6 +785,19 @@ VERILATOR_NONSTANDARD = {
     "t_randomize_unpacked_struct_no_rand_members": "needs IEEE 1800-2023 "
         "rand member rules",
     "t_forceable_writemem": "needs the Verilator forceable metacomment",
+    # foreach over a string is new in IEEE 1800-2023 (12.7.3).
+    "t_foreach": "needs IEEE 1800-2023 foreach over a string",
+    # An assignment operator is illegal in an expression outside a
+    # procedural statement (IEEE 1800-2017 11.3.6).
+    "t_lint_assigneqexpr": "uses an assignment operator in a continuous "
+        "assignment expression",
+    # In an unsigned comparison the base of ** is unsigned too (IEEE
+    # 1800-2017 11.8.2); the test excludes the other simulators here.
+    "t_math_pow3": "expects a signed ** base inside an unsigned comparison",
+    # Reading an unpacked-union member other than the one last written is
+    # undefined (IEEE 1800-2017 7.3).
+    "t_union_unpacked": "reads a different unpacked-union member than the "
+        "one written",
     "t_stream_crc_example": "compares %p text against Verilator's "
         "hexadecimal elements",
     "t_class_enum": "compares %p of a class handle against Verilator's "

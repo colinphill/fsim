@@ -657,6 +657,15 @@ private:
     // The smallest and largest choices of a named array aggregate without
     // `others` (IEEE 1076-2008 9.3.3.3), as an ascending range; `index`
     // evaluates one index choice (integer constants by default).
+    // An aggregate whose only choice is one non-static range (IEEE
+    // 1076-2008 9.3.3.3): `(l to r => e)` or `(a'range => e)`.
+    // The prefix of `x(x'range)`, a slice whose discrete range is its own
+    // prefix's index range and so denotes the whole object (IEEE 1076-2008
+    // 8.5).
+    [[nodiscard]] std::optional<semantic::ExpressionId>
+    hir_vhdl_whole_range_slice(semantic::ExpressionId expression) const;
+    [[nodiscard]] bool hir_vhdl_single_dynamic_range_aggregate(
+        const semantic::vhdl::Expression& aggregate) const;
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_named_aggregate_bounds(
         const semantic::vhdl::Expression& aggregate,
@@ -771,6 +780,9 @@ private:
     // interface type, its handle and member signal.
     struct HirVirtualInterfaceMember {
         semantic::DeclarationId receiver;
+        // A class object whose property `receiver` holds the handle
+        // (`obj.vif.m`).
+        std::optional<semantic::DeclarationId> object;
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
@@ -782,6 +794,9 @@ private:
         const semantic::sv::Declaration& declaration) const;
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(semantic::ExpressionId expression_id) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_virtual_interface_member_handle(
+        const HirVirtualInterfaceMember& member);
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(
         std::string_view name, semantic::ScopeId scope) const;
@@ -1280,7 +1295,8 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_indexed_member(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool element_relative = false) const;
     // Adds a packed member's offset to a constant selection (or makes the
     // member the selection of an unselected target); false on overflow.
     [[nodiscard]] static bool add_hir_member_selection(
@@ -1304,6 +1320,8 @@ private:
         std::optional<semantic::ExpressionId> receiver;
         semantic::DeclarationId receiver_declaration;
         std::optional<semantic::ExpressionId> count;
+        /// A packed structure member receiver (`s.m.name`).
+        std::optional<HirPackedMemberSelection> member;
         std::vector<std::uint64_t> values;
         std::vector<std::string> names;
         std::size_t width { };
@@ -1317,7 +1335,8 @@ private:
     hir_systemverilog_enumeration_type_profile(HirEnumerationMethod result,
         semantic::sv::TypeReference type, semantic::ScopeId scope) const;
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
-    hir_systemverilog_value_type(semantic::ExpressionId expression) const;
+    hir_systemverilog_value_type(semantic::ExpressionId expression,
+        std::size_t trailing_segments = 0U) const;
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
         semantic::DeclarationId declaration) const;
@@ -1754,6 +1773,12 @@ private:
         std::size_t expected_width);
     [[nodiscard]] bool is_hir_vhdl_environment_expression(
         semantic::ExpressionId expression) const;
+    // A STD.ENV status literal compared with a status-returning STD.ENV
+    // function call (`dir_createdir(p) = STATUS_ITEM_EXISTS`).
+    [[nodiscard]] std::optional<std::uint64_t>
+    hir_vhdl_environment_call_status_literal(
+        semantic::ExpressionId literal,
+        semantic::ExpressionId call) const;
     [[nodiscard]] bool is_hir_vhdl_environment_status_literal(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::uint64_t>
@@ -2175,6 +2200,8 @@ private:
     };
     [[nodiscard]] std::optional<HirContainerElementMember>
     hir_container_element_member(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirPackedRange>
+    hir_container_element_member_range(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
     hir_static_element_signal_extract(
         const HirContainerElementBinding& element) const;
@@ -2505,6 +2532,7 @@ private:
         bool signed_value { };
         bool static_storage { };
         bool writable { };
+        bool event { };
     };
     [[nodiscard]] std::optional<HirClassPropertyProfile>
     hir_class_property_profile(
@@ -3057,6 +3085,66 @@ private:
         std::uint64_t source_order) const;
     void hir_local_event_notifiers(semantic::ExpressionId expression,
         std::vector<SignalId>& dependencies);
+    // The design-wide signal the runtime toggles whenever a class property
+    // changes; waits on expressions that read class properties include it.
+    [[nodiscard]] std::optional<SignalId> hir_class_heap_notifier();
+    // `f(i)` read as `f()(i)` when every formal of `f` has a default and the
+    // context takes one element of its array result (IEEE 1076-2008 8.4).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_defaulted_call_index(
+        semantic::ExpressionId expression, std::size_t expected_width);
+    // Calls lowered with only their default actuals.
+    std::unordered_set<std::uint32_t> hir_vhdl_defaulted_calls_;
+    // A predicate locator (`find... with (p)`) evaluated element by element
+    // in SimIR, the iterator bound to each element and its index (IEEE
+    // 1800-2017 7.12.1); used when the bounded predicate graph cannot
+    // express the predicate.
+    [[nodiscard]] bool lower_hir_container_locator_loop(
+        std::string_view method, runtime::simir::ContainerRegisterId source,
+        const runtime::simir::ContainerType& source_type,
+        runtime::simir::ContainerRegisterId destination,
+        std::string_view iterator_name, semantic::ExpressionId predicate);
+    // A reduction (`sum with (e)`) accumulated element by element; the
+    // result has the with expression's width (IEEE 1800-2017 7.12.3).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_container_reduction_loop(
+        std::string_view method, runtime::simir::ContainerRegisterId source,
+        const runtime::simir::ContainerType& source_type,
+        std::string_view iterator_name, semantic::ExpressionId transformation);
+    // The with-clause expressions naming the iterator (`true` for
+    // `iterator.index`).
+    [[nodiscard]] std::vector<std::pair<std::uint32_t, bool>>
+    hir_container_iterator_references(semantic::ExpressionId expression,
+        std::string_view iterator_name) const;
+    // Whether a VHDL expression has an array subtype.
+    [[nodiscard]] bool hir_vhdl_array_valued(
+        semantic::ExpressionId expression) const;
+    // Whether a VHDL value is signed: SIGNED, a slice or concatenation of
+    // SIGNED values, or an integer (IEEE 1076-2008 8.5, 9.2.5).
+    [[nodiscard]] bool hir_vhdl_signed_array(
+        semantic::ExpressionId expression, std::size_t depth = 0U) const;
+    // The units of a physical type with their scales in primary units, in
+    // declaration order; nullopt when a scale is not static.
+    [[nodiscard]] std::optional<std::vector<std::pair<std::string, std::int64_t>>>
+    hir_vhdl_physical_unit_scales(
+        const semantic::vhdl::TypeDefinition& type) const;
+    // A class property named in an event control: `p` in a method of its
+    // class, or `obj.p` through a class handle variable (IEEE 1800-2017
+    // 9.4.2, 8.4).
+    struct HirNamedClassProperty {
+        std::string identity;
+        std::optional<semantic::DeclarationId> object;
+        bool static_storage { };
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
+        // An `event` property: a trigger toggles its one-bit value.
+        bool event { };
+    };
+    [[nodiscard]] std::optional<HirNamedClassProperty>
+    hir_named_class_property(std::string_view name,
+        semantic::ScopeId scope, std::uint64_t source_order) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_named_class_property(
+        const HirNamedClassProperty& property);
+    [[nodiscard]] bool lower_hir_named_class_property_write(
+        const HirNamedClassProperty& property, RegisterId value);
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
@@ -3102,6 +3190,11 @@ private:
         frontend::SourceSpan span);
 
     ElaboratedDesign& design_;
+    // Writes of the current process through virtual interface handles.
+    std::unordered_map<SignalId, std::size_t> hir_virtual_interface_writes_;
+    // When set, a single dynamic-range aggregate records whether its length
+    // matches its context here instead of asserting it.
+    std::optional<RegisterId>* hir_vhdl_aggregate_length_sink_ { };
     const SignalBindings& signals_;
     const ReadOnlySignalBindings& read_only_signals_;
     PackageConstantSignal package_constant_signal_;

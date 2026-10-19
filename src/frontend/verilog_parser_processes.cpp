@@ -930,6 +930,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
                     block_typedef_types_.insert_or_assign(alias.name, alias.type);
                     procedural_typedef_names_.insert(alias.name);
+                    // The literals of an enumeration typedef are declared in
+                    // this block (IEEE 1800-2017 6.19).
+                    for (const auto& literal : alias.type.enumeration_literals) {
+                        current_procedural_names_.insert(literal);
+                    }
                 }
             } else if (is_block_declaration_start() || keyword("parameter")
                 || keyword("localparam")) {

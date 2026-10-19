@@ -1279,6 +1279,37 @@ std::optional<Type> Resolver::resolve_typed_expression(
     // chandle-valued expressions. The hierarchy builder validates the
     // concrete interface type, specialization, modport, and selected
     // instance after child interfaces have been elaborated.
+    // `vif.mp` selects a modport of the interface a handle names; the
+    // handle is unchanged (IEEE 1800-2017 25.9).
+    if (expression.kind == ExpressionKind::Identifier) {
+      const auto dot = expression.text.rfind('.');
+      auto interface_name = expected.named_type.empty()
+          ? expected.spelling : expected.named_type;
+      interface_name = interface_name.substr(0, interface_name.find('.'));
+      if (dot != std::string::npos && dot != 0U) {
+        const auto member = expression.text.substr(dot + 1U);
+        const auto modport = std::ranges::any_of(design_.units,
+            [&](const DesignUnit& unit) {
+              return unit.kind == UnitKind::SystemVerilogInterface
+                  && unit.name == interface_name
+                  && std::ranges::any_of(unit.systemverilog_modports,
+                         [&](const SystemVerilogModport& candidate) {
+                           return candidate.name == member;
+                         });
+            });
+        if (modport) {
+          expression.text.resize(dot);
+        }
+      }
+      // A handle held by a class object (`c.vif`) is read like any other
+      // property (8.4).
+      const auto root = std::string_view { expression.text }.substr(
+          0, expression.text.find('.'));
+      if (expression.text.find('.') != std::string::npos
+          && scope.objects.contains(root)) {
+        (void)resolve_expression(expression, scope);
+      }
+    }
     return expected;
   }
   if (expression.text == "@sv-new"

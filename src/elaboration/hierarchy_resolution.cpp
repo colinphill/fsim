@@ -2439,7 +2439,23 @@ void HierarchyBuilder::validate_process_drivers()
             continue;
         }
         std::map<SignalId, std::vector<DriverRegion>> process_outputs;
+        // A write through a virtual interface handle drives the member of
+        // whichever instance the handle names at run time (IEEE 1800-2017
+        // 25.9); it is not a static driver of every candidate.
+        const auto virtual_writes
+            = design_.virtual_interface_write_counts_.find(process.name());
+        std::unordered_map<SignalId, std::size_t> discounted;
         for (const auto& region : process.driver_regions()) {
+            if (virtual_writes
+                    != design_.virtual_interface_write_counts_.end()
+                && region.whole) {
+                const auto count = virtual_writes->second.find(region.signal);
+                if (count != virtual_writes->second.end()
+                    && discounted[region.signal] < count->second) {
+                    ++discounted[region.signal];
+                    continue;
+                }
+            }
             process_outputs[region.signal].push_back(region);
         }
         const auto record_container_object_write =

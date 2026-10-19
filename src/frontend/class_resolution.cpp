@@ -17,6 +17,10 @@ namespace fsim::frontend {
 
 namespace {
 
+// The design whose classes are being resolved; its typedefs name base
+// classes (`class c extends t;` with `typedef b t;`).
+thread_local const ParsedDesign* resolving_design = nullptr;
+
 struct ClassEntry {
   SystemVerilogClassDeclaration* declaration{};
   const std::vector<SystemVerilogImport>* imports{};
@@ -346,6 +350,48 @@ void resolve_declaration_types(
           && declaration.base->declaration_identity.empty()) {
       auto candidates =
           resolve_name(declaration.base->name, owner, entries);
+      // A typedef of a class or of a specialization names that class and
+      // its parameter values (IEEE 1800-2017 8.13, 6.18).
+      if (candidates.empty() && resolving_design != nullptr
+          && declaration.base->name.find("::") == std::string::npos) {
+        const Type* aliased = nullptr;
+        for (const auto& unit : resolving_design->units) {
+          if (unit.language != Language::SystemVerilog2017) continue;
+          const auto prefix =
+              effective_library(unit.library) + "::" + unit.name + "::";
+          const bool lexical =
+              declaration.canonical_identity.starts_with(prefix)
+              || (unit.name.starts_with("fsim_unit_")
+                  && unit.compilation_unit_identity
+                      == owner.compilation_unit_identity);
+          if (!lexical) continue;
+          for (const auto& alias : unit.type_aliases) {
+            if (alias.name == declaration.base->name) {
+              aliased = &alias.type;
+            }
+          }
+        }
+        if (aliased != nullptr && !aliased->named_type.empty()
+            && aliased->named_type != declaration.base->name) {
+          candidates = resolve_name(aliased->named_type, owner, entries);
+          if (candidates.size() == 1U) {
+            declaration.base->name = aliased->named_type;
+            if (declaration.base->parameter_actuals.empty()) {
+              for (const auto& actual :
+                   aliased->systemverilog_class_parameter_actuals) {
+                declaration.base->parameter_actuals.push_back(
+                    SystemVerilogClassParameterActual{
+                        actual.name.value_or(std::string{}),
+                        actual.value,
+                        actual.type_actual
+                            ? std::optional<Type>{*actual.type_actual}
+                            : std::nullopt,
+                        actual.span});
+              }
+            }
+          }
+        }
+      }
       if (candidates.empty()) {
         diagnose(
             diagnostics,
@@ -726,6 +772,14 @@ bool resolve_systemverilog_classes(
     ParsedDesign& design,
     std::vector<Diagnostic>& diagnostics) {
   const auto initial_diagnostic_count = diagnostics.size();
+  const struct DesignScope {
+    explicit DesignScope(const ParsedDesign& design) {
+      resolving_design = &design;
+    }
+    ~DesignScope() { resolving_design = nullptr; }
+    DesignScope(const DesignScope&) = delete;
+    DesignScope& operator=(const DesignScope&) = delete;
+  } design_scope{design};
   std::vector<ClassEntry> entries;
   for (auto& unit : design.units) {
     if (unit.language != Language::SystemVerilog2017) {

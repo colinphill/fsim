@@ -3457,10 +3457,48 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                         "TextIO read value must be a writable bounded "
                         "object");
                 }
+                // A static slice of a BIT_VECTOR reads into that part of
+                // the object (IEEE 1076-2008 16.4).
+                auto scan_target = *target->local;
+                auto scan_width = static_cast<std::uint32_t>(target->width);
+                if (value_class == TextioScalarClass::bit_vector) {
+                    const auto selected
+                        = specialized_hir_unit_->find_expression(*value);
+                    const auto base = selected && selected->vhdl != nullptr
+                            && selected->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::slice
+                            && !selected->vhdl->operands.empty()
+                        ? specialized_hir_unit_->find_expression(
+                              selected->vhdl->operands.front())
+                        : std::nullopt;
+                    const auto selection = base && base->vhdl != nullptr
+                            && base->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::name
+                            && hir_target_declaration(
+                                   selected->vhdl->operands.front())
+                                == hir_target_declaration(*value)
+                            && !hir_vhdl_member_selection(
+                                selected->vhdl->operands.front())
+                        ? hir_constant_selection(*value, hir_process_scope_)
+                        : std::nullopt;
+                    if (selection && selection->width != 0U
+                        && selection->offset <= target->width
+                        && selection->width
+                            <= target->width - selection->offset) {
+                        scan_width = static_cast<std::uint32_t>(
+                            selection->width);
+                        scan_target = allocate_register(
+                            scan_width, target->domain);
+                        selection_target = *target->local;
+                        selection_scan_target = scan_target;
+                        selection_offset = static_cast<std::uint32_t>(
+                            selection->offset);
+                    }
+                }
                 conversion.target = {
                     InputScanTargetKind::packed_register,
-                    *target->local,
-                    static_cast<std::uint32_t>(target->width),
+                    scan_target,
+                    scan_width,
                     true,
                 };
                 // A TIME value is an abstract literal and a unit name

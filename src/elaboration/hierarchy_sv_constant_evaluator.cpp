@@ -4103,6 +4103,30 @@ private:
                     frames_.pop_back();
                     return std::nullopt;
                 }
+                // An uninitialized packed local holds its type's default,
+                // so a member write (`s.m = v`) updates it in place
+                // (IEEE 1800-2017 6.8, 13.4.4).
+                const auto& local = *child->systemverilog;
+                if (local.form == semantic::sv::DeclarationForm::variable
+                    && local.type && !local.type->container_form
+                    && local.type->unpacked_dimensions.empty()
+                    && !frames_.back().arrays.contains(child_id)
+                    && !frames_.back().values.contains(child_id)) {
+                    std::unordered_set<std::uint32_t> visiting;
+                    if (const auto width = resolved_type_width(
+                            *local.type, &specialization_, visiting);
+                        width && *width != 0U
+                        && *width <= maximum_constant_width) {
+                        frames_.back().values.emplace(child_id,
+                            local.type->four_state
+                                ? make_unknown(
+                                      static_cast<std::uint32_t>(*width),
+                                      local.type->signed_value)
+                                : make_known(0U,
+                                      static_cast<std::uint32_t>(*width),
+                                      local.type->signed_value, false));
+                    }
+                }
             }
         }
         for (const auto statement : callable.statements) {

@@ -199,7 +199,11 @@ enum class StringMethodOperator : std::uint8_t {
     // VHDL TextIO WRITE field widths evaluated at run time. The string form
     // stores the field register in `first`; the packed form uses `second`.
     format_packed_dynamic_field,
-    format_string_dynamic_field
+    format_string_dynamic_field,
+    // T'VALUE of a physical type: the physical literal in the source string
+    // as a count of primary units, using the newline-separated
+    // `name=scale` units of `argument` (IEEE 1076-2008 16.2.2, 5.2.4).
+    vhdl_physical_value
 };
 struct StringMethod {
     StringMethodOperator operation { };

@@ -124,6 +124,10 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
   if (property.type.value_form == semantic::sv::TypeForm::string) {
     result.kind = runtime::SystemVerilogClassPropertyKind::String;
     result.width = 0;
+  } else if (property.type.target.spelling == "event") {
+    // An event's trigger toggles one two-state bit (IEEE 1800-2017 15.5).
+    result.kind = runtime::SystemVerilogClassPropertyKind::Bit2;
+    result.width = 1;
   } else {
     result.kind = property.type.four_state
         ? runtime::SystemVerilogClassPropertyKind::Logic4

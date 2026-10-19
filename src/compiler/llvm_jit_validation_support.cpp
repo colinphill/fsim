@@ -420,7 +420,8 @@ std::optional<std::string> validate_string_method_metadata(
         registers.push_back({ operation.destination, 32U, true });
     if (kind == StringMethodOperator::atoreal
         || kind == StringMethodOperator::vhdl_integer_value
-        || kind == StringMethodOperator::vhdl_enumeration_value)
+        || kind == StringMethodOperator::vhdl_enumeration_value
+        || kind == StringMethodOperator::vhdl_physical_value)
         registers.push_back({ operation.destination, 64U, true });
     if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
         || kind == StringMethodOperator::substr
@@ -439,6 +440,7 @@ std::optional<std::string> validate_string_method_metadata(
     if (kind == StringMethodOperator::compare
         || kind == StringMethodOperator::icompare
         || kind == StringMethodOperator::vhdl_enumeration_value
+        || kind == StringMethodOperator::vhdl_physical_value
         || string_format) {
         if (!string_register(operation.argument))
             return "StringMethod argument string register is out of range";

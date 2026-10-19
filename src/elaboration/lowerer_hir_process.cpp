@@ -3458,6 +3458,29 @@ bool Lowerer::lower_hir_output_actual_write(
         || !signal_binding_is_writable(*binding)) {
         return false;
     }
+    // A static element of a multidimensional VHDL array (`s(v, i)`) is one
+    // flattened selection of its signal (IEEE 1076-2008 8.4, 6.5.7.1).
+    if (expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call) {
+        if (const auto array = hir_vhdl_array_selection(target);
+            array && array->dynamic_indices.empty()
+            && array->declaration == *declaration && array->width != 0U
+            && array->offset <= binding->width
+            && array->width <= binding->width - array->offset) {
+            if (register_width(source) != array->width) {
+                source = resize_register(
+                    source, array->width, array->signed_value);
+            }
+            process_.operations.emplace_back(WriteUpdateSlice {
+                *binding->signal,
+                source,
+                static_cast<std::uint32_t>(array->offset),
+                SignalUpdateDomain::generic,
+            });
+            record_readonly_vhdl_output_write(*binding);
+            return true;
+        }
+    }
 
     std::span<const semantic::ExpressionId> operands;
     std::string_view selection_operation;
@@ -3741,6 +3764,12 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         || design_.process_count() != processes_before) {
         return lowered;
     }
+    // A hierarchical name not yet elaborated (a virtual interface member
+    // read in a lowered class function) defers the whole process to the
+    // second pass; the interpreter cannot resolve it either.
+    if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
+        return std::nullopt;
+    }
     if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
         for (auto index = diagnostics_before; index < diagnostics_.size();
              ++index) {
@@ -3760,6 +3789,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
 void Lowerer::reset_hir_process_state()
 {
     hir_lowering_rejection_.reset();
+    hir_virtual_interface_writes_.clear();
     next_register_ = 0U;
     next_string_register_ = 0U;
     next_container_register_ = 0U;
@@ -4994,6 +5024,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     }
     process_.driver_regions = collect_driver_regions(
         process_, register_widths_);
+    if (!hir_virtual_interface_writes_.empty()) {
+        design_.virtual_interface_write_counts_.insert_or_assign(
+            process_.name, std::move(hir_virtual_interface_writes_));
+    }
     materialize_hir_procedural_continuous_assignments();
     materialize_hir_monitor_drivers();
 

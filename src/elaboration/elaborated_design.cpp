@@ -405,6 +405,7 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     signal_by_name_.clear();
     string_by_name_.clear();
     container_by_name_.clear();
+    virtual_interface_write_counts_.clear();
 }
 
 const std::vector<SignalInfo>&

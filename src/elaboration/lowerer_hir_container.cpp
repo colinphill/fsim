@@ -530,15 +530,9 @@ Lowerer::lower_hir_systemverilog_container_expression(
                     span);
                 return invalid_result();
             }
+            // The iterator argument names the iterator inside the with
+            // clause, hiding a visible object of that name (7.12.4).
             iterator_name = iterator->systemverilog->text;
-            if (hir_referenced_declaration(call.operands[1])) {
-                report(
-                    "FSIM-ELAB-SVREDUCE-007",
-                    "named container reduction iterator '" + iterator_name
-                        + "' collides with a visible object",
-                    hir_source_span(iterator->systemverilog->source));
-                return invalid_result();
-            }
         }
         if (transformed && source->type.associative) {
             report(
@@ -550,12 +544,35 @@ Lowerer::lower_hir_systemverilog_container_expression(
         }
         std::vector<ContainerPredicateNode> transformation;
         if (transformed) {
+            const auto transform_id = call.operands[explicit_iterator ? 2U : 1U];
+            const auto diagnostic_count = diagnostics_.size();
             const auto lowered = lower_hir_container_expression_graph(
-                call.operands[explicit_iterator ? 2U : 1U],
+                transform_id,
                 iterator_name,
                 source->type,
                 HirContainerExpressionPurpose::reduction_transformation);
             if (!lowered) {
+                // A transformation beyond the bounded graph runs as an
+                // element loop; its result has the with expression's type
+                // (7.12.3).
+                const auto graph_diagnostics = std::vector<Diagnostic>(
+                    diagnostics_.begin()
+                        + static_cast<std::ptrdiff_t>(diagnostic_count),
+                    diagnostics_.end());
+                diagnostics_.resize(diagnostic_count);
+                if (const auto reduced = lower_hir_container_reduction_loop(
+                        call.text, source->value, source->type,
+                        iterator_name, transform_id)) {
+                    return expected_width != 0U
+                            && expected_width != register_width(*reduced)
+                        ? std::optional { resize_register(*reduced,
+                              expected_width,
+                              hir_expression_signed(transform_id)) }
+                        : reduced;
+                }
+                diagnostics_.resize(diagnostic_count);
+                diagnostics_.insert(diagnostics_.end(),
+                    graph_diagnostics.begin(), graph_diagnostics.end());
                 return invalid_result();
             }
             transformation = std::move(*lowered);
@@ -858,26 +875,43 @@ bool Lowerer::lower_hir_container_locator_assignment(
                 span);
             return true;
         }
+        // The iterator argument names the iterator inside the with
+        // clause, hiding a visible object of that name (7.12.4).
         iterator_name = iterator->systemverilog->text;
-        if (hir_referenced_declaration(call.operands[1])) {
-            report(
-                predicate ? "FSIM-ELAB-SVFIND-007"
-                          : "FSIM-ELAB-SVLOCATOR-008",
-                "named container locator iterator '" + iterator_name
-                    + "' collides with a visible object",
-                hir_source_span(iterator->systemverilog->source));
-            return true;
-        }
     }
     std::vector<ContainerPredicateNode> predicate_graph;
     std::vector<ContainerPredicateNode> transformation;
     if (predicate) {
+        const auto predicate_id = call.operands[explicit_iterator ? 2U : 1U];
+        const auto diagnostic_count = diagnostics_.size();
         const auto lowered = lower_hir_container_expression_graph(
-            call.operands[explicit_iterator ? 2U : 1U],
+            predicate_id,
             iterator_name,
             source->type,
             HirContainerExpressionPurpose::locator_predicate);
         if (!lowered) {
+            // A predicate beyond the bounded graph (a method call, a
+            // select, a variable operand) runs as an element loop.
+            const auto graph_diagnostics = std::vector<Diagnostic>(
+                diagnostics_.begin()
+                    + static_cast<std::ptrdiff_t>(diagnostic_count),
+                diagnostics_.end());
+            diagnostics_.resize(diagnostic_count);
+            const auto destination = target->local
+                ? *target->local
+                : allocate_container_register(*target->type);
+            if (lower_hir_container_locator_loop(call.text, source->value,
+                    source->type, destination, iterator_name,
+                    predicate_id)) {
+                if (!target->local) {
+                    process_.operations.emplace_back(WriteContainerObject {
+                        target->object, destination, std::nullopt });
+                }
+                return true;
+            }
+            diagnostics_.resize(diagnostic_count);
+            diagnostics_.insert(diagnostics_.end(),
+                graph_diagnostics.begin(), graph_diagnostics.end());
             return true;
         }
         predicate_graph = std::move(*lowered);
@@ -929,9 +963,240 @@ bool Lowerer::lower_hir_container_locator_assignment(
     return true;
 }
 
+bool Lowerer::lower_hir_container_locator_loop(
+    const std::string_view method,
+    const runtime::simir::ContainerRegisterId source,
+    const runtime::simir::ContainerType& source_type,
+    const runtime::simir::ContainerRegisterId destination,
+    const std::string_view iterator_name,
+    const semantic::ExpressionId predicate)
+{
+    using runtime::simir::BinaryOperator;
+    const bool index_result = method.ends_with("_index");
+    const bool first = method.starts_with(".find_first");
+    const bool last = method.starts_with(".find_last");
+    // The predicate's references to the iterator and to `iterator.index`.
+    const auto references
+        = hir_container_iterator_references(predicate, iterator_name);
+    const auto element_domain = source_type.two_state
+        ? frontend::ValueDomain::Bit2
+        : frontend::ValueDomain::Logic4;
+    process_.operations.emplace_back(DeleteContainer { destination, { } });
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, source });
+    const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        count, PackedLogic4::from_aval_bval(32U, 0U, 0U) });
+    const auto one = load_constant(
+        PackedLogic4::from_aval_bval(32U, 1U, 0U),
+        frontend::ValueDomain::Bit2);
+    const auto loop = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, count, size });
+    const auto enter = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { more, 0U, 0U });
+    const auto body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    auto index = count;
+    if (last) {
+        // The last match first: visit from the end (7.12.1).
+        const auto from_end = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, from_end, size, count });
+        index = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, index, from_end, one });
+    }
+    const auto element = allocate_register(
+        source_type.element_width, element_domain);
+    process_.operations.emplace_back(ContainerRead {
+        element, source, index, true, false, false });
+    for (const auto& [id, is_index] : references) {
+        hir_captured_update_indices_.insert_or_assign(
+            id, is_index ? index : element);
+    }
+    const auto width = hir_expression_width(predicate, hir_process_scope_)
+                           .value_or(1U);
+    auto truth = lower_hir_expression(predicate, width);
+    for (const auto& reference : references) {
+        hir_captured_update_indices_.erase(reference.first);
+    }
+    if (!truth) {
+        return false;
+    }
+    if (register_width(*truth) != 1U) {
+        const auto zero = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { zero, *truth });
+        const auto nonzero
+            = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { nonzero, zero });
+        truth = nonzero;
+    }
+    const auto test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { *truth, 0U, 0U });
+    const auto take = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(PushContainer {
+        destination, index_result ? index : element, false, std::nullopt });
+    std::optional<InstructionIndex> leave;
+    if (first || last) {
+        leave = static_cast<InstructionIndex>(process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+    }
+    const auto next = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto advanced = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, advanced, count, one });
+    process_.operations.emplace_back(CopyRegister { count, advanced });
+    process_.operations.emplace_back(Jump { loop });
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[enter] = Branch {
+        more, body, end, UnknownBranchPolicy::when_false };
+    process_.operations[test] = Branch {
+        *truth, take, next, UnknownBranchPolicy::when_false };
+    if (leave) {
+        process_.operations[*leave] = Jump { end };
+    }
+    return true;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
+    const std::string_view method,
+    const runtime::simir::ContainerRegisterId source,
+    const runtime::simir::ContainerType& source_type,
+    const std::string_view iterator_name,
+    const semantic::ExpressionId transformation)
+{
+    using runtime::simir::BinaryOperator;
+    const auto references = hir_container_iterator_references(
+        transformation, iterator_name);
+    const auto element_domain = source_type.two_state
+        ? frontend::ValueDomain::Bit2
+        : frontend::ValueDomain::Logic4;
+    // The with expression's width, with the iterator at the element's.
+    const auto probe = allocate_register(
+        source_type.element_width, element_domain);
+    for (const auto& [id, is_index] : references) {
+        hir_captured_update_indices_.insert_or_assign(id, probe);
+    }
+    const auto width = hir_expression_width(
+        transformation, hir_process_scope_);
+    for (const auto& reference : references) {
+        hir_captured_update_indices_.erase(reference.first);
+    }
+    if (!width || *width == 0U) {
+        return std::nullopt;
+    }
+    const auto accumulator_domain = frontend::ValueDomain::Logic4;
+    const auto accumulator = allocate_register(*width, accumulator_domain);
+    const bool product = method == ".product";
+    const bool all_ones = method == ".and";
+    auto initial = PackedLogic4 { *width,
+        all_ones ? runtime::Logic4::one : runtime::Logic4::zero };
+    if (product) {
+        initial.set(0U, runtime::Logic4::one);
+    }
+    process_.operations.emplace_back(LoadConstant { accumulator, initial });
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, source });
+    const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        count, PackedLogic4::from_aval_bval(32U, 0U, 0U) });
+    const auto one = load_constant(
+        PackedLogic4::from_aval_bval(32U, 1U, 0U),
+        frontend::ValueDomain::Bit2);
+    const auto loop = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, count, size });
+    const auto enter = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { more, 0U, 0U });
+    const auto body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto element = allocate_register(
+        source_type.element_width, element_domain);
+    process_.operations.emplace_back(ContainerRead {
+        element, source, count, true, false, false });
+    for (const auto& [id, is_index] : references) {
+        hir_captured_update_indices_.insert_or_assign(
+            id, is_index ? count : element);
+    }
+    auto value = lower_hir_expression(transformation, *width);
+    for (const auto& reference : references) {
+        hir_captured_update_indices_.erase(reference.first);
+    }
+    if (!value) {
+        return std::nullopt;
+    }
+    if (register_width(*value) != *width) {
+        value = resize_register(*value, *width,
+            hir_expression_signed(transformation));
+    }
+    const auto combined = allocate_register(*width, accumulator_domain);
+    process_.operations.emplace_back(Binary {
+        method == ".sum" ? BinaryOperator::add_unsigned
+            : product    ? BinaryOperator::multiply_unsigned
+            : all_ones   ? BinaryOperator::bit_and
+            : method == ".or" ? BinaryOperator::bit_or
+                              : BinaryOperator::bit_xor,
+        combined, accumulator, *value });
+    process_.operations.emplace_back(CopyRegister { accumulator, combined });
+    const auto advanced = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, advanced, count, one });
+    process_.operations.emplace_back(CopyRegister { count, advanced });
+    process_.operations.emplace_back(Jump { loop });
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[enter] = Branch {
+        more, body, end, UnknownBranchPolicy::when_false };
+    return accumulator;
+}
+
+std::vector<std::pair<std::uint32_t, bool>>
+Lowerer::hir_container_iterator_references(
+    const semantic::ExpressionId expression,
+    const std::string_view iterator_name) const
+{
+    std::vector<std::pair<std::uint32_t, bool>> references;
+    std::vector<semantic::ExpressionId> pending { expression };
+    std::unordered_set<std::uint32_t> visited;
+    const auto index_name = std::string { iterator_name } + ".index";
+    while (!pending.empty()) {
+        const auto current = pending.back();
+        pending.pop_back();
+        if (!visited.insert(current.value()).second) {
+            continue;
+        }
+        const auto record = specialized_hir_unit_->find_expression(current);
+        if (!record || record->systemverilog == nullptr) {
+            continue;
+        }
+        const auto& node = *record->systemverilog;
+        if (node.kind == semantic::sv::ExpressionKind::name
+            && (node.text == iterator_name || node.text == index_name)) {
+            references.emplace_back(current.value(), node.text == index_name);
+            continue;
+        }
+        pending.insert(
+            pending.end(), node.operands.begin(), node.operands.end());
+    }
+    return references;
+}
+
 std::optional<semantic::sv::TypeReference>
 Lowerer::hir_systemverilog_value_type(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const std::size_t trailing_segments) const
 {
     // The declared type of a variable, of a member of a structure variable
     // (`s.a.b`), or of an element of an unpacked array (`a[i]`).
@@ -960,11 +1225,20 @@ Lowerer::hir_systemverilog_value_type(
     if (source.kind != semantic::sv::ExpressionKind::name) {
         return std::nullopt;
     }
-    const auto name_separator = source.text.find('.');
+    // A caller may drop trailing segments, such as a method name.
+    auto text = std::string_view { source.text };
+    for (std::size_t dropped { }; dropped < trailing_segments; ++dropped) {
+        const auto last = text.rfind('.');
+        if (last == std::string_view::npos) {
+            return std::nullopt;
+        }
+        text = text.substr(0U, last);
+    }
+    const auto name_separator = text.find('.');
     auto declaration_id = hir_referenced_declaration(expression_id);
     if (!declaration_id && name_separator != std::string::npos) {
         declaration_id = resolver.resolve_systemverilog(
-            std::string_view { source.text }.substr(0U, name_separator),
+            text.substr(0U, name_separator),
             source.scope,
             [](const semantic::CompiledDeclarationView& candidate) {
                 return candidate.systemverilog != nullptr
@@ -983,12 +1257,11 @@ Lowerer::hir_systemverilog_value_type(
     if (name_separator == std::string::npos) {
         return current;
     }
-    if (source.text.substr(0U, name_separator)
+    if (text.substr(0U, name_separator)
         != declaration->systemverilog->name) {
         return std::nullopt;
     }
-    auto remaining = std::string_view { source.text }.substr(
-        name_separator + 1U);
+    auto remaining = text.substr(name_separator + 1U);
     while (!remaining.empty()) {
         if (!current.target.target.valid()) {
             current = resolver.effective_systemverilog_type(
@@ -1124,20 +1397,49 @@ Lowerer::hir_systemverilog_enumeration_method(
                               || candidate.systemverilog->form
                                   == semantic::sv::DeclarationForm::port);
                   };
+            auto prefix = std::string_view { source.text }.substr(
+                0U, separator);
+            if (const auto scope = prefix.rfind("::");
+                prefix.find('.') != std::string_view::npos
+                && (scope == std::string_view::npos
+                    || scope < prefix.find('.'))) {
+                prefix = prefix.substr(0U, prefix.find('.'));
+            }
             declaration_id = hir_resolver().resolve_systemverilog(
-                 std::string_view { source.text }.substr(0U, separator),
-                 source.scope, object, false)
+                 prefix, source.scope, object, false)
                                  .unique();
         }
         const auto declaration = declaration_id
             ? specialized_hir_unit_->find_declaration(*declaration_id)
             : std::nullopt;
         // Only a direct `variable.method`, or `P::variable.method` for a
-        // package variable; a member path is not a method.
+        // package variable, or an enumeration member of a packed structure
+        // variable (`s.m.name`, IEEE 1800-2017 6.19.5, 7.2).
         auto root = std::string_view { source.text }.substr(0U, separator);
         if (const auto scope = root.rfind("::");
             scope != std::string_view::npos) {
             root.remove_prefix(scope + 2U);
+        }
+        if (const auto member_separator = root.find('.');
+            member_separator != std::string_view::npos) {
+            if (!declaration || declaration->systemverilog == nullptr
+                || declaration->systemverilog->name
+                    != root.substr(0U, member_separator)) {
+                return std::nullopt;
+            }
+            auto member = hir_systemverilog_member_path(
+                *declaration_id, root.substr(member_separator + 1U));
+            const auto type = member
+                ? hir_systemverilog_value_type(expression_id, 1U)
+                : std::nullopt;
+            if (!type) {
+                return std::nullopt;
+            }
+            result.receiver_declaration = *declaration_id;
+            result.member = std::move(member);
+            return hir_systemverilog_enumeration_type_profile(
+                std::move(result), *type,
+                declaration->systemverilog->scope);
         }
         if (!declaration || declaration->systemverilog == nullptr
             || declaration->systemverilog->name != root) {
@@ -1260,6 +1562,18 @@ Lowerer::lower_hir_systemverilog_enumeration_receiver(
             record_implicit_signal_dependency(*binding->signal);
         }
         value = destination;
+        if (const auto& member = method.member) {
+            if (member->offset + member->width > binding->width) {
+                return std::nullopt;
+            }
+            const auto part = allocate_register(
+                member->width, binding->domain);
+            process_.operations.emplace_back(Extract {
+                part, destination,
+                static_cast<std::uint32_t>(member->offset),
+                static_cast<std::uint32_t>(member->width) });
+            value = part;
+        }
     }
     if (value && register_width(*value) != method.width) {
         value = resize_register(*value, method.width, false);

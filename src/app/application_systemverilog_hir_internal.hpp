@@ -645,4 +645,9 @@ private:
     std::multimap<std::string, UnitParameter, std::less<>> unit_parameters_;
 };
 
+// The structural identity of an anonymous aggregate type in `scope`, or
+// nothing when its shape is not fixed by literals.
+[[nodiscard]] std::optional<std::string> anonymous_aggregate_signature(
+    const frontend::Type& type, semantic::ScopeId scope);
+
 } // namespace fsim::app::application_detail::systemverilog_hir_detail

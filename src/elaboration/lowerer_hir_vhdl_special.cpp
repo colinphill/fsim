@@ -1481,6 +1481,43 @@ Lowerer::hir_vhdl_environment_status_literal(
         : std::nullopt;
 }
 
+std::optional<std::uint64_t>
+Lowerer::hir_vhdl_environment_call_status_literal(
+    const semantic::ExpressionId literal,
+    const semantic::ExpressionId call) const
+{
+    if (!is_hir_vhdl_environment_status_literal(literal)) {
+        return std::nullopt;
+    }
+    const auto source = specialized_hir_unit_->find_expression(call);
+    const auto text = specialized_hir_unit_->find_expression(literal);
+    if (!source || source->vhdl == nullptr || !text
+        || text->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    using Api = frontend::VhdlSimulatorApi;
+    // The status type each function form of STD.ENV returns (IEEE
+    // 1076-2019 16.5.6).
+    const auto status = [&]() -> Api {
+        switch (hir_vhdl_simulator_api(*source->vhdl)) {
+        case Api::dir_open:
+        case Api::dir_workingdir:
+            return Api::dir_open_status;
+        case Api::dir_createdir:
+            return Api::dir_create_status;
+        case Api::dir_deletedir:
+            return Api::dir_delete_status;
+        case Api::dir_deletefile:
+            return Api::file_delete_status;
+        default:
+            return Api::none;
+        }
+    }();
+    return status == Api::none
+        ? std::nullopt
+        : vhdl_environment_status_ordinal(status, text->vhdl->text);
+}
+
 bool Lowerer::is_hir_vhdl_environment_directory(
     const semantic::DeclarationId declaration_id) const
 {
@@ -3513,52 +3550,14 @@ Lowerer::lower_hir_vhdl_reflection_expression(
                         result.ranges.push_back(*converted);
                     }
                 }
-                std::unordered_map<std::string, std::int64_t> scales;
-                for (const auto& unit : type.physical_units) {
-                    std::optional<std::int64_t> scale = unit.scale_factor;
-                    if (!scale && !unit.scale) {
-                        scale = 1;
-                    }
-                    if (!scale && unit.scale) {
-                        const auto scale_expression
-                            = specialized_hir_unit_->find_expression(
-                                *unit.scale);
-                        constexpr std::string_view prefix {
-                            "@vhdl-physical:"
-                        };
-                        if (scale_expression
-                            && scale_expression->vhdl != nullptr
-                            && scale_expression->vhdl->text.starts_with(prefix)
-                            && scale_expression->vhdl->operands.size() == 1U) {
-                            const auto referenced = std::string {
-                                std::string_view {
-                                    scale_expression->vhdl->text
-                                }
-                                    .substr(prefix.size())
-                            };
-                            const auto prior = scales.find(referenced);
-                            const auto multiplier = specialized_hir_unit_
-                                ->evaluate_integral_expression(
-                                    scale_expression->vhdl->operands.front());
-                            if (prior != scales.end() && multiplier
-                                && *multiplier >= 0
-                                && (*multiplier == 0
-                                    || prior->second
-                                        <= std::numeric_limits<
-                                            std::int64_t>::max()
-                                            / *multiplier)) {
-                                scale = prior->second * *multiplier;
-                            }
-                        }
-                    }
-                    if (!scale || *scale <= 0) {
-                        visiting.erase(current.type_mark.target.value());
-                        return std::nullopt;
-                    }
-                    scales.insert_or_assign(unit.name, *scale);
-                    result.names.push_back(unit.name);
-                    result.scales.push_back(static_cast<std::uint64_t>(
-                        *scale));
+                const auto units = hir_vhdl_physical_unit_scales(type);
+                if (!units) {
+                    visiting.erase(current.type_mark.target.value());
+                    return std::nullopt;
+                }
+                for (const auto& [name, scale] : *units) {
+                    result.names.push_back(name);
+                    result.scales.push_back(static_cast<std::uint64_t>(scale));
                 }
             } else if (type.form == semantic::vhdl::TypeForm::record) {
                 result.type_class = VhdlReflectionClass::record;
@@ -3839,6 +3838,52 @@ Lowerer::lower_hir_vhdl_reflection_string_expression(
     const auto destination = *operation.string_destination;
     process_.operations.emplace_back(std::move(operation));
     return destination;
+}
+
+std::optional<std::vector<std::pair<std::string, std::int64_t>>>
+Lowerer::hir_vhdl_physical_unit_scales(
+    const semantic::vhdl::TypeDefinition& type) const
+{
+    // Each secondary unit is a multiple of an earlier unit (IEEE 1076-2008
+    // 5.2.4.1); scales count primary units.
+    std::vector<std::pair<std::string, std::int64_t>> result;
+    std::unordered_map<std::string, std::int64_t> scales;
+    for (const auto& unit : type.physical_units) {
+        std::optional<std::int64_t> scale = unit.scale_factor;
+        if (!scale && !unit.scale) {
+            scale = 1;
+        }
+        if (!scale && unit.scale) {
+            const auto scale_expression
+                = specialized_hir_unit_->find_expression(*unit.scale);
+            constexpr std::string_view prefix { "@vhdl-physical:" };
+            if (scale_expression && scale_expression->vhdl != nullptr
+                && scale_expression->vhdl->text.starts_with(prefix)
+                && scale_expression->vhdl->operands.size() == 1U) {
+                const auto referenced = std::string {
+                    std::string_view { scale_expression->vhdl->text }
+                        .substr(prefix.size())
+                };
+                const auto prior = scales.find(referenced);
+                const auto multiplier
+                    = specialized_hir_unit_->evaluate_integral_expression(
+                        scale_expression->vhdl->operands.front());
+                if (prior != scales.end() && multiplier && *multiplier >= 0
+                    && (*multiplier == 0
+                        || prior->second
+                            <= std::numeric_limits<std::int64_t>::max()
+                                / *multiplier)) {
+                    scale = prior->second * *multiplier;
+                }
+            }
+        }
+        if (!scale || *scale <= 0) {
+            return std::nullopt;
+        }
+        scales.insert_or_assign(unit.name, *scale);
+        result.emplace_back(unit.name, *scale);
+    }
+    return result;
 }
 
 } // namespace fsim::elaboration

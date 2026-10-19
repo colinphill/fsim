@@ -6098,7 +6098,30 @@ private:
                 expression.operands[index]);
         }
         const auto accepts = [&](const semantic::DeclarationId body) {
-            return callable_accepts(body, actuals);
+            if (callable_accepts(body, actuals)) {
+                return true;
+            }
+            // `f(i, j)` is an indexed name of the parameterless call `f`
+            // when every formal has a default and the result is an array of
+            // that rank (IEEE 1076-2008 8.4, 4.2.2.1).
+            const auto declaration = specialization_.find_declaration(body);
+            if (!declaration || declaration->vhdl == nullptr
+                || !declaration->vhdl->callable
+                || !declaration->vhdl->callable->return_type
+                || !expression.argument_names.empty()
+                || !std::ranges::all_of(declaration->vhdl->callable->formals,
+                    [&](const semantic::DeclarationId formal) {
+                        const auto record
+                            = specialization_.find_declaration(formal);
+                        return record && record->vhdl != nullptr
+                            && record->vhdl->initializer.has_value();
+                    })) {
+                return false;
+            }
+            const auto* definition = root_definition(
+                *declaration->vhdl->callable->return_type);
+            return definition != nullptr && definition->form == TypeForm::array
+                && definition->array_dimensions.size() == actuals.size();
         };
         std::set<semantic::DeclarationId> accepted;
         for (const auto& candidate : candidates) {
@@ -11053,6 +11076,19 @@ private:
             if (vhdl_declaration.form
                 == semantic::vhdl::DeclarationForm::port) {
                 return true;
+            }
+            // A generic takes them from its actual or default value
+            // (6.5.6.2).
+            if (vhdl_declaration.form
+                == semantic::vhdl::DeclarationForm::generic_constant) {
+                return vhdl_declaration.initializer.has_value()
+                    || std::ranges::any_of(
+                        specialization_.specialization().actual_identities,
+                        [&](const semantic::SpecializedHirActualIdentity&
+                                actual) {
+                            return actual.declaration == selected_id
+                                && actual.actual_expression.has_value();
+                        });
             }
             if (vhdl_declaration.form
                     != semantic::vhdl::DeclarationForm::constant) {

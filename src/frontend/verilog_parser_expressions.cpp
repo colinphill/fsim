@@ -1882,11 +1882,46 @@ Expression VerilogParser::parse_primary_impl()
             };
             if (!at(TokenKind::LeftBrace)
                 && (keyword("bit") || keyword("logic") || keyword("reg"))) {
-                // A one-bit type as the slice size (IEEE 1800-2017
-                // 11.4.14).
+                // A one-bit type, or a vector of one with literal packed
+                // dimensions (`bit [1:0]`), as the slice size: its width
+                // (IEEE 1800-2017 11.4.14).
                 const auto type = advance();
+                std::uint64_t width { 1U };
+                bool literal_dimensions { true };
+                while (at(TokenKind::LeftBracket)
+                    && at(TokenKind::Number, 1U) && at(TokenKind::Colon, 2U)
+                    && at(TokenKind::Number, 3U)
+                    && at(TokenKind::RightBracket, 4U)) {
+                    advance();
+                    const auto left = advance();
+                    advance();
+                    const auto right = advance();
+                    advance();
+                    std::uint64_t msb { };
+                    std::uint64_t lsb { };
+                    const auto parsed_left = std::from_chars(left.text.data(),
+                        left.text.data() + left.text.size(), msb);
+                    const auto parsed_right = std::from_chars(
+                        right.text.data(),
+                        right.text.data() + right.text.size(), lsb);
+                    if (parsed_left.ec != std::errc { }
+                        || parsed_left.ptr != left.text.data() + left.text.size()
+                        || parsed_right.ec != std::errc { }
+                        || parsed_right.ptr
+                            != right.text.data() + right.text.size()) {
+                        literal_dimensions = false;
+                        break;
+                    }
+                    width *= (msb > lsb ? msb - lsb : lsb - msb) + 1U;
+                }
+                if (!literal_dimensions) {
+                    error(type, "FSIM-SV-PARSE-191",
+                        "a streaming slice type needs decimal literal packed "
+                        "dimensions");
+                }
                 slice_size = Expression {
-                    ExpressionKind::IntegerLiteral, "1", { }, type.span };
+                    ExpressionKind::IntegerLiteral, std::to_string(width),
+                    { }, type.span };
             } else if (!at(TokenKind::LeftBrace)) {
                 if (keyword("byte") || keyword("shortint")
                     || keyword("int") || keyword("longint")

@@ -1396,12 +1396,19 @@ void HierarchyBuilder::validate_verilog_specify(
                         && first
                             < std::numeric_limits<std::int64_t>::min()
                                 - second);
-                if (overflow || first + second <= 0) {
+                if (overflow) {
                     report("FSIM-ELAB-SVSPEC-016",
                         "combined timing-check limits at '" + path
-                            + "' must have a positive representable sum",
+                            + "' must have a representable sum",
                         source(check.source));
                     valid = false;
+                } else if (first + second <= 0) {
+                    // A negative limit whose sum with the other is not
+                    // positive is set to zero (IEEE 1800-2017 31.9); two
+                    // zero limits check nothing.
+                    for (auto& limit : normalized.limits) {
+                        limit = std::max<std::int64_t>(limit, 0);
+                    }
                 }
             }
             if (normalized.kind

@@ -1865,6 +1865,41 @@ namespace {
         return resolve(resolve, root);
     }
 
+    // A subtype whose type mark chain reaches STD_LOGIC or STD_LOGIC_VECTOR
+    // inherits that subtype's resolution function (IEEE 1076-2008 6.3).
+    bool compiled_vhdl_std_logic_subtype(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& root,
+        const std::optional<semantic::ScopeId> owner_scope = std::nullopt)
+    {
+        std::unordered_set<std::uint32_t> visiting;
+        const auto* input = &root;
+        semantic::vhdl::SubtypeIndication subtype;
+        for (;;) {
+            subtype = compiled_vhdl_link_subtype(
+                specialization, *input, owner_scope);
+            const auto name = simple_name_of(subtype.type_mark.spelling);
+            if (compiled_vhdl_name_equal(name, "std_logic")
+                || compiled_vhdl_name_equal(name, "std_logic_vector")) {
+                return true;
+            }
+            if (!subtype.type_mark.target.valid()
+                || !visiting.insert(subtype.type_mark.target.value())
+                        .second) {
+                return false;
+            }
+            const auto type = specialization.find_type(
+                subtype.type_mark.target);
+            if (!type || type->vhdl == nullptr
+                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form
+                        != semantic::vhdl::TypeForm::alias)) {
+                return false;
+            }
+            input = &type->vhdl->base;
+        }
+    }
+
     std::optional<CompiledVhdlSignalLayout>
     compiled_vhdl_named_signal_layout(
         const semantic::SpecializedHirUnit& specialization,
@@ -14430,6 +14465,14 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                         full_name, actual->second);
                     design_.signal_by_name_.insert_or_assign(
                         full_name, actual->second);
+                    // An inout clockvar reads its sample and drives the
+                    // signal (IEEE 1800-2017 14.3); keep the drive target
+                    // apart from the sampled copy registered below.
+                    if (member.direction
+                        == semantic::sv::Direction::inout) {
+                        design_.signal_by_name_.insert_or_assign(
+                            full_name + "$drive", actual->second);
+                    }
                 }
                 if (member.direction
                     == semantic::sv::Direction::output) {
@@ -21028,6 +21071,9 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 compiled_source_span(
                     *compiled_, diagnostic->source));
         }
+    } else if (compiled_vhdl_std_logic_subtype(working_specialization,
+                   *declaration.subtype, declaration.scope)) {
+        resolver_by_signal_.insert_or_assign(id, "std_logic");
     }
     design_.signals_.push_back(runtime::simir::Signal {
         full_name,
@@ -22499,18 +22545,18 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
                     const auto multiplier
                         = specialized->evaluate_integral_expression(
                             expression->vhdl->operands.front());
+                    // A unit's position number need not lie within the
+                    // range constraint (IEEE 1076-2008 5.2.4.1).
                     if (prior != scales.end() && multiplier
                         && *multiplier > 0
                         && prior->second
-                            <= std::numeric_limits<std::int32_t>::max()
+                            <= std::numeric_limits<std::int64_t>::max()
                                 / *multiplier) {
                         scale = prior->second * *multiplier;
                     }
                 }
             }
-            if (!scale || *scale <= 0
-                || *scale
-                    > std::numeric_limits<std::int32_t>::max()) {
+            if (!scale || *scale <= 0) {
                 report(
                     "FSIM-ELAB-VHPHYSICAL-004",
                     "secondary unit '" + unit.name
@@ -28444,6 +28490,56 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
         auto actual_hir_declaration
             = std::move(port_actual->hir_declaration);
         auto actual_hir_scope = std::move(port_actual->hir_scope);
+        // A port of an unconstrained array type takes its index ranges from
+        // a whole signal actual (IEEE 1076-2008 6.5.6.3); record them on
+        // the formal, so `p'range` inside the entity is static.
+        if (formal_declaration.subtype
+            && formal_declaration.subtype->constraints.empty()
+            && expression && expression->vhdl != nullptr
+            && expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && actual_hir_declaration
+            && *actual_signal < design_.signal_info_.size()) {
+            const auto& actual_info = design_.signal_info_[*actual_signal];
+            const auto unconstrained_formal = compiled_vhdl_signal_type(
+                *child_interface_specialization,
+                *formal_declaration.subtype, formal_declaration.scope);
+            if (actual_info.vhdl_array
+                && !actual_info.vhdl_array->dimensions.empty()
+                && std::ranges::all_of(actual_info.vhdl_array->dimensions,
+                    [](const auto& dimension) {
+                        return dimension.range.has_value();
+                    })
+                && unconstrained_formal && unconstrained_formal->vhdl_array
+                && unconstrained_formal->vhdl_array->unconstrained
+                && unconstrained_formal->vhdl_array->dimensions.size()
+                    == actual_info.vhdl_array->dimensions.size()) {
+                auto replacement = formal_declaration;
+                for (const auto& dimension
+                    : actual_info.vhdl_array->dimensions) {
+                    semantic::vhdl::RangeConstraint constraint;
+                    constraint.kind = semantic::vhdl::RangeKind::array_index;
+                    constraint.left = dimension.range->left;
+                    constraint.right = dimension.range->right;
+                    constraint.descending = dimension.range->descending;
+                    constraint.null = dimension.null;
+                    replacement.subtype->constraints.push_back(constraint);
+                }
+                replacement.subtype->unconstrained = false;
+                replacement.subtype->executable_width = actual_info.width;
+                // Only when the index ranges fix the whole shape; an
+                // element subtype that is itself unconstrained keeps the
+                // actual's layout.
+                const auto constrained_layout
+                    = compiled_vhdl_named_signal_layout(
+                        *child_interface_specialization,
+                        *replacement.subtype, replacement.scope);
+                if (constrained_layout
+                    && constrained_layout->width == actual_info.width
+                    && child_interface_specialization->replace(replacement)) {
+                    formal_declaration = std::move(replacement);
+                }
+            }
+        }
         const bool formal_infers_subtype
             = formal_declaration.subtype
             && (formal_declaration.subtype->unspecified_class

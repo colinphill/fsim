@@ -200,6 +200,17 @@ FunctionDeclaration VerilogParser::parse_function(
       "FSIM-SV-PARSE-141");
 
   if (prototype) {
+    // A prototype's classic formals are ANSI formals of implicit type
+    // `input logic` (IEEE 1800-2017 13.3, 13.4, 8.24).
+    if (language_ == Language::SystemVerilog2017) {
+      for (const auto& argument_name : classic_header_arguments) {
+        auto type = default_verilog_type();
+        type.spelling = "logic";
+        function.arguments.push_back(FunctionArgument{
+            argument_name, std::move(type), PortDirection::Input,
+            span_from(start, previous())});
+      }
+    }
     function.defined = false;
     function.span = span_from(start, previous());
     current_procedural_names_ = std::move(saved_names);
@@ -832,6 +843,14 @@ TaskDeclaration VerilogParser::parse_task(
   expect(TokenKind::Semicolon, "';' after task header", "FSIM-SV-PARSE-144");
 
   if (prototype) {
+    if (language_ == Language::SystemVerilog2017) {
+      for (const auto& argument_name : classic_header_arguments) {
+        auto type = default_verilog_type();
+        type.spelling = "logic";
+        task.arguments.emplace_back(argument_name, std::move(type),
+            PortDirection::Input, span_from(start, previous()));
+      }
+    }
     task.span = span_from(start, previous());
     current_procedural_names_ = std::move(saved_names);
     current_procedural_types_ = std::move(saved_types);

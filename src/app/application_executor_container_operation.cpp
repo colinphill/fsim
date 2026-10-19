@@ -329,7 +329,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     == runtime::simir::StringMethodOperator::icompare
                 || method->operation
                     == runtime::simir::StringMethodOperator::
-                        vhdl_enumeration_value;
+                        vhdl_enumeration_value
+                || method->operation
+                    == runtime::simir::StringMethodOperator::
+                        vhdl_physical_value;
             const auto result = runtime::simir::execute_string_method(
                 method->operation, source,
                 compare

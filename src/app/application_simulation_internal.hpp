@@ -272,6 +272,12 @@ struct Simulation::Impl {
 
     [[nodiscard]] static std::pair<std::string_view, std::string_view>
     static_property_parts(const std::string_view identity);
+    // The static storage a method of `handle`'s object uses for a static
+    // property declared by `owner`: that object's specialization of the
+    // owner (IEEE 1800-2017 8.25), or `owner` itself.
+    [[nodiscard]] std::string static_property_specialization(
+        std::string_view owner,
+        runtime::SystemVerilogClassHandle handle) const;
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_function(
         const runtime::SystemVerilogClassHandle handle,
@@ -834,6 +840,11 @@ struct Simulation::Impl {
     bool concurrent_assertion_failure_actions_enabled { true };
 
     ClassPropertyChangeHook class_property_change_hook;
+
+    // The elaborated notifier that waits on class properties depend on; it
+    // toggles whenever a class property changes.
+    std::optional<runtime::simir::SignalId> class_heap_change_signal;
+    void toggle_class_heap_change();
 
     std::size_t source_function_dispatch_depth { };
 

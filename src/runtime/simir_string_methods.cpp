@@ -7,7 +7,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
+#include <cmath>
+#include <cstdlib>
+#include <optional>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -282,6 +286,96 @@ std::uint32_t checked_vhdl_textio_field_width(
                     : static_cast<std::int64_t>(value);
 }
 
+// A physical literal (`25 kohm`, `1.5 ns`, `ohm`) as a count of primary
+// units; `units` holds newline-separated `name=scale` entries (IEEE
+// 1076-2008 15.5, 5.2.4.1, 16.2.2).
+[[nodiscard]] std::int64_t vhdl_physical_value(
+    const std::string_view text, const std::string_view units)
+{
+    const auto fail = [&]() -> std::int64_t {
+        throw std::invalid_argument {
+            "VHDL 'VALUE: \"" + std::string { text }
+            + "\" is not a physical literal of the type"
+        };
+    };
+    const auto space = [](const char character) {
+        return character == ' ' || character == '\t'
+            || character == '\xa0';
+    };
+    std::size_t begin { };
+    std::size_t end { text.size() };
+    while (begin < end && space(text[begin]))
+        ++begin;
+    while (end > begin && space(text[end - 1U]))
+        --end;
+    const auto literal = text.substr(begin, end - begin);
+    // The unit name is the trailing identifier.
+    auto unit_begin = literal.size();
+    while (unit_begin > 0U
+        && (std::isalnum(static_cast<unsigned char>(literal[unit_begin - 1U]))
+            || literal[unit_begin - 1U] == '_'))
+        --unit_begin;
+    // An abstract literal ending in an exponent or based digits is not part
+    // of the unit name: the unit starts with a letter after a separator.
+    while (unit_begin < literal.size()
+        && !std::isalpha(static_cast<unsigned char>(literal[unit_begin])))
+        ++unit_begin;
+    if (unit_begin > 0U && !space(literal[unit_begin - 1U]))
+        return fail();
+    const auto unit = literal.substr(unit_begin);
+    auto number = literal.substr(0U, unit_begin);
+    while (!number.empty() && space(number.back()))
+        number.remove_suffix(1U);
+    std::optional<std::int64_t> scale;
+    std::size_t start { };
+    while (!unit.empty() && start <= units.size()) {
+        const auto stop = units.find('\n', start);
+        const auto entry = units.substr(start,
+            stop == std::string_view::npos ? std::string_view::npos
+                                           : stop - start);
+        const auto equal = entry.find('=');
+        if (equal != std::string_view::npos
+            && std::ranges::equal(entry.substr(0U, equal), unit,
+                [](const char left, const char right) {
+                    return std::tolower(static_cast<unsigned char>(left))
+                        == std::tolower(static_cast<unsigned char>(right));
+                })) {
+            scale = vhdl_integer_value(entry.substr(equal + 1U));
+            break;
+        }
+        if (stop == std::string_view::npos)
+            break;
+        start = stop + 1U;
+    }
+    if (!scale)
+        return fail();
+    if (number.empty())
+        return *scale;
+    // A decimal literal with a point or exponent scales as a real.
+    if (number.find('#') == std::string_view::npos
+        && number.find_first_of(".eE") != std::string_view::npos) {
+        std::string digits;
+        for (const auto character : number) {
+            if (character != '_')
+                digits.push_back(character);
+        }
+        char* parsed_end = nullptr;
+        const auto value = std::strtod(digits.c_str(), &parsed_end);
+        if (parsed_end != digits.c_str() + digits.size()
+            || !std::isfinite(value))
+            return fail();
+        const auto product = std::round(value * static_cast<double>(*scale));
+        if (!(product >= -9.2e18 && product <= 9.2e18))
+            return fail();
+        return static_cast<std::int64_t>(product);
+    }
+    const auto value = vhdl_integer_value(number);
+    std::int64_t product { };
+    if (__builtin_mul_overflow(value, *scale, &product))
+        return fail();
+    return product;
+}
+
 [[nodiscard]] std::uint64_t string_to_real_bits(
     const std::string_view value)
 {
@@ -410,6 +504,11 @@ StringMethodResult execute_string_method(
             "VHDL 'VALUE: \"" + source
             + "\" is not a literal of the enumeration type"
         };
+    }
+    if (operation == StringMethodOperator::vhdl_physical_value) {
+        return { std::nullopt,
+            static_cast<std::uint64_t>(vhdl_physical_value(source, argument)),
+            std::nullopt };
     }
     if (operation == StringMethodOperator::vhdl_integer_value) {
         return { std::nullopt,
@@ -633,7 +732,8 @@ void Interpreter::Impl::execute_string(
     const bool compare = operation.operation == StringMethodOperator::compare
         || operation.operation == StringMethodOperator::icompare
         || operation.operation
-            == StringMethodOperator::vhdl_enumeration_value;
+            == StringMethodOperator::vhdl_enumeration_value
+        || operation.operation == StringMethodOperator::vhdl_physical_value;
     const bool has_first = operation.operation == StringMethodOperator::getc
         || operation.operation == StringMethodOperator::putc
         || operation.operation == StringMethodOperator::substr

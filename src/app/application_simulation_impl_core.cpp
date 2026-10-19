@@ -867,6 +867,39 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         identity);
 }
 
+std::string Simulation::Impl::static_property_specialization(
+    const std::string_view owner,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    const auto registered = [&] {
+        try {
+            static_cast<void>(class_static_store.initialized(owner));
+            return true;
+        } catch (const std::out_of_range&) {
+            return false;
+        }
+    }();
+    if (handle == 0U || registered) {
+        return std::string { owner };
+    }
+    try {
+        for (std::string current {
+                 class_heap.object(handle).specialization_identity };
+             !current.empty();) {
+            const auto& candidate = class_specialization(current);
+            if (candidate.declaration_identity == owner) {
+                return current;
+            }
+            if (!candidate.base) {
+                break;
+            }
+            current = candidate.base->specialization_identity;
+        }
+    } catch (const std::exception&) {
+    }
+    return std::string { owner };
+}
+
 [[nodiscard]] runtime::SystemVerilogClassHandle Simulation::Impl::allocate_class(
     const std::string_view specialization_identity,
     const std::string_view declared_type,
@@ -1302,7 +1335,16 @@ Simulation::Impl::packed_class_snapshot() const
         const auto& object = class_heap.object(handle);
         for (std::size_t index = 0; index < object.properties.size(); ++index) {
             const auto& property = object.properties[index];
-            if (property.packed.width() != 0) {
+            if (property.kind
+                == runtime::SystemVerilogClassPropertyKind::ClassHandle) {
+                // A handle property changes when it refers to another
+                // object (IEEE 1800-2017 9.4.2); the change hook sees only
+                // packed values.
+                result.emplace(
+                    std::pair { handle, object.property_names[index] },
+                    runtime::PackedLogic4::from_aval_bval(
+                        64U, property.handle, 0U));
+            } else if (property.packed.width() != 0) {
                 result.emplace(
                     std::pair { handle, object.property_names[index] },
                     property.packed);
@@ -1312,20 +1354,42 @@ Simulation::Impl::packed_class_snapshot() const
     return result;
 }
 
+void Simulation::Impl::toggle_class_heap_change()
+{
+    if (!class_heap_change_signal) {
+        return;
+    }
+    const auto& current = interpreter->signal_value(*class_heap_change_signal);
+    const bool high = current.width() != 0U
+        && current.get(0U) == runtime::Logic4::one;
+    interpreter->deposit_signal(*class_heap_change_signal,
+        runtime::PackedLogic4 { 1U,
+            high ? runtime::Logic4::zero : runtime::Logic4::one });
+}
+
 void Simulation::Impl::notify_class_changes(const PackedSnapshot& before)
 {
-    if (!class_property_change_hook
+    if ((!class_property_change_hook && !class_heap_change_signal)
         || interpreter->package_static_initialization_active())
         return;
     const auto after = packed_class_snapshot();
+    bool changed = false;
     for (const auto& [identity, value] : after) {
         const auto prior = before.find(identity);
         if (prior == before.end() || prior->second != value) {
-            class_property_change_hook(
-                identity.first, identity.second, value,
-                interpreter->scheduler().now(),
-                interpreter->scheduler().delta());
+            changed = true;
+            if (class_property_change_hook
+                && class_heap.property(identity.first, identity.second).kind
+                    != runtime::SystemVerilogClassPropertyKind::ClassHandle) {
+                class_property_change_hook(
+                    identity.first, identity.second, value,
+                    interpreter->scheduler().now(),
+                    interpreter->scheduler().delta());
+            }
         }
+    }
+    if (changed) {
+        toggle_class_heap_change();
     }
 }
 
@@ -1348,16 +1412,24 @@ Simulation::Impl::packed_static_snapshot() const
 
 void Simulation::Impl::notify_static_changes(const StaticPackedSnapshot& before)
 {
-    if (!class_static_property_change_hook
+    if ((!class_static_property_change_hook && !class_heap_change_signal)
         || interpreter->package_static_initialization_active())
         return;
+    bool changed = false;
     for (const auto& [identity, value] : packed_static_snapshot()) {
         const auto prior = before.find(identity);
         if (prior == before.end() || prior->second != value) {
-            class_static_property_change_hook(
-                identity.first, identity.second, value,
-                interpreter->scheduler().now(), interpreter->scheduler().delta());
+            changed = true;
+            if (class_static_property_change_hook) {
+                class_static_property_change_hook(
+                    identity.first, identity.second, value,
+                    interpreter->scheduler().now(),
+                    interpreter->scheduler().delta());
+            }
         }
+    }
+    if (changed) {
+        toggle_class_heap_change();
     }
 }
 

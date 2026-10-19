@@ -46,10 +46,13 @@ public:
         runtime::SystemVerilogClassHandle,
         std::string_view,
         const runtime::PackedLogic4&)>;
+    // The handle is the object whose method reads or writes the static
+    // property; it selects the specialization of a parameterized class.
     using StaticPropertyRead = std::function<runtime::PackedLogic4(
-        std::string_view)>;
+        std::string_view, runtime::SystemVerilogClassHandle)>;
     using StaticPropertyWrite = std::function<void(
-        std::string_view, const runtime::PackedLogic4&)>;
+        std::string_view, const runtime::PackedLogic4&,
+        runtime::SystemVerilogClassHandle)>;
     using StaticPropertyValueRead = std::function<std::optional<
         runtime::SystemVerilogClassPropertyValue>(std::string_view)>;
     void set_static_property_value_read_service(

@@ -789,6 +789,7 @@ void VhdlParser::parse_vhdl_generate_constant(
       "FSIM-VHDL-PARSE-085");
   for (const auto& name : names) {
     const auto canonical = vhdl_name(name.text);
+    vhdl_object_classes_.insert_or_assign(canonical, "constant");
     const bool duplicate =
         std::any_of(
             body.constants.begin(),

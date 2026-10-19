@@ -899,10 +899,23 @@ void VerilogParser::parse_modport(
         // The expression may name a signal of a nested interface instance
         // (`.r(inner.val)`).
         bool hierarchical_member = false;
+        // An element of an interface instance array (`.r(ch[0].val)`).
+        const auto constant_index = [&] {
+          while (alias_token && at(TokenKind::LeftBracket)
+              && at(TokenKind::Number, 1U)
+              && at(TokenKind::RightBracket, 2U)
+              && at(TokenKind::Dot, 3U)) {
+            advance();
+            member.text += "[" + advance().text + "]";
+            advance();
+          }
+        };
+        constant_index();
         while (alias_token && at(TokenKind::Dot)) {
           advance();
           member.text += "." + expect_identifier("modport member name").text;
           hierarchical_member = true;
+          constant_index();
         }
         if (alias_token) {
           expect(TokenKind::RightParen,
