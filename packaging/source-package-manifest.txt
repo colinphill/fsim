@@ -588,6 +588,7 @@ include/fsim/support/teardown.hpp
 include/fsim/support/uvm_identity.hpp
 include/fsim/support/vhdl_identifier.hpp
 include/fsim/support/vhdl_time.hpp
+include/fsim/support/vhdl_tool_identity.hpp
 include/fsim/systemc.hpp
 include/fsim/systemc/accellera.hpp
 include/fsim/systemc/hierarchy.hpp

@@ -2534,7 +2534,10 @@ void HierarchyBuilder::validate_process_drivers()
                 // Verilog variable.
                 && std::ranges::none_of(process_drivers,
                     [](const auto& driver) { return driver.vhdl; }))
-            || info.name.ends_with(".$container_storage")) {
+            || info.name.ends_with(".$container_storage")
+            // A change notifier of a string, container or automatic
+            // variable is toggled by every process that changes it.
+            || info.name.find(".$local_event_") != std::string::npos) {
             continue;
         }
         bool overlap = false;

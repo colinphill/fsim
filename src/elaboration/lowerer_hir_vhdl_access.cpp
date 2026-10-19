@@ -1274,8 +1274,54 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
     if (source.kind == semantic::vhdl::ExpressionKind::binary
         && source.operands.size() == 2U
         && (source.text == "=" || source.text == "/=")) {
-        const auto* lhs_type = access_type(source.operands[0]);
-        const auto* rhs_type = access_type(source.operands[1]);
+        // `null` takes the other operand's access type (IEEE 1076-2008
+        // 9.3.2).
+        const auto null_literal = [&](const semantic::ExpressionId id) {
+            const auto operand = specialized_hir_unit_->find_expression(id);
+            return operand && operand->vhdl != nullptr
+                && operand->vhdl->text == "@vhdl-null";
+        };
+        // A STD.TEXTIO LINE is held as its string; null is the empty
+        // value (IEEE 1076-2008 16.4).
+        const auto textio_line = [&](const semantic::ExpressionId id) {
+            const auto subtype = hir_vhdl_expression_subtype(id);
+            return subtype
+                && compiler_owned_textio_line_type(*specialized_hir_unit_,
+                    *subtype, hir_process_scope_,
+                    hir_vhdl_named_type(*specialized_hir_unit_, *subtype,
+                        semantic::vhdl::TypeForm::access));
+        };
+        for (std::size_t side { }; side < 2U; ++side) {
+            if (!null_literal(source.operands[1U - side])
+                || !textio_line(source.operands[side])) {
+                continue;
+            }
+            const auto line = lower_hir_string_expression(
+                source.operands[side]);
+            if (!line) {
+                return std::nullopt;
+            }
+            const auto length = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(StringLength { length, *line });
+            const auto zero = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+            const auto empty = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal, empty, length, zero });
+            if (source.text == "=") {
+                return empty;
+            }
+            const auto present = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(UnaryNot { present, empty });
+            return present;
+        }
+        const auto* lhs_type = null_literal(source.operands[0])
+            ? nullptr : access_type(source.operands[0]);
+        const auto* rhs_type = null_literal(source.operands[1])
+            ? nullptr : access_type(source.operands[1]);
         const auto* type = lhs_type != nullptr ? lhs_type : rhs_type;
         if (type == nullptr || (lhs_type != nullptr && rhs_type != nullptr
                 && lhs_type->id != rhs_type->id)) {

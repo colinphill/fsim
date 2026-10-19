@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/support/vhdl_tool_identity.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/output_format.hpp"
-#include "fsim/version.hpp"
 
 #include <charconv>
 #include <cctype>
@@ -6681,6 +6681,35 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                     }
                 }
                 return;
+            }
+            // A discrete subtype name chooses its range (IEEE 1076-2008
+            // 9.3.3.1, 9.3.3.3).
+            if (source.kind == semantic::vhdl::ExpressionKind::name) {
+                if (const auto named_range
+                    = hir_vhdl_discrete_subtype_choice(choice_id)) {
+                    const auto low = named_range->first;
+                    const auto high = named_range->second;
+                    if (low > high) {
+                        return;
+                    }
+                    if (low < std::min(*range->left, *range->right)
+                        || high > std::max(*range->left, *range->right)) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-003",
+                            "VHDL array aggregate index is outside the "
+                                "contextual range",
+                            hir_source_span(source.source));
+                        valid = false;
+                        return;
+                    }
+                    for (auto index = low;; ++index) {
+                        assign_index(index, association.value, span);
+                        if (index == high) {
+                            break;
+                        }
+                    }
+                    return;
+                }
             }
             const auto index = definition != nullptr
                     && current_dimension != nullptr
@@ -14794,7 +14823,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 type.two_state ? frontend::ValueDomain::Bit2
                                : frontend::ValueDomain::Logic4);
             process_.operations.emplace_back(PopContainer {
-                selected, container->container.value, true });
+                selected, container->container.value, !method->pop_back });
             store_hir_class_value_container(*container);
             return expected_width != 0U
                     && expected_width != type.element_width
@@ -14813,7 +14842,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(ClassMethodCall {
             destination,
             *receiver,
-            (pop ? "@container-pop-front:" : "@container-size:")
+            (!pop ? "@container-size:"
+                  : method->pop_back ? "@container-pop-back:"
+                                     : "@container-pop-front:")
                 + std::string { method->container },
             { },
             { },
@@ -15515,11 +15546,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             == semantic::sv::ExpressionKind::binary
         && expression->systemverilog->operands.size() == 2U
         && (expression->systemverilog->text == "=="
-            || expression->systemverilog->text == "!=")
+            || expression->systemverilog->text == "!="
+            || expression->systemverilog->text == "==="
+            || expression->systemverilog->text == "!==")
         && hir_expression_is_string(
             expression->systemverilog->operands[0], hir_process_scope_)
         && hir_expression_is_string(
             expression->systemverilog->operands[1], hir_process_scope_)) {
+        // String values hold no unknown bits, so case equality compares
+        // like logical equality (IEEE 1800-2023 6.16, 11.4.5).
         const auto lhs = lower_hir_string_expression(
             expression->systemverilog->operands[0]);
         const auto rhs = lower_hir_string_expression(
@@ -15527,13 +15562,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (!lhs || !rhs) {
             return std::nullopt;
         }
+        const auto case_compare = expression->systemverilog->text.size() == 3U;
         const auto destination = allocate_register(
-            1U, frontend::ValueDomain::Logic4);
+            1U, case_compare ? frontend::ValueDomain::Bit2
+                             : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(CompareStrings {
             destination,
             *lhs,
             *rhs,
-            expression->systemverilog->text == "!=",
+            expression->systemverilog->text.front() == '!',
         });
         result = destination;
     } else if (expression->systemverilog != nullptr
@@ -15776,8 +15813,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 const auto spelling = constant
                     ? constant->packed.to_msb_string()
                     : std::string { };
-                if (!constant || constant->width != 1U
-                    || spelling.size() != 1U) {
+                if (!constant || spelling.empty()) {
                     report(
                         "FSIM-ELAB-089",
                         "$countbits control arguments must be constant "
@@ -15785,7 +15821,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         hir_source_span(call.source));
                     return invalid_integral_result();
                 }
-                switch (spelling.front()) {
+                // A wider control argument selects by its least
+                // significant bit (IEEE 1800-2017 20.9).
+                switch (spelling.back()) {
                 case '0':
                     state_mask |= 0x01U;
                     break;
@@ -17828,6 +17866,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && declaration->vhdl->subtype
             ? hir_effective_vhdl_subtype(*declaration->vhdl->subtype)
             : std::nullopt;
+        // A type declaration names its type as the conversion's subtype,
+        // as hir_vhdl_conversion_profile does.
+        if ((!target_subtype || !target_subtype->type_mark.target.valid())
+            && declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->declared_type) {
+            semantic::vhdl::SubtypeIndication declared;
+            declared.type_mark.target = *declaration->vhdl->declared_type;
+            declared.type_mark.spelling = declaration->vhdl->name;
+            target_subtype = hir_effective_vhdl_subtype(declared);
+        }
         if (!target_subtype) {
             target_subtype
                 = hir_vhdl_qualified_integer_vector_subtype(expression_id);
@@ -21784,9 +21832,52 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     : std::nullopt;
                 return effective && is_real(*effective);
             };
+            // A slice or concatenation of a SIGNED value is SIGNED too
+            // (IEEE 1076-2008 8.5, 9.2.5).
+            const auto vhdl_signed = [&](const auto& self,
+                                         const semantic::ExpressionId id,
+                                         const std::size_t depth) -> bool {
+                if (hir_expression_signed(id)) {
+                    return true;
+                }
+                // A concatenation has the type of its typed operands.
+                const auto node = specialized_hir_unit_->find_expression(id);
+                if (depth < 16U && node && node->vhdl != nullptr
+                    && (node->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::concatenation
+                        || (node->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::binary
+                            && node->vhdl->text == "&"))) {
+                    return std::ranges::any_of(node->vhdl->operands,
+                        [&](const semantic::ExpressionId operand) {
+                            return self(self, operand, depth + 1U);
+                        });
+                }
+                const auto subtype = hir_vhdl_expression_subtype(id);
+                const auto effective = subtype
+                    ? hir_effective_vhdl_subtype(*subtype)
+                    : std::nullopt;
+                const auto named_signed = [](const auto& value) {
+                    return value.signed_value
+                        || same_vhdl_identifier(
+                            simple_name_of(value.type_mark.spelling),
+                            "signed");
+                };
+                return (subtype && named_signed(*subtype))
+                    || (effective && named_signed(*effective));
+            };
+            // A scalar logic operand (`a + '0'`) has no signedness.
+            const auto logic_literal = [&](const semantic::ExpressionId id) {
+                const auto node = specialized_hir_unit_->find_expression(id);
+                return node && node->vhdl != nullptr
+                    && node->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::logic_literal;
+            };
             if ((arithmetic || relational)
-                && hir_expression_signed(source.operands[0])
-                    != hir_expression_signed(source.operands[1])
+                && !logic_literal(source.operands[0])
+                && !logic_literal(source.operands[1])
+                && vhdl_signed(vhdl_signed, source.operands[0], 0U)
+                    != vhdl_signed(vhdl_signed, source.operands[1], 0U)
                 && !contextual_integer
                 && !real_operand(source.operands[0])
                 && !real_operand(source.operands[1])) {
@@ -24354,18 +24445,20 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     hir_source_span(source.source));
                 return std::nullopt;
             }
-            const auto value
-                = api == frontend::VhdlSimulatorApi::vhdl_version
-                ? std::string { "2019" }
-                : api == frontend::VhdlSimulatorApi::tool_type
-                ? std::string { "SIMULATION" }
-                : api == frontend::VhdlSimulatorApi::tool_vendor
-                ? std::string { "fsim project" }
-                : api == frontend::VhdlSimulatorApi::tool_name
-                ? std::string { "fsim" }
-                : api == frontend::VhdlSimulatorApi::tool_edition
-                ? std::string { "community" }
-                : std::string { fsim::version };
+            // The STD.ENV identity functions return the conditional
+            // analysis identifiers' values (IEEE 1076-2019 16.5.6, 24.2).
+            const auto value = std::string { support::vhdl_tool_identity(
+                api == frontend::VhdlSimulatorApi::vhdl_version
+                    ? "vhdl_version"
+                    : api == frontend::VhdlSimulatorApi::tool_type
+                    ? "tool_type"
+                    : api == frontend::VhdlSimulatorApi::tool_vendor
+                    ? "tool_vendor"
+                    : api == frontend::VhdlSimulatorApi::tool_name
+                    ? "tool_name"
+                    : api == frontend::VhdlSimulatorApi::tool_edition
+                    ? "tool_edition"
+                    : "tool_version").value_or(std::string_view { }) };
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
                 destination, value });
@@ -27933,9 +28026,29 @@ Lowerer::hir_systemverilog_parameter_member_slice(
         const auto segment = path.substr(0U, separator);
         type = fully_effective_systemverilog_type(
             type_resolver, *type, type_scope);
-        const auto definition = type->target.target.valid()
+        auto definition = type->target.target.valid()
             ? specialized_hir_unit_->find_type(type->target.target)
             : std::nullopt;
+        // A typedef of a package type (`typedef pkg::S t;`) names that
+        // type in the typedef's own scope.
+        for (std::size_t depth { }; depth < 8U && definition
+             && definition->systemverilog != nullptr
+             && definition->systemverilog->form
+                 == semantic::sv::TypeForm::alias;
+             ++depth) {
+            const auto alias_declaration
+                = specialized_hir_unit_->find_declaration(
+                    definition->systemverilog->declaration);
+            const auto alias_scope = alias_declaration
+                    && alias_declaration->systemverilog != nullptr
+                ? alias_declaration->systemverilog->scope
+                : type_scope;
+            type = fully_effective_systemverilog_type(type_resolver,
+                definition->systemverilog->base, alias_scope);
+            definition = type->target.target.valid()
+                ? specialized_hir_unit_->find_type(type->target.target)
+                : std::nullopt;
+        }
         if (!definition || definition->systemverilog == nullptr
             || (definition->systemverilog->form
                     != semantic::sv::TypeForm::packed_structure

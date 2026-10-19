@@ -283,6 +283,27 @@ void validate_container_value(const ContainerValue& value) {
   }
 }
 
+bool new_initializer_compatible(
+    const ContainerType& initializer, const ContainerType& target) {
+  if (initializer == target) {
+    return true;
+  }
+  auto as_dynamic = initializer;
+  if (initializer.fixed && initializer.dimensions.size() <= 1U) {
+    as_dynamic.fixed = false;
+    as_dynamic.dimensions.clear();
+    as_dynamic.index_left = target.index_left;
+    as_dynamic.index_right = target.index_right;
+    return as_dynamic == target;
+  }
+  if (!initializer.queue) {
+    return false;
+  }
+  as_dynamic.queue = false;
+  as_dynamic.maximum_elements.reset();
+  return as_dynamic == target;
+}
+
 std::optional<ContainerType>
 nested_element_container_type(const ContainerType& type) {
   if (type.element_kind == ContainerElementKind::Container

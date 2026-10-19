@@ -115,6 +115,8 @@ struct SvContainerMethodCall {
     // `sum`, `product`, `and`, `or` or `xor` for an array reduction (7.12.3),
     // whose result has the element type.
     std::string_view reduction;
+    // `pop_back()` rather than `pop_front()` (7.10.2.7).
+    bool pop_back { };
 
     [[nodiscard]] std::size_t result_width() const noexcept
     {
@@ -132,6 +134,7 @@ sv_container_method_call(const std::string_view text) noexcept
 {
     constexpr auto prefix = std::string_view { "@sv-container-method:" };
     constexpr auto pop_front = std::string_view { "pop_front:" };
+    constexpr auto pop_back = std::string_view { "pop_back:" };
     constexpr auto size = std::string_view { "size:" };
     if (!text.starts_with(prefix)) {
         return std::nullopt;
@@ -140,6 +143,10 @@ sv_container_method_call(const std::string_view text) noexcept
     if (operation.starts_with(pop_front)) {
         return SvContainerMethodCall { true,
             operation.substr(pop_front.size()), { } };
+    }
+    if (operation.starts_with(pop_back)) {
+        return SvContainerMethodCall { true,
+            operation.substr(pop_back.size()), { }, true };
     }
     if (operation.starts_with(size)) {
         return SvContainerMethodCall { false, operation.substr(size.size()),
@@ -795,6 +802,10 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_vhdl_subtype_name_bound(
         semantic::ExpressionId expression, std::size_t depth) const;
+    // The ascending (low, high) bounds of a discrete subtype name used as a
+    // choice; low exceeds high for a null range.
+    [[nodiscard]] std::optional<std::pair<std::int64_t, std::int64_t>>
+    hir_vhdl_discrete_subtype_choice(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_systemverilog_parameter_member(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
@@ -3015,6 +3026,37 @@ private:
         std::string_view published_prefix = { }) const;
     [[nodiscard]] std::optional<SignalId> hir_monitor_expression_signal(
         semantic::ExpressionId expression);
+    // Automatic variables, strings and containers that an event control or
+    // wait statement waits on (IEEE 1800-2017 9.4.2, 9.4.3) are not
+    // signals, so each such object has a notification signal that every
+    // change toggles and every such wait includes.
+    [[nodiscard]] bool hir_local_event_waited(
+        semantic::DeclarationId declaration) const;
+    [[nodiscard]] bool hir_change_notified_storage(
+        semantic::DeclarationId declaration) const;
+    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
+        StringRegisterId>>
+    hir_local_string_event(std::string_view name, semantic::ScopeId scope,
+        std::uint64_t source_order) const;
+    [[nodiscard]] std::optional<SignalId> hir_change_notifier(
+        std::string_view name, semantic::ScopeId scope,
+        std::uint64_t source_order);
+    struct HirChangeWatch {
+        SignalId notifier { };
+        semantic::DeclarationId declaration;
+        std::optional<RegisterId> old_packed;
+        std::optional<StringRegisterId> old_string;
+    };
+    [[nodiscard]] std::optional<HirChangeWatch>
+    prepare_hir_change_notification(semantic::ExpressionId target);
+    void finish_hir_change_notification(const HirChangeWatch& watch);
+    [[nodiscard]] std::optional<SignalId> hir_local_event_notifier(
+        semantic::DeclarationId declaration);
+    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, RegisterId>>
+    hir_local_event_variable(std::string_view name, semantic::ScopeId scope,
+        std::uint64_t source_order) const;
+    void hir_local_event_notifiers(semantic::ExpressionId expression,
+        std::vector<SignalId>& dependencies);
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
@@ -3302,6 +3344,8 @@ private:
         semantic::ScopeId scope;
     };
     std::vector<PendingMonitorDriver> pending_monitor_drivers_;
+    mutable std::optional<std::unordered_set<std::uint32_t>>
+        waited_local_declarations_;
     std::unordered_map<std::string, std::size_t>
         procedural_continuous_assignment_by_statement_;
     std::unordered_map<std::string, std::vector<std::size_t>>

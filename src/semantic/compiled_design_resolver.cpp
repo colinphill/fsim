@@ -5729,13 +5729,22 @@ CompiledDesignResolver::bind_vhdl_generics(
     for (const auto& association : associations) {
         std::optional<std::size_t> selected;
         if (association.formal) {
-            const auto name = vhdl_spelling(*association.formal);
+            // An operator symbol formal (`"=" => eq`) matches its designator
+            // with or without the quotes (IEEE 1076-2008 4.2.1).
+            const auto unquoted = [](std::string_view text) {
+                if (text.size() >= 2U && text.front() == '"'
+                    && text.back() == '"') {
+                    text = text.substr(1U, text.size() - 2U);
+                }
+                return text;
+            };
+            const auto name = unquoted(vhdl_spelling(*association.formal));
             for (std::size_t index { }; index < formals.size(); ++index) {
                 const auto declaration = find_declaration(
                     *design_, effective_, formals[index]);
                 if (declaration && declaration->vhdl != nullptr
                     && same_vhdl_identifier(
-                        declaration->vhdl->name, name)) {
+                        unquoted(declaration->vhdl->name), name)) {
                     if (selected) {
                         return std::nullopt;
                     }
@@ -5873,10 +5882,20 @@ CompiledDesignResolver::bind_vhdl_generics(
                 const auto selected = resolved.unique();
                 // An operator box default with no visible declared match
                 // denotes the predefined operation (IEEE 1076-2008 9.2).
+                // So does a box default naming an implicitly declared
+                // operation such as TO_STRING (5.2.6, 5.3.2.4, 5.7).
+                const auto implicit_operation = [](const std::string_view n) {
+                    return same_vhdl_identifier(n, "to_string")
+                        || same_vhdl_identifier(n, "minimum")
+                        || same_vhdl_identifier(n, "maximum")
+                        || same_vhdl_identifier(n, "to_hstring")
+                        || same_vhdl_identifier(n, "to_ostring");
+                };
                 const bool predefined_operator
                     = !selected && resolved.candidates.empty()
                     && declaration->vhdl->callable->default_box
-                    && vhdl::operator_designator(declaration->vhdl->name);
+                    && (vhdl::operator_designator(declaration->vhdl->name)
+                        || implicit_operation(declaration->vhdl->name));
                 if (!selected && !predefined_operator) {
                     return std::nullopt;
                 }
@@ -7251,6 +7270,33 @@ CompiledDesignResolver::resolve_vhdl_callable(
             if (binding == frame->end()) {
                 continue;
             }
+            const auto actual = binding->actual_declaration
+                ? binding->actual_declaration
+                : binding->expression
+                ? referenced_declaration(*binding->expression)
+                : std::nullopt;
+            // An actual declared outside the region that declares the
+            // formal (`"=" => eq42` from the instantiating architecture)
+            // runs in its own environment, not the instance's (IEEE
+            // 1076-2008 6.5.6.2, 12.1).
+            if (actual) {
+                const auto formal_view = find_declaration(
+                    *design_, effective_, formal);
+                const auto actual_view = find_declaration(
+                    *design_, effective_, *actual);
+                if (formal_view && formal_view->vhdl != nullptr
+                    && actual_view && actual_view->vhdl != nullptr
+                    && formal_view->vhdl->scope.valid()
+                    && actual_view->vhdl->scope.valid()
+                    && !scope_within(design_->semantics,
+                        actual_view->vhdl->scope, formal_view->vhdl->scope)
+                    && actual_view->vhdl->form
+                        != vhdl::DeclarationForm::generic_function
+                    && actual_view->vhdl->form
+                        != vhdl::DeclarationForm::generic_procedure) {
+                    return actual;
+                }
+            }
             // Follow a callable actual one frame at a time. Flattening the
             // chain through actual_declaration() loses the sibling value,
             // type, package, and subprogram bindings from intermediate
@@ -7263,11 +7309,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
                 retain_frame(*environment);
             }
             retain_specialization_bindings();
-            return binding->actual_declaration
-                ? binding->actual_declaration
-                : binding->expression
-                ? referenced_declaration(*binding->expression)
-                : std::nullopt;
+            return actual;
         }
         if (effective_ == nullptr) {
             return std::nullopt;
@@ -8061,6 +8103,7 @@ CompiledDesignResolver::resolve_systemverilog_expression(
               }
               auto type = *declaration.systemverilog->type;
               auto remaining = member_path;
+              std::size_t resolved_parameters { };
               while (!remaining.empty()) {
                   // Types from other units (an imported package typedef)
                   // keep only their spelling across object linking.
@@ -8089,16 +8132,26 @@ CompiledDesignResolver::resolve_systemverilog_expression(
                           = definition->systemverilog->base.target.target;
                       definition = find_type(*design_, effective_, base);
                   }
-                  if (!definition
-                      || definition->systemverilog == nullptr) {
+                  const auto structure = [](const sv::TypeForm form) {
+                      return form == sv::TypeForm::packed_structure
+                          || form == sv::TypeForm::packed_union
+                          || form == sv::TypeForm::tagged_union;
+                  };
+                  if (!definition || definition->systemverilog == nullptr
+                      || !structure(definition->systemverilog->form)) {
+                      // A type parameter denotes its actual type in this
+                      // specialization (IEEE 1800-2017 6.20.3).
+                      const auto effective = effective_systemverilog_type(
+                          type, declaration.systemverilog->scope);
+                      if (resolved_parameters++ < 8U && effective
+                          && !(*effective == type)
+                          && effective->target.target.valid()) {
+                          type = *effective;
+                          continue;
+                      }
                       return false;
                   }
                   const auto& record = *definition->systemverilog;
-                  if (record.form != sv::TypeForm::packed_structure
-                      && record.form != sv::TypeForm::packed_union
-                      && record.form != sv::TypeForm::tagged_union) {
-                      return false;
-                  }
                   const auto member_separator = remaining.find('.');
                   const auto member_name = remaining.substr(
                       0U, member_separator);

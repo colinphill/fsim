@@ -1216,6 +1216,10 @@ inline auto archive_fields(VhdlEnvironmentGetenv& operation)
 struct SignalStrengthText {
     StringRegisterId destination { };
     SignalId signal { };
+    // A constant bit or part select (`%v` of `w[2]`): its least
+    // significant bit and bit count; zero width is the whole signal.
+    std::uint32_t offset { };
+    std::uint32_t width { };
 
     friend bool operator==(const SignalStrengthText&,
         const SignalStrengthText&) = default;
@@ -1223,12 +1227,14 @@ struct SignalStrengthText {
 
 inline auto archive_fields(const SignalStrengthText& operation)
 {
-    return std::tie(operation.destination, operation.signal);
+    return std::tie(operation.destination, operation.signal,
+        operation.offset, operation.width);
 }
 
 inline auto archive_fields(SignalStrengthText& operation)
 {
-    return std::tie(operation.destination, operation.signal);
+    return std::tie(operation.destination, operation.signal,
+        operation.offset, operation.width);
 }
 
 /// Materialize the VHDL-2019 call path visible at one exact source-level call

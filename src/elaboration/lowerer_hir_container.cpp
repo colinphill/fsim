@@ -442,7 +442,16 @@ Lowerer::lower_hir_systemverilog_container_expression(
         }
         return invalid_result();
     }
-    if (pop
+    // A queue selected from another value (`q[i].pop_front()`) is popped
+    // through a copy that is written back (IEEE 1800-2017 7.10.2).
+    const auto pop_path = pop
+            && !hir_container_object_binding(call.operands.front())
+        ? hir_sv_value_path(call.operands.front())
+        : std::nullopt;
+    const bool pop_element = pop_path && !pop_path->leaf
+        && !pop_path->steps.empty() && !pop_path->root.read_only
+        && pop_path->type.queue;
+    if (pop && !pop_element
         && hir_static_container_expression_type(call.operands.front())
         && !hir_container_object_binding(call.operands.front())) {
         report(
@@ -578,6 +587,29 @@ Lowerer::lower_hir_systemverilog_container_expression(
                   destination,
                   expected_width,
                   source->type.signed_elements) }
+            : std::optional { destination };
+    }
+    if (pop && pop_element) {
+        if (call.operands.size() != 1U) {
+            return invalid_result();
+        }
+        const auto destination = allocate_register(
+            pop_path->type.element_width,
+            pop_path->type.two_state
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(PopContainer {
+            destination, source->value, call.text == ".pop_front" });
+        if (!lower_hir_sv_value_path_write(
+                *pop_path, std::nullopt, source->value)) {
+            return invalid_result();
+        }
+        return expected_width != 0U
+                && expected_width != pop_path->type.element_width
+            ? std::optional { resize_register(
+                  destination,
+                  expected_width,
+                  pop_path->type.signed_elements) }
             : std::optional { destination };
     }
     if (pop) {

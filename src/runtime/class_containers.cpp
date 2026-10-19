@@ -120,6 +120,16 @@ SystemVerilogClassHandle SystemVerilogClassHandleContainer::pop_front() {
   return result;
 }
 
+SystemVerilogClassHandle SystemVerilogClassHandleContainer::pop_back() {
+  if (descriptor_.kind != SystemVerilogClassContainerKind::Queue) {
+    throw std::logic_error{"pop_back requires a class handle queue"};
+  }
+  if (sequential_.empty()) return 0;
+  const auto result = sequential_.back();
+  sequential_.pop_back();
+  return result;
+}
+
 SystemVerilogClassHandle SystemVerilogClassHandleContainer::at(
     const std::string_view key) const {
   if (descriptor_.kind != SystemVerilogClassContainerKind::AssociativeArray

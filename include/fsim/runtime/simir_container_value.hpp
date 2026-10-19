@@ -126,6 +126,12 @@ void resize_container_value(
 [[nodiscard]] std::optional<ContainerType>
 nested_element_container_type(const ContainerType& type);
 
+/// Whether `initializer` may initialize a dynamic array of type `target`
+/// in `new[n](initializer)`: the same type, or a queue or one-dimensional
+/// fixed-size array of the same elements (IEEE 1800-2017 7.5.1, 7.6).
+[[nodiscard]] bool new_initializer_compatible(
+    const ContainerType& initializer, const ContainerType& target);
+
 /// Construct the language-defined initial value for a container type. Fixed
 /// unpacked arrays and aggregate members are materialized densely.
 [[nodiscard]] ContainerValue

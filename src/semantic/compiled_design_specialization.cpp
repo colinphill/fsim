@@ -5373,7 +5373,6 @@ private:
                     && callable->vhdl != nullptr
                     && callable->vhdl->callable
                     && callable->vhdl->callable->function
-                    && callable->vhdl->callable->pure
                     && callable->vhdl->callable->formals.empty()) {
                     return evaluate_vhdl_callable(source);
                 }
@@ -6844,10 +6843,13 @@ private:
         if (!callable || callable->vhdl == nullptr
             || !callable->vhdl->callable
             || !callable->vhdl->callable->function
-            || !callable->vhdl->callable->pure
             || !callable->vhdl->callable->defined) {
             return std::nullopt;
         }
+        // An impure function is evaluated as well: the body executor reads
+        // only its own frame, constants and generics, and fails on every
+        // other object, file or procedure call, so a result it produces is
+        // the one elaboration computes (IEEE 1076-2008 4.2.1, 14.4.2.1).
         const auto& declaration = *callable->vhdl;
         const auto& formals = declaration.callable->formals;
         if (expression.operands.size() != formals.size()) {
@@ -6868,7 +6870,7 @@ private:
         // its arguments alone, so every specialization shares it.
         std::string memo_key;
         const bool memo = initializer_memo_context_ != nullptr
-            && binding_ == nullptr
+            && binding_ == nullptr && declaration.callable->pure
             && vhdl_package_callable(declaration)
             && vhdl_call_memo_key(callable_id, actual_values, memo_key);
         if (memo) {
@@ -7219,8 +7221,12 @@ private:
     [[nodiscard]] bool assign_vhdl_name(
         const DeclarationId declaration, VhdlConstantValue value)
     {
+        // Only the active call's formals and locals are writable; an
+        // object declared outside it (an impure function's shared
+        // variable) has elaboration state this evaluator does not own.
         if (call_frames_.empty()
-            || value.kind == VhdlConstantValue::Kind::invalid) {
+            || value.kind == VhdlConstantValue::Kind::invalid
+            || !call_frames_.back().vhdl_values.contains(declaration)) {
             return false;
         }
         const auto integer = value.kind == VhdlConstantValue::Kind::integer
@@ -7499,11 +7505,33 @@ private:
             if (!statement.condition || statement.alternatives.empty()) {
                 return fail();
             }
-            const auto selector = vhdl_integer_expression(
+            // An array selector matches a choice of the same length and
+            // elements only (IEEE 1076-2008 10.9).
+            const auto array_selector = evaluate_vhdl_value(
                 *statement.condition);
+            const auto* packed_selector = array_selector
+                    && array_selector->kind == VhdlConstantValue::Kind::packed
+                ? &array_selector->packed
+                : nullptr;
+            const auto selector = packed_selector != nullptr
+                ? std::optional<std::int64_t> { 0 }
+                : vhdl_integer_expression(*statement.condition);
             if (!selector) {
                 return fail();
             }
+            const auto choice_matches = [&](const ExpressionId choice)
+                -> std::optional<bool> {
+                if (packed_selector != nullptr) {
+                    const auto value = evaluate_vhdl_value(choice);
+                    if (!value || value->kind != VhdlConstantValue::Kind::packed) {
+                        return std::nullopt;
+                    }
+                    return value->packed.bits == packed_selector->bits;
+                }
+                const auto value = vhdl_integer_expression(choice);
+                return value ? std::optional { *value == *selector }
+                             : std::nullopt;
+            };
             const vhdl::CaseAlternative* matched = nullptr;
             const vhdl::CaseAlternative* default_alternative = nullptr;
             for (const auto& alternative : statement.alternatives) {
@@ -7525,11 +7553,11 @@ private:
                     if (!consume_constant_work_unit()) {
                         return fail();
                     }
-                    const auto value = vhdl_integer_expression(choice);
-                    if (!value) {
+                    const auto matches = choice_matches(choice);
+                    if (!matches) {
                         return fail();
                     }
-                    if (*value != *selector) {
+                    if (!*matches) {
                         continue;
                     }
                     if (matched != nullptr) {
@@ -8283,9 +8311,29 @@ private:
                 .effective_systemverilog_type(type, unit_.scope())) {
             type = *effective;
         }
-        const auto definition = type.target.target.valid()
+        auto definition = type.target.target.valid()
             ? unit_.find_type(type.target.target)
             : std::nullopt;
+        // A typedef of a package type (`typedef pkg::S t;`) names that type
+        // in the typedef's own scope.
+        for (std::size_t depth { }; depth < 8U && definition
+             && definition->systemverilog != nullptr
+             && definition->systemverilog->form == sv::TypeForm::alias;
+             ++depth) {
+            const auto alias = unit_.find_declaration(
+                definition->systemverilog->declaration);
+            auto base = definition->systemverilog->base;
+            if (const auto effective = CompiledDesignResolver { unit_ }
+                    .effective_systemverilog_type(base,
+                        alias && alias->systemverilog != nullptr
+                            ? alias->systemverilog->scope
+                            : unit_.scope())) {
+                base = *effective;
+            }
+            definition = base.target.target.valid()
+                ? unit_.find_type(base.target.target)
+                : std::nullopt;
+        }
         if (!definition || definition->systemverilog == nullptr
             || (definition->systemverilog->form
                     != sv::TypeForm::packed_structure
@@ -11036,6 +11084,45 @@ private:
             if (!selector) {
                 return StatementFlow::failed;
             }
+            // An array choice matches only a selector of its length (IEEE
+            // 1076-2008 10.9); integral values alone do not show lengths.
+            std::optional<std::optional<std::int64_t>> selector_length;
+            const auto array_selector_length = [&] {
+                if (selector_length) {
+                    return *selector_length;
+                }
+                selector_length = vhdl_value_shape_length(
+                    *statement.condition, 0U);
+                const auto view = unit_.find_expression(*statement.condition);
+                const auto declaration = !*selector_length && view
+                        && view->vhdl != nullptr
+                        && view->vhdl->kind == vhdl::ExpressionKind::name
+                        && view->vhdl->referenced_name
+                        && view->vhdl->referenced_name->selected
+                    ? unit_.find_declaration(
+                          *view->vhdl->referenced_name->selected)
+                    : std::nullopt;
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->subtype
+                    && declaration->vhdl->subtype->constraints.size() == 1U) {
+                    const auto& range
+                        = declaration->vhdl->subtype->constraints.front();
+                    const auto left = range.left ? range.left
+                        : range.left_expression
+                        ? evaluate(*range.left_expression)
+                        : std::nullopt;
+                    const auto right = range.right ? range.right
+                        : range.right_expression
+                        ? evaluate(*range.right_expression)
+                        : std::nullopt;
+                    if (left && right) {
+                        *selector_length = std::max<std::int64_t>(
+                            0, (range.descending ? *left - *right
+                                                 : *right - *left) + 1);
+                    }
+                }
+                return *selector_length;
+            };
             const vhdl::CaseAlternative* matched = nullptr;
             const vhdl::CaseAlternative* default_alternative = nullptr;
             for (const auto& alternative : statement.alternatives) {
@@ -11047,6 +11134,20 @@ private:
                     continue;
                 }
                 for (const auto choice : alternative.choices) {
+                    if (const auto choice_view = unit_.find_expression(choice);
+                        choice_view && choice_view->vhdl != nullptr
+                        && choice_view->vhdl->kind
+                            == vhdl::ExpressionKind::string_literal) {
+                        const auto length = array_selector_length();
+                        if (!length || !choice_view->vhdl->decoded_string) {
+                            return StatementFlow::failed;
+                        }
+                        if (static_cast<std::int64_t>(
+                                choice_view->vhdl->decoded_string->size())
+                            != *length) {
+                            continue;
+                        }
+                    }
                     const auto value = evaluate(choice);
                     if (!value) {
                         return StatementFlow::failed;
@@ -13992,6 +14093,79 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             }
             values.push_back(*value);
         }
+        return true;
+    }
+    // A constant slice of a one-dimensional array value (`L[1+:2]`,
+    // IEEE 1800-2017 7.4.6) selects its elements in order.
+    if (source.kind == sv::ExpressionKind::slice && extents.size() == 1U
+        && source.operands.size() == 3U) {
+        const auto base = design.find_expression(source.operands[0]);
+        if (!base || base->systemverilog == nullptr
+            || base->systemverilog->kind != sv::ExpressionKind::name
+            || !base->systemverilog->referenced_name
+            || !base->systemverilog->referenced_name->selected) {
+            return false;
+        }
+        const auto base_declaration = design.find_declaration(
+            *base->systemverilog->referenced_name->selected);
+        if (!base_declaration || base_declaration->systemverilog == nullptr
+            || !base_declaration->systemverilog->type
+            || base_declaration->systemverilog->type->unpacked_dimensions.size()
+                != 1U) {
+            return false;
+        }
+        const auto& range
+            = base_declaration->systemverilog->type->unpacked_dimensions.front();
+        const auto bound = [&](const std::optional<std::int64_t> value,
+                               const std::optional<ExpressionId> id) {
+            return value ? value
+                : id ? parent.evaluate_integral_expression(*id)
+                     : std::optional<std::int64_t> { };
+        };
+        const auto declared_left = bound(range.left, range.left_expression);
+        const auto declared_right = bound(range.right, range.right_expression);
+        const auto first = parent.evaluate_integral_expression(source.operands[1]);
+        const auto second = parent.evaluate_integral_expression(source.operands[2]);
+        if (!declared_left || !declared_right || !first || !second) {
+            return false;
+        }
+        std::int64_t low { };
+        std::int64_t high { };
+        if (source.text == "+:") {
+            low = *first;
+            high = *first + *second - 1;
+        } else if (source.text == "-:") {
+            low = *first - *second + 1;
+            high = *first;
+        } else {
+            low = std::min(*first, *second);
+            high = std::max(*first, *second);
+        }
+        std::vector<std::int64_t> all;
+        const auto count = static_cast<std::size_t>(
+            std::abs(*declared_left - *declared_right) + 1);
+        const std::array extent { count };
+        if (!append_systemverilog_array_values(design, source.operands[0],
+                parent, extent, all, depth + 1)
+            || all.size() != count) {
+            return false;
+        }
+        // Elements are stored from the declared left bound.
+        const bool ascending = *declared_left <= *declared_right;
+        std::vector<std::int64_t> picked;
+        for (std::size_t position { }; position < count; ++position) {
+            const auto index = ascending
+                ? *declared_left + static_cast<std::int64_t>(position)
+                : *declared_left - static_cast<std::int64_t>(position);
+            if (index >= low && index <= high) {
+                picked.push_back(all[position]);
+            }
+        }
+        // A slice keeps the direction of the base array (7.4.6).
+        if (picked.size() != extents.front()) {
+            return false;
+        }
+        values.insert(values.end(), picked.begin(), picked.end());
         return true;
     }
     if (source.kind != sv::ExpressionKind::name || !source.referenced_name

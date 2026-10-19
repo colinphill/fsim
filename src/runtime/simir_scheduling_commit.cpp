@@ -2186,7 +2186,8 @@ Interpreter::Impl::switch_network_bit_strength(
 }
 
 std::string Interpreter::Impl::signal_strength_text(
-    const SignalId signal_id) const
+    const SignalId signal_id, const std::uint32_t offset,
+    const std::uint32_t count) const
 {
     constexpr std::array<std::string_view, 8> names {
         "Hi", "Sm", "Me", "We", "La", "Pu", "St", "Su"
@@ -2255,7 +2256,14 @@ std::string Interpreter::Impl::signal_strength_text(
         return static_cast<char>('0' + static_cast<unsigned>(rank));
     };
     std::string text;
-    for (std::size_t index = width; index-- > 0U;) {
+    const auto first = count == 0U
+        ? std::size_t { }
+        : std::min<std::size_t>(offset, width);
+    const auto last = count == 0U
+        ? width
+        : std::min<std::size_t>(width,
+              static_cast<std::size_t>(offset) + count);
+    for (std::size_t index = last; index-- > first;) {
         if (!text.empty()) {
             text += '_';
         }

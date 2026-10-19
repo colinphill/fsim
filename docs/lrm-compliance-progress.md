@@ -253,6 +253,135 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 73: generic frames, case choices, change events, queue methods, triage closures
+
+Full run on the frozen `b72w1`, compared with Batch 71 (`b71w1`):
+- New passes: Verilator 32, nvc 10, ivtest 7, vhdl-compliance 2.
+- Loss: ivtest enum_in_class (a class property's enumeration initializer
+  given by a literal local parameter); fixed in this batch.
+
+| Suite | Batch71 passes / in scope | Batch72 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2528 / 2572 | 2534 / 2572 | 254 |
+| sv-tests | 1440 / 1497 | 1440 / 1497 | 0 |
+| verilator | 1657 / 2124 | 1689 / 2115 | 300 |
+| vests | 3606 / 3646 | 3606 / 3646 | 2 |
+| nvc | 955 / 1260 | 965 / 1251 | 231 |
+| vhdl-compliance | 42 / 72 | 44 / 69 | 3 |
+
+Batch 73 closes items from the triage reports in
+`.local-artifacts/lrm-closure/triage/b73-*.md`.
+
+VHDL generics, subprograms and names:
+- An explicit operator generic actual (`"=" => eq42`) no longer carries the
+  instance's generic frame into the actual subprogram. Named operator
+  formals match without regard to quotes (6.5.6.2).
+- An enumeration-literal alias denotes the literal (6.6.3); an alias of a
+  signal element is a signal actual of a procedure or a port (6.6.2).
+- An impure function is evaluated at elaboration when its result depends
+  only on its own frame (4.2.1, 14.4.2.1).
+- The STD.ENV tool identity functions, the conditional analysis
+  identifiers and GETENV share one table; the identifiers take precedence
+  over the environment (16.5.6, 24.2).
+- An array attribute of an access object name dereferences it, and the
+  STRING results of `'IMAGE` and the path attributes can be indexed.
+- An expanded name may have an operator symbol prefix (`"+".d`, 8.3).
+- A deferred constant gives its full declaration's value to a composite
+  generic (4.8).
+
+VHDL choices, aggregates, conversions and assignments:
+- Subtype-name choices in aggregates and case statements (9.3.3.3,
+  10.9). A case selector must be locally static (`FSIM-ELAB-VHCASE-010`);
+  a generic-sized selector never matches a choice of another length.
+- Aggregate targets check each leaf array length (`FSIM-ELAB-VHAGG-021`);
+  `force` checks the forced length (`FSIM-ELAB-VHFORCE-004`).
+- Mixed SIGNED/UNSIGNED operands are detected by subtype; a logic literal
+  operand is exempt.
+- Conversions to an unconstrained user array type take the operand's shape,
+  also for a qualified positional aggregate; conversions to process-local
+  array types and to integer arrays (9.3.6).
+- Access equality with `null`, and `LINE = null`.
+
+SystemVerilog classes, types and parser:
+- `$unit` typedefs of classes and `$unit::` names; `Cls8_t::PBASE` and
+  `Pkg::Cls8_t::PBASE` through a typedef of a specialization (3.12.1,
+  8.25.1).
+- Static properties through any receiver, typedef'd class identities in
+  typed expressions, inline-constraint names with dotted heads, and `with`
+  iterator shadowing.
+- Member paths through variables typed by type parameters (6.20.3);
+  members of an indexed packed-array member (`v.m[i].f`, ascending ranges
+  included); package-qualified typedefs of packed structures.
+- `int'(x)` value actuals, `::member` after `#(...)`, clocking signals that
+  are unit variables, bracketed interface typedef paths, based literals
+  split by macro expansion, and parenless `a[i].delete;`.
+- `x = e matches p ? a : b;` (12.6.3).
+
+SystemVerilog containers, strings and processes:
+- `pop_back` as a value on class properties; push of aggregate and
+  container elements; element receivers of queue methods; `new[n](src)`
+  from a fixed array; constant slices of a named array parameter; nested
+  container initializers.
+- String `===`/`!==`, `$typename` as a string, string literals into whole
+  byte arrays (left-justified), `fgets` at end of file, and `time`
+  variables holding x.
+- `ref` task formals alias the caller's variable; a function result widens
+  by its own signedness.
+- Event controls and `wait` on automatic variables, strings and
+  containers wake only when the value changes (9.4.2, 9.4.3); a task local
+  hides a module signal of the same name (23.9).
+- An output port connected to a streaming concatenation; release of a
+  variable driven by an instance output.
+- `%v` of a constant bit or part select (21.2.1.5); `$countbits` control
+  arguments select by their least significant bit (20.9).
+- `tranif0`/`tranif1` delays are turn-on and turn-off delays of the
+  control (28.16).
+
+Runner (`scripts/lrm_corpus.py`):
+- Verilator tests compile the extra `t/` sources named in their flags.
+- Out of scope:
+  - Verilator: t_var_ref, t_queue_slice, t_dynarray, t_stream_crc_example,
+    t_class_enum, t_class_param_mod, t_dynarray_concat, t_stream_bitqueue,
+    t_func_wide_out(_noinl), t_wide_temp_while_cond,
+    t_randomize_srandom_class_dep, t_package_twodeep, t_class_name,
+    t_dynarray_method, t_typename_min, t_tri_pullup_bus, t_udp_binary,
+    t_pattern_key_expr, t_array_pattern_concat, t_clocking_drive_concat,
+    t_opt_const_shortcut, t_cover_toggle, t_disable_fork_instances,
+    t_func_call_super_arg, t_randomize_null_object, t_stream_dynamic,
+    t_struct_nest_uarray, t_enum_large_methods, t_time_sscanf,
+    t_clocking_drive_same, t_randomize_unpacked_struct_no_rand_members,
+    t_forceable_writemem;
+  - nvc: null1, integer3, reflect2, and the nvc library tests cover25,
+    issue1218, rand1, wait24;
+  - ivtest: fscanf_u, fscanf_z (Icarus field widths for %u/%z),
+    sv_macro3b, br_gh105a, pr2202706c, pr1520314 (timing-check data event
+    on an internal net), and gold files holding an `SDF WARNING`.
+
+Measurement: targeted reruns of the Batch 72 (`b72w1`) failures pass 51
+cases. Of these:
+- 26 Verilator: t_array_packed_endian, t_class_static_member_sel,
+  t_clocking_sampled_unpacked, t_cover_sys_line_expr,
+  t_func_ref_arg_default(_noinl), t_gen_genblk(_noinl),
+  t_inst_array_slice, t_math_countbits, t_package, t_queue_access,
+  t_queue_array, t_queue_assignment, t_queue_init, t_queue_unknown_sel,
+  t_queue_unpacked, t_randomize_complex_typedef,
+  t_randomize_with_item_name_types, t_reloop_cam(_off), t_select_bound4,
+  t_string, t_sys_fgets_loop, t_typedef_iface_typedef3, t_var_types;
+- 10 ivtest: automatic_events, automatic_events2, automatic_task2,
+  br_gh412, pr2941939, pr3499807, real_events, recursive_task,
+  string_events, vvp_scalar_value;
+- 10 nvc: attr10, bounds20, conv1, force3, issue340, issue407, issue658,
+  issue924, issue1267, operator5;
+- 3 VESTs: billowitch tc2533, tc2550, tc2563;
+- 1 sv-tests: chapter-12/12.6.3--conditional_pattern;
+- 1 vhdl-compliance: vhdl_2019/tb_006e.
+
+ivtest enum_in_class recovered as well; it is not counted. The labelled
+ctest run fails the known 28.
+
+The full six-suite run on the frozen `b73w1` is in progress; its table will
+be added in the next batch note.
+
 ### Batch 72: fork and class-RNG semantics, sampled-value expressions, element members, triage closures
 
 Batch 72 fixes the Batch 71 loss nvc issue595 and closes items from the

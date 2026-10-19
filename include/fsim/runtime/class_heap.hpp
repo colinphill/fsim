@@ -70,6 +70,7 @@ class SystemVerilogClassHandleContainer final {
       SystemVerilogClassHeap& heap,
       SystemVerilogClassHandle handle);
   [[nodiscard]] SystemVerilogClassHandle pop_front();
+  [[nodiscard]] SystemVerilogClassHandle pop_back();
   [[nodiscard]] SystemVerilogClassHandle at(std::string_view key) const;
   [[nodiscard]] std::span<const SystemVerilogClassHandle>
   sequential_values() const noexcept {

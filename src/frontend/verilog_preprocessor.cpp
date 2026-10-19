@@ -2244,6 +2244,40 @@ namespace {
                     substituted.push_back(std::move(token));
                 }
             }
+            // White space may separate a base format from its value
+            // (IEEE 1800-2017 5.7.1), so `8'h k8` with k8 = 11 is one
+            // literal although the body lexed `8'h` alone.
+            for (std::size_t merge_at = 0; merge_at + 1 < substituted.size();) {
+                const auto& based = substituted[merge_at].text;
+                const auto& value = substituted[merge_at + 1].text;
+                const auto quote = based.find('\'');
+                const bool digitless = substituted[merge_at].kind == TokenKind::Number
+                    && quote != std::string::npos
+                    && based.size() >= quote + 2U
+                    && std::string_view { "bBoOdDhH" }.find(based.back())
+                        != std::string_view::npos
+                    && (based.size() == quote + 2U
+                        || (based.size() == quote + 3U
+                            && (based[quote + 1U] == 's'
+                                || based[quote + 1U] == 'S')));
+                const bool digits = !value.empty()
+                    && (substituted[merge_at + 1].kind == TokenKind::Number
+                        || substituted[merge_at + 1].kind == TokenKind::Identifier)
+                    && std::ranges::all_of(value, [](const char character) {
+                           return std::isxdigit(
+                                      static_cast<unsigned char>(character))
+                               || character == '_' || character == 'x'
+                               || character == 'X' || character == 'z'
+                               || character == 'Z' || character == '?';
+                       });
+                if (digitless && digits) {
+                    substituted[merge_at].text += value;
+                    substituted.erase(substituted.begin()
+                        + static_cast<std::ptrdiff_t>(merge_at + 1U));
+                    continue;
+                }
+                ++merge_at;
+            }
             substituted = expand_known_invocations_before_concatenation(
                 substituted, depth + 1, expansion_stack);
             substituted = concatenate_tokens(

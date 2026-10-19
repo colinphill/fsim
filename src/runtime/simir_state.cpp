@@ -1093,6 +1093,11 @@ Interpreter::Impl::get_container_object(
         std::move(value),
         get_signal(signal).value_kind);
     const auto kind = get_signal(signal).systemverilog_scalar;
+    // `time` is a 4-state integral type (IEEE 1800-2017 6.11), so its
+    // payload may carry unknown bits.
+    if (kind == SystemVerilogScalarKind::Time && has_unknown(normalized)) {
+        return normalized;
+    }
     if (kind != SystemVerilogScalarKind::None) {
         const auto decoded = decode_systemverilog_scalar_payload(
             normalized, kind);

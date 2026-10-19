@@ -222,11 +222,170 @@ struct Analysis {
 
 }  // namespace
 
+namespace {
+
+// The 64-bit value of a known constant node, extended by its signedness.
+[[nodiscard]] std::optional<std::uint64_t> constant_bits(
+    const SystemVerilogConstraintExpressionNode& node) {
+  const auto bits = node.constant.width();
+  if (node.operation != Operator::Constant || bits == 0U || bits > 64U
+      || node.constant.is_logic9() || node.constant.low_word().bval != 0U) {
+    return std::nullopt;
+  }
+  auto value = node.constant.low_word().aval;
+  if (bits < 64U) {
+    value &= (std::uint64_t{1} << bits) - 1U;
+    if (node.profile.signed_value && ((value >> (bits - 1U)) & 1U) != 0U) {
+      value |= ~((std::uint64_t{1} << bits) - 1U);
+    }
+  }
+  return value;
+}
+
+[[nodiscard]] PackedLogic4 constant_of_width(
+    std::uint64_t value, const std::size_t bits) {
+  if (bits < 64U) value &= (std::uint64_t{1} << bits) - 1U;
+  return PackedLogic4::from_aval_bval(bits, value, 0U);
+}
+
+// Folds integral arithmetic over constants (state values already
+// substituted), and turns `v + c == k`, `v - c == k` and `c - v == k`
+// into `v == k'` in the comparison's modular context (IEEE 1800-2017
+// 11.4.3, 11.8.1), so the range analysis bounds `v`.
+[[nodiscard]] SystemVerilogConstraintExpression normalized_expression(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintVariableId variable) {
+  auto result = expression;
+  auto& nodes = result.nodes;
+  const auto original_count = nodes.size();
+  for (std::size_t index = 0; index < original_count; ++index) {
+    auto& node = nodes[index];
+    const auto width = node.profile.width;
+    if (width == 0U || width > 64U) continue;
+    const auto operand = [&](const std::size_t position)
+        -> std::optional<std::uint64_t> {
+      return position < node.operands.size()
+              && node.operands[position] < index
+          ? constant_bits(nodes[node.operands[position]])
+          : std::nullopt;
+    };
+    std::optional<std::uint64_t> folded;
+    switch (node.operation) {
+    case Operator::UnaryMinus:
+      if (node.operands.size() == 1U) {
+        if (const auto value = operand(0)) folded = ~*value + 1U;
+      }
+      break;
+    case Operator::BitwiseNot:
+      if (node.operands.size() == 1U) {
+        if (const auto value = operand(0)) folded = ~*value;
+      }
+      break;
+    case Operator::Add:
+    case Operator::Subtract:
+    case Operator::Multiply:
+    case Operator::BitwiseAnd:
+    case Operator::BitwiseOr:
+    case Operator::BitwiseXor:
+      if (node.operands.size() == 2U) {
+        const auto left = operand(0);
+        const auto right = operand(1);
+        if (!left || !right) break;
+        switch (node.operation) {
+        case Operator::Add: folded = *left + *right; break;
+        case Operator::Subtract: folded = *left - *right; break;
+        case Operator::Multiply: folded = *left * *right; break;
+        case Operator::BitwiseAnd: folded = *left & *right; break;
+        case Operator::BitwiseOr: folded = *left | *right; break;
+        default: folded = *left ^ *right; break;
+        }
+      }
+      break;
+    default:
+      break;
+    }
+    if (folded) {
+      node.operation = Operator::Constant;
+      node.constant = constant_of_width(*folded, width);
+      node.operands.clear();
+    }
+  }
+  const auto is_variable = [&](std::size_t id) {
+    for (std::size_t depth = 0; depth < 4U && id < nodes.size(); ++depth) {
+      if (nodes[id].operation == Operator::Variable) {
+        return nodes[id].variable == variable ? std::optional { id }
+                                              : std::nullopt;
+      }
+      if (nodes[id].operation != Operator::UnaryPlus
+          || nodes[id].operands.size() != 1U) {
+        return std::optional<std::size_t> {};
+      }
+      id = nodes[id].operands.front();
+    }
+    return std::optional<std::size_t> {};
+  };
+  for (std::size_t index = 0; index < original_count; ++index) {
+    const auto operation = nodes[index].operation;
+    if ((operation != Operator::Equal && operation != Operator::NotEqual
+            && operation != Operator::CaseEqual
+            && operation != Operator::CaseNotEqual)
+        || nodes[index].operands.size() != 2U) {
+      continue;
+    }
+    for (std::size_t side = 0; side < 2U; ++side) {
+      const auto arithmetic_id = nodes[index].operands[side];
+      const auto other_id = nodes[index].operands[1U - side];
+      const auto& arithmetic = nodes[arithmetic_id];
+      const auto known = constant_bits(nodes[other_id]);
+      const auto context = std::max(
+          arithmetic.profile.width, nodes[other_id].profile.width);
+      if (!known || context == 0U || context > 64U
+          || (arithmetic.operation != Operator::Add
+              && arithmetic.operation != Operator::Subtract)
+          || arithmetic.operands.size() != 2U) {
+        continue;
+      }
+      std::optional<std::size_t> found;
+      std::optional<std::uint64_t> offset;
+      bool variable_first = true;
+      if (const auto left = is_variable(arithmetic.operands[0])) {
+        found = left;
+        offset = constant_bits(nodes[arithmetic.operands[1]]);
+      } else if (const auto right = is_variable(arithmetic.operands[1])) {
+        found = right;
+        offset = constant_bits(nodes[arithmetic.operands[0]]);
+        variable_first = false;
+      }
+      if (!found || !offset) continue;
+      std::uint64_t value{};
+      if (arithmetic.operation == Operator::Add) {
+        value = *known - *offset;
+      } else if (variable_first) {
+        value = *known + *offset;
+      } else {
+        value = *offset - *known;
+      }
+      SystemVerilogConstraintExpressionNode constant;
+      constant.operation = Operator::Constant;
+      constant.constant = constant_of_width(value, context);
+      constant.profile = nodes[*found].profile;
+      constant.profile.width = context;
+      nodes.push_back(std::move(constant));
+      nodes[index].operands = { *found, nodes.size() - 1U };
+      break;
+    }
+  }
+  return result;
+}
+
+}  // namespace
+
 std::vector<SystemVerilogConstraintKeyRange>
 systemverilog_constraint_key_ranges(
-    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintExpression& source_expression,
     const SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintVariableProfile& profile) {
+  const auto expression = normalized_expression(source_expression, variable);
   const auto width = profile.width;
   if (width == 0U || width > 64U) {
     throw std::invalid_argument{

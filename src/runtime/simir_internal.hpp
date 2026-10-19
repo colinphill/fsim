@@ -5157,7 +5157,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id, std::size_t target_bit) const;
     // `%v` text of a net: each bit's strength and value, most significant
     // bit first (IEEE 1800-2017 21.2.1.5).
-    [[nodiscard]] std::string signal_strength_text(SignalId signal_id) const;
+    [[nodiscard]] std::string signal_strength_text(SignalId signal_id,
+        std::uint32_t offset = 0U, std::uint32_t count = 0U) const;
 
     [[nodiscard]] PackedLogic4 resolved_local_driver_value(
         SignalId signal_id,

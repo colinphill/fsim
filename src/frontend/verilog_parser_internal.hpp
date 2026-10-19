@@ -836,6 +836,7 @@ class VerilogParser final : private detail::ParserBase {
   ParsedDesign* parsed_design_{};
   [[gnu::noinline]] void prepend_hoisted_statements(
       std::optional<Statement>& statement, std::size_t mark);
+  std::optional<Statement> parse_matches_conditional_assignment();
   std::optional<Statement> parse_randcase(const Token& start);
   std::optional<Statement> parse_randsequence(const Token& start);
   [[nodiscard]] std::vector<Token> synthetic_tokens(

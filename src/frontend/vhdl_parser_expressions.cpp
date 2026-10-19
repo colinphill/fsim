@@ -923,6 +923,23 @@ Expression VhdlParser::parse_primary()
     }
     if (at(TokenKind::StringLiteral)) {
         const auto token = advance();
+        // An expanded name whose prefix is an operator symbol names a
+        // declaration of that operator function (`"+".d`, IEEE 1076-2008
+        // 8.3).
+        if (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
+            advance();
+            const auto part = advance();
+            // Operator functions are declared under their symbol without
+            // quotes.
+            auto text = string_literal_text(token);
+            std::ranges::transform(text, text.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            return Expression { ExpressionKind::Identifier,
+                text + "." + vhdl_name(part.text), { },
+                cover(token.span, part.span) };
+        }
         return Expression {
             ExpressionKind::StringLiteral, token.text, { }, token.span, { }, { }, { },
             string_literal_text(token)
@@ -1172,8 +1189,19 @@ Expression VhdlParser::parse_primary()
         bool saw_dereference = false;
         // An index or element selected through an access object reaches
         // the designated object (IEEE 1076-2008 8.3).
+        // So does an array attribute of an access object (8.3, 16.2.3).
+        const auto array_attribute = [&] {
+            if (!at(TokenKind::Apostrophe) || !at(TokenKind::Identifier, 1)) {
+                return false;
+            }
+            const auto attribute = vhdl_name(current(1).text);
+            return attribute == "length" || attribute == "low"
+                || attribute == "high" || attribute == "left"
+                || attribute == "right" || attribute == "range"
+                || attribute == "reverse_range" || attribute == "ascending";
+        };
         if (vhdl_access_object_names_.contains(canonical)
-            && (at(TokenKind::LeftParen)
+            && (at(TokenKind::LeftParen) || array_attribute()
                 || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
                     && vhdl_name(current(1).text) != "all"))) {
             selected = Expression { ExpressionKind::Call,

@@ -478,6 +478,18 @@ ICARUS_EXTENSION_SYNTAX = re.compile(
 # semantics and options.
 _ICARUS_RACE = "depends on Icarus's process order within a time step"
 ICARUS_NONSTANDARD = {
+    # IEEE 1800-2017 21.3.4.3 gives %u/%z no field width; Icarus reads a
+    # sized %u as whole 32-bit words truncated to the width.
+    **{name: "Icarus field-width semantics for %u/%z input (IEEE 1800-2017 21.3.4.3)"
+       for name in ("fscanf_u", "fscanf_z")},
+    # IEEE 1800-2017 22.5.1 does not form a macro name by token pasting, nor
+    # process directives produced by a macro expansion.
+    "sv_macro3b": "macro name formed by `` pasting (IEEE 1800-2017 22.5.1)",
+    "br_gh105a": "directive produced by a macro expansion (IEEE 1800-2017 22.5.1)",
+    "pr2202706c": "Icarus plusarg value syntax and real targets for %d",
+    # A timing-check event names a module input or inout port
+    # (IEEE 1364-2005 A.7.5.3, specify_terminal_descriptor).
+    "pr1520314": "timing-check data event on an internal net",
     # IEEE 1497-2001 5.2: an SDF header starts with the required
     # SDFVERSION entry; these files omit it.
     **{name: "SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2)"
@@ -712,6 +724,82 @@ VERILATOR_NONSTANDARD = {
     # A module parameter value assignment is parenthesized (IEEE 1800-2017
     # A.4.1.1); `#1.2` is delay syntax.
     "t_param": "gives a module instance an unparenthesized parameter value",
+    # Pass by reference is illegal in a subroutine with static lifetime
+    # (IEEE 1800-2017 13.5.2).
+    "t_var_ref": "passes ref arguments to a static task",
+    # The %p layout of element separators, radixes, and class handles is
+    # implementation-defined (IEEE 1800-2017 21.2.1.7); these compare
+    # against Verilator's own spelling.
+    "t_queue_slice": "compares %p text against Verilator's element spacing",
+    # A synchronous drive targets a clockvar expression, not a
+    # concatenation (IEEE 1800-2023 14.16); the test notes this.
+    "t_clocking_drive_concat": "drives a concatenation of clockvars",
+    "t_opt_const_shortcut": "needs a Verilator C++ DPI companion file",
+    # A variable may not be both continuously and procedurally assigned
+    # (IEEE 1800-2017 6.5).
+    "t_cover_toggle": "mixes continuous and procedural assignments to one "
+        "struct variable",
+    "t_disable_fork_instances": "calls push_back on a function-result "
+        "temporary",
+    "t_func_call_super_arg": "uses the Verilator $c extension",
+    # Calling a method through a null handle is an error (IEEE 1800-2017
+    # 8.4).
+    "t_randomize_null_object": "expects randomize() through a null handle "
+        "to return 0",
+    "t_dynarray": "compares %p text against Verilator's hexadecimal elements",
+    "t_stream_dynamic": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    "t_struct_nest_uarray": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    # %p of an enumeration without a named value is implementation
+    # defined (IEEE 1800-2017 21.2.1.7).
+    "t_enum_large_methods": "compares %p of an unnamed enumeration value",
+    # 1800-2017 21.3.4.3 leaves %t scan rounding to the tool.
+    "t_time_sscanf": "expects Verilator's %t scan rounding",
+    # These rules are new in IEEE 1800-2023 (14.16.2, 18.4).
+    "t_clocking_drive_same": "needs IEEE 1800-2023 clocking drive rules",
+    "t_randomize_unpacked_struct_no_rand_members": "needs IEEE 1800-2023 "
+        "rand member rules",
+    "t_forceable_writemem": "needs the Verilator forceable metacomment",
+    "t_stream_crc_example": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    "t_class_enum": "compares %p of a class handle against Verilator's "
+        "member listing",
+    "t_class_param_mod": "compares %p of a class handle against "
+        "Verilator's member listing",
+    "t_dynarray_concat": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    "t_stream_bitqueue": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    "t_func_wide_out": "needs a Verilator C++ DPI companion file",
+    "t_wide_temp_while_cond": "needs a Verilator C++ DPI companion file",
+    # A header package import is followed by a parameter or port list
+    # (IEEE 1800-2017 A.1.2, footnote).
+    "t_package_twodeep": "has a header package import without a port "
+        "list",
+    "t_class_name": "checks simulator-specific %m text of class scopes",
+    "t_dynarray_method": "compares %p text against Verilator's "
+        "hexadecimal elements",
+    # A forward typedef is resolved within its scope (IEEE 1800-2017 6.18).
+    "t_randomize_srandom_class_dep": "declares `typedef class Cls;` with "
+        "no class Cls",
+    "t_typename_min": "compares %p text against Verilator's element "
+        "listing",
+    # A port without a net type under `default_nettype none` is an error
+    # (IEEE 1800-2017 22.8).
+    "t_tri_pullup_bus": "declares an implicit port net under "
+        "`default_nettype none",
+    # A top-level instance is a module, not a primitive (IEEE 1800-2017
+    # 23.3.1).
+    "t_udp_binary": "has only a primitive and no top-level module",
+    "t_func_wide_out_noinl": "needs a Verilator C++ DPI companion file",
+    # A real associative-array index is not allowed (IEEE 1800-2017 7.8.5);
+    # the test notes it covers a Verilator extension.
+    "t_pattern_key_expr": "uses a real associative-array index",
+    # An array pattern item is one element (IEEE 1800-2017 10.9.1); the test
+    # flattens array slices into the target.
+    "t_array_pattern_concat": "flattens array slices inside an assignment "
+        "pattern",
     # A begin-end block is a generate block only inside a conditional or
     # loop generate construct (IEEE 1800-2017 27.3, A.4.2); the bare form
     # was removed after IEEE 1364-2001.
@@ -980,6 +1068,14 @@ def verilator_cases(root: Path) -> list[Case]:
                     and (tdir.parent / token).is_file():
                 library_files.setdefault(current_library, []).append(
                     str(tdir.parent / token))
+        # Source files the driver passes in v_flags (t_sv_cpu's design
+        # files) are part of the compilation.
+        for flag in flags:
+            for token in flag.split():
+                if token.startswith("t/") and token.endswith((".v", ".sv")) \
+                        and (tdir.parent / token).is_file() \
+                        and (tdir.parent / token) != top_file:
+                    compile_args.append(str(tdir.parent / token))
         compile_args.append(str(top_file))
         compile_args += [str(f) for f in verilator_library_files(top_file, tdir)]
         shell = ""
@@ -1166,7 +1262,7 @@ def ivtest_cases(root: Path) -> list[Case]:
                     re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', "",
                            text, flags=re.S)):
                 out_of_scope = "out of scope: Icarus syntax extension"
-            elif re.search(r"^\s*(SORRY|WARNING)\b|^warning: "
+            elif re.search(r"^\s*(SDF )?(SORRY|WARNING)\b|^warning: "
                            r"|: (sorry|warning|Warning): ",
                            gold_text, re.M):
                 out_of_scope = "out of scope: Icarus diagnostic in gold output"
@@ -1493,6 +1589,15 @@ NVC_NONSTANDARD = {
         "out-of-range INTEGER arithmetic is erroneous "
         "(IEEE 1076-2019 5.2.3.1)"
     ),
+    # The test notes its asserted values are not the LRM's.
+    "null1": "asserts nvc's normalized null-range index bounds, which the "
+        "test notes differ from the LRM",
+    "integer3": "asserts nvc's repeated range evaluation count, which the "
+        "test notes should be 1",
+    "reflect2": "documents nvc reflection bounds the test calls incorrect",
+    # The `nvc` library (random, sim_pkg, cover_pkg) is nvc's own.
+    **{name: "uses nvc's own library packages"
+       for name in ("cover25", "issue1218", "rand1", "wait24")},
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",
     "wide7": "uses ~& and ~| as binary operators",

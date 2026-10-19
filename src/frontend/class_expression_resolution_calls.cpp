@@ -435,6 +435,25 @@ void Resolver::retain_task_profile(
           expression.span);
       return std::nullopt;
     }
+    // A static property selected through any object expression is the
+    // class's one variable (IEEE 1800-2017 8.9).
+    if (match.property->is_static) {
+      const auto type = resolve_alias_type(
+          match.property->declaration.type,
+          match.owner->canonical_identity);
+      expression.kind = ExpressionKind::Call;
+      expression.text =
+          (type.systemverilog_container
+               ? "@sv-static-container-property:"
+               : "@sv-static-property:")
+          + match.owner->canonical_identity + "::" + std::string{member};
+      expression.operands.clear();
+      retain_result_type(expression, type);
+      if (const auto result_identity = class_identity(type)) {
+        expression.nominal_type = *result_identity;
+      }
+      return type;
+    }
     expression.text =
         (match.property->declaration.type.systemverilog_container
              ? "@sv-container-property:"
@@ -701,9 +720,24 @@ void Resolver::retain_task_profile(
             + property;
         expression.operands = std::move(operands);
       } else {
+        // A with-clause's iterator (`item` by default) hides a class
+        // property of the same name (IEEE 1800-2017 7.12).
+        auto with_scope = scope;
+        const auto iterator_name = expression.operands.size() == 3U
+                && expression.operands[1].kind == ExpressionKind::Identifier
+            ? expression.operands[1].text
+            : std::string{"item"};
+        if (expression.operands.size() >= 2U && scope.class_owner != nullptr
+            && find_property(scope.class_owner->canonical_identity,
+                   iterator_name).property
+            && !scope.objects.contains(iterator_name)) {
+          auto element = *receiver_type;
+          element.systemverilog_container.reset();
+          with_scope.objects.emplace(iterator_name, std::move(element));
+        }
         for (auto& operand :
              expression.operands | std::views::drop(1)) {
-          resolve_expression(operand, scope);
+          resolve_expression(operand, with_scope);
         }
       }
         if (method == "pop_front" || method == "pop_back") {
@@ -813,25 +847,29 @@ void Resolver::retain_task_profile(
                                             Expression& node) -> void {
         if (node.kind == ExpressionKind::Identifier) {
           constexpr std::string_view local_prefix{"local::"};
+          // The first name of a dotted path (`item.addr`) selects the
+          // scope that holds it.
+          const auto head = [](const std::string_view text) {
+            return std::string{text.substr(0, text.find('.'))};
+          };
           if (node.text.starts_with(local_prefix)) {
             // Outside a class the lowerer binds `local::` names itself.
             const auto name = node.text.substr(local_prefix.size());
             if (scope.class_owner != nullptr
-                && !scope.objects.contains(name)
-                && find_property(scope.class_owner->canonical_identity, name)
-                       .property) {
+                && !scope.objects.contains(head(name))
+                && find_property(scope.class_owner->canonical_identity,
+                       head(name)).property) {
               node.text = name;
               resolve_expression(node, scope);
             }
             return;
           }
-          if (node.text.find('.') == std::string::npos
-              && node.text.find("::") == std::string::npos
-              && !find_property(receiver_identity, node.text).property
+          if (node.text.find("::") == std::string::npos
+              && !find_property(receiver_identity, head(node.text)).property
               && scope.class_owner != nullptr
-              && !scope.objects.contains(node.text)
+              && !scope.objects.contains(head(node.text))
               && find_property(scope.class_owner->canonical_identity,
-                     node.text).property) {
+                     head(node.text)).property) {
             resolve_expression(node, scope);
           }
           return;
@@ -1255,6 +1293,11 @@ std::optional<Type> Resolver::resolve_typed_expression(
     return expected;
   }
   auto expected_identity = class_identity(expected);
+  if (!expected_identity && !expected.named_type.empty()) {
+    // A typedef of a class names that class (IEEE 1800-2017 6.18).
+    expected_identity = class_identity(
+        resolve_alias_type(expected, scope.lexical_identity));
+  }
   if (!expected_identity && !expected.named_type.empty()) {
     expected_identity = expected.named_type;
   }

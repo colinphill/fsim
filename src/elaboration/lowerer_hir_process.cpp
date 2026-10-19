@@ -2131,6 +2131,8 @@ std::optional<Process> Lowerer::lower_hir_process(
     if (!source) {
         return std::nullopt;
     }
+    // Sensitivity notifiers are named for this instance.
+    hierarchy_ = std::string { hierarchy };
 
     HirProcessDescription description;
     if (source->systemverilog != nullptr) {
@@ -2156,6 +2158,28 @@ std::optional<Process> Lowerer::lower_hir_process(
         description.start_after_procedures
             = description.always_comb_or_latch;
         description.concurrent_assertion = input.concurrent_assertion;
+        // An upward or downward hierarchical name (`t.clk`, IEEE 1800-2017
+        // 23.6, 23.8), resolved against each enclosing instance in turn.
+        const auto hierarchical_sensitivity
+            = [&](const std::string& name) -> std::optional<SignalId> {
+            if (name.find('.') == std::string::npos) {
+                return std::nullopt;
+            }
+            auto signal = hir_hierarchical_signal(name);
+            for (auto lexical = hierarchy;
+                 !signal && !lexical.empty();) {
+                signal = hir_named_signal(
+                    std::string { lexical } + "." + name, input.scope);
+                const auto dot = lexical.rfind('.');
+                lexical = dot == std::string_view::npos
+                    ? std::string_view { }
+                    : lexical.substr(0U, dot);
+            }
+            if (signal) {
+                hierarchical_reference_used_ = true;
+            }
+            return signal;
+        };
         for (const auto& sensitivity : input.sensitivities) {
             if (sensitivity.signal == "*") {
                 description.wildcard_sensitivity = true;
@@ -2270,6 +2294,22 @@ std::optional<Process> Lowerer::lower_hir_process(
                 if (binding) {
                     signal = binding->signal;
                 }
+                if (const auto named = specialized_hir_unit_->find_expression(
+                        *sensitivity.expression);
+                    !signal && named && named->systemverilog != nullptr
+                    && named->systemverilog->kind
+                        == semantic::sv::ExpressionKind::name) {
+                    signal = hierarchical_sensitivity(
+                        named->systemverilog->text);
+                }
+                if (!signal && declaration
+                    && sensitivity.edge == semantic::sv::EdgeKind::any
+                    && hir_local_event_waited(*declaration)
+                    && (hir_string_binding(*declaration, input.scope, true)
+                        || hir_container_object_binding_for_declaration(
+                            *declaration))) {
+                    signal = hir_local_event_notifier(*declaration);
+                }
                 if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
                     && (description.event_expression
                         || input.sensitivities.size() != 1U)) {
@@ -2322,6 +2362,15 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             if (!signal) {
                 signal = hir_named_signal(sensitivity.signal, input.scope);
+            }
+            if (!signal) {
+                signal = hierarchical_sensitivity(sensitivity.signal);
+            }
+            // A string or container changes through its notification
+            // signal (IEEE 1800-2017 9.4.2).
+            if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any) {
+                signal = hir_change_notifier(sensitivity.signal, input.scope,
+                    sensitivity.source_order);
             }
             // A constant (a parameter or enumeration literal) never
             // changes, so it adds no event.
@@ -3253,6 +3302,88 @@ bool Lowerer::lower_hir_output_actual_write(
         : std::nullopt;
     if (expression && hir_container_element_binding(target)) {
         return lower_hir_packed_copy_out(target, source);
+    }
+    // An output connected to a streaming concatenation unpacks into its
+    // operands (IEEE 1800-2017 11.4.14.3, 23.3.3): the leftmost bits fill
+    // the stream, a `<<` stream reverses its slices, and each operand then
+    // takes its bits like a concatenation.
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && (expression->systemverilog->text == "@stream-left"
+            || expression->systemverilog->text == "@stream-right")
+        && expression->systemverilog->operands.size() >= 2U
+        && !hir_sv_container_stream(target)) {
+        const auto& stream = *expression->systemverilog;
+        const auto slice_size = hir_constant_integer(stream.operands.front());
+        if (!slice_size || *slice_size <= 0) {
+            return false;
+        }
+        std::vector<std::size_t> widths;
+        std::size_t total { };
+        for (std::size_t index = 1U; index < stream.operands.size(); ++index) {
+            const auto width = hir_expression_width(
+                stream.operands[index], hir_process_scope_);
+            if (!width || *width == 0U
+                || *width > std::numeric_limits<std::uint32_t>::max()
+                    - total) {
+                return false;
+            }
+            widths.push_back(*width);
+            total += *width;
+        }
+        const auto slice = static_cast<std::size_t>(*slice_size);
+        const bool reversed = stream.text == "@stream-left" && slice < total;
+        if (reversed && total % slice != 0U) {
+            return false;
+        }
+        const auto source_width = register_width(source);
+        auto value = source;
+        if (source_width > total) {
+            value = allocate_register(total, register_domain(source));
+            process_.operations.emplace_back(Extract {
+                value, source,
+                static_cast<std::uint32_t>(source_width - total),
+                static_cast<std::uint32_t>(total) });
+        } else if (source_width < total) {
+            const auto fill = load_constant(
+                unsigned_value(0U, total - source_width),
+                register_domain(source));
+            value = allocate_register(total, register_domain(source));
+            process_.operations.emplace_back(Concatenate {
+                value, { source, fill }, static_cast<std::uint32_t>(total) });
+        }
+        if (reversed) {
+            std::vector<RegisterId> slices;
+            for (std::size_t offset { }; offset < total; offset += slice) {
+                const auto part = allocate_register(
+                    slice, register_domain(value));
+                process_.operations.emplace_back(Extract {
+                    part, value, static_cast<std::uint32_t>(offset),
+                    static_cast<std::uint32_t>(slice) });
+                slices.push_back(part);
+            }
+            const auto reordered = allocate_register(
+                total, register_domain(value));
+            process_.operations.emplace_back(Concatenate {
+                reordered, std::move(slices),
+                static_cast<std::uint32_t>(total) });
+            value = reordered;
+        }
+        auto offset = total;
+        for (std::size_t index { }; index < widths.size(); ++index) {
+            offset -= widths[index];
+            const auto part = allocate_register(
+                widths[index], register_domain(value));
+            process_.operations.emplace_back(Extract {
+                part, value, static_cast<std::uint32_t>(offset),
+                static_cast<std::uint32_t>(widths[index]) });
+            if (!lower_hir_output_actual_write(
+                    stream.operands[index + 1U], part)) {
+                return false;
+            }
+        }
+        return true;
     }
     // An output connected to a concatenation of variables or nets writes
     // each operand its bits, most significant first (23.3.3).

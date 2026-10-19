@@ -97,6 +97,19 @@ std::optional<Type> VerilogParser::import_interface_type(DesignUnit& unit) {
   index_ += cursor;
   while (match(TokenKind::Dot)) {
     path.push_back(expect_identifier("interface member name").text);
+    // The elements of an interface instance array share one type, so the
+    // index of a nested instance array (`x_if_a[0]`) selects nothing.
+    if (at(TokenKind::LeftBracket)) {
+      std::size_t depth{};
+      do {
+        if (at(TokenKind::LeftBracket)) {
+          ++depth;
+        } else if (at(TokenKind::RightBracket)) {
+          --depth;
+        }
+        advance();
+      } while (depth != 0U && !at_end());
+    }
   }
   if (path.empty()) {
     return std::nullopt;

@@ -997,6 +997,14 @@ void Interpreter::Impl::execute_file(
                 if (!line.empty() && line.back() == '\r')
                     line.pop_back();
             }
+            // A string target holds exactly the characters read, so a read
+            // at end of file leaves it empty (IEEE 1800-2023 21.3.4.2); a
+            // failed read leaves it unchanged.
+            if (count == 0
+                && operation.target_kind == FileTextTargetKind::string_register
+                && checked_file(process.id, handle).last_error.empty()) {
+                get_string_register(process, operation.target).clear();
+            }
             if (count != 0) {
                 switch (operation.target_kind) {
                 case FileTextTargetKind::string_register:

@@ -1888,6 +1888,33 @@ void VhdlParser::parse_vhdl_object_alias(
         vhdl_name(name.text), std::move(external));
     return;
   }
+  // An alias of an enumeration literal (`alias high is std.standard.'1'
+  // [return bit];`, IEEE 1076-2008 6.6.3) denotes that literal.
+  {
+    std::size_t lookahead = 0;
+    while (at(TokenKind::Identifier, lookahead)
+        && at(TokenKind::Dot, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (at(TokenKind::CharacterLiteral, lookahead)) {
+      index_ += lookahead;
+      const auto literal = advance();
+      if (match(TokenKind::LeftBracket)) {
+        while (!at_end() && !at(TokenKind::RightBracket)
+            && !at(TokenKind::Semicolon)) {
+          advance();
+        }
+        expect(TokenKind::RightBracket, "']' after alias signature",
+            "FSIM-VHDL-PARSE-236");
+      }
+      expect(TokenKind::Semicolon, "';' after alias declaration",
+          "FSIM-VHDL-PARSE-236");
+      vhdl_external_aliases_.insert_or_assign(vhdl_name(name.text),
+          Expression { ExpressionKind::LogicLiteral, literal.text, { },
+              literal.span });
+      return;
+    }
+  }
   const auto target_start = position();
   const auto actual = parse_vhdl_selected_name("alias target");
   // An object alias may denote an element or slice of an object (IEEE

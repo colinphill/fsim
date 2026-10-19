@@ -383,6 +383,12 @@ void VerilogParser::parse_clocking_block(
                 unit.ports,
                 [&](const SignalDeclaration& candidate) {
                   return candidate.name == signal.text;
+                })
+            // An unpacked array is held as a variable (14.3).
+            || std::ranges::any_of(
+                unit.variables,
+                [&](const VariableDeclaration& candidate) {
+                  return candidate.name == signal.text;
                 });
         if (!signal_declared) {
           error(

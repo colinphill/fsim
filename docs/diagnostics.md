@@ -2411,6 +2411,7 @@ scheduler.
 | `FSIM-ELAB-VHAGG-018` | error | OTHERS or a multiple choice in a VHDL record aggregate stands for no element, or for elements of different types (IEEE 1076-2008 9.3.3.2). |
 | `FSIM-ELAB-VHAGG-019` | error | A character of a VHDL string literal is not a literal of the BIT or STD_ULOGIC element type of its array (IEEE 1076-2008 9.3.2). |
 | `FSIM-ELAB-VHAGG-020` | error | Both operands of a VHDL relational operator are aggregates, so their type cannot be determined (IEEE 1076-2008 9.3.3.3). |
+| `FSIM-ELAB-VHAGG-021` | error | An element of a VHDL aggregate assignment target does not have the length of the matching element of the value (IEEE 1076-2008 10.6.2.1). |
 | `FSIM-ELAB-VHRANGE-001` | error | The bounds of a VHDL range in a type definition differ in type or from the index type, or a scalar type definition has non-numeric bounds (IEEE 1076-2008 5.2.1, 5.3.2.1). |
 | `FSIM-ELAB-VHRANGE-002` | error | Before VHDL-2019, an INTEGER range bound exceeds the 32-bit INTEGER range (IEEE 1076-2008 5.2.3.1). |
 | `FSIM-ELAB-VHRANGE-003` | error | The static initial value of a VHDL object lies outside its integer subtype (IEEE 1076-2008 14.4.2). |
@@ -2575,6 +2576,7 @@ scheduler.
 | `FSIM-ELAB-VHFORCE-001` | error | A VHDL force or release target is not a supported signal, static index, or static slice. |
 | `FSIM-ELAB-VHFORCE-002` | error | A VHDL force or release target is not a visible packed signal with an executable layout. |
 | `FSIM-ELAB-VHFORCE-003` | error | A four- or nine-state VHDL value is forced onto a two-state target without explicit conversion. |
+| `FSIM-ELAB-VHFORCE-004` | error | A forced VHDL array value does not have the length of its target (IEEE 1076-2008 10.5.2.1). |
 | `FSIM-ELAB-SVFILE-001` | error | A Verilog/SystemVerilog text-file handle is not a 32-bit integer expression. |
 | `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole writable packed or string variable. |
 | `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have compatible Verilog byte-string filename and mode operands. |

@@ -112,7 +112,9 @@ void VerilogParser::parse_parameter_overrides(
       override.value = parse_expression();
       return;
     }
-    if (begins_unambiguous_type_actual()) {
+    // `int'(x)` is a cast expression, not the type `int` (6.24.1).
+    if (begins_unambiguous_type_actual()
+        && !at(TokenKind::Apostrophe, 1)) {
       override.type_value = parse_type_parameter_actual();
     } else {
       override.value = parse_expression();
@@ -1216,6 +1218,12 @@ void VerilogParser::require_default_port_net_type(
         }
         ++cursor;
       } while (!at(TokenKind::EndOfFile, cursor));
+      // `P::cfg#(C)::data_t`: a type declared in the specialization
+      // (8.25.1).
+      while (at(TokenKind::Scope, cursor)
+             && at(TokenKind::Identifier, cursor + 1U)) {
+        cursor += 2U;
+      }
       return has_type_declarator(cursor);
     }
     return has_type_declarator(cursor + 1U);
@@ -1243,6 +1251,12 @@ Type VerilogParser::parse_named_type() {
     name += "::";
     name += selected.text;
     span = cover(span, selected.span);
+  }
+  // `$unit::t` names a type of this file's compilation-unit package (IEEE
+  // 1800-2017 3.12.1).
+  if (name.starts_with("$unit::") && compilation_unit_package_) {
+    name = compilation_unit_package_->name
+        + name.substr(std::string_view { "$unit" }.size());
   }
   // A typedef of an enclosing procedural block (6.18).
   if (const auto local = block_typedef_types_.find(name);
@@ -1868,7 +1882,26 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             && (initializer->kind == ExpressionKind::Call
                 || initializer->kind == ExpressionKind::Identifier
                 || initializer->kind == ExpressionKind::Index
-                || initializer->kind == ExpressionKind::Slice)) {
+                || initializer->kind == ExpressionKind::Slice
+                // A pattern for a nested container with a dynamic or queue
+                // dimension (`int q[$][$] = '{'{1}}`) is built at time zero
+                // like an assignment (IEEE 1800-2017 10.9).
+                || (initializer->kind == ExpressionKind::Aggregate
+                    && [&] {
+                         const auto& outer
+                             = *declaration_type.systemverilog_container;
+                         if (outer.element_types.size() != 1U
+                             || !outer.element_types.front()
+                                     .systemverilog_container) {
+                           return false;
+                         }
+                         const auto& inner = *outer.element_types.front()
+                                                  .systemverilog_container;
+                         return outer.kind
+                                 != SystemVerilogContainerKind::StaticArray
+                             || inner.kind
+                                 != SystemVerilogContainerKind::StaticArray;
+                       }()))) {
           container_initializer = *initializer;
         }
         VariableDeclaration variable{

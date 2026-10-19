@@ -86,6 +86,9 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
     constexpr std::string_view pop_front_prefix {
         "@container-pop-front:"
     };
+    constexpr std::string_view pop_back_prefix {
+        "@container-pop-back:"
+    };
     constexpr std::string_view size_prefix { "@container-size:" };
     const auto prefix = operation.starts_with(read_prefix)
         ? read_prefix
@@ -97,6 +100,8 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         ? push_back_prefix
         : operation.starts_with(pop_front_prefix)
         ? pop_front_prefix
+        : operation.starts_with(pop_back_prefix)
+        ? pop_back_prefix
         : operation.starts_with(size_prefix)
         ? size_prefix
         : std::string_view { };
@@ -146,14 +151,16 @@ runtime::PackedLogic4 SystemVerilogClassExecution::invoke_class_container(
         container.push_back(heap_, value);
         return runtime::PackedLogic4::from_aval_bval(64, value, 0);
     }
-    if (prefix == pop_front_prefix) {
+    if (prefix == pop_front_prefix || prefix == pop_back_prefix) {
         if (!actuals.empty()) {
             throw std::invalid_argument {
-                "class handle queue pop_front has inconsistent actuals"
+                "class handle queue pop has inconsistent actuals"
             };
         }
-        return runtime::PackedLogic4::from_aval_bval(
-            64, container.pop_front(), 0);
+        return runtime::PackedLogic4::from_aval_bval(64,
+            prefix == pop_front_prefix ? container.pop_front()
+                                       : container.pop_back(),
+            0);
     }
     if (prefix == size_prefix) {
         if (!actuals.empty()) {

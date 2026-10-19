@@ -207,7 +207,16 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
     std::optional<std::uint64_t> union_width;
     bool concrete = !type.packed_members.empty();
     for (const auto& member : type.packed_members) {
-        const auto width = member.width();
+        auto width = member.width();
+        // A member of a packed typedef type (`a_t m;`) has that type's width.
+        if (!width && !member.nested_types.empty()
+            && !member.nested_types.front().named_type.empty()) {
+            const auto named = packed_typedef_types_.find(
+                member.nested_types.front().named_type);
+            if (named != packed_typedef_types_.end()) {
+                width = named->second.width();
+            }
+        }
         if (!width || *width == 0) {
             concrete = false;
             break;
@@ -241,7 +250,15 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
         if (!is_union) {
             auto offset = total_width;
             for (auto& member : type.packed_members) {
-                offset -= *member.width();
+                auto width = member.width();
+                if (!width && !member.nested_types.empty()) {
+                    const auto named = packed_typedef_types_.find(
+                        member.nested_types.front().named_type);
+                    if (named != packed_typedef_types_.end()) {
+                        width = named->second.width();
+                    }
+                }
+                offset -= width.value_or(0U);
                 member.lsb_offset = offset;
             }
         }
@@ -460,10 +477,13 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
         element.enumeration_literals.clear();
         element.systemverilog_enumeration_values.clear();
     }
+    // A packed union is a packed element as a structure is (7.3.1).
+    const bool packed_aggregate = !element.packed_members.empty()
+        && element.packed_range;
     if (!element.named_type.empty() || !element.enumeration_literals.empty()
         || element.systemverilog_container
         || (element.domain != ValueDomain::Logic4
-            && element.domain != ValueDomain::Bit2)
+            && element.domain != ValueDomain::Bit2 && !packed_aggregate)
         || (element.packed_members.empty() && element.spelling != "logic"
             && element.spelling != "bit" && element.spelling != "reg")) {
         return std::nullopt;

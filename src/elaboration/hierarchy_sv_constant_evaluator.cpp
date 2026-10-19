@@ -4358,9 +4358,31 @@ private:
                       type, specialization_.scope())) {
             type = *effective;
         }
-        const auto definition = type.target.target.valid()
+        auto definition = type.target.target.valid()
             ? specialization_.find_type(type.target.target)
             : std::nullopt;
+        // A typedef of a package type (`typedef pkg::S t;`) names that type
+        // in the typedef's own scope.
+        for (std::size_t depth { }; depth < 8U && definition
+             && definition->systemverilog != nullptr
+             && definition->systemverilog->form
+                 == semantic::sv::TypeForm::alias;
+             ++depth) {
+            const auto alias = specialization_.find_declaration(
+                definition->systemverilog->declaration);
+            auto base = definition->systemverilog->base;
+            if (const auto effective
+                = semantic::CompiledDesignResolver { specialization_ }
+                      .effective_systemverilog_type(base,
+                          alias && alias->systemverilog != nullptr
+                              ? alias->systemverilog->scope
+                              : specialization_.scope())) {
+                base = *effective;
+            }
+            definition = base.target.target.valid()
+                ? specialization_.find_type(base.target.target)
+                : std::nullopt;
+        }
         if (!definition || definition->systemverilog == nullptr
             || (definition->systemverilog->form
                     != semantic::sv::TypeForm::packed_structure

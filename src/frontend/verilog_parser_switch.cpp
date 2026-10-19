@@ -366,6 +366,35 @@ void VerilogParser::parse_switch_primitive(
         std::optional<Expression> right_switch_control;
         const bool active_high = operation == "tranif1"
             || operation == "rtranif1";
+        // A tranif's delays are its turn-on and turn-off delays (IEEE
+        // 1800-2017 28.16): the switch follows its control through a net
+        // driven with those delays, as rise and fall of the control for
+        // tranif1 and as fall and rise for tranif0.
+        if (required == 3 && delay && current_default_nettype_ != "none") {
+          const auto control_name = "fsim_tranif_control_"
+              + std::to_string(generated_statement_counter_++);
+          auto control_delay = *delay;
+          if (!active_high && !control_delay.additional_values.empty()) {
+            auto turn_on = control_delay;
+            turn_on.additional_values.clear();
+            auto turn_off = control_delay.additional_values.front();
+            turn_off.additional_values = {std::move(turn_on)};
+            control_delay = std::move(turn_off);
+          }
+          implicit_net_references_.push_back(
+              {control_name, current_default_nettype_, start.span, {}, true});
+          Statement control_driver;
+          control_driver.kind = StatementKind::Assignment;
+          control_driver.assignment_kind = AssignmentKind::Continuous;
+          control_driver.target = Expression{
+              ExpressionKind::Identifier, control_name, {}, start.span};
+          control_driver.value = mapped[2];
+          control_driver.delay = std::move(control_delay);
+          control_driver.span = start.span;
+          statements.push_back(std::move(control_driver));
+          mapped[2] = Expression{
+              ExpressionKind::Identifier, control_name, {}, start.span};
+        }
         if (required == 3) {
           auto left_control = mapped[2];
           auto right_control = mapped[2];

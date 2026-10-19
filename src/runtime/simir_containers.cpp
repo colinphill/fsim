@@ -413,21 +413,6 @@ std::size_t maximum_container_string_length(const Value& value) noexcept
 
 // A new[] initializer is a dynamic array or a queue of the target's
 // elements (IEEE 1800-2017 7.5.1, 7.6).
-[[nodiscard]] bool new_initializer_compatible(
-    const ContainerType& initializer, const ContainerType& target)
-{
-    if (initializer == target) {
-        return true;
-    }
-    if (!initializer.queue) {
-        return false;
-    }
-    auto as_dynamic = initializer;
-    as_dynamic.queue = false;
-    as_dynamic.maximum_elements.reset();
-    return as_dynamic == target;
-}
-
 } // namespace
 
 ContainerReferenceRefresh

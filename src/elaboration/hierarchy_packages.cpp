@@ -7392,6 +7392,29 @@ namespace {
                 specialization, expression, subtype, scope)) {
             return aggregate;
         }
+        // A deferred constant has the value of its full declaration in the
+        // package body (IEEE 1076-2008 4.8).
+        if (const auto named = specialization.find_expression(expression);
+            named && named->vhdl != nullptr
+            && named->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && named->vhdl->referenced_name
+            && named->vhdl->referenced_name->selected) {
+            const auto constant = specialization.find_declaration(
+                *named->vhdl->referenced_name->selected);
+            const auto full = constant && constant->vhdl != nullptr
+                    && constant->vhdl->form
+                        == semantic::vhdl::DeclarationForm::constant
+                    && constant->vhdl->deferred
+                    && !constant->vhdl->initializer
+                    && constant->vhdl->completion
+                ? specialization.find_declaration(*constant->vhdl->completion)
+                : std::nullopt;
+            if (full && full->vhdl != nullptr && full->vhdl->initializer
+                && *full->vhdl->initializer != expression) {
+                return compiled_vhdl_static_composite_value(specialization,
+                    *full->vhdl->initializer, subtype, scope);
+            }
+        }
         const auto effective = semantic::CompiledDesignResolver {
             specialization
         }.effective_vhdl_subtype(subtype, scope);
@@ -28206,7 +28229,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
     }
     std::unordered_map<std::string, std::string>
         inferred_vhdl_port_types;
-    for (const auto& binding : port_bindings.bindings) {
+    for (const auto& association_binding : port_bindings.bindings) {
+        auto binding = association_binding;
         const auto specialized_formal
             = child_interface_specialization->find_declaration(
                 binding.formal);
@@ -28275,6 +28299,31 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
                     + formal_declaration.name + "'",
                 compiled_source_span(*compiled_, binding.source));
             return false;
+        }
+        // An alias of a signal element or slice denotes that element
+        // (IEEE 1076-2008 6.6.2): associate the aliased name.
+        if (const auto named = port_actual_specialization.find_expression(
+                *binding.expression);
+            named && named->vhdl != nullptr
+            && named->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && named->vhdl->referenced_name
+            && named->vhdl->referenced_name->selected) {
+            const auto alias = port_actual_specialization.find_declaration(
+                *named->vhdl->referenced_name->selected);
+            const auto aliased = alias && alias->vhdl != nullptr
+                    && alias->vhdl->form
+                        == semantic::vhdl::DeclarationForm::alias
+                    && alias->vhdl->initializer
+                ? port_actual_specialization.find_expression(
+                      *alias->vhdl->initializer)
+                : std::nullopt;
+            if (aliased && aliased->vhdl != nullptr
+                && (aliased->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::index
+                    || aliased->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::slice)) {
+                binding.expression = *alias->vhdl->initializer;
+            }
         }
         const auto expression
             = port_actual_specialization.find_expression(

@@ -3,6 +3,7 @@
 #include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/support/vhdl_tool_identity.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
@@ -1817,7 +1818,8 @@ void Interpreter::Impl::handle_boundary(
         (void)get_signal(strength->signal);
         require_region_forwarding_role_journal_flushed_for_signal(
             strength->signal);
-        auto text = signal_strength_text(strength->signal);
+        auto text = signal_strength_text(
+            strength->signal, strength->offset, strength->width);
         if (process.executor) {
             process.executor->write_string_register(
                 strength->destination, text);
@@ -1838,8 +1840,13 @@ void Interpreter::Impl::handle_boundary(
             fail(process,
                 "STD.ENV GETENV name contains an embedded null character");
         }
-        auto value = fsim::support::environment_variable(name)
-            .value_or(std::string { });
+        // Conditional analysis identifiers take precedence over the
+        // environment (IEEE 1076-2019 16.5.6).
+        const auto identity = fsim::support::vhdl_tool_identity(name);
+        auto value = identity
+            ? std::string { *identity }
+            : fsim::support::environment_variable(name)
+                  .value_or(std::string { });
         if (value.size() > maximum_string_bytes) {
             process.pc = instruction;
             fail(process,

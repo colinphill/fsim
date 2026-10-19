@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_conditional_analysis_internal.hpp"
 #include "fsim/support/ctype_whitespace.hpp"
+#include "fsim/support/vhdl_tool_identity.hpp"
 #include "string_case.hpp"
 
 #include <algorithm>
@@ -213,16 +214,8 @@ namespace {
         [[nodiscard]] static std::string identifier_value(
             const std::string_view identifier)
         {
-            constexpr std::array values {
-                std::pair { "vhdl_version", "2019" },
-                std::pair { "tool_type", "SIMULATION" },
-                std::pair { "tool_vendor", "FSIM PROJECT" },
-                std::pair { "tool_name", "FSIM" },
-                std::pair { "tool_edition", "COMMUNITY" },
-                std::pair { "tool_version", "3.0" },
-            };
-            const auto found = std::ranges::find(values, identifier, &decltype(values)::value_type::first);
-            return found == values.end() ? std::string { } : std::string { found->second };
+            return std::string { support::vhdl_tool_identity(identifier)
+                                     .value_or(std::string_view { }) };
         }
 
         [[nodiscard]] std::optional<std::string> parse_value()

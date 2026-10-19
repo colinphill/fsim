@@ -209,7 +209,10 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             path.string_leaf = member_type.element_kind
                     == ContainerElementKind::String
                 && singleton_member_type(member_type);
-            path.leaf = packed_leaf_type(member_type) || path.string_leaf;
+            // A queue or associative-array member is a container (7.10).
+            path.leaf = (packed_leaf_type(member_type) && !member_type.queue
+                            && !member_type.associative)
+                || path.string_leaf;
             path.type = std::move(member_type);
             continue;
         }

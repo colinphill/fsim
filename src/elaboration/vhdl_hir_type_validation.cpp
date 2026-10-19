@@ -7472,6 +7472,10 @@ private:
         }
         // The selector's subtype, when it names an object.
         std::optional<SubtypeIndication> selector_subtype;
+        // Whether that subtype's bounds are locally static; bounds that
+        // depend on a generic are only globally static (IEEE 1076-2008
+        // 9.4.2, 9.4.3).
+        bool selector_locally_static = true;
         if (const auto selector = specialization_.find_expression(*statement.condition);
             selector && selector->vhdl != nullptr
             && selector->vhdl->kind == semantic::vhdl::ExpressionKind::name
@@ -7481,6 +7485,15 @@ private:
                 *selector->vhdl->referenced_name->selected);
             if (declaration && declaration->vhdl != nullptr && declaration->vhdl->subtype) {
                 selector_subtype = specialized_subtype(*declaration->vhdl->subtype);
+                for (const auto& constraint : declaration->vhdl->subtype->constraints) {
+                    for (const auto bound : { constraint.left_expression,
+                             constraint.right_expression }) {
+                        if (bound
+                            && !vhdl_locally_static_expression(specialization_, *bound)) {
+                            selector_locally_static = false;
+                        }
+                    }
+                }
             }
         }
         // The selector subtype's static range: its own constraint, else the
@@ -7549,7 +7562,8 @@ private:
                 return true;
             }
             if (found->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal) {
-                if (selector_length && found->vhdl->decoded_string
+                if (selector_length && selector_locally_static
+                    && found->vhdl->decoded_string
                     && static_cast<std::int64_t>(found->vhdl->decoded_string->size())
                         != *selector_length) {
                     report("FSIM-ELAB-VHDLCASE-010",
@@ -10746,6 +10760,67 @@ private:
                     }
                     return;
                 }
+                // A discrete subtype name chooses its range (IEEE
+                // 1076-2008 9.3.3.1, 9.3.3.3).
+                if (value.kind == semantic::vhdl::ExpressionKind::name
+                    && value.referenced_name
+                    && value.referenced_name->selected) {
+                    const auto declaration = specialization_.find_declaration(
+                        *value.referenced_name->selected);
+                    const auto type = declaration && declaration->vhdl != nullptr
+                            && (declaration->vhdl->form
+                                    == semantic::vhdl::DeclarationForm::subtype
+                                || declaration->vhdl->form
+                                    == semantic::vhdl::DeclarationForm::type)
+                            && declaration->vhdl->declared_type
+                        ? specialization_.find_type(
+                              *declaration->vhdl->declared_type)
+                        : std::nullopt;
+                    const auto* range = type && type->vhdl != nullptr
+                            && !type->vhdl->base.constraints.empty()
+                        ? &type->vhdl->base.constraints.front()
+                        : type && type->vhdl != nullptr
+                            && type->vhdl->scalar_range
+                        ? &*type->vhdl->scalar_range
+                        : nullptr;
+                    if (range != nullptr) {
+                        std::unordered_set<std::uint32_t> active;
+                        const auto bound = [&](const std::optional<std::int64_t>& literal,
+                                               const std::optional<semantic::ExpressionId>& expression)
+                            -> std::optional<std::int64_t> {
+                            if (literal) {
+                                return literal;
+                            }
+                            return expression ? static_integer(*expression, active)
+                                              : std::nullopt;
+                        };
+                        const auto left = bound(range->left, range->left_expression);
+                        const auto right = bound(range->right, range->right_expression);
+                        if (left && right) {
+                            const auto low = std::min(*left, *right);
+                            const auto high = std::max(*left, *right);
+                            if (low < minimum || high > maximum
+                                || static_cast<std::uint64_t>(high)
+                                        - static_cast<std::uint64_t>(low)
+                                    >= element_count) {
+                                report(
+                                    "FSIM-ELAB-VHARRAYAGG-003",
+                                    "VHDL array aggregate index is outside the "
+                                        "contextual range",
+                                    value.source);
+                                return;
+                            }
+                            for (auto index = low;; ++index) {
+                                assign(index, association.value,
+                                    association.source);
+                                if (index == high) {
+                                    break;
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 const auto index = array_aggregate_index_value(
                     array_definition, array_dimension_index, choice_id);
                 if (!index) {
@@ -12371,10 +12446,12 @@ private:
                         validate_value_name(*element.delay->primary.expression);
                     }
                 }
-                // Case and selected-assignment choices are values too.
+                // Case and selected-assignment choices are values or
+                // discrete ranges, which a subtype name denotes (IEEE
+                // 1076-2008 9.3.3.1, 10.9).
                 for (const auto& alternative : statement.alternatives) {
                     for (const auto choice : alternative.choices) {
-                        validate_value_name(choice);
+                        validate_value_name(choice, true);
                     }
                 }
             }

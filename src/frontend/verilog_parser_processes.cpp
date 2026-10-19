@@ -168,7 +168,9 @@ std::optional<Statement> VerilogParser::parse_statement()
         parse_verilog_attribute_instances();
     }
     std::optional<Statement> statement;
-    if (keyword("if")) {
+    if (auto conditional = parse_matches_conditional_assignment()) {
+        statement = std::move(conditional);
+    } else if (keyword("if")) {
         const auto start = advance();
         statement = parse_if_statement(start);
     } else {
@@ -208,6 +210,108 @@ void VerilogParser::prepend_hoisted_statements(
     block->statements = std::move(hoisted);
     block->statements.push_back(std::move(*statement));
     statement = std::move(*block);
+}
+
+// `lhs = e matches p [&&& g] ? x : y;` (IEEE 1800-2017 12.6.3) is
+// `if (e matches p [&&& g]) lhs = x; else lhs = y;`, which binds the pattern
+// variables for `x` as the conditional operator does.
+[[gnu::noinline]] std::optional<Statement>
+VerilogParser::parse_matches_conditional_assignment()
+{
+    if (language_ != Language::SystemVerilog2017
+        || current(0).kind != TokenKind::Identifier) {
+        return std::nullopt;
+    }
+    std::size_t depth { };
+    std::optional<std::size_t> assignment;
+    std::optional<std::size_t> matches;
+    std::optional<std::size_t> question;
+    std::optional<std::size_t> colon;
+    std::size_t nested { };
+    std::size_t offset { };
+    for (;; ++offset) {
+        const auto& token = current(offset);
+        if (token.kind == TokenKind::EndOfFile) {
+            return std::nullopt;
+        }
+        if (token.kind == TokenKind::LeftParen
+            || token.kind == TokenKind::LeftBracket
+            || token.kind == TokenKind::LeftBrace) {
+            ++depth;
+            continue;
+        }
+        if (token.kind == TokenKind::RightParen
+            || token.kind == TokenKind::RightBracket
+            || token.kind == TokenKind::RightBrace) {
+            if (depth == 0U) {
+                return std::nullopt;
+            }
+            --depth;
+            continue;
+        }
+        if (depth != 0U) {
+            continue;
+        }
+        if (token.kind == TokenKind::Semicolon) {
+            break;
+        }
+        if (!assignment) {
+            if (token.kind == TokenKind::Assign
+                || token.kind == TokenKind::LessEqual) {
+                assignment = offset;
+            } else if (token.kind == TokenKind::Identifier
+                && is_system_verilog_2012_keyword(token.text)) {
+                return std::nullopt;
+            }
+        } else if (!matches) {
+            if (token.kind == TokenKind::Identifier
+                && token.text == "matches") {
+                matches = offset;
+            }
+        } else if (!question) {
+            if (token.kind == TokenKind::Question) {
+                question = offset;
+            }
+        } else if (!colon) {
+            if (token.kind == TokenKind::Question) {
+                ++nested;
+            } else if (token.kind == TokenKind::Colon) {
+                if (nested == 0U) {
+                    colon = offset;
+                } else {
+                    --nested;
+                }
+            }
+        }
+    }
+    if (!assignment || !matches || !question || !colon
+        || *assignment == 0U) {
+        return std::nullopt;
+    }
+    const auto start = current(0);
+    const auto range = [&](std::vector<Token>& tokens,
+                           const std::size_t first, const std::size_t last) {
+        for (std::size_t index = first; index < last; ++index) {
+            tokens.push_back(current(index));
+        }
+    };
+    const auto append = [&](std::vector<Token>& tokens,
+                            const std::string_view text) {
+        for (auto& token : synthetic_tokens(text, start.span)) {
+            tokens.push_back(std::move(token));
+        }
+    };
+    std::vector<Token> tokens = synthetic_tokens("if (", start.span);
+    range(tokens, *assignment + 1U, *question);
+    append(tokens, ")");
+    range(tokens, 0U, *assignment + 1U);
+    range(tokens, *question + 1U, *colon);
+    append(tokens, "; else");
+    range(tokens, 0U, *assignment + 1U);
+    range(tokens, *colon + 1U, offset);
+    append(tokens, ";");
+    index_ += offset + 1U;
+    return parse_generated_statement(std::move(tokens), start.span);
 }
 
 [[gnu::noinline]] std::optional<Statement>
@@ -1689,8 +1793,12 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 && kind == TokenKind::Dot
                 && current(lookahead + 1U).kind
                     == TokenKind::Identifier
-                && current(lookahead + 2U).kind
-                    == TokenKind::LeftParen
+                && (current(lookahead + 2U).kind
+                        == TokenKind::LeftParen
+                    // `a[i].delete;` without parentheses (7.5.3, 13.5.5).
+                    || (current(lookahead + 2U).kind
+                            == TokenKind::Semicolon
+                        && current(lookahead + 1U).text == "delete"))
                 && contains_word(
                     { "delete", "insert", "push_front", "push_back",
                         "pop_front", "pop_back", "exists",

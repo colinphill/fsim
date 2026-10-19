@@ -1037,6 +1037,17 @@ Expression VerilogParser::parse_primary_impl()
                 append_specialization();
             }
         }
+        // `$unit::name` names a declaration of this file's compilation-unit
+        // package (IEEE 1800-2017 3.12.1, 26.3).
+        if (canonical.starts_with("$unit::") && compilation_unit_package_) {
+            (void)require_standard(
+                "predefined scope '$unit'",
+                StandardRevision::SystemVerilog2005,
+                name,
+                "FSIM-SV-PARSE-349");
+            canonical = compilation_unit_package_->name
+                + canonical.substr(std::string_view { "$unit" }.size());
+        }
         if (canonical == "$unit" || canonical.starts_with("$unit::")
             || canonical == "$root" || canonical.starts_with("$root::")
             || canonical.starts_with("std::")

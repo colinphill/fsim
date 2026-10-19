@@ -798,7 +798,34 @@ bool Resolver::class_assignable(
       return *alias->second;
     }
     const auto separator = lexical_identity.rfind("::");
-    if (separator == std::string::npos) return type;
+    if (separator == std::string::npos) {
+      // A compilation-unit typedef is visible to every unit of its file
+      // (IEEE 1800-2017 3.12.1); its key names the unit package.
+      const auto prefix = lexical_identity + "::fsim_unit_";
+      const auto suffix = "::" + type.named_type;
+      const Type* unique = nullptr;
+      for (const auto& [key, candidate] : class_aliases_) {
+        if (!key.starts_with(prefix) || !key.ends_with(suffix)
+            || key.find("::", prefix.size()) != key.size() - suffix.size()) {
+          continue;
+        }
+        if (unique != nullptr) return type;
+        unique = candidate;
+      }
+      // Only a class typedef is resolved here; other compilation-unit
+      // types keep their name for the HIR's own lookup.
+      if (unique == nullptr || !class_identity(*unique)) return type;
+      if (type.systemverilog_container) {
+        auto& elements = type.systemverilog_container->element_types;
+        if (elements.empty()) {
+          elements.push_back(*unique);
+        } else {
+          elements.front() = *unique;
+        }
+        return type;
+      }
+      return *unique;
+    }
     lexical_identity.resize(separator);
   }
 }
@@ -2149,6 +2176,7 @@ void Resolver::retain_result_type(
     // `obj.X`, is that constant (IEEE 1800-2017 8.25, 6.20.4).
     if (match.property && match.property->is_parameter
         && match.property->declaration.initializer
+        && match.property->declaration.type.enumeration_literals.empty()
         && (match.property->declaration.initializer->kind
                 == ExpressionKind::IntegerLiteral
             || match.property->declaration.initializer->kind
@@ -2360,9 +2388,47 @@ void Resolver::retain_result_type(
     // A value parameter or local parameter of a specialization,
     // `C#(7)::v` (IEEE 1800-2017 8.25.1): its value expression with the
     // specialization's parameter values substituted.
-    if (owners.size() == 1U && owner_name.find('#') != std::string::npos) {
+    // A typedef of a specialization, `typedef C#(8) C8; C8::v`, names the
+    // same parameter values.
+    auto specialization_spelling = owner_name;
+    if (owners.size() == 1U && owner_name.find('#') == std::string::npos
+        && owner_name.find("::") == std::string::npos) {
+      Type named;
+      named.named_type = owner_name;
+      const auto alias = resolve_alias_type(named, scope.lexical_identity);
+      if (const auto spelling = class_specialization_spelling(
+              owners.front()->name, alias)) {
+        specialization_spelling = *spelling;
+      }
+    } else if (owners.size() == 1U
+        && owner_name.find('#') == std::string::npos) {
+      // A package typedef of a specialization, `P::C8::v`.
+      const auto package_separator = owner_name.find("::");
+      const auto package = owner_name.substr(0U, package_separator);
+      const auto alias_name = owner_name.substr(package_separator + 2U);
+      const Type* package_alias = nullptr;
+      if (alias_name.find("::") == std::string::npos) {
+        for (const auto& unit : design_.units) {
+          if (unit.name != package) continue;
+          const auto alias = class_aliases_.find(effective_library(unit.library)
+              + "::" + unit.name + "::" + alias_name);
+          if (alias != class_aliases_.end()) {
+            package_alias = alias->second;
+            break;
+          }
+        }
+      }
+      if (package_alias != nullptr) {
+        if (const auto spelling = class_specialization_spelling(
+                owners.front()->name, *package_alias)) {
+          specialization_spelling = *spelling;
+        }
+      }
+    }
+    if (owners.size() == 1U
+        && specialization_spelling.find('#') != std::string::npos) {
       if (auto value = class_specialization_parameter_value(
-              *owners.front(), owner_name, member)) {
+              *owners.front(), specialization_spelling, member)) {
         const auto span = expression.span;
         expression = std::move(*value);
         expression.span = span;

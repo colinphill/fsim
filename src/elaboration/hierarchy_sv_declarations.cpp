@@ -379,8 +379,8 @@ namespace {
             }
         }
         // A string literal initializes an unpacked array of bytes one
-        // character per element, right-justified like the packed value it
-        // denotes (5.9).
+        // character per element from the left, zero-padded or truncated on
+        // the right (IEEE 1800-2023 5.9).
         if (initializer_source != nullptr
             && initializer_source->kind == ExpressionKind::string_literal
             && type.fixed && type.dimensions.size() == 1U
@@ -393,11 +393,8 @@ namespace {
             }
             auto value = default_container_value(type);
             for (std::size_t at = 0; at < *leaf_count; ++at) {
-                // Element `at` holds the character `count - at` from the end.
-                const auto from_end = *leaf_count - at;
-                const auto character = from_end <= text->size()
-                    ? static_cast<unsigned char>(
-                          (*text)[text->size() - from_end])
+                const auto character = at < text->size()
+                    ? static_cast<unsigned char>((*text)[at])
                     : 0U;
                 value.elements[at] = PackedLogic4::from_aval_bval(
                     8U, character, 0U);
