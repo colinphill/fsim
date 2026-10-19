@@ -488,6 +488,8 @@ struct Statement {
     ForkJoinKind fork_join { ForkJoinKind::all };
     // Concurrent assertion attempts own independent local register frames.
     bool fork_isolate_register_frame { };
+    // A pending clocking drive, not a subprocess (9.6.1, 9.6.3, 14.16).
+    bool fork_detached { };
     AssignmentControl assignment_control { AssignmentControl::none };
     bool assignment_control_repeated { };
     UpdateKind update_kind { UpdateKind::none };

@@ -27,6 +27,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
     unit_foreach_types_.clear();
   port_type_refinements_.clear();
   implicit_net_references_.clear();
+  procedural_typedef_names_.clear();
   container_iterator_names_.clear();
   current_procedural_names_.clear();
   current_procedural_types_.clear();
@@ -1686,11 +1687,27 @@ void VerilogParser::parse_parameter_group(
         local ? "localparam name" : "parameter name");
     // An unpacked array parameter (IEEE 1800-2017 6.20.2) is kept as a
     // constant container object initialized by its value.
+    // A parameter of a typedef'd unpacked array type (`typedef logic [9:0]
+    // t [0:7]; localparam t P = ...;`) is one too.
+    const auto typedef_array = [&]() -> std::optional<Type> {
+      if (type.systemverilog_container) return type;
+      if (type.named_type.empty()) return std::nullopt;
+      const auto found = packed_typedef_types_.find(type.named_type);
+      if (found == packed_typedef_types_.end()
+          || !found->second.systemverilog_container) {
+        return std::nullopt;
+      }
+      return found->second;
+    }();
     if (!type_parameter && !class_list
         && language_ == Language::SystemVerilog2017
-        && at(TokenKind::LeftBracket)) {
-      auto container_type = type;
-      (void)parse_optional_container_dimension(container_type);
+        && (at(TokenKind::LeftBracket) || (typedef_array && !port_list))) {
+      auto container_type = at(TokenKind::LeftBracket) || !typedef_array
+          ? type
+          : *typedef_array;
+      if (at(TokenKind::LeftBracket)) {
+        (void)parse_optional_container_dimension(container_type);
+      }
       std::optional<Expression> initializer;
       if (match(TokenKind::Assign)) {
         initializer = parse_expression();

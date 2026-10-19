@@ -225,6 +225,12 @@ class SystemVerilogClassHeap final {
 
   [[nodiscard]] SystemVerilogClassHandle allocate(
       const SystemVerilogClassDescriptor& descriptor);
+  // Seeds the next allocated object's generator from its creating thread
+  // (IEEE 1800-2017 18.14.1); without it the object seed derives from the
+  // simulation seed and the class's allocation ordinal.
+  void set_next_object_seed(std::optional<std::uint64_t> seed) noexcept {
+    next_object_seed_ = seed;
+  }
   [[nodiscard]] SystemVerilogClassHandle construct(
       const SystemVerilogClassDescriptor& descriptor,
       std::span<const ConstructorStep> constructor_steps);
@@ -326,6 +332,7 @@ class SystemVerilogClassHeap final {
   std::size_t storage_bytes_{};
   std::uint64_t simulation_seed_{1};
   std::map<std::string, std::uint64_t, std::less<>> next_object_ordinals_;
+  std::optional<std::uint64_t> next_object_seed_;
 };
 
 }  // namespace fsim::runtime

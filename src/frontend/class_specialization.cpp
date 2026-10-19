@@ -650,13 +650,71 @@ Type class_resolution_detail::specialize_selected_class_type(Type type,
     const std::vector<std::pair<std::string, const Expression*>>& values,
     const std::map<std::string, Type>& types) {
   ValueEnvironment environment;
+  // An actual that is not a frontend constant (`C#(W)::t` with a module
+  // parameter `W`) stays an expression; it replaces the formal in the
+  // selected type's ranges and is evaluated where the type is used.
+  std::map<std::string, const Expression*> symbolic;
   for (const auto& [name, expression] : values) {
     if (expression == nullptr) continue;
     if (const auto value = evaluate(*expression, environment)) {
       environment.insert_or_assign(name, *value);
+    } else {
+      symbolic.insert_or_assign(name, expression);
     }
   }
-  return specialize_type(std::move(type), environment, types);
+  type = specialize_type(std::move(type), environment, types);
+  if (symbolic.empty()) return type;
+  const auto substitute_expression = [&](const auto& self,
+                                         Expression& expression) -> void {
+    if (expression.kind == ExpressionKind::Identifier) {
+      if (const auto found = symbolic.find(expression.text);
+          found != symbolic.end()) {
+        const auto span = expression.span;
+        expression = *found->second;
+        expression.span = span;
+        return;
+      }
+      // A member of a structure parameter (`Cfg.n`) through a named actual.
+      if (const auto dot = expression.text.find('.');
+          dot != std::string::npos) {
+        if (const auto found = symbolic.find(expression.text.substr(0, dot));
+            found != symbolic.end()
+            && found->second->kind == ExpressionKind::Identifier) {
+          expression.text = found->second->text + expression.text.substr(dot);
+          return;
+        }
+      }
+    }
+    for (auto& operand : expression.operands) self(self, operand);
+  };
+  const auto substitute_type = [&](const auto& self, Type& selected) -> void {
+    if (selected.packed_range_expression) {
+      substitute_expression(substitute_expression,
+          selected.packed_range_expression->left);
+      substitute_expression(substitute_expression,
+          selected.packed_range_expression->right);
+    }
+    for (auto& dimension : selected.systemverilog_packed_dimensions) {
+      substitute_expression(substitute_expression, dimension.left);
+      substitute_expression(substitute_expression, dimension.right);
+    }
+    for (auto& member : selected.packed_members) {
+      if (member.packed_range_expression) {
+        substitute_expression(substitute_expression,
+            member.packed_range_expression->left);
+        substitute_expression(substitute_expression,
+            member.packed_range_expression->right);
+      }
+      for (auto& nested : member.nested_types) self(self, nested);
+    }
+    if (selected.systemverilog_container) {
+      for (auto& element : selected.systemverilog_container->element_types) {
+        self(self, element);
+      }
+    }
+  };
+  substitute_type(substitute_type, type);
+  return type;
 }
 
 
@@ -822,6 +880,23 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                    const SourceSpan& reference_span)
       -> std::optional<std::string> {
     ValueEnvironment values = package_values;
+    // A class declared in a package sees that package's parameters by
+    // their simple names (IEEE 1800-2017 26.3).
+    if (const auto owner_end = declaration.canonical_identity.rfind("::");
+        owner_end != std::string::npos) {
+      const auto owner = std::string_view { declaration.canonical_identity }
+          .substr(0, owner_end);
+      const auto package_start = owner.rfind("::");
+      const auto package = package_start == std::string_view::npos
+          ? owner : owner.substr(package_start + 2U);
+      const auto prefix = std::string { package } + "::";
+      for (const auto& [name, value] : package_values) {
+        if (name.starts_with(prefix)
+            && name.find("::", prefix.size()) == std::string::npos) {
+          values.insert_or_assign(name.substr(prefix.size()), value);
+        }
+      }
+    }
     std::set<std::string> bound_values;
     StringEnvironment string_values;
     TypeEnvironment types;
@@ -1219,6 +1294,18 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       collect_interface_specialization(interface_identity);
     }
 
+    // Class-body local parameters size the class's types
+    // (`localparam int W = 4; logic [W-1:0] x;`, IEEE 1800-2017 8.25).
+    for (const auto& property : declaration.properties) {
+      if (!property.is_parameter || !property.declaration.initializer
+          || values.contains(property.declaration.name)) {
+        continue;
+      }
+      if (const auto value = evaluate(
+              *property.declaration.initializer, values)) {
+        values.insert_or_assign(property.declaration.name, *value);
+      }
+    }
     std::map<std::string, Type> aliases;
     std::map<std::string, Type> scoped_aliases;
     for (const auto& alias : declaration.type_aliases) {
@@ -1226,6 +1313,40 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
           alias.name,
           specialize_type(alias.type, values, types));
     }
+    // A typedef of a non-parameterized base class is inherited
+    // (IEEE 1800-2017 8.13); the class's own typedefs hide it.
+    {
+      std::set<const SystemVerilogClassDeclaration*> visited_bases;
+      for (auto base = declaration.base; base;) {
+        if (base->declaration_identity.empty()) break;
+        const auto found = declarations.find(base->declaration_identity);
+        if (found == declarations.end()
+            || !visited_bases.insert(found->second).second
+            || !found->second->parameters.empty()) {
+          break;
+        }
+        for (const auto& alias : found->second->type_aliases) {
+          aliases.emplace(alias.name, alias.type);
+        }
+        base = found->second->base;
+      }
+    }
+    // `T::name` through a class-valued type parameter names a typedef of
+    // the actual class (IEEE 1800-2017 8.25.1).
+    const auto scoped_type_parameter_alias =
+        [&](const std::string& name) -> const Type* {
+      const auto separator = name.find("::");
+      if (separator == std::string::npos) return nullptr;
+      const auto bound = types.find(name.substr(0, separator));
+      if (bound == types.end()
+          || bound->second.systemverilog_class_declaration.empty()) {
+        return nullptr;
+      }
+      const auto alias = class_aliases.find(
+          bound->second.systemverilog_class_declaration
+          + name.substr(separator));
+      return alias == class_aliases.end() ? nullptr : &alias->second;
+    };
     std::function<Type(Type, std::set<std::string>)>
         expand_type_aliases;
     expand_type_aliases =
@@ -1245,6 +1366,9 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                        package_aliases.find(type.named_type);
                    package_alias != package_aliases.end()) {
           replacement = &package_alias->second;
+        } else if (const auto scoped = scoped_type_parameter_alias(
+                       type.named_type)) {
+          replacement = scoped;
         } else if (const auto class_alias =
                        class_aliases.find(type.named_type);
                    class_alias != class_aliases.end()) {

@@ -1050,9 +1050,10 @@ void VerilogParser::validate_task_body(
     if (argument.const_reference) {
       const_references.insert(argument.name);
     }
+    // An input, inout or ref formal may have a default (IEEE 1800-2017
+    // 13.5.3); a ref or inout default names the variable it refers to.
     if (argument.default_value
-        && (argument.direction != PortDirection::Input
-            || argument.reference)) {
+        && argument.direction == PortDirection::Output) {
       error(
           start,
           "FSIM-SV-SEM-097",

@@ -212,6 +212,11 @@ bool VerilogParser::parse_class_property(
           "duplicate class property declaration '" + name.text + "'");
     } else {
       const auto span = cover(start.span, previous().span);
+      if (type.systemverilog_container
+          && type.systemverilog_container->associative_index_type) {
+        class_associative_index_types_.insert_or_assign(name.text,
+            *type.systemverilog_container->associative_index_type);
+      }
       SystemVerilogClassProperty property;
       property.declaration = VariableDeclaration{
           name.text,
@@ -788,6 +793,17 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     ~ImplicitNetScope() { references.resize(count); }
   } implicit_net_scope { implicit_net_references_,
       implicit_net_references_.size() };
+  // Associative-array properties of this class, for `foreach` in its
+  // methods (IEEE 1800-2017 12.7.3); a nested class keeps its own.
+  struct ClassAssociativeScope {
+    std::unordered_map<std::string, Type>& types;
+    std::unordered_map<std::string, Type> saved;
+    explicit ClassAssociativeScope(std::unordered_map<std::string, Type>& target)
+        : types(target), saved(std::move(target)) { types.clear(); }
+    ClassAssociativeScope(const ClassAssociativeScope&) = delete;
+    ClassAssociativeScope& operator=(const ClassAssociativeScope&) = delete;
+    ~ClassAssociativeScope() { types = std::move(saved); }
+  } class_associative_scope { class_associative_index_types_ };
   declaration.standard_revision = standard_revision_;
   declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.enclosing_scope = std::move(enclosing_scope);

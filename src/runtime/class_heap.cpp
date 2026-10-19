@@ -322,10 +322,12 @@ SystemVerilogClassHandle SystemVerilogClassHeap::allocate(
   object_value.random_root_seed = derived_seed(
       simulation_seed_, descriptor.random_root_identity, 0);
   object_value.random_object_ordinal = object_ordinal;
-  object_value.random_object_seed = derived_seed(
-      object_value.random_root_seed,
-      descriptor.specialization_identity,
-      object_ordinal);
+  object_value.random_object_seed = next_object_seed_
+      ? derived_seed(*next_object_seed_,
+            descriptor.specialization_identity, 0)
+      : derived_seed(object_value.random_root_seed,
+            descriptor.specialization_identity, object_ordinal);
+  next_object_seed_.reset();
   for (std::size_t index = 0; index < object_value.properties.size(); ++index) {
     auto& state = object_value.properties[index].random_state;
     if (state) {

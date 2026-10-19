@@ -179,11 +179,13 @@ struct Analysis {
 }
 
 // Keys within ranges: every key when there are at most 4096, otherwise
-// each range's ends and a uniform sample of 512.
+// each range's ends and a uniform sample of 2048, so a constraint the range
+// analysis does not bound (a byte select equal to a constant) still meets a
+// candidate with high probability.
 [[nodiscard]] std::vector<std::uint64_t> bounded_keys(
     const Ranges& ranges, const std::function<std::uint64_t()>& random) {
   constexpr unsigned __int128 enumerated_values = 4096U;
-  constexpr std::size_t sampled_values = 512U;
+  constexpr std::size_t sampled_values = 2048U;
   unsigned __int128 count{};
   for (const auto& range : ranges) {
     count += static_cast<unsigned __int128>(range.high - range.low) + 1U;

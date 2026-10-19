@@ -239,6 +239,14 @@ class Resolver final {
   std::map<std::string, SystemVerilogClassDeclaration*, std::less<>> classes_;
   std::map<std::string, const DesignUnit*, std::less<>> class_units_;
   std::map<std::string, const Type*, std::less<>> class_aliases_;
+  // The array typedef `named_type` names from `lexical`, walking outward,
+  // then the unique compilation-unit typedef of that name.
+  [[nodiscard]] static std::optional<std::string>
+  class_specialization_spelling(const std::string& owner, const Type& type);
+  [[nodiscard]] std::optional<Expression> class_scoped_parameter_value(
+      const Type& type, const Scope& scope);
+  [[nodiscard]] const Type* container_alias(
+      std::string lexical, const std::string& named_type) const;
   std::map<std::string, SystemVerilogClassMethod*, std::less<>> methods_;
   std::map<std::string, SystemVerilogClassDeclaration*, std::less<>>
       method_owners_;

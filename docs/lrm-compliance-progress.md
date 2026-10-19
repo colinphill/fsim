@@ -253,6 +253,120 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 72: fork and class-RNG semantics, sampled-value expressions, element members, triage closures
+
+Batch 72 fixes the Batch 71 loss nvc issue595 and closes items from the
+triage reports in `.local-artifacts/lrm-closure/triage/b72-*.md`.
+
+SystemVerilog processes and randomization:
+- `disable fork` and `disable` of a named block reach the process's other
+  activations, kill descendants of finished branches, and leave detached
+  children alone; a clocking drive `<= ##n` runs detached (9.6.1, 9.6.3,
+  14.16). `wait fork` ignores detached children.
+- A class object's RNG is seeded from the creating process's RNG (18.14.2);
+  `items[i].srandom(s)` on a selected receiver works.
+- Soft constraints of nested objects take lower priority than the
+  containing object's (18.5.13). The solver samples larger domains.
+- `solve ... before` skips non-name items; a struct-member constraint on a
+  packed struct property is a part-select.
+- An inline `randomize() with` names a hierarchical variable of the calling
+  scope (`sub1.v`, 18.7, 23.6).
+
+Sampled values and assertions:
+- `$sampled`, `$past`, `$rose`, `$fell`, `$stable` and `$changed` take any
+  expression, sampled through a generated net (16.5.1, 16.9.3). A constant
+  or 2-state expression starts at its own initial value. `$sampled($time)`
+  is the current time.
+- A clocking block name (`$global_clock`) as a sampled-value clock, and the
+  `_gclk` functions, use that clocking event (14.14).
+
+SystemVerilog classes and types:
+- Class-scoped types through type parameters and module-parameter actuals
+  (`CFG::t`, `T::name`), inherited typedefs of non-parameterized bases,
+  class-body localparams in specialization, and struct members typed by
+  type parameters (8.25).
+- `CFG::p` through `typedef C#(5) CFG;`, and `m #(C#(5)::p)` value actuals,
+  including sibling local parameters (8.25.1).
+- `a[i].m = new` and other members of class-handle elements resolve as
+  member selections (8.22).
+- A class property typed by an array typedef declared outside the class
+  is a container (7.4, 7.5).
+- `vif.f` without parentheses calls the interface function (13.5.5).
+- A package class handle (`P::c.X`) reaches the object's literal local
+  parameters; a package-scoped typedef in a property type has its width;
+  a package class sees the package's parameters by simple name (26.3).
+
+Other SystemVerilog:
+- Packed members of container elements (`d[i].m`) read and write; element
+  assignment patterns, string-keyed associative patterns, and concatenation
+  or `default:` static-array patterns.
+- `ref` module ports (23.2.2.3) and `ref`/`inout` task defaults (13.5.3).
+- `m #(t[7:0])` and `m #(p::t[3:0])` are type actuals.
+- String replication with a non-constant count (11.4.12.2) and
+  `{>>{q}}` of string queues and arrays (11.4.14).
+- Nested queue and dynamic-array element writes follow the queue rules
+  (append one past the end, else ignore; 7.4.6, 7.10.1).
+- `void'(process::self())`; a variable declared with a forward typedef of
+  `string` (6.18).
+- A tri0/tri1 port whose actual is an expression keeps its pull (6.6.4).
+
+VHDL:
+- `S'STABLE(T)` and `S'QUIET(T)` are FALSE in the cycle of the event; their
+  `'ACTIVE`/`'EVENT` work (16.2.3).
+- VHDL-2019 object prefixes for scalar type attributes; `STD_ULOGIC`
+  `'VAL`, `'POS` and bounds (16.2.2).
+- A box default (`is <>`) denotes a subprogram with the formal's designator
+  only (6.5.6.2). The function- and procedure-generic application tests now
+  declare that subprogram, as the LRM requires.
+- `ABS(EPOCH(t2) - EPOCH(t1))`, `LOCALTIME`/`GMTIME` of a REAL or a nested
+  call, and `TO_STRING` of a REAL next to `use std.env.all` (16.5).
+- Constant choices of `case?` (10.9); a STD.TEXTIO LINE `l.all := ...`;
+  `s'last_value.x` of a record; `bit_sig <= force '1'`.
+- Bit-string literals: empty (`d""`, `4x""`) and replicated characters
+  (`UO"2C"`, 15.8).
+- A top-level generic of a STRING subtype takes a string override.
+- Enumeration subtype defaults use the subtype chain's constraint, and
+  character-literal initializers their position.
+- Conversion functions in subelement port actuals before VHDL-2008.
+- Fixed two crashes: a callable frame key reserved for a frame that was not
+  created now never names a later frame's index (nvc ieee13, issue516).
+
+Out of scope (scripts/lrm_corpus.py):
+- Verilator: t_tri_unconn (time-0 race), t_array_mda (out-of-bounds read),
+  t_tri_eqcase_input (always block without timing control), t_param and
+  t_param_no_parentheses (unparenthesized parameter value),
+  t_interface_gen5(_noinl) and t_var_dotted2_inl0/1 (bare generate block).
+- nvc: psl7, psl14-17, psl19-22 (PSL default clock among concurrent
+  statements).
+- vhdl-compliance: tb_014, tb_014a, tb_023 (unconditional error
+  placeholders).
+
+Measurement: targeted reruns of the Batch 71 (`b71w1`) failures pass 50
+cases. Of these:
+- 32 Verilator: t_class_extends, t_class_lparam_chain,
+  t_class_lparam_sibling_chain, t_class_param_typedef5,
+  t_constraint_unique_mode, t_disable_fork_deep, t_disable_fork_hier_inst,
+  t_disable_fork_nba, t_disable_fork_reentrant, t_foreach_class,
+  t_forceable_sampled, t_lparam_assign_iface_array_typedef2,
+  t_mod_param_class_typedef7, t_param_array5, t_param_override_typedef,
+  t_past, t_past_funcs, t_process_always, t_process_rand_state(_fork,
+  _public), t_randomize_array_elem_with, t_randomize_method_with,
+  t_randomize_soft_cross_object, t_randomize_solve_before_foreach,
+  t_sampled_expr, t_select_bound3, t_stream_string_array, t_string_repl,
+  t_type_param, t_type_param_collision, t_var_ref_port;
+- 9 nvc: attr18, bitstr1, implicit9, implicit10, issue481, issue890,
+  issue1043, stdenv5, textio8;
+- 7 ivtest: br_gh800, br_gh1449, packeda, sv_ps_member_sel3,
+  sv_ps_type_class1, sv_ps_type_class_prop, sv_typedef_fwd_base;
+- 2 vhdl-compliance: vhdl_2008/tb_top_generic_subtype,
+  vhdl_2019/tb_011.
+
+nvc issue595 recovered as well; it is not counted. The labelled ctest run
+fails the known 28.
+
+The full six-suite run on the frozen `b72w1` is in progress; its table will
+be added in the next batch note.
+
 ### Batch 71: class type-parameter handles, dynamic VHDL delays, class-scoped typedefs, triage closures
 
 Batch 71 fixes the Batch 70 regression (80 UVM cases in sv-tests) and closes
@@ -337,9 +451,29 @@ cases. Of these:
 The UVM cases and VESTs tc987 recovered as well; they are not counted.
 Verilator t_time_sscanf expects `%t` without `$timeformat` precision
 rounding, which contradicts the xsim-checked `sv_sscanf_time_batch58`
-fixture and 21.3.4.3; it stays open. The
-six-suite run on the frozen `b71w1` is in progress; its table will be added
-with Batch 72.
+fixture and 21.3.4.3; it stays open.
+
+Full run on the frozen `b71w1`, compared with Batch 70 (`b70w1`):
+- New passes: sv-tests 80 (the recovered UVM cases), Verilator 22, nvc 22,
+  VESTs 4, ivtest 3.
+- Losses:
+  - nvc issue595: a positional aggregate of `std_logic` signals as a port
+    actual went through a conversion program, which is not re-run when a
+    resolved source settles. Fixed in Batch 72: aggregates with Logic9 or
+    resolved sources keep the port adapter.
+  - vhdl-compliance `vhdl_2019/tb_007`: the user `to_string` overload now
+    runs (it used to be bypassed by the predefined one). It declares
+    `variable result : string(L'range)` in a block, a local whose size is
+    only known at run time, which fsim does not support yet.
+
+| Suite | Batch70 passes / in scope | Batch71 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2525 / 2572 | 2528 / 2572 | 254 |
+| sv-tests | 1360 / 1497 | 1440 / 1497 | 0 |
+| verilator | 1635 / 2124 | 1657 / 2124 | 291 |
+| vests | 3602 / 3646 | 3606 / 3646 | 2 |
+| nvc | 934 / 1260 | 955 / 1260 | 222 |
+| vhdl-compliance | 43 / 72 | 42 / 72 | 0 |
 
 ### Batch 70: VHDL port-association conversions, block-port shapes, triage closures
 

@@ -86,7 +86,15 @@ void VerilogParser::parse_parameter_overrides(
         || keyword("struct") || keyword("union") || keyword("enum")
         || at(TokenKind::LeftBracket)
         // A class specialization (`C#(8)::t`) is never an expression.
-        || (at(TokenKind::Identifier) && at(TokenKind::Hash, 1));
+        || (at(TokenKind::Identifier) && at(TokenKind::Hash, 1))
+        // A packed array of a typedef name (`t[7:0]`, `p::t[3:0]`, 7.4.1).
+        || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
+            && packed_typedef_types_.contains(current().text))
+        || (at(TokenKind::Identifier) && at(TokenKind::Scope, 1)
+            && at(TokenKind::Identifier, 2) && at(TokenKind::LeftBracket, 3)
+            && (packed_typedef_types_.contains(
+                    current().text + "::" + current(2).text)
+                || packed_typedef_types_.contains(current(2).text)));
   };
   const auto parse_actual = [&](ParameterOverride& override) {
     // `type(...)` is a type actual (6.23) unless it begins a constant
@@ -405,14 +413,20 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
               || keyword("reg") || keyword("var")
               || (is_named_type_reference_start()
                   && at(TokenKind::Identifier, 1)));
-      if (is_direction_keyword() || typed_without_direction) {
+      // A `ref` port passes a variable by reference (IEEE 1800-2017
+      // 23.2.2.3).
+      const bool ref_port = language_ == Language::SystemVerilog2017
+          && keyword("ref");
+      if (is_direction_keyword() || typed_without_direction || ref_port) {
         const auto direction_token = current();
         note_port_style(true, direction_token);
         (void)require_standard(
             "an ANSI module-port declaration",
             StandardRevision::Verilog2001,
             direction_token);
-        spec.direction = typed_without_direction
+        spec.direction = ref_port && match_keyword("ref")
+            ? PortDirection::Ref
+            : typed_without_direction
             ? (have_inherited_type ? inherited.direction
                                    : PortDirection::Inout)
             : parse_direction();
@@ -2115,6 +2129,28 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     type = parse_virtual_interface_type(virtual_start);
   } else {
     parse_optional_net_type(type);
+  }
+  // An anonymous enumeration declared in a block gets a hidden typedef,
+  // so its literal names resolve there (IEEE 1800-2017 6.19).
+  if (!type.enumeration_literals.empty() && type.named_type.empty()
+      && type.enumeration_literals.size()
+          == type.systemverilog_enumeration_values.size()) {
+    std::vector<EnumLiteralDeclaration> literals;
+    for (std::size_t index = 0; index < type.enumeration_literals.size();
+         ++index) {
+      literals.push_back({ type.enumeration_literals[index],
+          type.systemverilog_enumeration_values[index],
+          type.systemverilog_enumeration_values[index].span });
+    }
+    const auto name = anonymous_enumeration_type_name(literals.front().name);
+    if (std::ranges::none_of(block.type_aliases,
+            [&](const TypeAliasDeclaration& alias) {
+              return alias.name == name;
+            })) {
+      block.type_aliases.push_back({ name, type, start.span,
+          std::move(literals), TypeDeclarationKind::SystemVerilogTypedef,
+          { }, { }, { }, false });
+    }
   }
   // `var` with an implicit data type declares a logic variable (6.8).
   if (explicit_variable && type.named_type.empty() && type.spelling == "wire") {

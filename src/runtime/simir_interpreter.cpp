@@ -83,6 +83,11 @@ void Interpreter::set_region_kernel_backend_provider(
     impl_->region_kernel_backend_provider = std::move(provider);
 }
 
+std::optional<std::uint64_t> Interpreter::take_class_allocation_seed()
+{
+    return std::exchange(impl_->pending_class_allocation_seed, std::nullopt);
+}
+
 void Interpreter::set_class_allocate_context_hook(
     ClassAllocateContextHook hook)
 {

@@ -1311,6 +1311,8 @@ Simulation::Impl::Impl(
             const std::span<const runtime::PackedLogic4> actuals,
             const std::span<const std::string> string_actuals,
             const std::span<const std::string> actual_names) {
+            class_heap.set_next_object_seed(
+                interpreter->take_class_allocation_seed());
             return construct_class(
                 specialization, declared_type, actuals, string_actuals,
                 actual_names, scope, 0U, owner_design_process, 0U,

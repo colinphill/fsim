@@ -441,9 +441,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
   };
   const auto configure = [&](SystemVerilogConstraintSolver& solver,
                              const SystemVerilogClassRandomizeVariables& all) {
-    for (const auto& node : nodes) {
-      if (node.constraints != nullptr && *node.constraints) {
-        (*node.constraints)(solver, view_of(node, all));
+    // Soft constraints added later take priority; a containing object's
+    // soft constraints outrank those of its rand member objects (IEEE
+    // 1800-2017 18.5.14.1), so the members (in reverse preorder) come
+    // first and the root last.
+    for (auto node = nodes.rbegin(); node != nodes.rend(); ++node) {
+      if (node->constraints != nullptr && *node->constraints) {
+        (*node->constraints)(solver, view_of(*node, all));
       }
     }
     if (request.inline_constraints) {

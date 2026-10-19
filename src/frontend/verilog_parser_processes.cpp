@@ -825,6 +825,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                             : std::optional<Type> { prior_typedef->second } });
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
                     block_typedef_types_.insert_or_assign(alias.name, alias.type);
+                    procedural_typedef_names_.insert(alias.name);
                 }
             } else if (is_block_declaration_start() || keyword("parameter")
                 || keyword("localparam")) {
@@ -845,7 +846,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 advance();
             }
         }
-        block.type_aliases = std::move(local_declarations.type_aliases);
+        block.type_aliases.insert(block.type_aliases.begin(),
+            std::make_move_iterator(local_declarations.type_aliases.begin()),
+            std::make_move_iterator(local_declarations.type_aliases.end()));
         expect_keyword("end", false, "FSIM-SV-PARSE-017");
         if (match(TokenKind::Colon)) {
             const auto closing_label = expect_identifier("block name");
@@ -2188,8 +2191,18 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 emit(";");
                 emit(immediate || clocking.empty()
                         ? "end" : "end join_none end");
-                return parse_generated_statement(
+                auto generated = parse_generated_statement(
                     std::move(out), span_from(start, previous()));
+                // The drive's fork is a pending update, not a subprocess
+                // (IEEE 1800-2017 9.6.1, 9.6.3).
+                if (generated && !immediate && !clocking.empty()) {
+                    for (auto& item : generated->statements) {
+                        if (item.kind == StatementKind::Fork) {
+                            item.fork_detached = true;
+                        }
+                    }
+                }
+                return generated;
             }
         } else if (match(TokenKind::Assign)) {
             assignment_kind = AssignmentKind::Blocking;

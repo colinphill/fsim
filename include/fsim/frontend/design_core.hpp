@@ -1672,6 +1672,10 @@ struct Statement {
     ForkJoinKind fork_join_kind { ForkJoinKind::All };
     // Concurrent assertion attempts own independent local register frames.
     bool fork_isolate_register_frame { };
+    // A fork that schedules a pending update (`cb.v <= ##n e`) rather than
+    // creating subprocesses; disable fork and wait fork ignore its children
+    // (IEEE 1800-2017 9.6.1, 9.6.3, 14.16).
+    bool fork_detached { };
     // True only for an If node synthesized from a VHDL conditional signal
     // assignment, preserving its distinct legality diagnostic.
     bool vhdl_conditional_assignment { };

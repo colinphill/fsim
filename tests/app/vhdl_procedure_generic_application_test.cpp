@@ -424,6 +424,18 @@ architecture rtl of procedure_top is
                << increment << R"(;
     accumulator := accumulator + destination;
   end procedure;
+  -- The boxed default names this procedure by its designator (IEEE
+  -- 1076-2008 6.5.6.2).
+  procedure selected(
+    source : in integer;
+    variable destination : out integer;
+    variable accumulator : inout integer) is
+    variable temporary : integer := source;
+  begin
+    destination := temporary + )"
+               << increment << R"(;
+    accumulator := accumulator + destination;
+  end procedure;
   signal direct_input : integer;
   signal direct_output : integer;
   signal direct_total : integer;

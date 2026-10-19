@@ -17,6 +17,38 @@
 #include <unordered_map>
 
 namespace fsim::elaboration {
+
+namespace {
+
+// A callable frame key reserved before its frame exists, so recursive calls
+// in the body find the frame; the reservation is dropped when the frame is not
+// created, so the key never names the index a later frame takes.
+class CallableKeyReservation {
+public:
+    CallableKeyReservation() = default;
+    CallableKeyReservation(const CallableKeyReservation&) = delete;
+    CallableKeyReservation& operator=(const CallableKeyReservation&) = delete;
+    ~CallableKeyReservation()
+    {
+        if (indices_ != nullptr) {
+            indices_->erase(key_);
+        }
+    }
+    void reserve(std::unordered_map<std::string, std::size_t>& indices,
+        std::string key)
+    {
+        indices_ = &indices;
+        key_ = std::move(key);
+    }
+    void commit() noexcept { indices_ = nullptr; }
+
+private:
+    std::unordered_map<std::string, std::size_t>* indices_ { };
+    std::string key_;
+};
+
+} // namespace
+
 namespace {
 
     constexpr std::size_t maximum_effective_subtype_cache_entries = 64U;
@@ -3063,10 +3095,16 @@ Lowerer::hir_inline_constraints(
                 : std::nullopt;
             const auto width = hir_expression_width(id, process_scope);
             const auto domain = hir_expression_domain(id, process_scope);
-            // A property of the calling object (`this.i`) is read as well.
-            if (declaration && width && *width != 0U && *width <= 64U
-                && domain
-                && (hir_local_registers_.contains(declaration->value())
+            // A property of the calling object (`this.i`) is read as well,
+            // and so is a hierarchical reference (`sub1.v`, 23.6).
+            const bool hierarchical_value = !declaration
+                && runtime_values != nullptr && source.text.find('.')
+                    != std::string::npos
+                && hir_direct_signal(id).has_value();
+            if ((declaration || hierarchical_value) && width && *width != 0U
+                && *width <= 64U && domain
+                && (hierarchical_value
+                    || hir_local_registers_.contains(declaration->value())
                     || hir_runtime_binding(
                         *declaration, process_scope, true)
                     || hir_class_property_profile(id))) {
@@ -5930,6 +5968,7 @@ Lowerer::lower_hir_class_callable_invocation(
           };
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
+    CallableKeyReservation key_reservation;
     if (profile.interface_receiver) {
         const auto key = std::to_string(profile.declaration.value())
             + ":" + *profile.interface_receiver;
@@ -5939,6 +5978,7 @@ Lowerer::lower_hir_class_callable_invocation(
             new_frame = false;
         } else {
             hir_interface_callable_indices_.emplace(key, frame_index);
+            key_reservation.reserve(hir_interface_callable_indices_, key);
         }
     } else {
         const auto callable_key = systemverilog_task_callable_key(
@@ -5958,6 +5998,7 @@ Lowerer::lower_hir_class_callable_invocation(
             new_frame = false;
         } else {
             hir_callable_indices_.emplace(key, frame_index);
+            key_reservation.reserve(hir_callable_indices_, key);
         }
     }
     if (new_frame) {
@@ -6074,6 +6115,7 @@ Lowerer::lower_hir_class_callable_invocation(
         frame.allocated = true;
         inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
+        key_reservation.commit();
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
         }
@@ -13995,6 +14037,7 @@ Lowerer::lower_hir_function_call_value(
     }
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
+    CallableKeyReservation key_reservation;
     if (interface_callable) {
         const auto key = callable_key + "|receiver:"
             + std::to_string(interface_callable->receiver.size()) + ":"
@@ -14005,6 +14048,7 @@ Lowerer::lower_hir_function_call_value(
             new_frame = false;
         } else {
             hir_interface_callable_indices_.emplace(key, frame_index);
+            key_reservation.reserve(hir_interface_callable_indices_, key);
         }
     } else {
         const auto found = hir_callable_indices_.find(callable_key);
@@ -14013,6 +14057,7 @@ Lowerer::lower_hir_function_call_value(
             new_frame = false;
         } else {
             hir_callable_indices_.emplace(callable_key, frame_index);
+            key_reservation.reserve(hir_callable_indices_, callable_key);
         }
     }
     if (new_frame) {
@@ -14209,6 +14254,7 @@ Lowerer::lower_hir_function_call_value(
         frame.allocated = true;
         inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
+        key_reservation.commit();
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
         }
@@ -14670,11 +14716,13 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
             + std::to_string(*lexical_parent);
     }
     auto frame_index = hir_callable_frames_.size();
+    CallableKeyReservation key_reservation;
     if (const auto found = hir_callable_indices_.find(callable_key);
         found != hir_callable_indices_.end()) {
         frame_index = found->second;
     } else {
         hir_callable_indices_.emplace(callable_key, frame_index);
+        key_reservation.reserve(hir_callable_indices_, callable_key);
         HirCallableFrame frame;
         frame.declaration = function;
         frame.scope = *declaration->vhdl->nested_scope;
@@ -14706,6 +14754,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
         frame.allocated = true;
         inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
+        key_reservation.commit();
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
         }
@@ -15337,12 +15386,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
                 + (range->descending ? "down" : "up");
         }
     }
+    CallableKeyReservation key_reservation;
     const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
         : hir_callable_frames_.size();
     if (found == hir_callable_indices_.end()) {
         hir_callable_indices_.emplace(callable_key_text, frame_index);
+        key_reservation.reserve(hir_callable_indices_, callable_key_text);
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = *scope;
@@ -15470,6 +15521,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         frame.allocated = true;
         inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
+        key_reservation.commit();
         if (!allocate_hir_static_callable_declarations(frame_index)) {
             return std::nullopt;
         }
@@ -16577,12 +16629,14 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         callable_key_text += "|lexical-parent:"
             + std::to_string(*lexical_parent);
     }
+    CallableKeyReservation key_reservation;
     const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
         : hir_callable_frames_.size();
     if (found == hir_callable_indices_.end()) {
         hir_callable_indices_.emplace(callable_key_text, frame_index);
+        key_reservation.reserve(hir_callable_indices_, callable_key_text);
         HirCallableFrame frame;
         frame.declaration = resolution->body;
         frame.scope = scope;
@@ -16725,6 +16779,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         frame.allocated = true;
         inherit_enclosing_hir_frame_facts(frame);
         hir_callable_frames_.push_back(std::move(frame));
+        key_reservation.commit();
     }
 
     std::vector<std::optional<RegisterId>> lowered_actuals(

@@ -2838,17 +2838,30 @@ Lowerer::lower_hir_vhdl_environment_expression(
             return std::nullopt;
         }
         const auto operand = source.operands.front();
-        const bool record = hir_vhdl_time_record_expression(operand);
         const auto operand_expression
             = specialized_hir_unit_->find_expression(operand);
+        // `GMTIME(LOCALTIME)`: a parameterless calendar call is a
+        // TIME_RECORD (IEEE 1076-2019 16.5.5).
+        const bool nested_calendar = operand_expression
+            && operand_expression->vhdl != nullptr
+            && operand_expression->vhdl->operands.empty()
+            && (equal_ignoring_ascii_case(
+                    simple_name_of(operand_expression->vhdl->text),
+                    "localtime")
+                || equal_ignoring_ascii_case(
+                    simple_name_of(operand_expression->vhdl->text),
+                    "gmtime"));
+        const bool record = nested_calendar
+            || hir_vhdl_time_record_expression(operand);
         const auto operand_subtype = hir_vhdl_expression_subtype(operand);
         const bool real_time = (operand_expression
                 && operand_expression->vhdl != nullptr
                 && operand_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::real_literal)
             || (operand_subtype
-                && equal_ignoring_ascii_case(
-                    operand_subtype->type_mark.spelling, "real"));
+                && (equal_ignoring_ascii_case(
+                        operand_subtype->type_mark.spelling, "real")
+                    || hir_vhdl_subtype_is_real(*operand_subtype)));
         const auto argument_name = source.argument_names.empty()
             ? std::string_view { }
             : std::string_view { source.argument_names.front() };

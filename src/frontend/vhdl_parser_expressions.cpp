@@ -283,7 +283,15 @@ std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
             }
             const auto position = std::string_view { "0123456789ABCDEF" }.find(character);
             if (position == std::string_view::npos || position >= (std::size_t { 1 } << radix_width)) {
-                malformed = true;
+                // Any other graphic character stands for itself in each
+                // position (IEEE 1076-2008 15.8, `UO"2C"` is "010CCC").
+                if (!std::isgraph(static_cast<unsigned char>(raw))) {
+                    malformed = true;
+                    return;
+                }
+                for (unsigned index = 0; index < radix_width; ++index) {
+                    append_bit(raw);
+                }
                 return;
             }
             for (unsigned shift = radix_width; shift != 0; --shift) {
@@ -364,14 +372,14 @@ std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
                 }
             }
             flush_chunk();
-            if (value_character_count == 0) {
-                malformed = true;
-            }
             while (limbs.size() > 1U && limbs.back() == 0U) {
                 limbs.pop_back();
             }
+            // An empty literal (`D""`) has no bits (IEEE 1076-2008 15.8).
             if (limbs.size() == 1U && limbs.front() == 0U) {
-                append_bit('0');
+                if (value_character_count != 0) {
+                    append_bit('0');
+                }
             } else {
                 const auto most_significant_bits = 32U - static_cast<unsigned>(std::countl_zero(limbs.back()));
                 for (unsigned shift = most_significant_bits; shift != 0; --shift) {

@@ -2757,6 +2757,52 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
             : std::optional { resize(destination) };
     };
 
+    if (attribute->implicit_prefix) {
+        const bool stable = *attribute->implicit_prefix
+            == HirVhdlSignalAttributeKind::stable;
+        if (attribute->duration != 0U) {
+            const auto derived = vhdl_implicit_signal_attribute(
+                attribute->signal, stable ? "stable" : "quiet",
+                attribute->duration, span);
+            if (!derived) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(SignalEvent {
+                destination, *derived });
+            return resize(destination);
+        }
+        // S'STABLE(0) is FALSE exactly in a cycle with an event on S (and
+        // S'QUIET(0) in one with a transaction), so it changes when that
+        // differs from the previous cycle, which the settle signal (toggled
+        // one delta after each event or transaction) reports.
+        const auto settle = vhdl_implicit_signal_attribute(
+            attribute->signal, stable ? "stable_settle" : "quiet_settle",
+            0U, span);
+        if (!settle) {
+            return std::nullopt;
+        }
+        const auto current = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        if (stable) {
+            SignalEvent operation { current, attribute->signal };
+            operation.selection = runtime_selection;
+            process_.operations.emplace_back(std::move(operation));
+        } else {
+            SignalActive operation { current, attribute->signal };
+            operation.selection = runtime_selection;
+            process_.operations.emplace_back(std::move(operation));
+        }
+        const auto previous = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(SignalEvent { previous, *settle });
+        const auto destination = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::bit_xor, destination, current, previous });
+        return resize(destination);
+    }
     switch (attribute->kind) {
     case HirVhdlSignalAttributeKind::event: {
         const auto destination = allocate_register(
@@ -2834,10 +2880,37 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
     case HirVhdlSignalAttributeKind::stable:
     case HirVhdlSignalAttributeKind::quiet: {
         if (attribute->duration != 0U) {
-            return read_derived(
+            const auto derived = read_derived(
                 attribute->kind == HirVhdlSignalAttributeKind::stable
                     ? "stable"
                     : "quiet");
+            if (!derived) {
+                return std::nullopt;
+            }
+            // The implicit signal is FALSE from the very cycle of the event
+            // (or transaction) on S (IEEE 1076-2008 16.2.3, 14.7.3.4); its
+            // driver only updates it one delta later.
+            record_implicit_signal_dependency(attribute->signal);
+            const auto changed = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            if (attribute->kind == HirVhdlSignalAttributeKind::stable) {
+                SignalEvent operation { changed, attribute->signal };
+                operation.selection = runtime_selection;
+                process_.operations.emplace_back(std::move(operation));
+            } else {
+                SignalActive operation { changed, attribute->signal };
+                operation.selection = runtime_selection;
+                process_.operations.emplace_back(std::move(operation));
+            }
+            const auto unchanged = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(UnaryNot { unchanged, changed });
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_and, destination,
+                resize_register(*derived, 1U, false), unchanged });
+            return resize(destination);
         }
         // S'STABLE(0) and S'QUIET(0) are FALSE only in the cycle of an
         // event or transaction on S (IEEE 1076-2008 16.2.3); a settle
@@ -12982,9 +13055,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (language_ != frontend::Language::SystemVerilog2017 || named
             || arguments.empty() || arguments.size() > maximum_arity
             || !signal_expression
-            || signal_expression->systemverilog == nullptr
-            || signal_expression->systemverilog->kind
-                != semantic::sv::ExpressionKind::name) {
+            || signal_expression->systemverilog == nullptr) {
             report(
                 "FSIM-ELAB-SVSAMPLE-001",
                 std::string { source.text }
@@ -12996,7 +13067,39 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 hir_source_span(sampled.source));
             return std::nullopt;
         }
-        const auto signal = hir_direct_signal(*arguments.front());
+        const auto& sampled_source = *signal_expression->systemverilog;
+        // The sampled value of a time function is its current value (IEEE
+        // 1800-2017 16.5.1).
+        if (source.text == "$sampled"
+            && sampled_source.kind == semantic::sv::ExpressionKind::call
+            && (sampled_source.text == "$time"
+                || sampled_source.text == "$stime"
+                || sampled_source.text == "$realtime")) {
+            return lower_hir_expression(*arguments.front(), expected_width);
+        }
+        auto signal = hir_direct_signal(*arguments.front());
+        // Any other expression is sampled through a generated net that
+        // follows its value (IEEE 1800-2017 16.5.1, 16.9.3).
+        if (!signal
+            && sampled_source.kind != semantic::sv::ExpressionKind::name) {
+            signal = hir_monitor_expression_signal(*arguments.front());
+            // Before its first sample the expression has its initial value
+            // (16.9.3): a constant's own value, and zero for a 2-state one.
+            if (signal && *signal < design_.signals_.size()) {
+                auto& initial = design_.signals_[*signal].initial_value;
+                const auto width = initial.width();
+                if (const auto constant
+                    = hir_constant_integer(*arguments.front());
+                    constant && width <= 64U) {
+                    initial = PackedLogic4::from_aval_bval(width,
+                        static_cast<std::uint64_t>(*constant), 0U);
+                } else if (hir_expression_domain(*arguments.front(),
+                               hir_process_scope_)
+                    == std::optional { frontend::ValueDomain::Bit2 }) {
+                    initial = PackedLogic4(width, Logic4::zero);
+                }
+            }
+        }
         const auto width = signal
                 && *signal < design_.signal_info_.size()
             ? std::optional<std::size_t> {
@@ -13054,7 +13157,59 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto clock_index = past ? 3U : 1U;
         std::optional<SignalId> clock;
         SampledClockEdge clock_edge { SampledClockEdge::any };
-        if (argument(clock_index)) {
+        // A clocking block name (`$global_clock` for the unnamed global
+        // clocking block) stands for its clocking event (IEEE 1800-2017
+        // 14.14, 16.9.3).
+        const auto clocking_block_clock = [&](const std::string& name)
+            -> std::optional<std::pair<SignalId, SampledClockEdge>> {
+            const auto selected = specialized_hir_unit_->design().find_unit(
+                specialized_hir_unit_->unit());
+            if (!selected || selected->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& blocks = selected->systemverilog->clocking_blocks;
+            const auto block = std::ranges::find(
+                blocks, name, &semantic::sv::ClockingBlock::name);
+            if (block == blocks.end() || block->event.size() != 1U
+                || block->event.front().expression) {
+                return std::nullopt;
+            }
+            const auto& event = block->event.front();
+            const auto signal = hir_named_signal(
+                event.signal, hir_process_scope_);
+            if (!signal || *signal >= design_.signal_info_.size()
+                || design_.signal_info_[*signal].width != 1U) {
+                return std::nullopt;
+            }
+            return std::pair {
+                *signal,
+                event.edge == semantic::sv::EdgeKind::positive
+                    ? SampledClockEdge::positive
+                    : event.edge == semantic::sv::EdgeKind::negative
+                    ? SampledClockEdge::negative
+                    : SampledClockEdge::any,
+            };
+        };
+        const auto block_clock = [&]()
+            -> std::optional<std::pair<SignalId, SampledClockEdge>> {
+            const auto event = argument(clock_index)
+                ? argument_record(clock_index)
+                : std::optional<semantic::CompiledExpressionView> { };
+            if (!event || event->systemverilog == nullptr
+                || event->systemverilog->kind
+                    != semantic::sv::ExpressionKind::name) {
+                return std::nullopt;
+            }
+            return clocking_block_clock(event->systemverilog->text);
+        }();
+        const auto global_clock = global
+            ? clocking_block_clock("$global_clock")
+            : std::nullopt;
+        if (block_clock || global_clock) {
+            clock = block_clock ? block_clock->first : global_clock->first;
+            clock_edge
+                = block_clock ? block_clock->second : global_clock->second;
+        } else if (argument(clock_index)) {
             const auto event = argument_record(clock_index);
             const auto event_source
                 = event && event->systemverilog != nullptr
@@ -13709,6 +13864,42 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && expected_width != element.width
             ? std::optional { resize_register(
                   destination, expected_width, element.signed_value) }
+            : std::optional { destination };
+    } else if (const auto element_member
+        = hir_container_element_member(expression_id)) {
+        // `d[i].m`: the member's bits of the packed element.
+        const auto* const member = &*element_member;
+        const auto& element = member->element;
+        const auto index = lower_hir_container_element_index(element);
+        if (!index) {
+            return std::nullopt;
+        }
+        const auto container = element.local
+            ? *element.local
+            : allocate_container_register(*element.type);
+        if (!element.local) {
+            process_.operations.emplace_back(ReadContainerObject {
+                container, element.object });
+            record_container_object_dependency(element.object);
+        }
+        const auto whole = allocate_register(element.width, element.domain);
+        process_.operations.emplace_back(ContainerRead {
+            whole,
+            container,
+            *index,
+            element.indices.size() > 1U || element.type->signed_indices,
+            element.indices.size() > 1U,
+            false,
+        });
+        const auto destination = allocate_register(
+            member->width, element.domain);
+        process_.operations.emplace_back(runtime::simir::Extract {
+            destination, whole,
+            static_cast<std::uint32_t>(member->offset),
+            static_cast<std::uint32_t>(member->width) });
+        result = expected_width != 0U && expected_width != member->width
+            ? std::optional { resize_register(
+                  destination, expected_width, member->signed_value) }
             : std::optional { destination };
     } else if (const auto element
         = hir_container_element_binding(expression_id)) {
@@ -17570,6 +17761,50 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return same_vhdl_identifier(
                     record_element.name, member_name);
             });
+        // A member of a record value (`s'last_value.x`): the record's
+        // first element is most significant (IEEE 1076-2008 5.3.3).
+        if (selected != elements.end()) {
+            std::size_t total { };
+            std::size_t member_offset { };
+            std::size_t member_width { };
+            frontend::ValueDomain member_domain {
+                frontend::ValueDomain::Unknown };
+            bool laid_out = true;
+            for (auto item = elements.begin(); item != elements.end();
+                 ++item) {
+                const auto effective
+                    = hir_effective_vhdl_subtype(item->subtype);
+                const auto width = effective
+                    ? vhdl_subtype_width(*effective) : std::nullopt;
+                if (!width || *width == 0U) {
+                    laid_out = false;
+                    break;
+                }
+                if (item == selected) {
+                    member_width = *width;
+                    member_domain = vhdl_value_domain(effective->domain);
+                } else if (item > selected) {
+                    member_offset += *width;
+                }
+                total += *width;
+            }
+            if (laid_out
+                && total <= std::numeric_limits<std::uint32_t>::max()) {
+                if (const auto whole = lower_hir_expression(
+                        expression->vhdl->operands.front(), total);
+                    whole && register_width(*whole) == total) {
+                    const auto destination = allocate_register(
+                        member_width, member_domain);
+                    process_.operations.emplace_back(Extract {
+                        destination,
+                        *whole,
+                        static_cast<std::uint32_t>(member_offset),
+                        static_cast<std::uint32_t>(member_width),
+                    });
+                    return destination;
+                }
+            }
+        }
         report(
             "FSIM-ELAB-VHCOMPOP-004",
             selected == elements.end()
@@ -18409,13 +18644,24 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // RISING_EDGE(S) is S'EVENT and TO_X01(S) = '1' and
         // TO_X01(S'LAST_VALUE) = '0' (IEEE 1076-2008 16.7); matching
         // equality folds 'H' and 'L' onto '1' and '0'.
-        const auto declaration = hir_referenced_declaration(
-            expression->vhdl->operands.front());
+        const auto operand = expression->vhdl->operands.front();
+        // A scalar element of a record signal (`rising_edge(r.f)`) is a
+        // range of the record's signal (IEEE 1076-2008 16.2.4).
+        const auto edge_member = hir_vhdl_member_selection(operand);
+        const bool member_operand = edge_member && !edge_member->index
+            && !edge_member->access_object_root
+            && edge_member->width == 1U;
+        const auto declaration = member_operand
+            ? std::optional { edge_member->declaration }
+            : hir_referenced_declaration(operand);
         const auto binding = declaration
             ? hir_runtime_binding(*declaration, hir_process_scope_, false)
             : std::nullopt;
         if (!binding || binding->kind != HirRuntimeBindingKind::signal
-            || !binding->signal || binding->width != 1U) {
+            || !binding->signal
+            || (member_operand
+                    ? binding->signal_selection.has_value()
+                    : binding->width != 1U)) {
             report(
                 "FSIM-ELAB-045",
                 "a VHDL edge predicate requires a scalar signal operand",
@@ -18423,20 +18669,37 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return std::nullopt;
         }
         const auto signal = *binding->signal;
-        const auto logic9
-            = binding->domain == frontend::ValueDomain::Logic9;
+        const auto domain
+            = member_operand ? edge_member->domain : binding->domain;
+        const auto logic9 = domain == frontend::ValueDomain::Logic9;
         const auto rising = expression->vhdl->text == "rising_edge";
+        const auto edge_selection = member_operand
+            ? std::optional { runtime::simir::SignalSelection {
+                  static_cast<std::uint32_t>(edge_member->offset), 1U } }
+            : std::nullopt;
         record_implicit_signal_dependency(signal);
         const auto event = allocate_register(
             1U, frontend::ValueDomain::Boolean);
-        process_.operations.emplace_back(SignalEvent { event, signal });
-        const auto current = allocate_register(1U, binding->domain);
+        process_.operations.emplace_back(
+            SignalEvent { event, signal, edge_selection });
+        auto current = allocate_register(
+            member_operand ? binding->signal_storage_width.value_or(
+                                 binding->width)
+                           : 1U,
+            member_operand ? binding->domain : domain);
         process_.operations.emplace_back(ReadSignal { current, signal });
-        const auto previous = allocate_register(1U, binding->domain);
+        if (member_operand) {
+            const auto bit = allocate_register(1U, domain);
+            process_.operations.emplace_back(Extract {
+                bit, current, static_cast<std::uint32_t>(edge_member->offset),
+                1U });
+            current = bit;
+        }
+        const auto previous = allocate_register(1U, domain);
         process_.operations.emplace_back(SignalLastValue {
-            previous, signal });
+            previous, signal, edge_selection });
         const auto level = [&](const bool high) {
-            const auto constant = allocate_register(1U, binding->domain);
+            const auto constant = allocate_register(1U, domain);
             process_.operations.emplace_back(LoadConstant {
                 constant,
                 logic9
@@ -18450,7 +18713,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // 1076-2008 16.7).
         const auto exact = [&](const RegisterId value,
                                const std::string_view spelling) {
-            const auto constant = allocate_register(1U, binding->domain);
+            const auto constant = allocate_register(1U, domain);
             process_.operations.emplace_back(LoadConstant {
                 constant, PackedLogic4::from_logic9_msb_string(spelling) });
             const auto result = allocate_register(
@@ -24219,7 +24482,19 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             == frontend::VhdlSimulatorApi::get_vhdl_assert_format) {
             return lower_hir_vhdl_assert_string_expression(expression_id);
         }
-        if (api == frontend::VhdlSimulatorApi::to_string) {
+        // TO_STRING of a REAL value is the predefined STD.STANDARD
+        // operation, never the STD.ENV TIME_RECORD one (IEEE 1076-2019
+        // 5.2.6, 16.5.5).
+        const auto real_operand = [&] {
+            if (source.operands.empty()) {
+                return false;
+            }
+            const auto subtype
+                = hir_vhdl_expression_subtype(source.operands.front());
+            return subtype && hir_vhdl_subtype_is_real(*subtype);
+        };
+        if (api == frontend::VhdlSimulatorApi::to_string
+            && !real_operand()) {
             return lower_hir_vhdl_environment_string_expression(
                 expression_id);
         }
@@ -25052,12 +25327,77 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             destination, std::move(operands) });
         return destination;
     }
+    // `{>>{q}}` of strings and string containers concatenates their
+    // characters left to right (IEEE 1800-2017 11.4.14, 6.24.3).
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text == "@stream-right" && source.operands.size() >= 2U) {
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(
+            LoadStringConstant { destination, std::string { } });
+        const auto append = [&](const StringRegisterId part) {
+            const auto grown = allocate_string_register();
+            process_.operations.emplace_back(ConcatenateStrings {
+                grown, { destination, part } });
+            process_.operations.emplace_back(
+                CopyStringRegister { destination, grown });
+        };
+        for (std::size_t index = 1U; index < source.operands.size();
+             ++index) {
+            const auto operand = source.operands[index];
+            if (hir_expression_is_string(operand, hir_process_scope_)) {
+                const auto text = lower_hir_string_expression(operand);
+                if (!text) {
+                    return std::nullopt;
+                }
+                append(*text);
+                continue;
+            }
+            const auto container = lower_hir_static_container_value(operand);
+            if (!container
+                || container->type.element_kind
+                    != ContainerElementKind::String) {
+                return std::nullopt;
+            }
+            const auto size = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(
+                ContainerSize { size, container->value });
+            const auto position = load_integer(
+                0, 32U, frontend::ValueDomain::Integer);
+            const auto one = load_integer(
+                1, 32U, frontend::ValueDomain::Integer);
+            const auto head = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto more = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_signed, more, position, size });
+            const auto branch = process_.operations.size();
+            process_.operations.emplace_back(Branch {
+                more, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto body = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto element = allocate_string_register();
+            process_.operations.emplace_back(ContainerStringRead {
+                element, container->value, position, true, false, false,
+                { } });
+            append(element);
+            process_.operations.emplace_back(IntegerBinary {
+                IntegerBinaryOperator::add, position, position, one });
+            process_.operations.emplace_back(Jump { head });
+            process_.operations[branch] = Branch {
+                more, body,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+        }
+        return destination;
+    }
     // A string replication `{N{s, ...}}` (IEEE 1800-2017 11.4.12.2).
     if (source.kind == semantic::sv::ExpressionKind::replication
         && source.operands.size() >= 2U) {
         constexpr std::int64_t maximum_repetitions { 1 << 16 };
         const auto count = hir_constant_integer(source.operands.front());
-        if (!count || *count < 0 || *count > maximum_repetitions) {
+        if (count && (*count < 0 || *count > maximum_repetitions)) {
             return std::nullopt;
         }
         std::vector<StringRegisterId> items;
@@ -25069,6 +25409,56 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 return std::nullopt;
             }
             items.push_back(*lowered);
+        }
+        // A string replication may have a non-constant multiplier,
+        // evaluated at run time (IEEE 1800-2017 11.4.12.2).
+        if (!count) {
+            auto remaining = lower_hir_expression(source.operands.front(), 32U);
+            if (!remaining) {
+                return std::nullopt;
+            }
+            if (register_width(*remaining) != 32U) {
+                remaining = resize_register(*remaining, 32U,
+                    hir_expression_signed(source.operands.front()));
+            }
+            const auto counter = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(CopyRegister {
+                counter, *remaining });
+            const auto unit = allocate_string_register();
+            process_.operations.emplace_back(ConcatenateStrings {
+                unit, items });
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, std::string { } });
+            const auto zero = load_integer(
+                0, 32U, frontend::ValueDomain::Integer);
+            const auto one = load_integer(
+                1, 32U, frontend::ValueDomain::Integer);
+            const auto head = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto more = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::greater_signed, more, counter, zero });
+            const auto branch = process_.operations.size();
+            process_.operations.emplace_back(Branch {
+                more, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto body = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto grown = allocate_string_register();
+            process_.operations.emplace_back(ConcatenateStrings {
+                grown, { destination, unit } });
+            process_.operations.emplace_back(
+                CopyStringRegister { destination, grown });
+            process_.operations.emplace_back(IntegerBinary {
+                IntegerBinaryOperator::subtract, counter, counter, one });
+            process_.operations.emplace_back(Jump { head });
+            process_.operations[branch] = Branch {
+                more, body,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+            return destination;
         }
         std::vector<StringRegisterId> operands;
         operands.reserve(items.size() * static_cast<std::size_t>(*count));

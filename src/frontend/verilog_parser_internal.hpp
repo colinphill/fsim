@@ -966,6 +966,9 @@ class VerilogParser final : private detail::ParserBase {
   // Typedefs declared in the enclosing procedural blocks (IEEE 1800-2017
   // 6.18): a use of the name denotes the aliased type.
   std::unordered_map<std::string, Type> block_typedef_types_;
+  // Names of typedefs declared in procedural blocks of the current unit;
+  // a use of one as an operand (a type actual) is not an implicit net.
+  std::unordered_set<std::string> procedural_typedef_names_;
   // Nonzero while parsing a class declaration.
   std::size_t class_parse_depth_ { };
   // Design-unit-level dynamic arrays, queues and associative arrays, whose
@@ -976,6 +979,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> unit_string_names_;
   // Index types of the unit's associative arrays, for foreach.
   std::unordered_map<std::string, Type> unit_associative_index_types_;
+  // Associative-array properties of the class being parsed.
+  std::unordered_map<std::string, Type> class_associative_index_types_;
   // Types of unit-level variables used to validate foreach array rank.
   std::unordered_map<std::string, Type> unit_foreach_types_;
   // Nonzero while parsing a constraint block or a delay value, where `->`

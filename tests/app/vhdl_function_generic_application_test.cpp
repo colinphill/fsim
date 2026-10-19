@@ -322,6 +322,13 @@ architecture rtl of function_top is
     return value + )"
                << increment << R"(;
   end function;
+  -- The boxed default names this function by its designator (IEEE
+  -- 1076-2008 6.5.6.2).
+  function transform(value : integer) return integer is
+  begin
+    return value + )"
+               << increment << R"(;
+  end function;
   signal direct_input : integer;
   signal direct_output : integer;
   signal boxed_input : integer;

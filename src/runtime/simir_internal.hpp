@@ -1149,6 +1149,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<StringRegisterId> pending_mailbox_string_result;
         std::optional<ProcessId> fork_parent;
         std::optional<InstructionIndex> fork_site;
+        // Spawned by a detached fork (a pending clocking drive).
+        bool fork_detached { };
         std::optional<std::uint64_t> fork_group;
         // Allocate child tracking before the first fork publishes children.
         // Wait/disable operations on an ordinary process need no sidecar.
@@ -3930,6 +3932,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     CoverageDatabaseControlHook coverage_database_control_hook;
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
     ClassAllocateContextHook class_allocate_context_hook;
+    std::optional<std::uint64_t> pending_class_allocation_seed;
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
     ClassPropertyContainerHook class_property_container_hook;

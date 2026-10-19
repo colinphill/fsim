@@ -7535,32 +7535,15 @@ CompiledDesignResolver::resolve_vhdl_default_callable(
     };
     if (name != nullptr) {
         append(*name);
-    } else {
-        std::vector<std::string> designators;
-        for (const auto& declaration : design_->vhdl_hir.declarations()) {
-            if (vhdl_callable_form(declaration.form)
-                && declaration.callable) {
-                designators.push_back(declaration.name);
-            }
-        }
-        std::ranges::sort(designators, [](const std::string& left,
-                                          const std::string& right) {
-            if (same_vhdl_identifier(left, right)) {
-                return false;
-            }
-            return left < right;
-        });
-        const auto duplicate = std::ranges::unique(designators,
-            [](const std::string& left, const std::string& right) {
-                return same_vhdl_identifier(left, right);
-            });
-        designators.erase(duplicate.begin(), duplicate.end());
-        for (const auto& designator : designators) {
-            vhdl::Name candidate_name;
-            candidate_name.spelling = designator;
-            candidate_name.canonical = designator;
-            append(candidate_name);
-        }
+    } else if (const auto formal
+               = find_declaration(*design_, effective_, expected);
+               formal && formal->vhdl != nullptr) {
+        // A box default denotes a visible subprogram with the formal's own
+        // designator and a conforming profile (IEEE 1076-2008 6.5.6.2).
+        vhdl::Name candidate_name;
+        candidate_name.spelling = formal->vhdl->name;
+        candidate_name.canonical = formal->vhdl->name;
+        append(candidate_name);
     }
     normalize_vhdl_callable_resolutions(candidates);
     return { status_for(candidates.size()), std::move(candidates) };

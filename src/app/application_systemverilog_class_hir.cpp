@@ -757,6 +757,81 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
             break;
         }
     }
+    // A member of a packed structure property (`s.a`) is a constant
+    // part-select of the property's bits (IEEE 1800-2017 7.2.1, 18.3).
+    if (expression.kind == sv::ConstraintExpressionKind::name
+        && expression.text.find('.') != std::string::npos
+        && !expression.text.ends_with(".size")) {
+        std::string_view path { expression.text };
+        if (path.starts_with("this.")) path.remove_prefix(5U);
+        const auto dot = path.find('.');
+        const auto root = path.substr(0U, dot);
+        const frontend::Type* root_type = nullptr;
+        for (const auto& candidate : class_specializations_) {
+            if (!specializes_or_derives(
+                    candidate, declaration.canonical_identity)) {
+                continue;
+            }
+            for (const auto& property : candidate.properties) {
+                if (property.name == root) {
+                    root_type = &property.type;
+                    break;
+                }
+            }
+            if (root_type != nullptr) break;
+        }
+        if (dot != std::string_view::npos && root_type != nullptr
+            && !root_type->packed_members.empty()
+            && root_type->packed_aggregate != frontend::PackedAggregateKind::UnpackedStruct
+            && root_type->packed_aggregate != frontend::PackedAggregateKind::UnpackedUnion
+            && !root_type->systemverilog_container) {
+            const frontend::Type* current = root_type;
+            std::uint64_t offset { };
+            std::optional<std::uint64_t> width;
+            auto remaining = path.substr(dot + 1U);
+            while (current != nullptr && !remaining.empty()) {
+                const auto next = remaining.find('.');
+                const auto segment = remaining.substr(0U, next);
+                const auto member = std::ranges::find(
+                    current->packed_members, segment,
+                    &frontend::PackedMember::name);
+                if (member == current->packed_members.end()
+                    || !member->width()) {
+                    width.reset();
+                    break;
+                }
+                offset += member->lsb_offset;
+                width = member->width();
+                remaining = next == std::string_view::npos
+                    ? std::string_view { }
+                    : remaining.substr(next + 1U);
+                current = !remaining.empty() && !member->nested_types.empty()
+                    ? &member->nested_types.front()
+                    : nullptr;
+                if (!remaining.empty() && current == nullptr) {
+                    width.reset();
+                    break;
+                }
+            }
+            if (width && *width != 0U && remaining.empty()) {
+                const auto literal = [&](const std::uint64_t value) {
+                    sv::ConstraintExpression result;
+                    result.kind = sv::ConstraintExpressionKind::integer_literal;
+                    result.text = std::to_string(value);
+                    result.source = expression.source;
+                    return result;
+                };
+                sv::ConstraintExpression receiver;
+                receiver.kind = sv::ConstraintExpressionKind::name;
+                receiver.text = std::string { root };
+                receiver.source = expression.source;
+                expression.kind = sv::ConstraintExpressionKind::slice;
+                expression.text = ":";
+                expression.operands = { std::move(receiver),
+                    literal(offset + *width - 1U), literal(offset) };
+            }
+        }
+    }
     auto foreach_iterator = enclosing_foreach;
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U

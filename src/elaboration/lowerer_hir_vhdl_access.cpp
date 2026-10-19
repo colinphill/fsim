@@ -1046,11 +1046,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
     const auto access_type = [&](const semantic::ExpressionId value)
         -> const semantic::vhdl::TypeDefinition* {
         const auto subtype = hir_vhdl_expression_subtype(value);
-        return subtype
-            ? hir_vhdl_named_type(
-                  *specialized_hir_unit_, *subtype,
-                  semantic::vhdl::TypeForm::access)
-            : nullptr;
+        if (!subtype) {
+            return nullptr;
+        }
+        // STD.TEXTIO.LINE is reached through its access definition.
+        const auto* named = hir_vhdl_named_type(*specialized_hir_unit_,
+            *subtype, semantic::vhdl::TypeForm::access);
+        return named != nullptr ? named
+                                : hir_vhdl_access_type_definition(*subtype);
     };
     const auto allocated_type = [&]()
         -> const semantic::vhdl::TypeDefinition* {
@@ -2172,6 +2175,30 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
     } else {
         const auto prefix = dereference->vhdl->operands.front();
         subtype = hir_vhdl_expression_subtype(prefix);
+        // `l.all := "..."` on a STD.TEXTIO LINE held as a string replaces
+        // the designated STRING (IEEE 1076-2008 10.6.2.1, 16.4).
+        const auto textio_declaration = hir_target_declaration(prefix);
+        const auto textio_binding = textio_declaration
+            ? hir_string_binding(
+                  *textio_declaration, hir_process_scope_, true)
+            : std::nullopt;
+        if (!member && subtype
+            && compiler_owned_textio_line_type(*specialized_hir_unit_,
+                *subtype, hir_process_scope_,
+                hir_vhdl_named_type(*specialized_hir_unit_, *subtype,
+                    semantic::vhdl::TypeForm::access))
+            && textio_binding
+            && textio_binding->kind == HirStringBindingKind::local
+            && textio_binding->local) {
+            const auto text = lower_hir_string_expression(
+                *statement->vhdl->value);
+            if (!text) {
+                return false;
+            }
+            process_.operations.emplace_back(CopyStringRegister {
+                *textio_binding->local, *text });
+            return true;
+        }
         handle = lower_hir_expression(prefix, 32U);
     }
     const auto* type = subtype

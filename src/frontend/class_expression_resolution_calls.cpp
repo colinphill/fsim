@@ -440,12 +440,39 @@ void Resolver::retain_task_profile(
              ? "@sv-container-property:"
              : "@sv-property:")
         + match.owner->canonical_identity + "::" + std::string{member};
-    retain_result_type(expression, match.property->declaration.type);
-    if (const auto property_identity = class_identity(
-            match.property->declaration.type)) {
+    auto property_type = match.property->declaration.type;
+    // A container of class handles selected through another object
+    // (`m[i].arr[j] = new`) names its element class in the owner's scope.
+    if (property_type.systemverilog_container
+        && !class_identity(property_type)) {
+      auto& elements = property_type.systemverilog_container->element_types;
+      const auto named = elements.empty() ? property_type.named_type
+                                          : elements.front().named_type;
+      if (!named.empty()
+          && (elements.empty() || !class_identity(elements.front()))) {
+        Scope owner_scope = scope;
+        owner_scope.lexical_identity = match.owner->canonical_identity;
+        const auto declarations = resolve_class_name(named, owner_scope);
+        if (declarations.size() == 1U) {
+          const auto element_class = class_type(*declarations.front());
+          property_type.systemverilog_class_declaration
+              = element_class.systemverilog_class_declaration;
+          property_type.systemverilog_class_name
+              = element_class.systemverilog_class_name;
+          if (!elements.empty() && !elements.front().systemverilog_container) {
+            elements.front().systemverilog_class_declaration
+                = element_class.systemverilog_class_declaration;
+            elements.front().systemverilog_class_name
+                = element_class.systemverilog_class_name;
+          }
+        }
+      }
+    }
+    retain_result_type(expression, property_type);
+    if (const auto property_identity = class_identity(property_type)) {
       expression.nominal_type = *property_identity;
     }
-    return match.property->declaration.type;
+    return property_type;
   }
   if (expression.text.starts_with("@sv-")) {
     for (auto& operand : expression.operands) {
@@ -1009,10 +1036,51 @@ std::optional<Type> Resolver::resolve_expression(
     return resolve_call(
         expression, scope, expected_class, expected_scalar);
   }
+  // `a[i].m` parses as an index node whose text carries the member path
+  // (`index.m`); a member of a class-handle element is a member selection
+  // of that object (IEEE 1800-2017 8.22).
+  if (expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2U
+      && expression.text.starts_with("index.")) {
+    Expression element{ExpressionKind::Index, "index",
+        {expression.operands[0], expression.operands[1]}, expression.span};
+    const auto element_type = resolve_expression(element, scope);
+    if (element_type && class_identity(*element_type)
+        && !element_type->systemverilog_container) {
+      Expression selected = std::move(element);
+      std::string_view path{expression.text};
+      path.remove_prefix(std::string_view{"index."}.size());
+      while (!path.empty()) {
+        const auto dot = path.find('.');
+        const auto member = path.substr(0, dot);
+        Expression select{ExpressionKind::Call,
+            "@sv-select:" + std::string{member}, {}, expression.span};
+        select.operands.push_back(std::move(selected));
+        selected = std::move(select);
+        path = dot == std::string_view::npos ? std::string_view{}
+                                             : path.substr(dot + 1U);
+      }
+      selected.systemverilog_source_order
+          = expression.systemverilog_source_order;
+      expression = std::move(selected);
+      return resolve_expression(
+          expression, scope, expected_class, expected_scalar);
+    }
+  }
   if (expression.kind == ExpressionKind::Index
       && expression.operands.size() == 2U) {
     auto container = resolve_expression(expression.operands[0], scope);
     resolve_expression(expression.operands[1], scope);
+    // An object of a typedef'd array (`typedef C ca_t[2]; ca_t a;`) has
+    // the typedef's dimensions.
+    if (container && !container->systemverilog_container
+        && container->systemverilog_class_declaration.empty()
+        && !container->named_type.empty()) {
+      if (const auto alias = container_alias(
+              scope.lexical_identity, container->named_type)) {
+        container = *alias;
+      }
+    }
     if (!container || !container->systemverilog_container) {
       return std::nullopt;
     }
@@ -1138,6 +1206,32 @@ std::optional<Type> Resolver::resolve_expression(
   }
   return std::nullopt;
 }
+const Type* Resolver::container_alias(
+    std::string lexical, const std::string& named_type) const {
+  for (;;) {
+    const auto alias = class_aliases_.find(lexical + "::" + named_type);
+    if (alias != class_aliases_.end()) {
+      return alias->second->systemverilog_container ? alias->second
+                                                    : nullptr;
+    }
+    const auto parent = lexical.rfind("::");
+    if (parent == std::string::npos) break;
+    lexical.resize(parent);
+  }
+  // A compilation-unit typedef: the one alias of that name with array
+  // dimensions.
+  const Type* unique{};
+  bool ambiguous{};
+  const auto suffix = "::" + named_type;
+  for (const auto& [key, type] : class_aliases_) {
+    if (key.ends_with(suffix) && type->systemverilog_container) {
+      ambiguous = ambiguous || unique != nullptr;
+      unique = type;
+    }
+  }
+  return ambiguous ? nullptr : unique;
+}
+
 std::optional<Type> Resolver::resolve_typed_expression(
     Expression& expression,
     const Scope& scope,
@@ -1716,6 +1810,27 @@ void Resolver::resolve_statement(
     const auto identity = receiver_type
         ? class_identity(*receiver_type) : std::nullopt;
     const auto name = statement.value.text.substr(1U);
+    // `items[i].srandom(seed);` seeds that object's generator
+    // (IEEE 1800-2017 18.13.3, 18.13.5).
+    if (identity && statement.value.operands.size() == 2U
+        && (name == "srandom" || name == "set_randstate")
+        && find_methods(*identity, name, SystemVerilogClassMethodKind::Function)
+               .empty()
+        && find_methods(*identity, name, SystemVerilogClassMethodKind::Task)
+               .empty()) {
+      statement.kind = StatementKind::TaskCall;
+      statement.task_name = name == "srandom" ? "@sv-object-srandom"
+                                              : "@sv-object-set-randstate";
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+      statement.task_arguments.push_back(std::move(receiver));
+      statement.task_arguments.push_back(
+          std::move(statement.value.operands[1]));
+      statement.task_argument_names.assign(2U, std::string{});
+      resolve_expression(statement.task_arguments.back(), scope);
+      statement.value = Expression{};
+      return;
+    }
     if (identity
         && !find_methods(*identity, name, SystemVerilogClassMethodKind::Task)
                 .empty()) {
@@ -1949,6 +2064,21 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
     for (auto& argument : method.arguments) inherit_type(argument.type);
     inherit_type(method.return_type);
     for (auto& variable : method.variables) inherit_type(variable.type);
+  }
+  for (auto& property : declaration.properties) {
+    if (!property.declaration.type.systemverilog_container) {
+      inherit_type(property.declaration.type);
+    }
+    // A property typed by an array typedef declared outside the class
+    // (`typedef int ia_t[]; class C; ia_t arr;`) has its dimensions.
+    auto& type = property.declaration.type;
+    if (!type.systemverilog_container && !type.named_type.empty()
+        && type.systemverilog_class_declaration.empty()) {
+      if (const auto alias = container_alias(
+              declaration.canonical_identity, type.named_type)) {
+        type = *alias;
+      }
+    }
   }
   // A property of an enumeration typedef keeps the enumeration's literals,
   // which bound its random values (IEEE 1800-2017 18.4).

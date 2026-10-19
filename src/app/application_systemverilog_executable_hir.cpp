@@ -1631,6 +1631,7 @@ namespace {
             output.fork_join = fork_join_kind(input.fork_join_kind);
             output.fork_isolate_register_frame
                 = input.fork_isolate_register_frame;
+            output.fork_detached = input.fork_detached;
             output.assignment_control = assignment_control(
                 input.procedural_assignment_control);
             output.assignment_control_repeated = input.procedural_assignment_repeat;

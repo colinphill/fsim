@@ -727,6 +727,10 @@ void Interpreter::Impl::execute(ProcessId id)
                                 ? process.frame->string_registers.at(actual)
                                 : std::string { });
                     }
+                    pending_class_allocation_seed
+                        = (static_cast<std::uint64_t>(next_random(process))
+                              << 32U)
+                        | next_random(process);
                     const auto handle = class_allocate_context_hook(
                               process.id,
                               process.cold().design_process,

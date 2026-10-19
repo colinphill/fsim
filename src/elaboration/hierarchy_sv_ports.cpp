@@ -1960,8 +1960,11 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             // port's net type (23.3.3.7).
             const bool formal_own_net
                 = merged_info.systemverilog_net_type.empty()
-                && merged_info.name
-                    == child_path + "." + formal_declaration.name;
+                && (merged_info.name
+                        == child_path + "." + formal_declaration.name
+                    || merged_info.name
+                        == child_path + ".$actual_"
+                            + formal_declaration.name);
             if ((formal_net == "tri0" || formal_net == "tri1")
                 && !merged.implicit_driver
                 && (merged_info.systemverilog_net_type == "wire"

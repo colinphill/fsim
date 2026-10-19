@@ -148,6 +148,13 @@ void Resolver::run() {
           if (auto scoped = resolve_class_scoped_type(
                   *override_value.type_value, scope)) {
             override_value.type_value = std::move(*scoped);
+          } else if (auto value = class_scoped_parameter_value(
+                         *override_value.type_value, scope)) {
+            // `m #(C#(5)::p)` names a parameter of the specialization, a
+            // value actual (IEEE 1800-2017 8.25.1).
+            override_value.value = std::move(*value);
+            override_value.type_value.reset();
+            substitute_class_parameter_references(override_value.value, scope);
           }
         }
       }
@@ -158,8 +165,45 @@ void Resolver::run() {
     resolve_scoped_types(unit.ports, scope);
     resolve_scoped_types(unit.signals, scope);
     resolve_scoped_types(unit.variables, scope);
+    // A variable declared with a forward typedef (`typedef T; T v;`) takes
+    // the type the later typedef gives it (IEEE 1800-2017 6.18), which
+    // matters when that type is a string.
+    const auto resolve_forward_string = [&](auto& objects) {
+      for (auto& object : objects) {
+        if (object.type.named_type.empty()
+            || object.type.spelling == "string"
+            || object.type.systemverilog_container) {
+          continue;
+        }
+        const auto alias = std::ranges::find_if(unit.type_aliases,
+            [&](const TypeAliasDeclaration& candidate) {
+              return candidate.name == object.type.named_type;
+            });
+        if (alias != unit.type_aliases.end()
+            && alias->type.spelling == "string") {
+          object.type = alias->type;
+        }
+      }
+    };
+    resolve_forward_string(unit.signals);
+    resolve_forward_string(unit.variables);
     add_objects(scope, unit.signals);
     add_objects(scope, unit.variables);
+    // An object of a named conditional generate block is visible as
+    // `label.name` (IEEE 1800-2017 27.6).
+    for (const auto& region : unit.generate_regions) {
+      if (region.kind != GenerateKind::Conditional) continue;
+      const auto add_labelled = [&](const std::string& label,
+                                    const GenerateBody& body) {
+        if (label.empty()) return;
+        for (const auto& declaration : body.variables) {
+          scope.objects.try_emplace(
+              label + "." + declaration.name, declaration.type);
+        }
+      };
+      add_labelled(region.then_scope, region.then_body);
+      add_labelled(region.else_scope, region.else_body);
+    }
     for (auto& variable : unit.variables) {
       if (variable.initializer) {
         resolve_typed_expression(
@@ -950,9 +994,79 @@ void Resolver::substitute_class_parameter_references(
       }
     }
   }
+  // `CFG::member` through `typedef C#(5) CFG;` (IEEE 1800-2017 8.25.1).
+  if (expression.kind == ExpressionKind::Identifier
+      && expression.text.find('#') == std::string::npos) {
+    const auto selected = expression.text.rfind("::");
+    if (selected != std::string::npos && selected != 0U
+        && expression.text.find("::") == selected) {
+      const auto alias_name = expression.text.substr(0, selected);
+      const Type* alias{};
+      for (std::string lexical = scope.lexical_identity;;) {
+        if (const auto found = class_aliases_.find(
+                lexical + "::" + alias_name);
+            found != class_aliases_.end()) {
+          alias = found->second;
+          break;
+        }
+        const auto parent = lexical.rfind("::");
+        if (parent == std::string::npos) break;
+        lexical.resize(parent);
+      }
+      const auto spelling = alias != nullptr
+          ? class_specialization_spelling(alias->spelling, *alias)
+          : std::nullopt;
+      if (spelling) {
+        const auto owners = resolve_class_name(*spelling, scope);
+        if (owners.size() == 1U) {
+          if (auto value = class_specialization_parameter_value(
+                  *owners.front(), *spelling,
+                  expression.text.substr(selected + 2U))) {
+            const auto span = expression.span;
+            expression = std::move(*value);
+            expression.span = span;
+            substitute_class_parameter_references(
+                expression, scope, depth + 1U);
+            return;
+          }
+        }
+      }
+    }
+  }
   for (auto& operand : expression.operands) {
     substitute_class_parameter_references(operand, scope, depth + 1U);
   }
+}
+// A class specialization spelled with its positional literal or name
+// actuals (`C#(5)`), the form class_specialization_parameter_value reads.
+std::optional<std::string> Resolver::class_specialization_spelling(
+    const std::string& owner, const Type& type) {
+  if (type.systemverilog_class_parameter_actuals.empty()) return std::nullopt;
+  std::string spelling = owner + "#(";
+  bool first = true;
+  for (const auto& actual : type.systemverilog_class_parameter_actuals) {
+    if (actual.name || actual.type_actual
+        || (actual.value.kind != ExpressionKind::IntegerLiteral
+            && actual.value.kind != ExpressionKind::Identifier)
+        || !actual.value.operands.empty()) {
+      return std::nullopt;
+    }
+    spelling += (first ? "" : ",") + actual.value.text;
+    first = false;
+  }
+  return spelling + ")";
+}
+std::optional<Expression> Resolver::class_scoped_parameter_value(
+    const Type& type, const Scope& scope) {
+  const auto selected = type.named_type.rfind("::");
+  if (selected == std::string::npos) return std::nullopt;
+  const auto spelling = class_specialization_spelling(
+      type.named_type.substr(0, selected), type);
+  if (!spelling) return std::nullopt;
+  const auto owners = resolve_class_name(*spelling, scope);
+  if (owners.size() != 1U) return std::nullopt;
+  return class_specialization_parameter_value(
+      *owners.front(), *spelling, type.named_type.substr(selected + 2U));
 }
 std::optional<Expression> Resolver::class_specialization_parameter_value(
     const SystemVerilogClassDeclaration& owner, const std::string_view spelling,
@@ -1032,6 +1146,40 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
                               const std::size_t depth)
       -> std::optional<Expression> {
     if (depth > 16U) return std::nullopt;
+    // `Inner#(W)::v`: the specialization's literal actuals replace its
+    // parameter names inside a nested specialization's actual list.
+    if (value.kind == ExpressionKind::Identifier
+        && value.text.find("#(") != std::string::npos) {
+      auto& text = value.text;
+      for (const auto& [name, actual] : values) {
+        if (actual.kind != ExpressionKind::IntegerLiteral) continue;
+        for (std::size_t at = text.find(name); at != std::string::npos;
+             at = text.find(name, at + 1U)) {
+          const auto word = [&](const char character) {
+            return std::isalnum(static_cast<unsigned char>(character)) != 0
+                || character == '_' || character == '$';
+          };
+          const auto end = at + name.size();
+          if ((at != 0U && word(text[at - 1U]))
+              || (end < text.size() && word(text[end]))
+              || text.rfind("#(", at) == std::string::npos) {
+            continue;
+          }
+          text.replace(at, name.size(), actual.text);
+          at += actual.text.size() - 1U;
+        }
+      }
+      return value;
+    }
+    // A sibling local parameter already resolved to the class's static
+    // property (`@sv-static-property:C::base`) names it again.
+    const auto static_prefix = "@sv-static-property:"
+        + owner.canonical_identity + "::";
+    if (value.kind == ExpressionKind::Call && value.operands.empty()
+        && value.text.starts_with(static_prefix)) {
+      value = Expression{ExpressionKind::Identifier,
+          value.text.substr(static_prefix.size()), {}, value.span};
+    }
     if (value.kind == ExpressionKind::Identifier) {
       if (const auto found = values.find(value.text); found != values.end()) {
         return found->second;
@@ -1043,6 +1191,16 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
           });
       if (parameter != owner.parameters.end()) {
         return self(self, parameter->default_value, depth + 1U);
+      }
+      // A sibling local parameter of the class body (8.25).
+      const auto sibling = std::ranges::find_if(owner.properties,
+          [&](const SystemVerilogClassProperty& candidate) {
+            return candidate.is_parameter
+                && candidate.declaration.name == value.text
+                && candidate.declaration.initializer;
+          });
+      if (sibling != owner.properties.end()) {
+        return self(self, *sibling->declaration.initializer, depth + 1U);
       }
       return value;
     }
@@ -1064,6 +1222,7 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         || !property->declaration.initializer) {
       return std::nullopt;
     }
+
     return substitute(substitute, *property->declaration.initializer, 0U);
   }
   if (const auto found = values.find(selected->name); found != values.end()) {
@@ -1766,6 +1925,21 @@ void Resolver::retain_result_type(
         type.systemverilog_scalar;
     return type;
   }
+  // A bare container property inherited from a base class (`s = new[3];`
+  // in a derived method) is the object's own member (IEEE 1800-2017 8.13).
+  if (scope.class_owner != nullptr && scope.method_body
+      && expression.text.find('.') == std::string::npos
+      && expression.text.find("::") == std::string::npos) {
+    const auto inherited = find_property(
+        scope.class_owner->canonical_identity, expression.text);
+    if (inherited.property != nullptr && inherited.owner != nullptr
+        && inherited.owner != scope.class_owner
+        && !inherited.property->is_static
+        && inherited.property->declaration.type.systemverilog_container) {
+      expression.text = "this." + expression.text;
+      return resolve_identifier(expression, scope);
+    }
+  }
 
   // `v.rand_mode` and `c.constraint_mode` without parentheses query the
   // mode (IEEE 1800-2017 13.5.5, 18.8, 18.9).
@@ -1892,7 +2066,67 @@ void Resolver::retain_result_type(
         expression.text.substr(0, dot),
         {},
         expression.span};
-    const auto receiver_type = resolve_expression(receiver, scope);
+    auto receiver_type = resolve_expression(receiver, scope);
+    // A class handle declared in a package (`P::c.x`, 26.3).
+    if (!receiver_type) {
+      const auto separator = receiver.text.find("::");
+      if (separator != std::string::npos
+          && receiver.text.find("::", separator + 2U) == std::string::npos
+          && receiver.text.find('.') == std::string::npos) {
+        const auto package_name = receiver.text.substr(0, separator);
+        const auto object_name = receiver.text.substr(separator + 2U);
+        for (const auto& candidate : design_.units) {
+          if (candidate.kind != UnitKind::SystemVerilogPackage
+              || candidate.name != package_name) {
+            continue;
+          }
+          const auto find_type = [&](const auto& objects) -> const Type* {
+            const auto found = std::ranges::find_if(objects,
+                [&](const auto& object) { return object.name == object_name; });
+            return found == objects.end() ? nullptr : &found->type;
+          };
+          const auto* object_type = find_type(candidate.variables);
+          if (object_type == nullptr) {
+            object_type = find_type(candidate.signals);
+          }
+          if (object_type != nullptr && !object_type->named_type.empty()) {
+            Scope package_scope = scope;
+            package_scope.lexical_identity
+                = effective_library(candidate.library) + "::" + candidate.name;
+            const auto declarations = resolve_class_name(
+                object_type->named_type, package_scope);
+            if (declarations.size() == 1U) {
+              receiver_type = class_type(*declarations.front());
+            }
+          }
+        }
+      }
+    }
+    // `vif.f` names a call of the interface's function `f` without
+    // arguments (IEEE 1800-2017 13.5.5, 25.9).
+    if (receiver_type && receiver_type->systemverilog_virtual_interface) {
+      const auto member = expression.text.substr(dot + 1U);
+      auto interface_name = receiver_type->named_type.empty()
+          ? receiver_type->spelling : receiver_type->named_type;
+      interface_name = interface_name.substr(0, interface_name.find('.'));
+      const auto function = std::ranges::any_of(design_.units,
+          [&](const DesignUnit& unit) {
+            return unit.kind == UnitKind::SystemVerilogInterface
+                && unit.name == interface_name
+                && std::ranges::any_of(unit.functions,
+                       [&](const FunctionDeclaration& candidate) {
+                         return candidate.name == member;
+                       });
+          });
+      if (function) {
+        Expression call{ExpressionKind::Call, "." + member, {},
+            expression.span};
+        call.operands.push_back(Expression{ExpressionKind::Identifier,
+            expression.text.substr(0, dot), {}, expression.span});
+        expression = std::move(call);
+        return resolve_expression(expression, scope);
+      }
+    }
     // A member of a packed structure class property (`c.p.a`, 7.2, 8.5).
     if (receiver_type && !class_identity(*receiver_type)
         && is_class_property_access(receiver)) {
@@ -1910,6 +2144,19 @@ void Resolver::retain_result_type(
     if (match.property
         && !check_member_visibility(match, scope, member, expression.span)) {
       return std::nullopt;
+    }
+    // A local parameter of the object's class with a literal value,
+    // `obj.X`, is that constant (IEEE 1800-2017 8.25, 6.20.4).
+    if (match.property && match.property->is_parameter
+        && match.property->declaration.initializer
+        && (match.property->declaration.initializer->kind
+                == ExpressionKind::IntegerLiteral
+            || match.property->declaration.initializer->kind
+                == ExpressionKind::LogicLiteral)) {
+      const auto span = expression.span;
+      expression = *match.property->declaration.initializer;
+      expression.span = span;
+      return match.property->declaration.type;
     }
     if (!match.property) {
       // A parameter of the object's class specialization, `obj.P`, denotes

@@ -698,6 +698,28 @@ VERILATOR_NONSTANDARD = {
     # variable it writes waits for a change that never comes (9.4.2.2).
     "t_virtual_interface_method": "toggles a clock that starts at x",
     "t_wait_iface_vif": "expects an always @* block to run without an event",
+    # The check at the time-0 negedge of a net copy of clk reads a pulled
+    # port driven by a continuous assignment; their order is unspecified
+    # (IEEE 1800-2017 4.7).
+    "t_tri_unconn": "checks a pulled net at a time-0 clock edge that races "
+        "its continuous driver",
+    # An out-of-bounds read of an unpacked array returns the element type's
+    # default (IEEE 1800-2017 7.4.6); the expected sum assumes otherwise.
+    "t_array_mda": "expects a value from an out-of-bounds array read",
+    # `always begin if (a) ... end` has no timing control: a zero-delay loop
+    # (IEEE 1800-2017 9.2.2.1).
+    "t_tri_eqcase_input": "runs an always block without a timing control",
+    # A module parameter value assignment is parenthesized (IEEE 1800-2017
+    # A.4.1.1); `#1.2` is delay syntax.
+    "t_param": "gives a module instance an unparenthesized parameter value",
+    # A begin-end block is a generate block only inside a conditional or
+    # loop generate construct (IEEE 1800-2017 27.3, A.4.2); the bare form
+    # was removed after IEEE 1364-2001.
+    **{name: "declares a bare begin-end block in a generate region"
+       for name in ("t_interface_gen5", "t_interface_gen5_noinl",
+                    "t_var_dotted2_inl0", "t_var_dotted2_inl1")},
+    "t_param_no_parentheses": "gives a module instance an unparenthesized "
+        "parameter value",
     # A constant function may call only constant system functions, which
     # do not include $sformatf (IEEE 1800-2017 13.4.3, 11.2.1).
     "t_const_string_func": "calls $sformatf in a constant function",
@@ -1452,6 +1474,12 @@ def vests_group(directory: str, relative: str) -> str:
 
 # nvc cases that need extensions or expect behavior contrary to the LRM.
 NVC_NONSTANDARD = {
+    # A PSL clock declaration is a block declarative item (IEEE 1076-2008
+    # 3.3.2, 11.1); these place `-- psl default clock` among the
+    # concurrent statements.
+    **{name: "declares a PSL default clock among concurrent statements"
+       for name in ("psl7", "psl14", "psl15", "psl16", "psl17", "psl19",
+                    "psl20", "psl21", "psl22")},
     "agg7": (
         "expects a descending array-valued range association in an "
         "ascending constrained target (IEEE 1076-2008 9.3.3.3)"
@@ -1575,6 +1603,14 @@ def nvc_cases(root: Path) -> list[Case]:
 
 VUNIT_RUN_RE = re.compile(r'\brun\s*\(\s*"([^"]+)"\s*\)', re.I)
 
+# Testbenches whose body is an unconditional `error(...)` placeholder for a
+# language change the suite has not written a test for yet.
+VHDL_COMPLIANCE_SKIP = {
+    f"vhdl_2019/{name}.vhd": "out of scope: placeholder testbench that "
+        "reports an unconditional error"
+    for name in ("tb_014", "tb_014a", "tb_023")
+}
+
 
 def vhdl_compliance_cases(root: Path) -> list[Case]:
     base = root / "sources" / "vhdl-compliance-tests"
@@ -1606,6 +1642,7 @@ def vhdl_compliance_cases(root: Path) -> list[Case]:
                 checker="vunit",
                 checker_data={"tests": tests},
                 env={"VHDL_TEST": "hello world", "TOOL_NAME": "do not use this"},
+                skip=VHDL_COMPLIANCE_SKIP.get(f"vhdl_{standard}/{source.name}"),
             ))
     return cases
 

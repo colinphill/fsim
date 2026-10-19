@@ -322,6 +322,21 @@ bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
     if (!program) {
         return false;
     }
+    // A resolved source's effective value settles after its drivers; an
+    // aggregate of such signals (std_logic) keeps the port adapter, which
+    // follows it. Resolution kinds are bound later, so use the domain.
+    if (const auto expression = specialization.find_expression(actual);
+        expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && std::ranges::any_of(program->sources, [&](const SignalId source) {
+               return source < design_.signal_info_.size()
+                   && (design_.signal_info_[source].source_domain
+                           == frontend::ValueDomain::Logic9
+                       || (source < design_.signals_.size()
+                           && design_.signals_[source].vhdl_resolver));
+           })) {
+        return false;
+    }
     auto& process = program->program.process;
     process.language_standard = owner.standard;
     process.compatibility_profile = owner.compatibility_profile;

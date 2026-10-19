@@ -1354,6 +1354,9 @@ struct Fork {
     std::vector<InstructionIndex> branches;
     ForkJoinKind join { ForkJoinKind::all };
     bool isolate_register_frame { };
+    /// The children are pending updates (a clocking drive with a cycle
+    /// delay), which disable fork and wait fork leave alone.
+    bool detached { };
 };
 struct ForkEnd { };
 struct WaitFork { };
@@ -2699,6 +2702,10 @@ public:
         CoverageDatabaseControlHook hook);
     void set_fork_spawn_filter(ForkSpawnFilter filter);
     void set_class_allocate_context_hook(ClassAllocateContextHook hook);
+    // The seed a new object's random number generator takes from the
+    // allocating process's generator (IEEE 1800-2017 18.14.1), available
+    // while the class allocation hook runs.
+    [[nodiscard]] std::optional<std::uint64_t> take_class_allocation_seed();
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);
     void set_class_property_container_hook(ClassPropertyContainerHook hook);

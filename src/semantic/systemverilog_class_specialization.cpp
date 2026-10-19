@@ -734,6 +734,49 @@ private:
             }
             return static_cast<std::size_t>(*type.executable_width);
         }
+        // A predefined integral or real type (`integer` through a typedef,
+        // IEEE 1800-2017 6.11, 6.12).
+        if (!type.target.target.valid()) {
+            static constexpr std::array<std::pair<std::string_view,
+                std::size_t>, 12> predefined {{
+                { "bit", 1U }, { "logic", 1U }, { "reg", 1U },
+                { "byte", 8U }, { "shortint", 16U }, { "int", 32U },
+                { "integer", 32U }, { "longint", 64U }, { "time", 64U },
+                { "real", 64U }, { "realtime", 64U }, { "shortreal", 32U },
+            }};
+            const auto found = std::ranges::find(predefined,
+                std::string_view { type.target.spelling },
+                &std::pair<std::string_view, std::size_t>::first);
+            if (found != predefined.end()) {
+                return found->second;
+            }
+            // An unlinked package-scoped typedef (`P::T`) names the one
+            // typedef of that name.
+            const auto separator = type.target.spelling.rfind("::");
+            if (separator != std::string::npos) {
+                const auto name = std::string_view { type.target.spelling }
+                    .substr(separator + 2U);
+                const TypeDefinition* unique { };
+                bool ambiguous { };
+                for (const auto& [id, definition] : types_) {
+                    (void)id;
+                    if (definition != nullptr && definition->name == name) {
+                        ambiguous = ambiguous || unique != nullptr;
+                        unique = definition;
+                    }
+                }
+                if (unique != nullptr && !ambiguous
+                    && active.insert(unique->id).second) {
+                    const auto width = unique->members.empty()
+                        ? storage_width(unique->base, active)
+                        : std::nullopt;
+                    active.erase(unique->id);
+                    if (width) {
+                        return width;
+                    }
+                }
+            }
+        }
         if (!type.target.target.valid()
             || !active.insert(type.target.target).second) {
             return std::nullopt;

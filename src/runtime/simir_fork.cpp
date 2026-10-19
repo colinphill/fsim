@@ -74,7 +74,10 @@ namespace {
     if (fsim::runtime::simir::operation_holds<WaitFork>(operation)) {
         clear_wait_timeout(process);
         if (!process.cold().fork_state
-            || process.cold().fork_state->live_children.empty()) {
+            || std::ranges::all_of(process.cold().fork_state->live_children,
+                [&](const ProcessId child) {
+                    return get_process(child).cold().fork_detached;
+                })) {
             process.status = ProcessStatus::running;
             queue_current(process.id);
         } else {
@@ -148,6 +151,43 @@ namespace {
                 }
             }
         }
+        // The block ends in every concurrent activation of the code that
+        // declares it (IEEE 1800-2017 9.6.2), such as each call of an
+        // automatic task running in another fork branch.
+        std::vector<ProcessId> other_owners;
+        for (auto& state : processes) {
+            if (state.halted || &state == &process
+                || state.cold().design_process
+                    != process.cold().design_process
+                || state.pc < disable_block->begin
+                || state.pc >= disable_block->end) {
+                continue;
+            }
+            auto* other = &state;
+            while (other->cold().fork_parent && other->cold().fork_site
+                && *other->cold().fork_site >= disable_block->begin
+                && *other->cold().fork_site < disable_block->end) {
+                other = &get_process(*other->cold().fork_parent);
+            }
+            bool related = other == owner;
+            for (auto* ancestor = owner; !related
+                 && ancestor->cold().fork_parent;) {
+                ancestor = &get_process(*ancestor->cold().fork_parent);
+                related = ancestor == other;
+            }
+            if (!related
+                && std::ranges::find(other_owners, other->id)
+                    == other_owners.end()) {
+                other_owners.push_back(other->id);
+            }
+        }
+        for (const auto other : other_owners) {
+            auto& other_owner = get_process(other);
+            if (!other_owner.halted) {
+                disable_process_interval(process, other_owner,
+                    disable_block->begin, disable_block->end, false);
+            }
+        }
         return true;
     }
     if (!fsim::runtime::simir::operation_holds<DisableFork>(operation)) {
@@ -156,7 +196,33 @@ namespace {
     const auto& disable = *fsim::runtime::simir::operation_get_if<DisableFork>(&operation);
     clear_wait_timeout(process);
     if (!disable.site) {
-        cancel_fork_descendants(process);
+        // A pending clocking drive is not a subprocess (IEEE 1800-2017
+        // 9.6.3): keep detached children.
+        std::vector<ProcessId> children;
+        for (const auto& candidate : processes) {
+            if (candidate.cold().fork_parent == process.id
+                && !candidate.halted && !candidate.cold().fork_detached) {
+                children.push_back(candidate.id);
+            }
+        }
+        const bool detached_children = std::ranges::any_of(processes,
+            [&](const ProcessState& candidate) {
+                return candidate.cold().fork_parent == process.id
+                    && !candidate.halted && candidate.cold().fork_detached;
+            });
+        if (!detached_children) {
+            cancel_fork_descendants(process);
+        } else {
+            for (const auto child_id : children) {
+                auto& child = get_process(child_id);
+                cancel_fork_descendants(child);
+                if (!child.halted) {
+                    complete_fork_child(child, ProcessStatus::killed);
+                }
+            }
+            process.cold().waiting_for_children = false;
+            process.cold().waiting_fork_group.reset();
+        }
     } else {
         ProcessState* owner = &process;
         while ((!owner->cold().fork_state
@@ -165,20 +231,67 @@ namespace {
             && owner->cold().fork_parent) {
             owner = &get_process(*owner->cold().fork_parent);
         }
-        if (const auto* const fork_state = owner->cold().fork_state.get()) {
+        const auto cancel_site = [&](ProcessState& site_owner) {
+            const auto* const fork_state = site_owner.cold().fork_state.get();
+            if (fork_state == nullptr) {
+                return;
+            }
             const auto found = fork_state->active_sites.find(*disable.site);
-            if (found != fork_state->active_sites.end()) {
-                const std::vector<ProcessId> children {
-                    found->second.begin(), found->second.end()
-                };
-                for (const auto child_id : children) {
-                    auto& child = get_process(child_id);
-                    cancel_fork_descendants(child);
-                    if (!child.halted) {
-                        complete_fork_child(child, ProcessStatus::killed);
-                    }
+            if (found == fork_state->active_sites.end()) {
+                return;
+            }
+            const std::vector<ProcessId> children {
+                found->second.begin(), found->second.end()
+            };
+            for (const auto child_id : children) {
+                auto& child = get_process(child_id);
+                cancel_fork_descendants(child);
+                if (!child.halted) {
+                    complete_fork_child(child, ProcessStatus::killed);
                 }
             }
+        };
+        cancel_site(*owner);
+        // Processes a finished branch of the fork left running (its own
+        // join_none children) belong to the disabled fork too.
+        std::vector<ProcessId> descendants;
+        for (auto& state : processes) {
+            if (state.halted) {
+                continue;
+            }
+            for (const auto* member = &state; member->cold().fork_parent;) {
+                if (*member->cold().fork_parent == owner->id
+                    && member->cold().fork_site
+                    && *member->cold().fork_site == *disable.site) {
+                    descendants.push_back(state.id);
+                    break;
+                }
+                member = &get_process(*member->cold().fork_parent);
+            }
+        }
+        for (const auto descendant : descendants) {
+            auto& state = get_process(descendant);
+            if (!state.halted) {
+                cancel_fork_descendants(state);
+                complete_fork_child(state, ProcessStatus::killed);
+            }
+        }
+        // A disabled named block ends in every concurrent activation of
+        // the code that declares it (IEEE 1800-2017 9.6.2), such as each
+        // call of an automatic task running in another fork branch.
+        std::vector<ProcessId> activations;
+        for (auto& state : processes) {
+            if (&state != owner && !state.halted
+                && state.cold().design_process
+                    == process.cold().design_process
+                && state.cold().fork_state
+                && state.cold().fork_state->active_sites.contains(
+                    *disable.site)) {
+                activations.push_back(state.id);
+            }
+        }
+        for (const auto activation : activations) {
+            cancel_site(get_process(activation));
         }
     }
     if (!process.halted) {
@@ -712,6 +825,7 @@ void Interpreter::Impl::spawn_fork(
         child.cold().inherit_fork_program(
             parent.cold(), child_id, instruction, child_index);
         child.cold().design_process = design_process;
+        child.cold().fork_detached = operation.detached;
         child.id = child_id;
         child.has_callable_frame_push = parent.has_callable_frame_push;
         child.execution_phase = process_execution_phase(
@@ -852,7 +966,10 @@ void Interpreter::Impl::complete_fork_child(
     }
     if (parent.cold().waiting_for_children
         && (!parent.cold().fork_state
-            || parent.cold().fork_state->live_children.empty())) {
+            || std::ranges::all_of(parent.cold().fork_state->live_children,
+                [&](const ProcessId remaining) {
+                    return get_process(remaining).cold().fork_detached;
+                }))) {
         parent.cold().waiting_for_children = false;
         parent.status = ProcessStatus::running;
         queue_active_current(*parent_id);

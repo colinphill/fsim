@@ -193,7 +193,7 @@ end entity;
 architecture rtl of recovered is
   signal bits : bit_vector(3 downto 0);
 begin
-  bits <= X"GG";
+  bits <= X"F__F";
 end architecture;
 library work;
 )",

@@ -8561,6 +8561,16 @@ private:
                         != std::string::npos)) {
                 return std::nullopt;
             }
+            // A packed array of a named type (`w_t [1:0]`) has elements of
+            // that type's width (IEEE 1800-2017 7.4.1).
+            if (type->target.target.valid()
+                && (type->packed_range || !type->packed_dimensions.empty())
+                && depth == 0) {
+                if (const auto width
+                    = systemverilog_specialized_type_bit_width(*type, 0U)) {
+                    return width;
+                }
+            }
             if (const auto width = systemverilog_type_bit_width(*type)) {
                 return width;
             }

@@ -510,6 +510,8 @@ void VerilogParser::resolve_compilation_unit_references(
   }
   std::unordered_set<std::string> known{callable};
   known.insert(known_class_names_.begin(), known_class_names_.end());
+  known.insert(procedural_typedef_names_.begin(),
+      procedural_typedef_names_.end());
   if (compilation_unit_package_) {
     const auto& outer = *compilation_unit_package_;
     for (const auto& item : outer.parameters) known.insert(item.name);
@@ -638,6 +640,8 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
     }
   }
   known.insert(known_class_names_.begin(), known_class_names_.end());
+  known.insert(procedural_typedef_names_.begin(),
+      procedural_typedef_names_.end());
   // Compilation-unit declarations are visible in every module.
   if (compilation_unit_package_) {
     const auto& outer = *compilation_unit_package_;

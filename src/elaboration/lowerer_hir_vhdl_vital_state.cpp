@@ -130,7 +130,7 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
     const auto previous_expression = variable_profile
         ? actuals.find("previousdatain", 1U)
         : std::nullopt;
-    const auto table_expression = actuals.find(
+    auto table_expression = actuals.find(
         "statetable", variable_profile ? 2U : 1U);
     const auto data_expression = actuals.find(
         "datain", variable_profile ? 3U : 2U);
@@ -149,6 +149,13 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
             "VitalStateTable is missing a required table, data, or state actual",
             statement_span);
         return true;
+    }
+    // A table actual naming a constant stands for its value.
+    if (const auto declaration
+        = hir_referenced_declaration(*table_expression)) {
+        if (const auto initializer = hir_constant_initializer(*declaration)) {
+            table_expression = *initializer;
+        }
     }
     const auto table = specialized_hir_unit_->find_expression(
         *table_expression);

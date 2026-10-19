@@ -2084,6 +2084,9 @@ void Interpreter::Impl::handle_boundary(
                     ? process.executor->read_string_register(actual)
                     : std::string { });
         }
+        pending_class_allocation_seed
+            = (static_cast<std::uint64_t>(next_random(process)) << 32U)
+            | next_random(process);
         const auto handle = class_allocate_context_hook(
                   process.id,
                   process.cold().design_process,

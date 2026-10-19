@@ -1524,6 +1524,9 @@ private:
         std::optional<semantic::ScopeId> driving_process_scope;
         // 'EVENT of an indexed element of the signal: the element read.
         std::optional<semantic::ExpressionId> element;
+        // S'STABLE(T)'EVENT/'ACTIVE or S'QUIET(T)'EVENT/'ACTIVE: the kind of
+        // the implicit signal prefix whose changes are tested.
+        std::optional<HirVhdlSignalAttributeKind> implicit_prefix;
     };
     [[nodiscard]] std::optional<HirVhdlSignalAttributeProfile>
     hir_vhdl_signal_attribute_profile(
@@ -2148,7 +2151,19 @@ private:
     };
     [[nodiscard]] std::optional<HirContainerElementBinding>
     hir_container_element_binding(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool packed_member = false) const;
+    // A member of a packed element of a container (`d[1].header`): the
+    // element and the member's bits within it (IEEE 1800-2017 7.2.1).
+    struct HirContainerElementMember {
+        HirContainerElementBinding element;
+        std::size_t offset { };
+        std::size_t width { };
+        bool signed_value { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+    };
+    [[nodiscard]] std::optional<HirContainerElementMember>
+    hir_container_element_member(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
     hir_static_element_signal_extract(
         const HirContainerElementBinding& element) const;
@@ -2244,10 +2259,17 @@ private:
     void publish_hir_container_element_path(
         const HirContainerElementBinding& element,
         const HirLoweredContainerElement& path);
+    struct HirAggregateElementTarget {
+        runtime::simir::ContainerRegisterId output { };
+        RegisterId index { };
+        bool signed_index { };
+    };
     [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
     lower_hir_container_assignment_pattern(
         semantic::ExpressionId expression,
-        const HirContainerObjectBinding& target);
+        const HirContainerObjectBinding& target,
+        const std::optional<HirAggregateElementTarget>& element_target
+        = std::nullopt);
     [[nodiscard]] std::optional<runtime::simir::ContainerType>
     hir_systemverilog_container_type(
         const semantic::sv::TypeReference& type) const;

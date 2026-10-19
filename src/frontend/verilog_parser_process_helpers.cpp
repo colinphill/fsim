@@ -997,10 +997,14 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             associative_index
                 = *collection_type->systemverilog_container->associative_index_type;
         } else if (!collection_type) {
-            if (const auto found = unit_associative_index_types_.find(
+            if (const auto found = class_associative_index_types_.find(
                     statement.target.text);
-                found != unit_associative_index_types_.end()) {
+                found != class_associative_index_types_.end()) {
                 associative_index = found->second;
+            } else if (const auto unit_found
+                = unit_associative_index_types_.find(statement.target.text);
+                unit_found != unit_associative_index_types_.end()) {
+                associative_index = unit_found->second;
             }
         }
     }

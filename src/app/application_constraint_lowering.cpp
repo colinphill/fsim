@@ -1690,8 +1690,11 @@ lower_systemverilog_solve_before(
     std::vector<runtime::SystemVerilogConstraintVariableId> result;
     result.reserve(list.operands.size());
     for (const auto& item : list.operands) {
+      // An element select (`solve a[0] before y`) or another item without
+      // an exact binding orders nothing here; the ordering never changes
+      // the solution set (IEEE 1800-2017 18.5.10).
       if (item.kind != semantic::sv::ConstraintExpressionKind::name) {
-        return std::nullopt;
+        continue;
       }
       const auto binding = std::ranges::find(
           item.bindings, specialization_identity,
