@@ -574,6 +574,9 @@ std::optional<std::vector<WorkspaceCompiledObject>> partition_workspace_objects(
 int handle_workspace_compile(const cli::Invocation& invocation, const project::Config& config,
     diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&)
 {
+    // Workspace objects and libraries are checksummed compiled HIR; the new
+    // object's state is still checked when it is serialized.
+    const semantic::TrustedCompiledHirLoad trusted_objects;
     if (config.source_sets.size() != 1) {
         workspace_error(diagnostics, "compile requires one source language per invocation");
         return 1;

@@ -197,7 +197,7 @@ void Resolver::run() {
                                     const GenerateBody& body) {
         if (label.empty()) return;
         for (const auto& declaration : body.variables) {
-          scope.objects.try_emplace(
+          scope.objects.add(
               label + "." + declaration.name, declaration.type);
         }
       };
@@ -216,8 +216,8 @@ void Resolver::run() {
       class_scope.class_owner = &declaration;
       // A class member hides an enclosing module object of the same name
       // (IEEE 1800-2017 8.6, 23.9).
-      std::erase_if(class_scope.objects, [&](const auto& object) {
-        return find_property(declaration.canonical_identity, object.first)
+      class_scope.objects.hide_if([&](const std::string& name) {
+        return find_property(declaration.canonical_identity, name)
             .property != nullptr;
       });
       resolve_class(declaration, class_scope);
@@ -2207,10 +2207,10 @@ void Resolver::retain_result_type(
       return type;
     }
   }
-  if (const auto found = scope.objects.find(expression.text);
-      found != scope.objects.end()) {
+  if (const auto* found = scope.objects.find(expression.text);
+      found != nullptr) {
     const auto type = resolve_alias_type(
-        found->second, scope.lexical_identity);
+        *found, scope.lexical_identity);
     if (const auto identity = class_identity(type)) {
       expression.nominal_type = *identity;
     }

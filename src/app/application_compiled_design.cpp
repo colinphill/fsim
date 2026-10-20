@@ -3,11 +3,13 @@
 #include "application_design_artifact_codec_internal.hpp"
 
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <boost/pfr/core.hpp>
 
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace fsim::app::application_detail {
@@ -25,6 +27,13 @@ struct SourceMappingIndex {
     std::vector<library::SourceNameMapping> ordered;
     std::map<std::string, std::string, std::less<>> producers;
     std::set<std::string, std::less<>> logical_names;
+    // Projections by input name: source spans repeat a few names, and an
+    // unmapped name otherwise compares against every mapping each time.
+    mutable std::unordered_map<std::string, std::pair<std::string, bool>>
+        projections;
+    // The mapping each embedded source path is equivalent to, if any.
+    mutable std::unordered_map<std::string, std::optional<std::size_t>>
+        equivalent_producers;
 };
 
 constexpr std::string_view kPendingAssertionMarker {
@@ -433,15 +442,25 @@ bool relocate_equivalent_embedded_source_names(
 {
     bool relocated = false;
     for (const auto& embedded : expansion_source_paths(name)) {
-        const auto mapping = std::ranges::find_if(
-            mappings.ordered, [&](const auto& candidate) {
-                return same_source_path(embedded,
-                    support::path_from_utf8(candidate.producer_name));
-            });
-        if (mapping == mappings.ordered.end()) {
+        const auto encoded = support::path_to_utf8(embedded);
+        auto known = mappings.equivalent_producers.find(encoded);
+        if (known == mappings.equivalent_producers.end()) {
+            const auto found = std::ranges::find_if(
+                mappings.ordered, [&](const auto& candidate) {
+                    return same_source_path(embedded,
+                        support::path_from_utf8(candidate.producer_name));
+                });
+            known = mappings.equivalent_producers.emplace(encoded,
+                found == mappings.ordered.end()
+                    ? std::nullopt
+                    : std::optional { static_cast<std::size_t>(
+                          found - mappings.ordered.begin()) }).first;
+        }
+        if (!known->second) {
             continue;
         }
-        const auto encoded = support::path_to_utf8(embedded);
+        const auto mapping = mappings.ordered.begin()
+            + static_cast<std::ptrdiff_t>(*known->second);
         std::size_t offset = 0;
         while (!encoded.empty()
             && (offset = name.find(encoded, offset)) != std::string::npos) {
@@ -494,13 +513,10 @@ bool validate_relocated_source_identities(
     return true;
 }
 
-SourceNameProjection project_source_name(
+SourceNameProjection project_uncached_source_name(
     const std::string_view name,
     const SourceMappingIndex& mappings)
 {
-    if (name.empty()) {
-        return { std::string { name }, true };
-    }
     const auto path = normalized_source_name(name);
     if (const auto mapping = mappings.producers.find(path);
         mapping != mappings.producers.end()) {
@@ -536,6 +552,24 @@ SourceNameProjection project_source_name(
     return { std::move(projected), false };
 }
 
+SourceNameProjection project_source_name(
+    const std::string_view name,
+    const SourceMappingIndex& mappings)
+{
+    if (name.empty()) {
+        return { std::string { name }, true };
+    }
+    std::string key { name };
+    if (const auto cached = mappings.projections.find(key);
+        cached != mappings.projections.end()) {
+        return { cached->second.first, cached->second.second };
+    }
+    auto projection = project_uncached_source_name(name, mappings);
+    mappings.projections.emplace(std::move(key),
+        std::pair { projection.value, projection.valid });
+    return projection;
+}
+
 bool relocate_name(
     std::string& name,
     const SourceMappingIndex& mappings,
@@ -549,6 +583,45 @@ bool relocate_name(
     diagnostics.error(
         "FSIM-ART-HIR-001",
         "compiled HIR retains an unmapped producer source path: " + name);
+    return false;
+}
+
+// An expansion description is text that embeds source locations
+// ("... defined at <path>:<line>:<column>, expanded at ..."): only its
+// embedded paths are relocated, never the description as a whole name.
+SourceNameProjection project_expansion_description(
+    const std::string_view description,
+    const SourceMappingIndex& mappings)
+{
+    if (expansion_source_paths(description).empty()) {
+        return project_source_name(description, mappings);
+    }
+    std::string projected { description };
+    (void)relocate_embedded_source_names(projected, mappings);
+    (void)relocate_equivalent_embedded_source_names(projected, mappings);
+    const auto unmapped = std::ranges::any_of(
+        expansion_source_paths(projected), [&](const auto& embedded) {
+            return support::path_is_portably_absolute(embedded)
+                && !mappings.logical_names.contains(
+                    source_path_key(embedded));
+        });
+    return { std::move(projected), !unmapped };
+}
+
+bool relocate_expansion_description(
+    std::string& description,
+    const SourceMappingIndex& mappings,
+    diagnostic::Engine& diagnostics)
+{
+    auto projection = project_expansion_description(description, mappings);
+    description = std::move(projection.value);
+    if (projection.valid) {
+        return true;
+    }
+    diagnostics.error(
+        "FSIM-ART-HIR-001",
+        "compiled HIR retains an unmapped producer source path: "
+            + description);
     return false;
 }
 
@@ -766,13 +839,10 @@ ProjectedSemanticSourceRecords project_semantic_source_names(
     }
 
     std::vector<std::string_view> source_names;
-    source_names.reserve(records.source_files.size()
-        + records.expansions.size() + records.source_spans.size());
+    source_names.reserve(
+        records.source_files.size() + records.source_spans.size());
     for (const auto& file : records.source_files) {
         source_names.push_back(file.physical_name);
-    }
-    for (const auto& expansion : records.expansions) {
-        source_names.push_back(expansion.description);
     }
     for (const auto& span : records.source_spans) {
         source_names.push_back(span.logical_name);
@@ -780,13 +850,15 @@ ProjectedSemanticSourceRecords project_semantic_source_names(
     auto projected_names = project_source_names(
         source_names, mappings, diagnostics);
     projected_semantics.valid = projected_names.valid;
+    for (auto& expansion : records.expansions) {
+        projected_semantics.valid = relocate_expansion_description(
+                expansion.description, mappings, diagnostics)
+            && projected_semantics.valid;
+    }
 
     auto projected_name = projected_names.values.begin();
     for (auto& file : records.source_files) {
         file.physical_name = std::move(*projected_name++);
-    }
-    for (auto& expansion : records.expansions) {
-        expansion.description = std::move(*projected_name++);
     }
     for (auto& span : records.source_spans) {
         span.logical_name = std::move(*projected_name++);
@@ -998,8 +1070,10 @@ compiled_cache_source_mappings(
     diagnostic::Engine& diagnostics)
 {
     std::vector<library::SourceNameMapping> result;
-    std::vector<std::filesystem::path> producers;
     std::set<std::string> producer_keys;
+    // One canonical identity per producer instead of comparing every pair
+    // of producers on the file system.
+    std::set<std::string> canonical_producers;
     std::set<std::string> logical_names;
     bool valid = true;
     const auto add = [&](const std::filesystem::path& path,
@@ -1008,14 +1082,18 @@ compiled_cache_source_mappings(
             return;
         }
         const auto producer_key = source_path_key(path);
-        if (producer_keys.contains(producer_key)
-            || std::ranges::any_of(producers, [&](const auto& producer) {
-                   return same_source_path(producer, path);
-               })) {
+        if (producer_keys.contains(producer_key)) {
+            return;
+        }
+        std::error_code canonical_error;
+        const auto canonical = support::native_fs::weakly_canonical(
+            path, canonical_error);
+        const auto canonical_key = canonical_error
+            ? producer_key : source_path_key(canonical);
+        if (!canonical_producers.insert(canonical_key).second) {
             return;
         }
         const auto producer = support::path_to_utf8(path.lexically_normal());
-        producers.push_back(path);
         producer_keys.insert(producer_key);
         auto logical = support::path_to_utf8(
             std::filesystem::path { make_logical() }.lexically_normal());
@@ -1225,7 +1303,7 @@ bool relocate_compiled_design_sources(
             && valid;
     }
     for (auto& expansion : records.expansions) {
-        valid = relocate_name(
+        valid = relocate_expansion_description(
                     expansion.description, *mapping_index, diagnostics)
             && valid;
     }

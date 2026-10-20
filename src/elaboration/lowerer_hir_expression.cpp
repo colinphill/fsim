@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <set>
+#include <unordered_map>
 #include <utility>
 
 namespace fsim::elaboration {
@@ -6158,6 +6159,56 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     std::optional<std::size_t> others;
     std::size_t positional { };
     bool valid = true;
+    // A value that is the same for every element it covers is lowered
+    // once: literals, constants, generic constants, enumeration literals,
+    // and aggregates of them. Lowering an `others` or range choice per
+    // element made a large array's aggregate cost one lowering per element.
+    // Calls and object reads are still lowered for each element.
+    std::unordered_map<std::uint32_t, bool> reusable_values;
+    std::unordered_map<std::uint32_t, RegisterId> reused_values;
+    const auto element_invariant = [&](const auto& self,
+                                       const semantic::ExpressionId id,
+                                       const std::size_t depth) -> bool {
+        const auto expression = depth < 64U
+            ? specialized_hir_unit_->find_expression(id)
+            : std::nullopt;
+        if (!expression || expression->vhdl == nullptr) {
+            return false;
+        }
+        using Kind = semantic::vhdl::ExpressionKind;
+        const auto& node = *expression->vhdl;
+        switch (node.kind) {
+        case Kind::integer_literal:
+        case Kind::real_literal:
+        case Kind::boolean_literal:
+        case Kind::logic_literal:
+        case Kind::string_literal:
+            return true;
+        case Kind::name: {
+            const auto selected = node.resolved_declaration
+                ? node.resolved_declaration
+                : node.referenced_name ? node.referenced_name->selected
+                                       : std::nullopt;
+            const auto declaration = selected
+                ? specialized_hir_unit_->find_declaration(*selected)
+                : std::nullopt;
+            if (!declaration || declaration->vhdl == nullptr) {
+                return false;
+            }
+            using Form = semantic::vhdl::DeclarationForm;
+            const auto form = declaration->vhdl->form;
+            return form == Form::constant || form == Form::generic_constant
+                || form == Form::enumeration_literal;
+        }
+        case Kind::aggregate:
+            return std::ranges::all_of(node.associations,
+                [&](const auto& association) {
+                    return self(self, association.value, depth + 1U);
+                });
+        default:
+            return false;
+        }
+    };
     const auto assign_offset = [&](const std::size_t offset,
                                    const semantic::ExpressionId value,
                                    const frontend::SourceSpan& span) {
@@ -6171,11 +6222,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             valid = false;
             return;
         }
+        auto reusable = reusable_values.find(value.value());
+        if (reusable == reusable_values.end()) {
+            reusable = reusable_values
+                           .emplace(value.value(),
+                               element_invariant(element_invariant, value, 0U))
+                           .first;
+        }
+        if (reusable->second) {
+            if (const auto reused = reused_values.find(value.value());
+                reused != reused_values.end()) {
+                values[offset] = reused->second;
+                return;
+            }
+        }
         values[offset] = lower_value(
             value, *element, "FSIM-" "ELAB-VHARRAYAGG", span,
             dimensions.size() > 1U
                 ? array_dimension_offset + 1U : 0U);
         valid = valid && values[offset].has_value();
+        if (reusable->second && values[offset]) {
+            reused_values.emplace(value.value(), *values[offset]);
+        }
     };
     const auto array_rank = [&](
                                    const semantic::vhdl::SubtypeIndication& subtype) {

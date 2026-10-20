@@ -702,6 +702,20 @@ void CompiledDesign::refresh_lookup_indexes()
         rebuilt.systemverilog_declarations_by_scope[
             declaration.scope.value()].push_back(declaration.id);
     }
+    rebuilt.systemverilog_import_statements_by_scope.resize(
+        semantics.scopes().size());
+    const auto& statements = systemverilog_hir.statements();
+    for (std::size_t position { }; position < statements.size(); ++position) {
+        const auto& scope = statements[position].nested_scope;
+        if (statements[position].imports.empty() || !scope
+            || !scope->valid()
+            || scope->value()
+                >= rebuilt.systemverilog_import_statements_by_scope.size()) {
+            continue;
+        }
+        rebuilt.systemverilog_import_statements_by_scope[scope->value()]
+            .push_back(static_cast<std::uint32_t>(position));
+    }
     rebuilt.vhdl_declarations_by_scope.resize(semantics.scopes().size());
     rebuilt.vhdl_declarations_by_scope_and_name.resize(
         semantics.scopes().size());
@@ -724,6 +738,11 @@ void CompiledDesign::refresh_lookup_indexes()
         rebuilt.vhdl_declarations_by_scope_and_name[scope_index]
             [declaration.name]
                 .push_back(declaration.id);
+    }
+    const auto& vhdl_types = vhdl_hir.types();
+    for (std::size_t position { }; position < vhdl_types.size(); ++position) {
+        rebuilt.vhdl_type_positions_by_name[vhdl_types[position].name]
+            .push_back(static_cast<std::uint32_t>(position));
     }
     rebuilt.vhdl_imports_by_unit.resize(semantics.units().size());
     std::vector<std::vector<const CompiledReference*>>
@@ -1149,11 +1168,7 @@ const Scope* CompiledDesign::find_scope(const ScopeId id) const noexcept
     if (!id.valid()) {
         return nullptr;
     }
-    if (id.value() < scopes.size() && scopes[id.value()].id == id) {
-        return &scopes[id.value()];
-    }
-    const auto found = std::ranges::find(scopes, id, &Scope::id);
-    return found == scopes.end() ? nullptr : &*found;
+    return find_by_id(scopes, id);
 }
 
 const vhdl::Unit* CompiledDesign::vhdl_scope_unit(
@@ -1172,6 +1187,37 @@ bool CompiledDesign::vhdl_scope_in_package(const ScopeId scope,
     const std::string_view package) const noexcept
 {
     return vhdl::is_package(vhdl_scope_unit(scope), library, package);
+}
+
+std::optional<std::span<const std::uint32_t>>
+CompiledDesign::vhdl_type_positions_named(
+    const std::string_view name) const noexcept
+{
+    if (!lookup_indexes_current()) {
+        return std::nullopt;
+    }
+    const auto found = lookup_indexes_.vhdl_type_positions_by_name.find(name);
+    return found == lookup_indexes_.vhdl_type_positions_by_name.end()
+        ? std::span<const std::uint32_t> { }
+        : std::span<const std::uint32_t> { found->second };
+}
+
+std::optional<std::span<const std::uint32_t>>
+CompiledDesign::systemverilog_import_statements_in_scope(
+    const ScopeId scope) const noexcept
+{
+    if (!lookup_indexes_current()) {
+        return std::nullopt;
+    }
+    if (!scope.valid()
+        || scope.value()
+            >= lookup_indexes_.systemverilog_import_statements_by_scope
+                   .size()) {
+        return std::span<const std::uint32_t> { };
+    }
+    return std::span<const std::uint32_t> {
+        lookup_indexes_.systemverilog_import_statements_by_scope[
+            scope.value()] };
 }
 
 std::optional<std::span<const DeclarationId>>
@@ -1347,10 +1393,9 @@ bool CompiledDesign::valid() const
                     >= semantics.expression_identities().size()) {
                 return false;
             }
-            const auto expression = std::ranges::find(
-                systemverilog_hir.expressions(), *use.expression,
-                &sv::Expression::id);
-            if (expression == systemverilog_hir.expressions().end()
+            const auto* expression = find_by_id(
+                systemverilog_hir.expressions(), *use.expression);
+            if (expression == nullptr
                 || expression->kind != sv::ExpressionKind::call
                 || !expression->referenced_name
                 || !valid_callsite_owner(expression->scope)) {
@@ -1362,10 +1407,9 @@ bool CompiledDesign::valid() const
                     >= semantics.statement_identities().size()) {
                 return false;
             }
-            const auto statement = std::ranges::find(
-                systemverilog_hir.statements(), *use.statement,
-                &sv::Statement::id);
-            if (statement == systemverilog_hir.statements().end()
+            const auto* statement = find_by_id(
+                systemverilog_hir.statements(), *use.statement);
+            if (statement == nullptr
                 || statement->kind != sv::StatementKind::task_call
                 || !valid_callsite_owner(statement->scope)) {
                 return false;

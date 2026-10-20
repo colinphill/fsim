@@ -253,6 +253,101 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 78 (part 1): compile and elaborate performance for UVM and VHDL
+
+Full run of Batch 77 on the frozen `b77w1` (SystemVerilog suites) and `b77w2`
+(VHDL suites), compared with Batch 76 (`b76w1`). Batch 77's 53 closures
+are listed in its note; the table shows net passes.
+
+| Suite | Batch76 passes / in scope | Batch77 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2547 / 2564 | 2547 / 2564 | 262 |
+| sv-tests | 1442 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1821 / 2066 | 1837 / 2067 | 348 |
+| vests | 3618 / 3646 | 3619 / 3646 | 2 |
+| nvc | 1002 / 1245 | 1033 / 1245 | 237 |
+| vhdl-compliance | 45 / 69 | 45 / 69 | 3 |
+
+The sv-tests 1444 includes the two 9.7 process tests fixed before the
+Batch 77 commit.
+
+This part of Batch 78 removes the load and linking costs that dominated
+sv-tests chapter 18. Every UVM case spent about 22 s compiling and 24 s
+elaborating, mostly reloading the UVM library. The profile is in
+`.local-artifacts/lrm-closure/perf-ch18-2026-10-20.md`.
+
+Timings on a quiet machine (`b77w2` to the frozen `b78g`):
+
+| Step | Before | After |
+|---|---:|---:|
+| UVM 2020.3.1 library compile | 36.3 s | 4.9 s |
+| UVM case compile | 22.6 s | 2.5 s |
+| UVM case elaborate | 24.6 s | 3.9 s |
+| vests tc987 compile | 31.7 s / 3.4 GB | 1.3 s / 0.17 GB |
+
+Summed case time in the full runs fell from 7333 s to 1114 s for sv-tests
+(chapter 18: 6239 s to 855 s). The other suites fell as follows: vests 792 s
+to 413 s, nvc 424 s to 281 s, Verilator 1211 s to 741 s, vhdl-compliance
+35 s to 15 s; ivtest is unchanged.
+
+The full run against `b77w` has no losses. It gains the three load-sensitive
+timeouts: vests tc987 and tc988, and Verilator t_constraint_array_sum_with.
+vests tc945 no longer times out but still fails: automatic callable frames
+exceed their storage budget. The labelled ctest has the same 28 known
+failures.
+
+Load and linking:
+- Source relocation memoizes each projected name. An expansion description
+  is relocated through its embedded paths only. Producer mappings are keyed
+  by canonical path once, instead of a pairwise path comparison.
+- Compile and elaborate trust the checksummed compiled HIR they load, as
+  simulate already does (`TrustedCompiledHirLoad`). Setting
+  `FSIM_VERIFY_ARTIFACT=1` restores the structural re-validation of linker
+  inputs, outputs and deserialized class HIR.
+- Linked metadata:
+  - The class-reference walk uses an id index. A linked design's ids need
+    not be dense, and a missed dense slot fell back to scanning every
+    statement.
+  - Class references resolve through an identity index.
+  - Reference sorting compares tied members instead of copied strings.
+- Dependency recording scans the library catalogs once per distinct
+  reference target.
+
+Name resolution and specialization:
+- `CompiledDesign` indexes import statements by scope, and VHDL type
+  definitions by identifier.
+  - The resolver's lexical-import lookup uses the import index.
+  - `resolve_vhdl_named_type` uses the type index unless the specialization
+    replaces a VHDL type.
+- HIR lookups by id try the dense slot before scanning (`find_by_id`).
+- Class specialization:
+  - Each reference-closure check runs once per HIR record, not once per
+    specialization.
+  - Static owner selections are indexed by enclosing scope.
+
+Library compile:
+- The SystemVerilog executable-HIR builder indexes declarations by scope,
+  name and id as they are appended. Name binding no longer scans every
+  declaration.
+- The frontend class resolver's scope objects are layered and copied on
+  write. Copying a scope per class, method or process no longer copies
+  every enclosing object's type.
+
+VHDL aggregates (9.3.3): an association value that is the same for every
+element it covers is lowered once per aggregate. That covers literals,
+constants, generic constants, enumeration literals and aggregates of them.
+`others` over a large array previously lowered its expression once per
+element. Calls and object reads are still lowered for each element.
+
+Open performance leads:
+- nvc protected6: a 2**20-iteration loop body is lowered element by element
+  at compile.
+- The VHDL generate specializer copies the specialized unit for every
+  iteration. vests tc1795 also needs the non-discrete generate range
+  diagnostic.
+
+The rest of Batch 78 continues corpus closures.
+
 ### Batch 77: structured class selections, value paths and places, VHDL shape service, run-time math_real
 
 Full run on the frozen `b76w1` (Batch 76, 3870c0cb), compared with Batch 75

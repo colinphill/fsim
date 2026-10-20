@@ -381,6 +381,9 @@ std::vector<workspace::UnitDependency> workspace_dependencies(
         }
     }
     std::optional<ClassIdentityIndex> classes;
+    std::set<std::tuple<semantic::CompiledReferenceKind, std::uint32_t,
+        std::string>>
+        scanned_targets;
     for (std::size_t index = 0; index < pending_units.size(); ++index) {
         const auto owner = pending_units[index];
         if (!visited_units.insert(owner).second) {
@@ -397,6 +400,14 @@ std::vector<workspace::UnitDependency> workspace_dependencies(
                 continue;
             }
             pending_units.push_back(target->identity->id);
+            // References differing only in owner or source select the same
+            // providers; scan the catalogs once per distinct target.
+            if (!scanned_targets
+                     .emplace(reference.kind, target->identity->id.value(),
+                         reference.secondary_name)
+                     .second) {
+                continue;
+            }
             const auto library = target->identity->library.empty()
                 ? std::string_view { "work" }
                 : std::string_view { target->identity->library };

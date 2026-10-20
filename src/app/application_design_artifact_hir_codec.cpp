@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_design_artifact_codec_internal.hpp"
 
+#include "fsim/semantic/compiled_design_linker.hpp"
+
 namespace fsim::app {
 namespace codec_detail {
 
@@ -444,7 +446,11 @@ deserialize_systemverilog_constraint_hir_state_with_budget(
     auto state = deserialize<SystemVerilogConstraintHirState>(
         "FSIMSVCH", kSystemVerilogConstraintHirStateSchema,
         bytes, std::move(source_name), diagnostics, &budget);
-    if (!state || !valid_systemverilog_hir_state(*state, semantics)) {
+    // A trusted load skips the structural checks the producer ran before
+    // serializing the state (FSIM_VERIFY_ARTIFACT=1 keeps them).
+    if (!state
+        || (!semantic::TrustedCompiledHirLoad::active()
+            && !valid_systemverilog_hir_state(*state, semantics))) {
         if (state && !diagnostics.has_error()) {
             diagnostics.error(
                 std::string { kCode },

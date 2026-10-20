@@ -1901,6 +1901,34 @@ CompiledDesignResolver::resolve_systemverilog_class_method(
     return { status_for(candidates.size()), std::move(candidates) };
 }
 
+std::vector<const sv::Statement*>
+CompiledDesignResolver::systemverilog_import_statements(
+    const ScopeId scope) const
+{
+    const auto& statements = design_->systemverilog_hir.statements();
+    if (const auto positions
+        = design_->systemverilog_import_statements_in_scope(scope)) {
+        std::vector<const sv::Statement*> result;
+        result.reserve(positions->size());
+        for (const auto position : *positions) {
+            result.push_back(&statements[position]);
+        }
+        return result;
+    }
+    if (!import_statements_) {
+        auto& index = import_statements_.emplace();
+        for (const auto& statement : statements) {
+            if (!statement.imports.empty() && statement.nested_scope) {
+                index[statement.nested_scope->value()].push_back(&statement);
+            }
+        }
+    }
+    const auto found = import_statements_->find(scope.value());
+    return found == import_statements_->end()
+        ? std::vector<const sv::Statement*> { }
+        : found->second;
+}
+
 CompiledDeclarationResolution
 CompiledDesignResolver::resolve_systemverilog_name(
     const sv::Name& name, const ScopeId use_scope,
@@ -1932,12 +1960,9 @@ CompiledDesignResolver::resolve_systemverilog_name(
         }
         while (scope) {
             if (owner && owner->systemverilog != nullptr) {
-                for (const auto& statement
-                    : design_->systemverilog_hir.statements()) {
-                    if (statement.nested_scope != scope) {
-                        continue;
-                    }
-                    for (const auto& import : statement.imports) {
+                for (const auto* statement
+                    : systemverilog_import_statements(*scope)) {
+                    for (const auto& import : statement->imports) {
                         if (import_follows_reference(
                                 import.source_order, name.source_order)) {
                             continue;
@@ -2187,17 +2212,9 @@ CompiledDesignResolver::resolve_systemverilog(
     };
     const auto imports_in_scope = [&](const ScopeId scope)
         -> const std::vector<sv::Import>* {
-        const sv::Statement* selected { };
-        for (const auto& statement : design_->systemverilog_hir.statements()) {
-            if (statement.nested_scope != scope || statement.imports.empty()) {
-                continue;
-            }
-            if (selected != nullptr) {
-                return nullptr;
-            }
-            selected = &statement;
-        }
-        return selected != nullptr ? &selected->imports : nullptr;
+        const auto statements = systemverilog_import_statements(scope);
+        return statements.size() == 1U ? &statements.front()->imports
+                                       : nullptr;
     };
     if (package_name.empty()) {
         auto scope = use_scope;
@@ -2597,6 +2614,29 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     const auto find_type = [&](const TypeId id) {
         return semantic::find_type(*design_, effective_, id);
     };
+    // The stored types that can carry `simple_name`, in HIR order: the
+    // name index when it is current and no specialization replacement
+    // can rename a type, else every type.
+    const auto named_type_ids = [&] {
+        std::vector<TypeId> ids;
+        const auto& types = design_->vhdl_hir.types();
+        const auto positions
+            = effective_ == nullptr || !effective_->replaces_vhdl_types()
+            ? design_->vhdl_type_positions_named(simple_name)
+            : std::nullopt;
+        if (positions) {
+            ids.reserve(positions->size());
+            for (const auto position : *positions) {
+                ids.push_back(types[position].id);
+            }
+        } else {
+            ids.reserve(types.size());
+            for (const auto& stored : types) {
+                ids.push_back(stored.id);
+            }
+        }
+        return ids;
+    }();
     const auto last_colon = spelling.rfind(':');
     if (last_colon != std::string_view::npos && last_colon != 0U) {
         const auto offset_colon = spelling.rfind(':', last_colon - 1U);
@@ -2613,8 +2653,8 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
                     == offset_spelling.data() + offset_spelling.size()) {
                 const auto source_name = spelling.substr(0U, offset_colon);
                 std::optional<TypeId> exact;
-                for (const auto& stored : design_->vhdl_hir.types()) {
-                    const auto type = find_type(stored.id);
+                for (const auto stored_id : named_type_ids) {
+                    const auto type = find_type(stored_id);
                     if (!type || type->vhdl == nullptr
                         || !same_vhdl_identifier(
                             type->vhdl->name, simple_name)
@@ -2744,8 +2784,8 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         }
         return std::nullopt;
     };
-    for (const auto& stored : design_->vhdl_hir.types()) {
-        const auto type = find_type(stored.id);
+    for (const auto stored_id : named_type_ids) {
+        const auto type = find_type(stored_id);
         if (!type || type->vhdl == nullptr
             || !same_vhdl_identifier(type->vhdl->name, simple_name)) {
             continue;

@@ -11,6 +11,8 @@
 #include <map>
 #include <ranges>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <tuple>
 #include <utility>
@@ -97,6 +99,15 @@ public:
             const auto identity = class_declaration_identity(declaration);
             for (const auto& parameter : declaration.parameters) {
                 class_parameters_.insert(parameter.declaration);
+                if (parameter.type_parameter) {
+                    type_parameter_names_.insert(parameter.name);
+                }
+            }
+            for (const auto& property : declaration.properties) {
+                class_member_identities_.insert(property.canonical_identity);
+            }
+            for (const auto& method : declaration.methods) {
+                class_member_identities_.insert(method.canonical_identity);
             }
             for (const auto& property : declaration.properties) {
                 if (property.parameter && property.initializer) {
@@ -122,7 +133,19 @@ public:
             if (!expression.class_owner.empty()
                 && !expression.class_owner.front()
                         .interface_parameter_actuals.empty()) {
-                owner_selections_.push_back(&expression);
+                // Listed under every enclosing scope, so a method finds
+                // the selections in its body without a scope walk each.
+                const auto& scopes = semantics_.scopes();
+                auto scope = expression.scope;
+                for (std::size_t depth { };
+                    scope.valid() && depth <= scopes.size(); ++depth) {
+                    owner_selections_[scope.value()].push_back(&expression);
+                    if (scope.value() >= scopes.size()
+                        || !scopes[scope.value()].parent) {
+                        break;
+                    }
+                    scope = *scopes[scope.value()].parent;
+                }
             }
         }
         for (const auto& statement : hir_.statements()) {
@@ -1589,41 +1612,19 @@ private:
         }
         if (!expression->class_member_identity.empty()
             && !expression->class_member_identity.starts_with('@')) {
-            valid = valid && std::ranges::any_of(
-                hir_.classes(), [&](const ClassDeclaration& declaration) {
-                    // A construction (`new`) and a class `$cast` name
-                    // their class.
-                    if ((expression->text.starts_with("@sv-new:")
-                            || expression->text.starts_with(
-                                "@sv-dollar-cast:"))
-                        && class_declaration_identity(declaration)
-                            == expression->class_member_identity) {
-                        return true;
-                    }
-                    // `new` of an object whose type is a type parameter
-                    // constructs the class the specialization binds.
-                    if (expression->text.starts_with("@sv-new:")
-                        && std::ranges::any_of(declaration.parameters,
-                            [&](const ClassParameter& parameter) {
-                                return parameter.type_parameter
-                                    && parameter.name
-                                    == expression->class_member_identity;
-                            })) {
-                        return true;
-                    }
-                    return std::ranges::any_of(
-                               declaration.properties,
-                               [&](const ClassProperty& property) {
-                                   return property.canonical_identity
-                                       == expression->class_member_identity;
-                               })
-                        || std::ranges::any_of(
-                            declaration.methods,
-                            [&](const ClassMethod& method) {
-                                return method.canonical_identity
-                                    == expression->class_member_identity;
-                            });
-                });
+            // A construction (`new`) and a class `$cast` name their class;
+            // `new` of an object whose type is a type parameter constructs
+            // the class the specialization binds; anything else names a
+            // property or method.
+            const auto& member = expression->class_member_identity;
+            const bool construction = expression->text.starts_with("@sv-new:");
+            valid = valid
+                && (((construction
+                         || expression->text.starts_with("@sv-dollar-cast:"))
+                        && classes_.contains(member))
+                    || (construction
+                        && type_parameter_names_.contains(member))
+                    || class_member_identities_.contains(member));
         }
         active.erase(id);
         return valid;
@@ -1754,6 +1755,43 @@ private:
         return valid;
     }
 
+    // A reference closure is a fixed property of the HIR, so each
+    // top-level check runs once rather than once per specialization.
+    bool declaration_closure_resolves(const DeclarationId id)
+    {
+        const auto [found, inserted]
+            = declaration_closures_.try_emplace(id, false);
+        if (inserted) {
+            std::set<DeclarationId> active;
+            std::set<StatementId> statement_active;
+            found->second
+                = declaration_references_resolve(id, active, statement_active);
+        }
+        return found->second;
+    }
+
+    bool statement_closure_resolves(const StatementId id)
+    {
+        const auto [found, inserted]
+            = statement_closures_.try_emplace(id, false);
+        if (inserted) {
+            std::set<StatementId> active;
+            found->second = statement_references_resolve(id, active);
+        }
+        return found->second;
+    }
+
+    bool expression_closure_resolves(const ExpressionId id)
+    {
+        const auto [found, inserted]
+            = expression_closures_.try_emplace(id, false);
+        if (inserted) {
+            std::set<ExpressionId> active;
+            found->second = expression_references_resolve(id, active);
+        }
+        return found->second;
+    }
+
     std::optional<SpecializedClassMethod> method(
         const ClassDeclaration& owner, const ClassMethod& input,
         const Environment& environment,
@@ -1815,10 +1853,7 @@ private:
             materialize_member_type(child, environment, identity);
         }
         for (const auto child : output.local_declarations) {
-            std::set<DeclarationId> declaration_active;
-            std::set<StatementId> statement_active;
-            if (!declaration_references_resolve(
-                    child, declaration_active, statement_active)) {
+            if (!declaration_closure_resolves(child)) {
                 report(ClassSpecializationErrorKind::unresolved_member,
                     identity, input.source,
                     "class method has an unresolved local declaration closure");
@@ -1826,10 +1861,9 @@ private:
             }
         }
         output.statements = declaration->statements;
-        std::set<StatementId> active;
         if (!std::ranges::all_of(output.statements,
                 [&](const StatementId statement) {
-                    return statement_references_resolve(statement, active);
+                    return statement_closure_resolves(statement);
                 })) {
             report(ClassSpecializationErrorKind::unresolved_member,
                 identity, input.source,
@@ -2183,11 +2217,10 @@ private:
         for (const auto& property : declaration.properties) {
             const auto* member = record_for(
                 declarations_, property.declaration);
-            std::set<ExpressionId> initializer_active;
             if (member == nullptr || !member->type
                 || (property.initializer
-                    && !expression_references_resolve(
-                        *property.initializer, initializer_active))) {
+                    && !expression_closure_resolves(
+                        *property.initializer))) {
                 report(ClassSpecializationErrorKind::unresolved_member,
                     identity, property.source,
                     "class property '" + property.canonical_identity
@@ -2272,11 +2305,12 @@ private:
             if (callable == nullptr || !callable->nested_scope) {
                 continue;
             }
-            for (const auto* selection : owner_selections_) {
-                if (!scope_within(semantics_, selection->scope,
-                        *callable->nested_scope)) {
-                    continue;
-                }
+            const auto selections = owner_selections_.find(
+                callable->nested_scope->value());
+            if (selections == owner_selections_.end()) {
+                continue;
+            }
+            for (const auto* selection : selections->second) {
                 const auto& owner = selection->class_owner.front();
                 const auto* target = class_for(owner.class_identity);
                 if (target == nullptr || target->parameters.empty()) {
@@ -2367,7 +2401,8 @@ private:
         types_by_name_;
     std::map<ExpressionId, const Expression*> expressions_;
     // Static selections through a parameterized class (`C#(N)::f()`).
-    std::vector<const Expression*> owner_selections_;
+    std::unordered_map<std::uint32_t, std::vector<const Expression*>>
+        owner_selections_;
     std::map<StatementId, const Statement*> statements_;
     std::map<UnitId, const Unit*> units_;
     std::map<std::string, std::size_t, std::less<>> materialized_;
@@ -2380,6 +2415,13 @@ private:
     std::set<std::string, std::less<>> active_slot_tables_;
     std::map<DeclarationId, ExpressionId> parameter_properties_;
     std::set<DeclarationId> class_parameters_;
+    // Names of type parameters, and canonical identities of class
+    // properties and methods, over every class.
+    std::unordered_set<std::string> type_parameter_names_;
+    std::unordered_set<std::string> class_member_identities_;
+    std::map<DeclarationId, bool> declaration_closures_;
+    std::map<StatementId, bool> statement_closures_;
+    std::map<ExpressionId, bool> expression_closures_;
     ClassSpecializationResult result_;
 };
 

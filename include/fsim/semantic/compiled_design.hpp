@@ -257,6 +257,11 @@ public:
     /// to the complete HIR collection.
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     systemverilog_declarations_in_scope(ScopeId scope) const noexcept;
+    /// Positions in `systemverilog_hir.statements()` of the statements with
+    /// import items that open `scope`, in statement order; disengaged when
+    /// the lookup indexes are stale.
+    [[nodiscard]] std::optional<std::span<const std::uint32_t>>
+    systemverilog_import_statements_in_scope(ScopeId scope) const noexcept;
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     vhdl_declarations_in_scope(ScopeId scope) const noexcept;
     /// Return VHDL declaration identities with this identifier in one scope,
@@ -271,6 +276,11 @@ public:
     /// lookup can attach nominal type identity for the name.
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     vhdl_type_declarations_named(std::string_view name) const noexcept;
+    /// Positions in `vhdl_hir.types()` of the type definitions with this
+    /// identifier, in HIR order; disengaged when the lookup indexes are
+    /// stale.
+    [[nodiscard]] std::optional<std::span<const std::uint32_t>>
+    vhdl_type_positions_named(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::span<const CompiledVhdlImport>>
     vhdl_linked_imports(UnitId owner) const noexcept;
     [[nodiscard]] std::optional<
@@ -346,6 +356,8 @@ private:
         RecordPositions instances;
         std::vector<std::vector<DeclarationId>>
             systemverilog_declarations_by_scope;
+        std::vector<std::vector<std::uint32_t>>
+            systemverilog_import_statements_by_scope;
         std::vector<std::vector<DeclarationId>>
             vhdl_declarations_by_scope;
         using VhdlDeclarationsByName = std::unordered_map<
@@ -357,6 +369,9 @@ private:
             std::vector<DeclarationId>,
             VhdlIdentifierHash, VhdlIdentifierEqual>
             vhdl_type_declarations_by_name;
+        std::unordered_map<std::string_view, std::vector<std::uint32_t>,
+            VhdlIdentifierHash, VhdlIdentifierEqual>
+            vhdl_type_positions_by_name;
         std::vector<std::vector<CompiledVhdlImport>>
             vhdl_imports_by_unit;
         std::unordered_map<std::string_view,

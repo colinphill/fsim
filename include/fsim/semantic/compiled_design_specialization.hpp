@@ -304,6 +304,12 @@ public:
     [[nodiscard]] UnitId unit() const noexcept;
     [[nodiscard]] ScopeId scope() const noexcept;
     [[nodiscard]] Language language() const noexcept;
+    /// Whether this specialization replaces any VHDL type definition, so
+    /// a replacement may carry a name the design's type index lacks.
+    [[nodiscard]] bool replaces_vhdl_types() const noexcept
+    {
+        return !vhdl_types_.empty();
+    }
 
     /// Evaluate the bounded integral HIR subset in this specialization. Name
     /// references use actual_identities before declaration defaults, so a

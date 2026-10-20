@@ -3,6 +3,7 @@
 
 #include <ranges>
 #include <set>
+#include <unordered_map>
 
 namespace fsim::semantic {
 namespace {
@@ -34,80 +35,116 @@ void append_reference(std::vector<CompiledReference>& references,
         std::string { identity }, source, std::nullopt });
 }
 
-void append_type_reference(const CompiledDesign& design,
+// HIR records by id and defined classes by name, built once per pass.
+// Ids in a linked design need not be dense, and a missed dense slot made
+// every lookup a scan over all records.
+class ReferenceLookup {
+public:
+    explicit ReferenceLookup(const sv::Hir& hir)
+    {
+        index(hir.statements(), statements_);
+        index(hir.declarations(), declarations_);
+        index(hir.expressions(), expressions_);
+        for (const auto& candidate : hir.classes()) {
+            if (candidate.forward_declaration)
+                continue;
+            // A second definition makes the name ambiguous.
+            const auto [found, inserted]
+                = classes_.try_emplace(candidate.name, &candidate);
+            if (!inserted)
+                found->second = nullptr;
+        }
+    }
+
+    [[nodiscard]] const sv::Statement* statement(const StatementId id) const
+    {
+        return lookup(statements_, id);
+    }
+    [[nodiscard]] const sv::Declaration* declaration(
+        const DeclarationId id) const
+    {
+        return lookup(declarations_, id);
+    }
+    [[nodiscard]] const sv::Expression* expression(
+        const ExpressionId id) const
+    {
+        return lookup(expressions_, id);
+    }
+    [[nodiscard]] const sv::ClassDeclaration* unique_class(
+        const std::string& name) const
+    {
+        const auto found = classes_.find(name);
+        return found == classes_.end() ? nullptr : found->second;
+    }
+
+private:
+    template <typename Records, typename Record>
+    static void index(const Records& records,
+        std::unordered_map<std::uint32_t, const Record*>& result)
+    {
+        result.reserve(records.size());
+        for (const auto& record : records) {
+            if (record.id.valid())
+                result.try_emplace(record.id.value(), &record);
+        }
+    }
+    template <typename Record, typename IdType>
+    static const Record* lookup(
+        const std::unordered_map<std::uint32_t, const Record*>& records,
+        const IdType id)
+    {
+        if (!id.valid())
+            return nullptr;
+        const auto found = records.find(id.value());
+        return found == records.end() ? nullptr : found->second;
+    }
+
+    std::unordered_map<std::uint32_t, const sv::Statement*> statements_;
+    std::unordered_map<std::uint32_t, const sv::Declaration*> declarations_;
+    std::unordered_map<std::uint32_t, const sv::Expression*> expressions_;
+    std::unordered_map<std::string, const sv::ClassDeclaration*> classes_;
+};
+
+void append_type_reference(const ReferenceLookup& lookup,
     std::vector<CompiledReference>& references,
     const UnitId owner, const sv::TypeReference& type,
     const SourceSpanId fallback_source)
 {
     append_reference(references, owner, type.class_identity,
         type.target.source.valid() ? type.target.source : fallback_source);
-    const auto& expressions = design.systemverilog_hir.expressions();
     for (const auto& actual : type.interface_parameter_actuals) {
         if (actual.type) {
             append_type_reference(
-                design, references, owner, *actual.type, actual.source);
+                lookup, references, owner, *actual.type, actual.source);
             continue;
         }
         // A class named as a type actual (`C#(Item)`).
-        const auto found = actual.expression
-            ? std::ranges::find(expressions, *actual.expression,
-                  &sv::Expression::id)
-            : expressions.end();
-        if (found == expressions.end()
+        const auto* found = actual.expression
+            ? lookup.expression(*actual.expression)
+            : nullptr;
+        if (found == nullptr
             || found->kind != sv::ExpressionKind::name
             || found->text.find("::") != std::string::npos) {
             continue;
         }
-        const sv::ClassDeclaration* selected { };
-        for (const auto& candidate : design.systemverilog_hir.classes()) {
-            if (candidate.name != found->text
-                || candidate.forward_declaration) {
-                continue;
-            }
-            if (selected != nullptr) {
-                selected = nullptr;
-                break;
-            }
-            selected = &candidate;
-        }
-        if (selected != nullptr) {
+        if (const auto* selected = lookup.unique_class(found->text)) {
             append_reference(references, owner,
                 sv::class_declaration_identity(*selected), actual.source);
         }
     }
     for (const auto& element : type.container_element_types) {
-        append_type_reference(design,
+        append_type_reference(lookup,
             references, owner, element, fallback_source);
     }
 }
 
-const sv::Declaration* declaration_for(
-    const CompiledDesign& design, const DeclarationId id)
-{
-    const auto* found = design.systemverilog_hir.find_declaration(id);
-    return found == nullptr
-        ? nullptr
-        : &*found;
-}
-
-const sv::Statement* statement_for(
-    const CompiledDesign& design, const StatementId id)
-{
-    const auto found = std::ranges::find(
-        design.systemverilog_hir.statements(), id,
-        &sv::Statement::id);
-    return found == design.systemverilog_hir.statements().end()
-        ? nullptr
-        : &*found;
-}
-
-void append_declaration_references(const CompiledDesign& design,
+void append_declaration_references(const ReferenceLookup& lookup,
     std::vector<CompiledReference>& references, UnitId owner,
     DeclarationId declaration_id,
     std::set<DeclarationId>& visited_declarations,
     std::set<StatementId>& visited_statements);
 
-void append_statement_references(const CompiledDesign& design,
+void append_statement_references(const ReferenceLookup& lookup,
     std::vector<CompiledReference>& references, const UnitId owner,
     const StatementId statement_id,
     std::set<DeclarationId>& visited_declarations,
@@ -115,16 +152,16 @@ void append_statement_references(const CompiledDesign& design,
 {
     if (!visited_statements.insert(statement_id).second)
         return;
-    const auto* statement = statement_for(design, statement_id);
+    const auto* statement = lookup.statement(statement_id);
     if (statement == nullptr)
         return;
     for (const auto declaration : statement->declarations) {
-        append_declaration_references(design, references, owner,
+        append_declaration_references(lookup, references, owner,
             declaration, visited_declarations, visited_statements);
     }
     const auto append_statements = [&](const auto& statements) {
         for (const auto child : statements) {
-            append_statement_references(design, references, owner,
+            append_statement_references(lookup, references, owner,
                 child, visited_declarations, visited_statements);
         }
     };
@@ -135,7 +172,7 @@ void append_statement_references(const CompiledDesign& design,
         append_statements(alternative.statements);
 }
 
-void append_declaration_references(const CompiledDesign& design,
+void append_declaration_references(const ReferenceLookup& lookup,
     std::vector<CompiledReference>& references, const UnitId owner,
     const DeclarationId declaration_id,
     std::set<DeclarationId>& visited_declarations,
@@ -143,38 +180,39 @@ void append_declaration_references(const CompiledDesign& design,
 {
     if (!visited_declarations.insert(declaration_id).second)
         return;
-    const auto* declaration = declaration_for(design, declaration_id);
+    const auto* declaration = lookup.declaration(declaration_id);
     if (declaration == nullptr)
         return;
     if (declaration->type) {
-        append_type_reference(design, references, owner,
+        append_type_reference(lookup, references, owner,
             *declaration->type, declaration->source);
     }
     if (declaration->default_type) {
-        append_type_reference(design, references, owner,
+        append_type_reference(lookup, references, owner,
             *declaration->default_type, declaration->source);
     }
     if (declaration->callable) {
-        append_type_reference(design, references, owner,
+        append_type_reference(lookup, references, owner,
             declaration->callable->return_type, declaration->source);
         for (const auto formal : declaration->callable->formals) {
             append_declaration_references(
-                design, references, owner, formal,
+                lookup, references, owner, formal,
                 visited_declarations, visited_statements);
         }
     }
     for (const auto child : declaration->children) {
         append_declaration_references(
-            design, references, owner, child,
+            lookup, references, owner, child,
             visited_declarations, visited_statements);
     }
     for (const auto statement : declaration->statements) {
-        append_statement_references(design, references, owner,
+        append_statement_references(lookup, references, owner,
             statement, visited_declarations, visited_statements);
     }
 }
 
 void append_scoped_class_references(const CompiledDesign& design,
+    const ReferenceLookup& lookup,
     std::vector<CompiledReference>& references)
 {
     const auto& model = design.semantics;
@@ -189,7 +227,7 @@ void append_scoped_class_references(const CompiledDesign& design,
                                  const sv::TypeReference& type,
                                  const SourceSpanId source) {
         if (const auto owner = owner_for(scope))
-            append_type_reference(design, references, *owner, type, source);
+            append_type_reference(lookup, references, *owner, type, source);
     };
     for (const auto& declaration : design.systemverilog_hir.declarations()) {
         if (declaration.type)
@@ -290,7 +328,8 @@ void append_compiled_class_references(
     const CompiledDesign& design,
     std::vector<CompiledReference>& references)
 {
-    append_scoped_class_references(design, references);
+    const ReferenceLookup lookup { design.systemverilog_hir };
+    append_scoped_class_references(design, lookup, references);
     // The class a static selection names, with its actuals
     // (`Qux#(Foo)::get()`), and `type(data_type)` operands.
     const auto& scopes = design.semantics.scopes();
@@ -303,12 +342,20 @@ void append_compiled_class_references(
         }
         const auto owner = scopes[expression.scope.value()].unit;
         for (const auto& type : expression.class_owner) {
-            append_type_reference(design,
+            append_type_reference(lookup,
                 references, owner, type, expression.source);
         }
         for (const auto& type : expression.type_operand) {
-            append_type_reference(design,
+            append_type_reference(lookup,
                 references, owner, type, expression.source);
+        }
+    }
+    // The first type each alias declaration declares.
+    std::unordered_map<std::uint32_t, const sv::TypeDefinition*>
+        types_by_declaration;
+    for (const auto& type : design.systemverilog_hir.types()) {
+        if (type.declaration.valid()) {
+            types_by_declaration.try_emplace(type.declaration.value(), &type);
         }
     }
     for (const auto& declaration : design.systemverilog_hir.classes()) {
@@ -323,7 +370,7 @@ void append_compiled_class_references(
                 relation.declaration_identity, relation.source);
             for (const auto& actual : relation.actuals) {
                 if (actual.type) {
-                    append_type_reference(design,
+                    append_type_reference(lookup,
                         references, owner, *actual.type, actual.source);
                 }
             }
@@ -340,28 +387,29 @@ void append_compiled_class_references(
             append_relation(relation);
         for (const auto& parameter : declaration.parameters) {
             if (parameter.type) {
-                append_type_reference(design,
+                append_type_reference(lookup,
                     references, owner, *parameter.type, parameter.source);
             }
             if (parameter.default_type) {
-                append_type_reference(design, references, owner,
+                append_type_reference(lookup, references, owner,
                     *parameter.default_type, parameter.source);
             }
         }
         for (const auto& property : declaration.properties) {
-            append_type_reference(design,
+            append_type_reference(lookup,
                 references, owner, property.type, property.source);
         }
         for (const auto alias : declaration.type_aliases) {
-            const auto type = std::ranges::find(
-                design.systemverilog_hir.types(), alias,
-                &sv::TypeDefinition::declaration);
-            if (type == design.systemverilog_hir.types().end())
+            const auto found = alias.valid()
+                ? types_by_declaration.find(alias.value())
+                : types_by_declaration.end();
+            if (found == types_by_declaration.end())
                 continue;
-            append_type_reference(design,
+            const auto* type = found->second;
+            append_type_reference(lookup,
                 references, owner, type->base, type->source);
             for (const auto& member : type->members) {
-                append_type_reference(design,
+                append_type_reference(lookup,
                     references, owner, member.type, member.source);
             }
         }
@@ -369,7 +417,7 @@ void append_compiled_class_references(
         std::set<StatementId> visited_statements;
         for (const auto member : declaration.member_declarations) {
             append_declaration_references(
-                design, references, owner, member,
+                lookup, references, owner, member,
                 visited_declarations, visited_statements);
         }
     }

@@ -344,17 +344,14 @@ const Declaration* declaration_for(
     const std::span<const Declaration> declarations,
     const DeclarationId id)
 {
-    const auto found = std::ranges::find(
-        declarations, id, &Declaration::id);
-    return found == declarations.end() ? nullptr : &*found;
+    return find_by_id(declarations, id);
 }
 
 const Statement* statement_for(
     const std::span<const Statement> statements,
     const StatementId id)
 {
-    const auto found = std::ranges::find(statements, id, &Statement::id);
-    return found == statements.end() ? nullptr : &*found;
+    return find_by_id(statements, id);
 }
 
 bool valid_source_origin(const Model& semantics, const SourceSpanId source,
@@ -1089,14 +1086,12 @@ const std::vector<TypeDefinition>& Hir::types() const noexcept { return types_; 
 
 const Declaration* Hir::find_declaration(const DeclarationId id) const noexcept
 {
-    const auto found = std::ranges::find(declarations_, id, &Declaration::id);
-    return found != declarations_.end() ? &*found : nullptr;
+    return find_by_id(declarations_, id);
 }
 
 const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
 {
-    const auto found = std::ranges::find(types_, id, &TypeDefinition::id);
-    return found != types_.end() ? &*found : nullptr;
+    return find_by_id(types_, id);
 }
 const std::vector<Expression>& Hir::expressions() const noexcept {
     return expressions_;

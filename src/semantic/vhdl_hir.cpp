@@ -75,14 +75,12 @@ const std::vector<TypeDefinition>& Hir::types() const noexcept { return types_; 
 
 const Declaration* Hir::find_declaration(const DeclarationId id) const noexcept
 {
-    const auto found = std::ranges::find(declarations_, id, &Declaration::id);
-    return found != declarations_.end() ? &*found : nullptr;
+    return find_by_id(declarations_, id);
 }
 
 const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
 {
-    const auto found = std::ranges::find(types_, id, &TypeDefinition::id);
-    return found != types_.end() ? &*found : nullptr;
+    return find_by_id(types_, id);
 }
 const std::vector<OverloadSet>& Hir::overload_sets() const noexcept {
     return overload_sets_;

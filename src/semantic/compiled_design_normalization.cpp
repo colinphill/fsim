@@ -606,9 +606,7 @@ const ConstantValue* bound_value(
 const vhdl::Statement* find_statement(
     const vhdl::Hir& hir, const StatementId id)
 {
-    const auto found = std::ranges::find(
-        hir.statements(), id, &vhdl::Statement::id);
-    return found == hir.statements().end() ? nullptr : &*found;
+    return find_by_id(hir.statements(), id);
 }
 
 bool vhdl_callable_formal(

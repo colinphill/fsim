@@ -44,6 +44,24 @@ private:
     std::uint32_t value_{invalid_value};
 };
 
+/// The record with `id` in a table of records with an `id` member. Tables
+/// are usually dense (record `n` has ID `n`), which is checked first; any
+/// other layout falls back to a linear search.
+template <typename Records, typename Tag>
+[[nodiscard]] const typename Records::value_type* find_by_id(
+    const Records& records, const Id<Tag> id) noexcept {
+    if (id.valid() && id.value() < records.size()
+        && records[id.value()].id == id) {
+        return &records[id.value()];
+    }
+    for (const auto& record : records) {
+        if (record.id == id) {
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
 struct SourceFileTag;
 struct SourceSpanTag;
 struct ExpansionTag;

@@ -6,6 +6,7 @@
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
+#include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 
 #include <sstream>
@@ -67,6 +68,8 @@ namespace application_detail {
 int handle_workspace_elaborate(const cli::Invocation& invocation, const project::Config& config,
     diagnostic::Engine& diagnostics, std::ostream& output, std::ostream&)
 {
+    // Workspace objects and libraries are checksummed compiled HIR.
+    const semantic::TrustedCompiledHirLoad trusted_objects;
     workspace::Store store(config.base_directory);
     auto catalogs = workspace_catalogs(store, nullptr, diagnostics);
     if (!catalogs) {

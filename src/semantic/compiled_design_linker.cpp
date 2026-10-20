@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -23,6 +24,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -641,6 +643,15 @@ std::string structural_hir_error(const CompiledDesign& design)
     return { };
 }
 
+thread_local bool compiled_hir_trusted = false;
+
+// The structural check, unless the bundle comes from a trusted load.
+std::string checked_structural_hir_error(const CompiledDesign& design)
+{
+    return TrustedCompiledHirLoad::active()
+        ? std::string { } : structural_hir_error(design);
+}
+
 template <typename T>
 void append(std::vector<T>& destination, std::vector<T>& source)
 {
@@ -1064,7 +1075,7 @@ CompiledLinkResult project_compiled_design(
     const bool input_checked = false)
 {
     if (const auto error = input_checked
-            ? std::string { } : structural_hir_error(design);
+            ? std::string { } : checked_structural_hir_error(design);
         !error.empty()) {
         return { std::nullopt,
             "cannot project a structurally invalid compiled-HIR design: "
@@ -1093,7 +1104,7 @@ CompiledLinkResult project_compiled_design(
     if (!normalize_compiled_design(output)) {
         return { std::nullopt, std::string { invalid_projection } };
     }
-    if (const auto error = structural_hir_error(output);
+    if (const auto error = checked_structural_hir_error(output);
         !error.empty()) {
         return { std::nullopt, std::string { invalid_projection }
                 + ": " + error };
@@ -1133,7 +1144,7 @@ CompiledLinkResult consume_or_project_compiled_design(
         return project_compiled_design(design, select_unit,
             select_auxiliary_library, invalid_projection);
     }
-    if (const auto error = structural_hir_error(design);
+    if (const auto error = checked_structural_hir_error(design);
         !error.empty()) {
         return { std::nullopt,
             "cannot project a structurally invalid compiled-HIR design: "
@@ -1536,6 +1547,50 @@ std::optional<UnitId> resolve_class_reference(
     }
     return compiled_class_owner(design, *found);
 }
+
+// Class declarations by declaration identity, canonical identity, and
+// name, so resolving each class reference is a lookup instead of a scan
+// (with an identity string built per class) over every class.
+class ClassReferenceIndex {
+public:
+    explicit ClassReferenceIndex(const CompiledDesign& design)
+    {
+        for (const auto& declaration : design.systemverilog_hir.classes()) {
+            by_identity_[sv::class_declaration_identity(declaration)]
+                .push_back(&declaration);
+            by_identity_[declaration.canonical_identity]
+                .push_back(&declaration);
+            by_name_[declaration.name].push_back(&declaration);
+        }
+    }
+
+    [[nodiscard]] std::optional<UnitId> resolve(
+        const CompiledDesign& design,
+        const CompiledReference& reference) const
+    {
+        const auto& index = reference.secondary_name.empty()
+            ? by_name_ : by_identity_;
+        const auto found = index.find(reference.secondary_name.empty()
+                ? reference.name : reference.secondary_name);
+        if (found == index.end()) {
+            return std::nullopt;
+        }
+        // A declaration whose identity equals its canonical identity is
+        // listed twice; the reference resolves only to a unique class.
+        const auto* selected = found->second.front();
+        if (std::ranges::any_of(found->second,
+                [&](const auto* candidate) { return candidate != selected; })) {
+            return std::nullopt;
+        }
+        return compiled_class_owner(design, *selected);
+    }
+
+private:
+    std::unordered_map<std::string,
+        std::vector<const sv::ClassDeclaration*>> by_identity_;
+    std::unordered_map<std::string,
+        std::vector<const sv::ClassDeclaration*>> by_name_;
+};
 
 std::optional<UnitId> resolve_reference(
     const CompiledDesign& design, const CompiledReference& reference)
@@ -3106,20 +3161,26 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
     references.insert(references.end(),
         std::make_move_iterator(package_member_uses.begin()),
         std::make_move_iterator(package_member_uses.end()));
+    // Projections tie the members; copying the strings into each
+    // comparison key dominated the sort.
     sort_unique(dependencies, [](const CompiledDependency& dependency) {
-        return std::tuple {
+        return std::tie(
             dependency.owner, dependency.logical_name,
-            dependency.content_digest };
+            dependency.content_digest);
     });
     sort_unique(references, [](const CompiledReference& reference) {
-        return std::tuple {
+        return std::tie(
             reference.owner, reference.kind, reference.library,
             reference.name, reference.secondary_name, reference.source,
-            reference.systemverilog_package_member };
+            reference.systemverilog_package_member);
     });
     design.refresh_lookup_indexes();
+    const ClassReferenceIndex classes { design };
     for (auto& reference : references) {
-        reference.target = resolve_reference(design, reference);
+        reference.target
+            = reference.kind == CompiledReferenceKind::class_declaration
+            ? classes.resolve(design, reference)
+            : resolve_reference(design, reference);
     }
     link_systemverilog_configurations(design);
 }
@@ -3343,7 +3404,7 @@ CompiledLinkResult extract_compiled_objects_impl(
         output.mutable_systemverilog().mutable_units().push_back(std::move(unit));
     }
     refresh_compiled_design_metadata(output);
-    if (const auto error = structural_hir_error(output); !error.empty()) {
+    if (const auto error = checked_structural_hir_error(output); !error.empty()) {
         return { std::nullopt,
             "compiled-HIR primitive source ownership is structurally invalid: "
                 + error };
@@ -3371,7 +3432,7 @@ std::vector<CompiledLinkResult> extract_compiled_object_set(
 {
     std::vector<CompiledLinkResult> results;
     results.reserve(selections.size());
-    if (const auto error = structural_hir_error(design); !error.empty()) {
+    if (const auto error = checked_structural_hir_error(design); !error.empty()) {
         for (std::size_t index = 0; index < selections.size(); ++index) {
             results.push_back({ std::nullopt,
                 "cannot project a structurally invalid compiled-HIR design: "
@@ -3418,13 +3479,33 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
         return { std::nullopt,
             "linked compiled-HIR bundle is structurally invalid" };
     }
-    if (const auto error = structural_hir_error(output);
+    if (const auto error = checked_structural_hir_error(output);
         !error.empty()) {
         return { std::nullopt,
             "linked compiled-HIR bundle is structurally invalid: "
                 + error };
     }
     return { std::move(output), { } };
+}
+
+TrustedCompiledHirLoad::TrustedCompiledHirLoad() noexcept
+    : previous_ { compiled_hir_trusted }
+{
+    compiled_hir_trusted = true;
+}
+
+TrustedCompiledHirLoad::~TrustedCompiledHirLoad()
+{
+    compiled_hir_trusted = previous_;
+}
+
+bool TrustedCompiledHirLoad::active() noexcept
+{
+    static const bool verify = [] {
+        const char* text = std::getenv("FSIM_VERIFY_ARTIFACT");
+        return text != nullptr && std::string_view { text } == "1";
+    }();
+    return compiled_hir_trusted && !verify;
 }
 
 CompiledLinkResult link_compiled_designs(
@@ -3434,7 +3515,7 @@ CompiledLinkResult link_compiled_designs(
         return { CompiledDesign { }, { } };
     }
     for (const auto& input : inputs) {
-        if (const auto error = structural_hir_error(input);
+        if (const auto error = checked_structural_hir_error(input);
             !error.empty()) {
             return { std::nullopt,
                 "cannot link a structurally invalid compiled-HIR bundle: "

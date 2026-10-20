@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace fsim::semantic {
@@ -488,11 +489,20 @@ private:
         DeclarationId expected, DeclarationId candidate,
         bool include_function_result, bool compare_interface_modes) const;
 
+    // SystemVerilog statements with import items that open `scope`, in
+    // statement order: the design's lookup index, or a local index built
+    // on first use while the design's indexes are stale.
+    [[nodiscard]] std::vector<const sv::Statement*>
+    systemverilog_import_statements(ScopeId scope) const;
+
     const CompiledDesign* design_ { };
     const SpecializedHirUnit* effective_ { };
     UnitId selected_unit_;
     std::span<const CompiledBindingFrame> binding_frames_;
     mutable std::vector<ExpressionId> resolving_expression_names_;
+    mutable std::optional<
+        std::unordered_map<std::uint32_t, std::vector<const sv::Statement*>>>
+        import_statements_;
 };
 
 } // namespace fsim::semantic

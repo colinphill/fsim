@@ -4,7 +4,10 @@
 
 #include <concepts>
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -13,6 +16,16 @@ namespace fsim::app::application_detail {
 namespace {
 
     namespace sv = semantic::sv;
+
+    struct TransparentStringHash {
+        using is_transparent = void;
+
+        [[nodiscard]] std::size_t operator()(
+            const std::string_view value) const noexcept
+        {
+            return std::hash<std::string_view> { }(value);
+        }
+    };
 
     class SystemVerilogExecutableBuilder final {
     public:
@@ -242,12 +255,9 @@ namespace {
             result.source_order = source_order;
             auto visible_scope = std::optional<semantic::ScopeId> { scope };
             while (visible_scope) {
-                for (const auto& declaration : hir_.declarations()) {
-                    if (declaration.scope == *visible_scope
-                        && declaration.name == spelling) {
-                        result.overloads.push_back(declaration.id);
-                    }
-                }
+                const auto named = declarations_named(*visible_scope, spelling);
+                result.overloads.insert(
+                    result.overloads.end(), named.begin(), named.end());
                 if (!result.overloads.empty()) {
                     break;
                 }
@@ -443,14 +453,9 @@ namespace {
                 || !receiver->referenced_name->selected) {
                 return;
             }
-            const auto object = std::ranges::find_if(
-                hir_.mutable_declarations(),
-                [&](const sv::Declaration& declaration) {
-                    return declaration.id
-                        == *receiver->referenced_name->selected;
-                });
-            if (object == hir_.mutable_declarations().end()
-                || !object->type) {
+            auto* object
+                = declaration_by_id(*receiver->referenced_name->selected);
+            if (object == nullptr || !object->type) {
                 return;
             }
             const auto class_identity = !object->type->class_identity.empty()
@@ -1464,13 +1469,14 @@ namespace {
             const frontend::SourceSpan& span)
         {
             const auto declaration_source = source(span);
-            const auto found = std::ranges::find_if(
-                hir_.mutable_declarations(), [&](const sv::Declaration& declaration) {
-                    return declaration.scope == scope && declaration.form == form
-                        && declaration.name == declaration_name
-                        && declaration.source == declaration_source;
-                });
-            return found == hir_.mutable_declarations().end() ? nullptr : &*found;
+            for (const auto id : declarations_named(scope, declaration_name)) {
+                auto* declaration = declaration_by_id(id);
+                if (declaration != nullptr && declaration->form == form
+                    && declaration->source == declaration_source) {
+                    return declaration;
+                }
+            }
+            return nullptr;
         }
 
         [[nodiscard]] semantic::DeclarationId block_variable(
@@ -1914,11 +1920,9 @@ namespace {
             for (const auto& function : input.functions) {
                 fill_function(function, identity.scope);
             }
-            for (const auto& declaration : hir_.declarations()) {
-                if (declaration.scope == identity.scope) {
-                    output.declarations.push_back(declaration.id);
-                }
-            }
+            const auto in_scope = declarations_in_scope(identity.scope);
+            output.declarations.insert(
+                output.declarations.end(), in_scope.begin(), in_scope.end());
             for (const auto& item : input.sensitivities) {
                 output.sensitivities.push_back(sensitivity(
                     item, identity.scope, identity.origin));
@@ -1978,12 +1982,7 @@ namespace {
                 if (input.net_delay) {
                     const auto converted = delay(
                         *input.net_delay, scope, declaration_origin);
-                    const auto refreshed = std::ranges::find_if(
-                        hir_.mutable_declarations(),
-                        [&](const sv::Declaration& candidate) {
-                            return candidate.id == id;
-                        });
-                    refreshed->delay = converted;
+                    declaration_by_id(id)->delay = converted;
                 }
             }
         }
@@ -2055,11 +2054,7 @@ namespace {
             for (const auto& item : input.statements) {
                 statements.push_back(statement(item, callable_scope, callable_origin));
             }
-            const auto refreshed = std::ranges::find_if(
-                hir_.mutable_declarations(), [&](const sv::Declaration& candidate) {
-                    return candidate.id == id;
-                });
-            refreshed->statements = std::move(statements);
+            declaration_by_id(id)->statements = std::move(statements);
         }
 
         void fill_task(
@@ -2088,11 +2083,7 @@ namespace {
             for (const auto& item : input.statements) {
                 statements.push_back(statement(item, callable_scope, callable_origin));
             }
-            const auto refreshed = std::ranges::find_if(
-                hir_.mutable_declarations(), [&](const sv::Declaration& candidate) {
-                    return candidate.id == id;
-                });
-            refreshed->statements = std::move(statements);
+            declaration_by_id(id)->statements = std::move(statements);
         }
 
         void fill_class(
@@ -2370,12 +2361,11 @@ namespace {
                 auto visible_scope = std::optional<semantic::ScopeId> { item.scope };
                 bool genvar = false;
                 while (visible_scope) {
-                    for (const auto& declaration : hir_.declarations()) {
-                        if (declaration.scope == *visible_scope
-                            && declaration.name == item.referenced_name->spelling) {
-                            item.referenced_name->overloads.push_back(declaration.id);
-                        }
-                    }
+                    const auto named = declarations_named(
+                        *visible_scope, item.referenced_name->spelling);
+                    item.referenced_name->overloads.insert(
+                        item.referenced_name->overloads.end(),
+                        named.begin(), named.end());
                     if (!item.referenced_name->overloads.empty()) {
                         break;
                     }
@@ -2402,9 +2392,81 @@ namespace {
             }
         }
 
+        // Declarations by scope (and name) and by id, extended over the
+        // declarations appended since the last lookup, in HIR order. The
+        // builders only append declarations and never rescope or rename
+        // one; a scan of every declaration per name made building
+        // quadratic in the design's declarations.
+        struct ScopeDeclarations {
+            std::vector<semantic::DeclarationId> all;
+            std::unordered_map<std::string,
+                std::vector<semantic::DeclarationId>,
+                TransparentStringHash, std::equal_to<>>
+                by_name;
+        };
+
+        void index_declarations()
+        {
+            const auto& declarations = hir_.declarations();
+            if (declarations.size() < indexed_declarations_) {
+                declarations_by_scope_.clear();
+                declaration_positions_.clear();
+                indexed_declarations_ = 0U;
+            }
+            for (; indexed_declarations_ < declarations.size();
+                ++indexed_declarations_) {
+                const auto& declaration = declarations[indexed_declarations_];
+                auto& scope = declarations_by_scope_[declaration.scope.value()];
+                scope.all.push_back(declaration.id);
+                scope.by_name[declaration.name].push_back(declaration.id);
+                declaration_positions_.try_emplace(
+                    declaration.id.value(), indexed_declarations_);
+            }
+        }
+
+        [[nodiscard]] std::span<const semantic::DeclarationId>
+        declarations_named(
+            const semantic::ScopeId scope, const std::string_view spelling)
+        {
+            index_declarations();
+            const auto in_scope = declarations_by_scope_.find(scope.value());
+            if (in_scope == declarations_by_scope_.end()) {
+                return { };
+            }
+            const auto found = in_scope->second.by_name.find(spelling);
+            return found == in_scope->second.by_name.end()
+                ? std::span<const semantic::DeclarationId> { }
+                : std::span<const semantic::DeclarationId> { found->second };
+        }
+
+        [[nodiscard]] std::span<const semantic::DeclarationId>
+        declarations_in_scope(const semantic::ScopeId scope)
+        {
+            index_declarations();
+            const auto found = declarations_by_scope_.find(scope.value());
+            return found == declarations_by_scope_.end()
+                ? std::span<const semantic::DeclarationId> { }
+                : std::span<const semantic::DeclarationId> {
+                      found->second.all };
+        }
+
+        [[nodiscard]] sv::Declaration* declaration_by_id(
+            const semantic::DeclarationId id)
+        {
+            index_declarations();
+            const auto found = declaration_positions_.find(id.value());
+            return found == declaration_positions_.end()
+                ? nullptr
+                : &hir_.mutable_declarations()[found->second];
+        }
+
         semantic::Model& model_;
         sv::Hir& hir_;
         systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder_;
+        std::unordered_map<std::uint32_t, ScopeDeclarations>
+            declarations_by_scope_;
+        std::unordered_map<std::uint32_t, std::size_t> declaration_positions_;
+        std::size_t indexed_declarations_ { };
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
         std::unordered_map<std::string, semantic::TypeId>
             anonymous_aggregate_types_;

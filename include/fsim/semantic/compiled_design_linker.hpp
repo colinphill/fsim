@@ -22,6 +22,23 @@ struct CompiledLinkResult {
     }
 };
 
+/// While alive on this thread, compiled-HIR bundles loaded from checksummed
+/// objects and libraries are trusted: linking, projection and decoding skip
+/// the structural re-validation their producer ran before serializing them.
+/// FSIM_VERIFY_ARTIFACT=1 keeps every check.
+class TrustedCompiledHirLoad {
+public:
+    TrustedCompiledHirLoad() noexcept;
+    ~TrustedCompiledHirLoad();
+    TrustedCompiledHirLoad(const TrustedCompiledHirLoad&) = delete;
+    TrustedCompiledHirLoad& operator=(const TrustedCompiledHirLoad&) = delete;
+
+    [[nodiscard]] static bool active() noexcept;
+
+private:
+    bool previous_ { };
+};
+
 /// Rebuild deterministic source-dependency and external-reference records from
 /// the owning semantic model and both HIRs. Existing records are replaced.
 void refresh_compiled_design_metadata(CompiledDesign& design);

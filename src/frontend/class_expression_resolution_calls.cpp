@@ -747,7 +747,7 @@ void Resolver::retain_task_profile(
             && !scope.objects.contains(iterator_name)) {
           auto element = *receiver_type;
           element.systemverilog_container.reset();
-          with_scope.objects.emplace(iterator_name, std::move(element));
+          with_scope.objects.add(iterator_name, std::move(element));
         }
         for (auto& operand :
              expression.operands | std::views::drop(1)) {
@@ -1873,7 +1873,7 @@ void Resolver::resolve_statement(
         resolve_typed_expression(
             *declaration.initializer, *declared_scope, declaration.type);
       }
-      declared_scope->objects[declaration.name] = declaration.type;
+      declared_scope->objects.assign(declaration.name, declaration.type);
     }
   }
   const Scope& scope = declared_scope ? *declared_scope : inherited_scope;
@@ -2137,7 +2137,7 @@ void Resolver::resolve_function(FunctionDeclaration& function, Scope scope) {
   }
   add_objects(scope, function.arguments);
   add_objects(scope, function.variables);
-  scope.objects[function.name] = function.return_type;
+  scope.objects.assign(function.name, function.return_type);
   for (auto& variable : function.variables) {
     if (variable.initializer) {
       resolve_typed_expression(
@@ -2274,13 +2274,13 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
         auto resolved = resolve_alias_type(
             argument.type, declaration.canonical_identity);
         if (resolved.systemverilog_container) {
-          method_scope.objects[argument.name] = std::move(resolved);
+          method_scope.objects.assign(argument.name, std::move(resolved));
         }
       }
     }
     add_objects(method_scope, method.variables);
     if (method.kind == SystemVerilogClassMethodKind::Function) {
-      method_scope.objects[method.name] = method.return_type;
+      method_scope.objects.assign(method.name, method.return_type);
     }
     for (auto& variable : method.variables) {
       if (variable.initializer) {

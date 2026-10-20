@@ -3,7 +3,9 @@
 
 #include "class_expression_resolution.hpp"
 
+#include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -16,12 +18,89 @@ Type specialize_selected_class_type(Type type,
     const std::vector<std::pair<std::string, const Expression*>>& values,
     const std::map<std::string, Type>& types);
 
+// Objects visible in a scope. A copied scope shares its source's layers;
+// its first change adds a layer on top, so copying a scope per class,
+// method, or process no longer copies every enclosing object's type.
+class ScopeObjects {
+ public:
+  [[nodiscard]] const Type* find(std::string_view name) const {
+    for (const auto* layer = top_.get(); layer != nullptr;
+         layer = layer->parent.get()) {
+      if (const auto found = layer->objects.find(name);
+          found != layer->objects.end()) {
+        return &found->second;
+      }
+      if (layer->hidden.contains(name)) return nullptr;
+    }
+    return nullptr;
+  }
+  [[nodiscard]] bool contains(std::string_view name) const {
+    return find(name) != nullptr;
+  }
+  // Declares or redeclares `name` in this scope.
+  void assign(std::string_view name, Type type) {
+    auto& layer = writable();
+    if (const auto hidden = layer.hidden.find(name);
+        hidden != layer.hidden.end()) {
+      layer.hidden.erase(hidden);
+    }
+    layer.objects.insert_or_assign(std::string{name}, std::move(type));
+  }
+  // Declares `name` unless an object of that name is already visible.
+  void add(std::string_view name, Type type) {
+    if (!contains(name)) assign(name, std::move(type));
+  }
+  // Hides every visible object whose name satisfies `hidden`.
+  void hide_if(const std::function<bool(const std::string&)>& hidden) {
+    std::set<std::string, std::less<>> names;
+    std::set<std::string, std::less<>> shadowed;
+    for (const auto* layer = top_.get(); layer != nullptr;
+         layer = layer->parent.get()) {
+      for (const auto& entry : layer->objects) {
+        if (!shadowed.contains(entry.first)) names.insert(entry.first);
+      }
+      for (const auto& entry : layer->objects) shadowed.insert(entry.first);
+      shadowed.insert(layer->hidden.begin(), layer->hidden.end());
+    }
+    std::vector<std::string> selected;
+    for (const auto& name : names) {
+      if (hidden(name)) selected.push_back(name);
+    }
+    if (selected.empty()) return;
+    auto& layer = writable();
+    for (auto& name : selected) {
+      layer.objects.erase(name);
+      layer.hidden.insert(std::move(name));
+    }
+  }
+  void clear() { top_.reset(); }
+
+ private:
+  struct Layer {
+    std::map<std::string, Type, std::less<>> objects;
+    std::set<std::string, std::less<>> hidden;
+    std::shared_ptr<const Layer> parent;
+  };
+
+  Layer& writable() {
+    if (!top_ || top_.use_count() > 1) {
+      auto layer = std::make_shared<Layer>();
+      layer->parent = std::move(top_);
+      top_ = std::move(layer);
+    }
+    // Unshared: no other scope can observe this layer changing.
+    return const_cast<Layer&>(*top_);
+  }
+
+  std::shared_ptr<const Layer> top_;
+};
+
 struct Scope {
   std::string library;
   std::string compilation_unit_identity;
   std::string lexical_identity;
   const SystemVerilogClassDeclaration* class_owner{};
-  std::map<std::string, Type, std::less<>> objects;
+  ScopeObjects objects;
   // Module and interface instances of the enclosing unit, by instance name,
   // with the name of the instantiated unit.
   std::map<std::string, std::string, std::less<>> instances{};
@@ -94,7 +173,7 @@ class Resolver final {
   static void add_objects(
       Scope& scope, const std::vector<Declaration>& declarations) {
     for (const auto& declaration : declarations) {
-      scope.objects[declaration.name] = declaration.type;
+      scope.objects.assign(declaration.name, declaration.type);
     }
   }
 
