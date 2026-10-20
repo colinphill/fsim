@@ -770,7 +770,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
                 && source.lifetime != semantic::sv::Lifetime::static_lifetime)) {
             continue;
         }
-        const bool string = compiled_systemverilog_string_declaration(source);
+        const bool string = compiled_systemverilog_string_declaration(
+            specialization, source);
         const bool event_array
             = source.type
             && source.type->container_form
@@ -1157,7 +1158,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     if (is_covergroup_object(declaration)) {
         return true;
     }
-    if (compiled_systemverilog_string_declaration(declaration)) {
+    if (compiled_systemverilog_string_declaration(
+            working_specialization, declaration)) {
         return materialize_compiled_systemverilog_string_declaration(
             declaration,
             working_specialization,
@@ -2339,6 +2341,21 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 || !effective_type.class_identity.empty();
             const bool package_initializer
                 = unit.kind == semantic::sv::UnitKind::package;
+            // A real-family value initializes an integral variable with its
+            // rounded integer (`time t = 5ns;`, IEEE 1800-2017 6.12.2).
+            const bool integral_declaration
+                = scalar_kind == frontend::SystemVerilogScalarKind::None
+                || scalar_kind == frontend::SystemVerilogScalarKind::Time;
+            const auto integral_initializer
+                = [&](std::optional<HirSystemVerilogConstant> value) {
+                      if (value && value->scalar
+                          && (!integral_declaration
+                              || value->scalar->kind
+                                  == frontend::SystemVerilogScalarKind::Chandle)) {
+                          value.reset();
+                      }
+                      return value;
+                  };
             if (class_handle && package_initializer && expression
                 && expression->systemverilog != nullptr
                 && (expression->systemverilog->kind
@@ -2353,9 +2370,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     width, 0U, 0U);
             } else if (std::string constant_error; const auto constant
                 = !class_handle && width <= 64U
-                    ? evaluate_hir_systemverilog_constant(
+                    ? integral_initializer(evaluate_hir_systemverilog_value(
                           working_specialization, *declaration.initializer,
-                          constant_error)
+                          constant_error))
                     : std::nullopt) {
                 // A four-state constant initializer (`= 1'bz`) keeps its
                 // unknown bits, sized to the declaration (IEEE 1800-2017

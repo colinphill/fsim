@@ -1632,7 +1632,12 @@ CompiledDesignResolver::actual_declaration(
                 &SpecializedHirActualIdentity::declaration);
             if (actual != actuals.end()) {
                 next = actual->actual_declaration;
-                if (!next && actual->actual_expression) {
+                // A materialized type actual is terminal: its expression
+                // was written in the instantiating parent's scope and names
+                // a formal this specialization does not bind (IEEE
+                // 1800-2017 6.20.3).
+                if (!next && actual->actual_expression
+                    && !actual->systemverilog_type) {
                     const auto resolved = resolve_expression_name(
                         *actual->actual_expression, { }, true);
                     next = resolved.unique();
@@ -2384,8 +2389,19 @@ CompiledDesignResolver::resolve_systemverilog_interface_member(
             || (!generic_interface.empty() && declaration.type
                 && declaration.type->target.spelling == "interface");
     };
-    const auto receiver_id = resolve_systemverilog(
+    auto receiver_id = resolve_systemverilog(
         receiver, use_scope, interface_object, false).unique();
+    // `vif.sub.f`: steps through interface instances of the receiver's
+    // interface (IEEE 1800-2017 25.3, 25.9).
+    std::string_view steps;
+    if (!receiver_id) {
+        if (const auto dot = receiver.find('.');
+            dot != std::string_view::npos && dot != 0U) {
+            receiver_id = resolve_systemverilog(receiver.substr(0U, dot),
+                use_scope, interface_object, false).unique();
+            steps = receiver.substr(dot + 1U);
+        }
+    }
     const auto receiver_view = receiver_id
         ? find_declaration(*design_, effective_, *receiver_id)
         : std::nullopt;
@@ -2411,15 +2427,39 @@ CompiledDesignResolver::resolve_systemverilog_interface_member(
             library = normalized_library(owner->systemverilog->library);
         }
     }
-    const auto selected = design_->find_unit(
+    auto selected = design_->find_unit(
         UnitKind::systemverilog_interface, library, interface_name);
     if (!selected || selected->systemverilog == nullptr) {
         return { CompiledResolutionStatus::not_found, { } };
     }
+    auto modport_name = modport;
+    while (!steps.empty()) {
+        const auto dot = steps.find('.');
+        const auto step = steps.substr(0U, dot);
+        std::optional<CompiledUnitView> next;
+        for (const auto instance_id : selected->systemverilog->instances) {
+            const auto instance = design_->find_instance(instance_id);
+            if (!instance || instance->systemverilog == nullptr
+                || instance->systemverilog->name != step) {
+                continue;
+            }
+            next = design_->find_unit(UnitKind::systemverilog_interface,
+                library, instance->systemverilog->target.spelling);
+            break;
+        }
+        if (!next || next->systemverilog == nullptr) {
+            return { CompiledResolutionStatus::not_found, { } };
+        }
+        selected = next;
+        // A modport restricts only the receiver's own interface (25.5).
+        modport_name = { };
+        steps = dot == std::string_view::npos ? std::string_view { }
+                                              : steps.substr(dot + 1U);
+    }
     const auto& interface = *selected->systemverilog;
-    if (!modport.empty()) {
+    if (!modport_name.empty()) {
         const auto view = std::ranges::find(
-            interface.modports, modport, &sv::Modport::name);
+            interface.modports, modport_name, &sv::Modport::name);
         if (view == interface.modports.end()
             || std::ranges::none_of(
                 view->members,
@@ -3333,9 +3373,15 @@ CompiledDesignResolver::underlying_systemverilog_type(
             || form == sv::TypeForm::unpacked_union) {
             break;
         }
+        // The typedef's base names a type in the typedef's own scope
+        // (IEEE 1800-2017 6.18).
+        const auto alias = find_declaration(
+            *design_, effective_, definition->systemverilog->declaration);
         auto replacement = effective_systemverilog_type(
                                definition->systemverilog->base,
-                               use_scope)
+                               alias && alias->systemverilog != nullptr
+                                   ? alias->systemverilog->scope
+                                   : use_scope)
                                .value_or(
                                    definition->systemverilog->base);
         current = retain_systemverilog_declarator(
@@ -8466,13 +8512,11 @@ CompiledDesignResolver::resolve_systemverilog_expression(
               auto remaining = member_path;
               std::size_t resolved_parameters { };
               while (!remaining.empty()) {
-                  // Types from other units (an imported package typedef)
-                  // keep only their spelling across object linking.
-                  if (!type.target.target.valid()) {
-                      type = effective_systemverilog_type(
-                          type, declaration.systemverilog->scope)
-                                 .value_or(type);
-                  }
+                  // A typedef denotes its base type (IEEE 1800-2017 6.18),
+                  // including another unit's type kept only by spelling.
+                  type = underlying_systemverilog_type(
+                      type, declaration.systemverilog->scope)
+                             .value_or(type);
                   if (!type.target.target.valid()) {
                       return false;
                   }

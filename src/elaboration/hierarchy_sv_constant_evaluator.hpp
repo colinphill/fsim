@@ -105,6 +105,29 @@ evaluate_hir_systemverilog_array_constant(
     semantic::ExpressionId expression,
     std::string& error);
 
+/// The bits a member and element path selects in the bit stream of an
+/// unpacked or packed aggregate value (IEEE 1800-2017 6.24.3).
+struct HirSystemVerilogAggregateSlice {
+    std::uint64_t offset { };
+    std::uint64_t width { };
+    std::uint64_t whole_width { };
+    bool signed_value { };
+};
+
+/// The slice `path` (`.m`, `[n]`, ...) selects in a value of `type`, laid
+/// out in `owner`.
+[[nodiscard]] std::optional<HirSystemVerilogAggregateSlice>
+hir_systemverilog_aggregate_slice(
+    const semantic::SpecializedHirUnit& owner,
+    const semantic::sv::TypeReference& type,
+    std::string_view path);
+
+/// True for an unpacked structure or fixed-size unpacked array type whose
+/// value is held as its bit stream.
+[[nodiscard]] bool hir_systemverilog_unpacked_aggregate_type(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type);
+
 /// The bit width of a type in a specialization, or nullopt when it is not a
 /// fixed-width type.
 [[nodiscard]] std::optional<std::uint64_t> hir_systemverilog_type_bits(

@@ -3081,10 +3081,17 @@ endmodule
         == fsim::runtime::SystemVerilogConstraintSolveStatus::Unsatisfiable);
     assert(valid_choice.expressions[2].operands[1].bindings.front().canonical_identity
         == "work::$unit::HirObject::limit");
+    // A function whose body returns one expression is that expression,
+    // cast to the function's type (IEEE 1800-2017 18.5.12).
     assert(valid_choice.expressions.back().operands[1].kind
         == fsim::semantic::sv::ConstraintExpressionKind::call);
-    assert(valid_choice.expressions.back().operands[1].bindings.front().canonical_identity
-        == "work::$unit::HirObject::limit_value");
+    assert(valid_choice.expressions.back().operands[1].text
+        == "@sv-cast:signed:32");
+    // `limit`, a local static constant, reads the class's static property.
+    assert(valid_choice.expressions.back().operands[1].operands.front().kind
+        == fsim::semantic::sv::ConstraintExpressionKind::call);
+    assert(valid_choice.expressions.back().operands[1].operands.front().text
+        == "@sv-static-property:work::$unit::HirObject::limit");
     assert(valid_choice.expressions.front().source
         != valid_choice.source);
     assert(hir_object->constraints.back().pure

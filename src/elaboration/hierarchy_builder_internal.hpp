@@ -767,6 +767,10 @@ private:
         std::string_view path,
         const std::optional<semantic::vhdl::SubtypeIndication>& context,
         const semantic::vhdl::Unit& owner);
+    // An unresolved actual written only by output-port adapters takes the
+    // formals' values in the same simulation cycle (IEEE 1076-2008
+    // 14.7.3.2): its adapters become one composing conversion program.
+    void compose_vhdl_output_routes();
 
     bool lower_compiled_vhdl_unit_processes(
         const semantic::vhdl::Unit& entity,
@@ -988,6 +992,10 @@ private:
         const semantic::CompiledInstanceView& instance,
         std::string_view child_path,
         const semantic::SpecializedHirUnit& working_specialization);
+    void append_systemverilog_type_actual_context(
+        const semantic::CompiledUnitView& child,
+        const semantic::SpecializedHirUnit& parent,
+        std::vector<semantic::SpecializedHirActualIdentity>& actuals) const;
 
     bool append_compiled_systemverilog_parameter_metadata(
         semantic::DeclarationId declaration_id,
@@ -1853,6 +1861,11 @@ private:
         systemverilog_interface_parameter_identities_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_types_;
+    // Each interface instance's specialization, reserved before the
+    // instantiating unit's processes lower calls through it.
+    std::unordered_map<std::string,
+        std::shared_ptr<const std::optional<semantic::SpecializedHirUnit>>>
+        systemverilog_instance_specializations_;
     // The last name component of every SystemVerilog disable target, and
     // the labels of named blocks and tasks it may name.
     struct SystemVerilogDisableLabels {

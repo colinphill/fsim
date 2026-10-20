@@ -253,6 +253,88 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 79: constraint containers, interface and type-parameter contexts, VHDL formal parts and null arrays
+
+Full run on the frozen `b79ab`, compared with Batch 78 (`b78y`). Batch 79
+closes 51 corpus tests (Verilator 38, nvc 13) and loses none. The
+borderline solver timeout `t_constraint_array_sum_with` passes again in this run.
+
+| Suite | Batch78 passes / in scope | Batch79 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2547 / 2564 | 2547 / 2564 | 262 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1838 / 2067 | 1876 / 2068 | 347 |
+| vests | 3625 / 3646 | 3625 / 3646 | 2 |
+| nvc | 1079 / 1245 | 1092 / 1245 | 237 |
+| vhdl-compliance | 46 / 69 | 46 / 69 | 3 |
+
+Randomization and constraints (IEEE 1800-2017 18.5, 18.11):
+- Constraint containers are a path-addressed tree, so associative arrays,
+  queues, dynamic arrays, unpacked arrays and struct members are rand
+  containers (with `size()`, `rand_mode` and `solve ... before`).
+- Unpacked structures and arrays of them randomize member by member, and
+  functions called in constraints are inlined.
+- Class-scope constants resolve in constraints and in class scope chains.
+
+Interfaces and parameters (IEEE 1800-2017 23.2, 25):
+- Virtual-interface selects reach sub-interfaces, their methods and their
+  members; an interface function or task called through a port uses the
+  callee interface's specialization for its formals.
+- A type parameter whose actual is a parent typedef carries the parent
+  parameter values it depends on, so `$bits` and member offsets use the
+  parent's specialization, not its defaults.
+- `$bits(h.p)` in a parameter default or override resolves the class
+  property; typedef members resolve through the underlying type; unpacked
+  array parameters are published as one aggregate identity.
+
+VHDL port and parameter formals (IEEE 1076-2008 6.5.7.1, 5.3.2.2):
+- A formal associated by subelements (`value(Data'range) => ...`,
+  `f(i to j) => ...`) is a slice of the formal: its bounds come from
+  `'range`/`'reverse_range` and range choices, and a formal shaped by one
+  slice choice takes that slice's direction.
+- An unconstrained array formal whose elements are unconstrained arrays
+  takes its element constraint from the actual.
+- A procedure signal parameter associated by one subelement aggregate
+  collapses to that actual; operator-symbol calls (`"not"(s)`) are
+  conversion functions in a port map.
+- A composite input with a conversion adapter starts from the converted
+  initial value; only resolved sources need the delta adapter.
+
+VHDL values:
+- Null arrays and arrays of null elements pass to unconstrained array
+  formals (5.3.2.1); a null function result has a shape, and a null
+  aggregate (all choices null ranges) equals any null array (9.2.3).
+- Concatenation types its result from the operands that are not context
+  typed (literals and aggregates, 9.3.2) and accepts array-typed element
+  operands.
+- Object aliases of protected shared variables, including aliases in
+  another package, reach the object's methods (6.6.2).
+- Constants of a package instance declared in an architecture are folded
+  or materialized with the instance's generic actuals, keyed per instance;
+  scalar bounds of such an instance's subtypes are evaluated with its
+  generics (4.9).
+
+Regressions the labelled ctest caught (not the corpus):
+- An interface type parameter whose actual is a packed array of packed
+  structures counted the structure's width twice; the array's dimensions
+  already include it (7.4.1).
+- The output-route composer's halted adapter stubs and port-association
+  programs are host programs, so the static kernel still owns such VHDL
+  designs; their sources stay host signals.
+- A typed integer parameter narrowed to its target (`Extract` of the
+  literal) is still a bound literal for shared native modules.
+
+Open leads (`.local-artifacts/lrm-closure/triage/b79/`):
+- Hierarchical selects into another module's multidimensional packed
+  array (`u.arr[0]`) read and write a single bit; the plan needs owner
+  specializations in the lowerer (`sv-hier-packed-index-diag.md`).
+- issue1534 (concatenation actual of an array-of-arrays formal) and
+  issue1559 (`use inst.all` of a local package instance; `'left` of its
+  subtypes silently falls back to the base range): `b80-leads-1534-1559.md`.
+- Local package instance generics in record element subtypes (issue894,
+  issue1474, issue644): `vhdl-local-package-instance-diag.md`.
+- conv17 needs per-driver formal conversions combined by resolution.
+
 ### Batch 78 (part 2): VHDL closures
 
 Full run on the frozen `b78y`, compared with Batch 78 part 1 (`b78g`). The

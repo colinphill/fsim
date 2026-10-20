@@ -3329,7 +3329,12 @@ void Interpreter::Impl::stage_update(
 {
     (void)get_signal(signal_id);
     if (driven_values[signal_id].width() != staged_value.width()) {
-        throw std::invalid_argument("SimIR signal assignment width mismatch");
+        throw std::invalid_argument(
+            "SimIR signal assignment width mismatch (signal "
+            + std::to_string(signal_id) + " has width "
+            + std::to_string(driven_values[signal_id].width())
+            + ", value has width " + std::to_string(staged_value.width())
+            + ")");
     }
     staged_value = normalize_signal_value(
         signal_id, std::move(staged_value));
@@ -3447,7 +3452,11 @@ void Interpreter::Impl::stage_update_words(
             if (driven_values[update.signal].width()
                 != update.value.width) {
                 throw std::invalid_argument(
-                    "SimIR signal assignment width mismatch");
+                    "SimIR signal assignment width mismatch (signal "
+                    + std::to_string(update.signal) + " has width "
+                    + std::to_string(driven_values[update.signal].width())
+                    + ", value has width "
+                    + std::to_string(update.value.width) + ")");
             }
         }
         if (!module_paths.empty()

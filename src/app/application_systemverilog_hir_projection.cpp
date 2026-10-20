@@ -539,7 +539,8 @@ void SystemVerilogHirBuilder::add_packed_members(
             source(member.span),
             member.initializer
                 ? expression(*member.initializer, scope, parent)
-                : std::nullopt });
+                : std::nullopt,
+            member.random });
     }
 }
 

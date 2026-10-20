@@ -55,6 +55,9 @@ public:
         runtime::simir::ProcessInstanceProgram instance);
     void replace(
         std::size_t process, runtime::simir::Process instance);
+    // Replace a row with a program of a different shape, under its own
+    // template.
+    void rebuild(std::size_t process, runtime::simir::Process program);
     [[nodiscard]] std::shared_ptr<const RuntimeProcessProgramTable>
     freeze() && noexcept;
 

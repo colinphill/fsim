@@ -1327,6 +1327,7 @@ void Simulation::Impl::setup_execution(
                  const runtime::simir::RegisterId destination) {
                 auto tracked_register = destination;
                 bool copy_definition { };
+                bool extract_definition { };
                 std::optional<runtime::simir::InstructionIndex>
                     convert_definition;
                 std::optional<runtime::simir::InstructionIndex>
@@ -1350,6 +1351,26 @@ void Simulation::Impl::setup_execution(
                         }
                         copy_definition = true;
                         tracked_register = copy->source;
+                        continue;
+                    }
+                    // A part of the literal (a typed parameter narrowed to
+                    // its target) is rebound with it.
+                    if (const auto* const extract
+                        = runtime::simir::operation_get_if<
+                            runtime::simir::Extract>(&operation);
+                        extract != nullptr
+                        && extract->destination == tracked_register) {
+                        const auto extract_index
+                            = static_cast<runtime::simir::InstructionIndex>(
+                                index);
+                        if (extract_definition
+                            || !is_logic4_register(extract->source)
+                            || has_transfer_that_skips_definition(
+                                extract_index, use)) {
+                            return false;
+                        }
+                        extract_definition = true;
+                        tracked_register = extract->source;
                         continue;
                     }
                     if (const auto* const convert

@@ -555,7 +555,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             coverage_, unit.kind == semantic::sv::UnitKind::module
                 && source_language == frontend::Language::SystemVerilog2017);
         generated_lowerer.set_systemverilog_interface_handles(
-            &systemverilog_interface_handles_, &systemverilog_interface_types_);
+            &systemverilog_interface_handles_, &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_);
         generated_lowerer.set_systemverilog_program_owner(
             program_owner);
         auto generated_concurrent_statements
@@ -820,7 +821,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
         generated_lowerer.set_ancestor_systemverilog_specializations(
             &materialization.type_owner_contexts);
         generated_lowerer.set_systemverilog_interface_handles(
-            &systemverilog_interface_handles_, &systemverilog_interface_types_);
+            &systemverilog_interface_handles_, &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_);
         generated_lowerer.set_systemverilog_program_owner(program_owner);
         auto& specialization
             = design_.specializations_[specialization_index];
@@ -993,7 +995,8 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
         lowerer.set_ancestor_systemverilog_specializations(
             &materialization.type_owner_contexts);
         lowerer.set_systemverilog_interface_handles(
-            &systemverilog_interface_handles_, &systemverilog_interface_types_);
+            &systemverilog_interface_handles_, &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_);
         lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         {

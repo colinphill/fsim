@@ -1428,7 +1428,8 @@ namespace {
                         member.initializer
                             ? expression(
                                   *member.initializer, scope, type_origin)
-                            : std::nullopt });
+                            : std::nullopt,
+                        member.random });
                 }
                 hir_.mutable_types().push_back(std::move(definition));
                 if (signature) {

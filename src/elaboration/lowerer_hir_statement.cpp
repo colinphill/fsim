@@ -7761,7 +7761,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     *lowered, value_scalar_kind);
             }
             if (!element_index || !lowered) {
+                // A pattern whose operand names a hierarchical reference
+                // not yet elaborated is lowered again later.
                 if (!lowered && diagnostics_.size() == diagnostics_before
+                    && !hierarchical_reference_missed_
                     && value_expression
                     && value_expression->systemverilog != nullptr
                     && value_expression->systemverilog->kind
@@ -8429,11 +8432,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             std::cerr << '\n';
         }
+        // A nonblocking write through a virtual interface may carry an
+        // intra-assignment control (`vif.d <= #t v`, IEEE 1800-2017 10.4.2).
         if (!direct_binding && statement->systemverilog != nullptr
-            && !statement->systemverilog->delay
+            && (!statement->systemverilog->delay || timed_nonblocking)
             && statement->systemverilog->assignment_kind
                 != semantic::sv::AssignmentKind::continuous) {
-            if (lower_hir_virtual_interface_select_write(
+            if (!statement->systemverilog->delay
+                && lower_hir_virtual_interface_select_write(
                     *target, *value, nonblocking, update_domain)) {
                 if (!lower_intra_assignment_control()) {
                     return assignment_rejected(__LINE__);
@@ -8458,16 +8464,28 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                 }
                 auto lowered = lower_hir_expression(*value, member->width);
-                if (!lowered || !lower_intra_assignment_control()) {
+                if (!lowered
+                    || (!timed_nonblocking
+                        && !lower_intra_assignment_control())) {
                     return assignment_rejected(__LINE__);
                 }
                 if (register_width(*lowered) != member->width) {
                     lowered = resize_register(*lowered, member->width,
                         hir_expression_signed(*value));
                 }
+                std::optional<NonblockingHandoff> handoff;
+                if (timed_nonblocking) {
+                    handoff = begin_nonblocking_handoff();
+                    if (!handoff) {
+                        return assignment_rejected(__LINE__);
+                    }
+                }
                 if (!lower_hir_virtual_interface_write(
                         *member, *lowered, nonblocking, update_domain)) {
                     return assignment_rejected(__LINE__);
+                }
+                if (handoff) {
+                    end_nonblocking_handoff(*handoff);
                 }
                 return true;
             }
@@ -12060,6 +12078,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (!lowered) {
             trace_assignment_failure("value-expression");
             if (packed_pattern && value_expression
+                && !hierarchical_reference_missed_
                 && value_expression->systemverilog != nullptr
                 && value_expression->systemverilog->kind
                     == semantic::sv::ExpressionKind::assignment_pattern) {
@@ -24126,7 +24145,8 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
             diagnostics_);
         driver_lowerer.set_specialized_hir_unit(specialized_hir_unit_);
         driver_lowerer.set_systemverilog_interface_handles(
-            systemverilog_interface_handles_, systemverilog_interface_types_);
+            systemverilog_interface_handles_, systemverilog_interface_types_,
+            systemverilog_instance_units_);
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
         driver_lowerer.vhdl_standard_ = vhdl_standard_;
@@ -24771,7 +24791,8 @@ void Lowerer::materialize_hir_monitor_drivers()
             diagnostics_);
         driver_lowerer.set_specialized_hir_unit(specialized_hir_unit_);
         driver_lowerer.set_systemverilog_interface_handles(
-            systemverilog_interface_handles_, systemverilog_interface_types_);
+            systemverilog_interface_handles_, systemverilog_interface_types_,
+            systemverilog_instance_units_);
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
         driver_lowerer.vhdl_standard_ = vhdl_standard_;
@@ -24832,7 +24853,7 @@ bool Lowerer::lower_hir_virtual_interface_select_write(
         return false;
     }
     const auto member = hir_virtual_interface_member(source.operands.front());
-    if (!member || member->candidates.empty()) {
+    if (!member || member->candidates.empty() || member->select_offset) {
         return false;
     }
     const auto& info = design_.signal_info_[member->candidates.front().second];
@@ -24957,7 +24978,14 @@ bool Lowerer::lower_hir_virtual_interface_write(
             process_.operations.size());
         process_.operations.emplace_back(Branch {
             selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
-        if (nonblocking) {
+        if (member.select_offset && nonblocking) {
+            process_.operations.emplace_back(WriteUpdateSlice {
+                signal, value, *member.select_offset, update_domain });
+            emit_clocking_drive_pending(signal);
+        } else if (member.select_offset) {
+            process_.operations.emplace_back(WriteBlockingSlice {
+                signal, value, *member.select_offset });
+        } else if (nonblocking) {
             process_.operations.emplace_back(WriteUpdate {
                 signal, value, update_domain });
             emit_clocking_drive_pending(signal);

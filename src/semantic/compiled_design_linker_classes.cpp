@@ -112,6 +112,16 @@ void append_type_reference(const ReferenceLookup& lookup,
 {
     append_reference(references, owner, type.class_identity,
         type.target.source.valid() ? type.target.source : fallback_source);
+    // A virtual interface names an interface that need not be instantiated
+    // (IEEE 1800-2017 25.9); the design links its definition.
+    if (type.virtual_interface && !type.interface_type.empty()) {
+        references.push_back({ CompiledReferenceKind::module, owner,
+            reference_library(type.interface_type),
+            reference_name(type.interface_type), { },
+            type.target.source.valid() ? type.target.source
+                                       : fallback_source,
+            std::nullopt });
+    }
     for (const auto& actual : type.interface_parameter_actuals) {
         if (actual.type) {
             append_type_reference(

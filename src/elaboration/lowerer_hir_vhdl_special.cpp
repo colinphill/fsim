@@ -264,6 +264,10 @@ std::optional<VhdlReflectionApiKind> reflection_string_operation(
     return std::nullopt;
 }
 
+const semantic::vhdl::TypeDefinition* find_protected_type(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::vhdl::SubtypeIndication& subtype);
+
 std::optional<semantic::DeclarationId> find_vhdl_object(
     const semantic::SpecializedHirUnit& unit,
     const semantic::ScopeId scope,
@@ -272,20 +276,74 @@ std::optional<semantic::DeclarationId> find_vhdl_object(
     semantic::vhdl::Name reference;
     reference.spelling = std::string { name };
     reference.canonical = reference.spelling;
+    using Form = semantic::vhdl::DeclarationForm;
+    // An object alias without a subtype indication denotes the aliased
+    // object with that object's subtype (IEEE 1076-2008 6.6.2); one of a
+    // protected object reaches that object's methods.
+    const auto plain_object_alias
+        = [](const semantic::vhdl::Declaration& declaration) {
+              return declaration.form == Form::alias
+                  && !declaration.subtype && !declaration.alias_signature
+                  && declaration.alias_target;
+          };
     const semantic::CompiledDeclarationPredicate object
-        = [](const semantic::CompiledDeclarationView& candidate) {
-              if (candidate.vhdl == nullptr
-                  || !candidate.vhdl->subtype) {
+        = [&](const semantic::CompiledDeclarationView& candidate) {
+              if (candidate.vhdl == nullptr) {
                   return false;
               }
-              using Form = semantic::vhdl::DeclarationForm;
+              if (plain_object_alias(*candidate.vhdl)) {
+                  return true;
+              }
+              if (!candidate.vhdl->subtype) {
+                  return false;
+              }
               const auto form = candidate.vhdl->form;
               return semantic::vhdl::is_value_object_form(form)
                   || form == Form::file || form == Form::alias;
           };
-    return semantic::CompiledDesignResolver { unit }
+    auto found = semantic::CompiledDesignResolver { unit }
         .resolve_vhdl(reference, scope, object)
         .unique();
+    const auto declaration_of = [&](const semantic::DeclarationId id)
+        -> const semantic::vhdl::Declaration* {
+        const auto specialized = unit.find_declaration(id);
+        if (specialized && specialized->vhdl != nullptr) {
+            return specialized->vhdl;
+        }
+        const auto& declarations = unit.design().vhdl_hir.declarations();
+        const auto stored = std::ranges::find(
+            declarations, id, &semantic::vhdl::Declaration::id);
+        return stored != declarations.end() ? &*stored : nullptr;
+    };
+    for (std::size_t depth { }; found && depth < 16U; ++depth) {
+        const auto* alias = declaration_of(*found);
+        if (alias == nullptr || !plain_object_alias(*alias)) {
+            break;
+        }
+        auto target_name = *alias->alias_target;
+        const auto target_id = target_name.selected
+            ? std::optional { *target_name.selected }
+            : [&] {
+                  target_name.overloads.clear();
+                  return semantic::CompiledDesignResolver { unit }
+                      .resolve_vhdl(target_name, alias->scope, object)
+                      .unique();
+              }();
+        if (!target_id || *target_id == *found) {
+            return std::nullopt;
+        }
+        const auto* target = declaration_of(*target_id);
+        if (target == nullptr
+            || (!plain_object_alias(*target)
+                && (!target->subtype
+                    || !semantic::vhdl::is_value_object_form(target->form)
+                    || find_protected_type(unit, *target->subtype)
+                        == nullptr))) {
+            return std::nullopt;
+        }
+        found = *target_id;
+    }
+    return found;
 }
 
 const semantic::vhdl::Declaration* find_vhdl_declaration(
@@ -301,6 +359,47 @@ const semantic::vhdl::Declaration* find_vhdl_declaration(
         declarations, declaration_id,
         &semantic::vhdl::Declaration::id);
     return stored != declarations.end() ? &*stored : nullptr;
+}
+
+// A subprogram alias of a protected method (`alias inc is pt.increment
+// []`, IEEE 1076-2008 6.6.3) names that method of that object.
+struct ProtectedMethodAlias {
+    const semantic::vhdl::Declaration* alias { };
+    SelectedVhdlName target;
+};
+
+std::optional<ProtectedMethodAlias> find_protected_method_alias(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::ScopeId scope,
+    const std::string_view name)
+{
+    if (name.find_first_of(".:") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    semantic::vhdl::Name reference;
+    reference.spelling = std::string { name };
+    reference.canonical = reference.spelling;
+    const semantic::CompiledDeclarationPredicate alias
+        = [](const semantic::CompiledDeclarationView& candidate) {
+              return candidate.vhdl != nullptr
+                  && candidate.vhdl->form
+                      == semantic::vhdl::DeclarationForm::alias
+                  && candidate.vhdl->alias_signature
+                  && candidate.vhdl->alias_target;
+          };
+    const auto resolved = semantic::CompiledDesignResolver { unit }
+        .resolve_vhdl(reference, scope, alias)
+        .unique();
+    const auto* declaration = resolved
+        ? find_vhdl_declaration(unit, *resolved)
+        : nullptr;
+    const auto target = declaration != nullptr
+        ? selected_vhdl_name(declaration->alias_target->text())
+        : std::nullopt;
+    if (!target) {
+        return std::nullopt;
+    }
+    return ProtectedMethodAlias { declaration, *target };
 }
 
 const semantic::vhdl::TypeDefinition* find_protected_body(
@@ -483,12 +582,21 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     if (specialized_hir_unit_ == nullptr) {
         return result;
     }
-    const auto selected = selected_vhdl_name(name.text());
+    auto selected = selected_vhdl_name(name.text());
+    auto object_scope = scope;
+    const auto method_alias = selected
+        ? std::nullopt
+        : find_protected_method_alias(
+              *specialized_hir_unit_, scope, name.text());
+    if (method_alias) {
+        selected = method_alias->target;
+        object_scope = method_alias->alias->scope;
+    }
     if (!selected) {
         return result;
     }
     const auto* body = protected_body_of(*specialized_hir_unit_,
-        hir_vhdl_protected_type(scope, selected->object));
+        hir_vhdl_protected_type(object_scope, selected->object));
     if (body == nullptr) {
         return result;
     }
@@ -497,7 +605,7 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     std::optional<semantic::DeclarationId> package_instance;
     semantic::CompiledBindingFrame generic_bindings;
     if (const auto instance
-        = hir_vhdl_protected_instance(scope, selected->object)) {
+        = hir_vhdl_protected_instance(object_scope, selected->object)) {
         package_instance = instance->package_instance;
         generic_bindings = instance->generic_bindings;
     }
@@ -508,6 +616,15 @@ Lowerer::hir_vhdl_protected_method_resolutions(
             || member->callable->function != function
             || !member->callable->defined
             || !equal_ignoring_ascii_case(member->name, selected->member)) {
+            continue;
+        }
+        // An alias's signature selects among the method's overloads by
+        // profile (4.5.3).
+        if (method_alias
+            && (method_alias->alias->alias_signature->result.has_value()
+                    != function
+                || method_alias->alias->alias_signature->parameters.size()
+                    != member->callable->formals.size())) {
             continue;
         }
         result.push_back(
@@ -576,6 +693,19 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
         anchor = find_protected_storage(
             container_objects_, object, "@protected");
     }
+    if (!anchor) {
+        // An object alias reaches the aliased object's anchor.
+        const auto object_id = find_vhdl_object(
+            *specialized_hir_unit_, scope, object);
+        const auto* declaration = object_id
+            ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
+            : nullptr;
+        if (declaration != nullptr
+            && !equal_ignoring_ascii_case(declaration->name, object)) {
+            anchor = find_protected_storage(
+                container_objects_, declaration->name, "@protected");
+        }
+    }
     return anchor;
 }
 
@@ -596,10 +726,18 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    const auto selected = selected_vhdl_name(call_name);
+    auto selected = selected_vhdl_name(call_name);
+    auto object_scope = scope;
+    if (!selected) {
+        if (const auto method_alias = find_protected_method_alias(
+                *specialized_hir_unit_, scope, call_name)) {
+            selected = method_alias->target;
+            object_scope = method_alias->alias->scope;
+        }
+    }
     const auto* body = selected
         ? protected_body_of(*specialized_hir_unit_,
-              hir_vhdl_protected_type(scope, selected->object))
+              hir_vhdl_protected_type(object_scope, selected->object))
         : nullptr;
     if (body == nullptr) {
         // An unprefixed call of a sibling method runs on the active
@@ -621,7 +759,8 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
         }
         return frame.vhdl_protected_members;
     }
-    const auto anchor = hir_vhdl_protected_anchor(selected->object, scope);
+    const auto anchor = hir_vhdl_protected_anchor(
+        selected->object, object_scope);
     if (!anchor) {
         return std::nullopt;
     }
@@ -629,7 +768,7 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     // instance are typed by that instance's generic actuals.
     auto* const lowerer = const_cast<Lowerer*>(this);
     const auto instance = hir_vhdl_protected_instance(
-        scope, selected->object);
+        object_scope, selected->object);
     if (instance) {
         lowerer->hir_generic_binding_frames_.push_back(
             instance->generic_bindings);
@@ -679,7 +818,8 @@ ContainerObjectId Lowerer::create_hir_vhdl_protected_anchor(
     return storage;
 }
 
-std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_lazy_global_constant(
+std::optional<Lowerer::HirLazyGlobalConstant>
+Lowerer::hir_vhdl_lazy_global_constant(
     const semantic::ExpressionId expression_id) const
 {
     if (specialized_hir_unit_ == nullptr
@@ -731,9 +871,29 @@ std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_lazy_global_constant(
             return std::nullopt;
         }
     }
+    // A constant of a package instance has that instance's generics
+    // (IEEE 1076-2008 4.9).
+    std::optional<semantic::CompiledVhdlPackageMember> instance;
+    if (root->vhdl->referenced_name) {
+        instance = hir_resolver()
+                       .resolve_vhdl_package_members(
+                           *root->vhdl->referenced_name, root->vhdl->scope)
+                       .unique();
+        if (instance
+            && (!instance->package_instance
+                || instance->member != declaration_id)) {
+            instance.reset();
+        }
+    }
     // A value the elaborator folds needs no run-time storage.
-    if (specialized_hir_unit_->evaluate_vhdl_constant_expression(
-            *declaration->initializer)) {
+    if (instance) {
+        if (specialized_hir_unit_->evaluate_integral_expression(root_id)
+            || specialized_hir_unit_->evaluate_vhdl_constant_expression(
+                root_id)) {
+            return std::nullopt;
+        }
+    } else if (specialized_hir_unit_->evaluate_vhdl_constant_expression(
+                   *declaration->initializer)) {
         return std::nullopt;
     }
     // Neither does a constant elaborated into a read-only signal (IEEE
@@ -749,7 +909,7 @@ std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_lazy_global_constant(
     if (!hir_vhdl_design_level_declaration(*declaration)) {
         return std::nullopt;
     }
-    return declaration_id;
+    return HirLazyGlobalConstant { declaration_id, std::move(instance) };
 }
 
 bool Lowerer::hir_vhdl_design_level_declaration(
@@ -913,8 +1073,9 @@ void Lowerer::release_hir_vhdl_global_files(
 }
 
 bool Lowerer::materialize_hir_vhdl_global_constant(
-    const semantic::DeclarationId declaration_id)
+    const HirLazyGlobalConstant& constant)
 {
+    const auto declaration_id = constant.declaration;
     const auto* declaration = find_vhdl_declaration(
         *specialized_hir_unit_, declaration_id);
     if (declaration == nullptr) {
@@ -926,10 +1087,31 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
         ? specialized_hir_unit_->design().find_unit(
               scopes[declaration->scope.value()].unit)
         : std::nullopt;
-    const bool package = unit && unit->vhdl != nullptr
-        && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
+    const auto package_scope = [&](const semantic::ScopeId scope) {
+        const auto owner = scope.valid() && scope.value() < scopes.size()
+            ? specialized_hir_unit_->design().find_unit(
+                  scopes[scope.value()].unit)
+            : std::nullopt;
+        return owner && owner->vhdl != nullptr
+            && owner->vhdl->kind == semantic::vhdl::UnitKind::package;
+    };
+    // Each package instance has its own constants; an instance declared in
+    // an architecture is elaborated per design instance (IEEE 1076-2008
+    // 4.9, 14.4.2.1).
+    const auto* instance_declaration = constant.instance
+        ? find_vhdl_declaration(
+              *specialized_hir_unit_, *constant.instance->package_instance)
+        : nullptr;
+    const bool package = instance_declaration != nullptr
+        ? package_scope(instance_declaration->scope)
+        : unit && unit->vhdl != nullptr
+            && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
     const auto key = std::string { "@vhdl-constant:" }
         + (package ? std::string { "package" } : hierarchy_) + "@"
+        + (constant.instance
+                ? std::to_string(constant.instance->package_instance->value())
+                    + "/"
+                : std::string { })
         + std::to_string(declaration_id.value()) + "." + declaration->name;
     const auto flag_name = key + ".@initialized";
     const auto value_name = key + ".@value";
@@ -969,10 +1151,19 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
     const auto initialize = static_cast<InstructionIndex>(
         process_.operations.size());
     // The first reader elaborates the declaration.
+    const bool instance_frame = constant.instance
+        && !constant.instance->generic_bindings.empty();
+    if (instance_frame) {
+        hir_generic_binding_frames_.push_back(
+            constant.instance->generic_bindings);
+    }
     materializing_hir_vhdl_global_constant_ = true;
     const std::array declarations { declaration_id };
     const bool initialized_here = initialize_hir_declarations(declarations);
     materializing_hir_vhdl_global_constant_ = false;
+    if (instance_frame) {
+        hir_generic_binding_frames_.pop_back();
+    }
     const auto local = hir_local_registers_.find(declaration_id.value());
     if (!initialized_here || local == hir_local_registers_.end()) {
         hir_local_registers_.erase(declaration_id.value());

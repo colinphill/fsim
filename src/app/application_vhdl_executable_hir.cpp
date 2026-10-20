@@ -188,6 +188,7 @@ class VhdlExecutableBuilder final {
                   = *input.vhdl_selected_name_spelling;
           }
       }
+      output.operator_symbol_call = input.vhdl_operator_symbol_call;
       output.argument_names = input.call_argument_names;
       for (const auto& operand : input.operands) {
           if (const auto operand_id = expression(

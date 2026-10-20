@@ -512,10 +512,13 @@ void verify_dynamic_part_insert_template_sharing(
         // Each of 128 leaf instances has two indexed input actuals and
         // one indexed output actual. Elaboration materializes one adapter
         // process for each of those three actuals; the clock name actual
-        // aliases directly. The 513 processes are therefore 128 leaf
-        // writers, 384 actual adapters, and the top stimulus process.
-        assert(compiled.elaborated_processes == 513U);
-        assert(uniform.elaborated_processes == 513U);
+        // aliases directly. The 128 output adapters only place their
+        // formals in parts of `results`, so one composer program builds
+        // `results` from them and they stay as halted stubs. The 514
+        // processes are therefore 128 leaf writers, 384 actual adapters,
+        // the `results` composer, and the top stimulus process.
+        assert(compiled.elaborated_processes == 514U);
+        assert(uniform.elaborated_processes == 514U);
         // DynamicPartInsert is emitted for the local dynamic-slice write in
         // each leaf writer. The top stimulus and port adapters use signal
         // element operations, not this local-register operation.

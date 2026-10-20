@@ -778,6 +778,15 @@ std::optional<ActualDependencies> validate_actuals(
 {
     ActualDependencies result;
     for (const auto& actual : actuals) {
+        // A type actual's context belongs to another unit; it neither binds
+        // a formal nor makes this unit's expressions residual.
+        if (actual.type_context) {
+            if (allowed.contains(actual.declaration)
+                || !design.find_declaration(actual.declaration)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (!allowed.contains(actual.declaration)
             || !result.declarations.insert(actual.declaration).second) {
             return std::nullopt;
@@ -9061,6 +9070,16 @@ private:
                 && !include_range(*type.packed_range)) {
                 return std::nullopt;
             }
+            // A packed structure or union described by its own members
+            // carries its flattened bit range; a packed array of one keeps
+            // that range as its innermost dimension, so the dimensions
+            // already span the aggregate (IEEE 1800-2017 7.2.1, 7.4.1).
+            if (type.value_form
+                && (*type.value_form == sv::TypeForm::packed_structure
+                    || *type.value_form == sv::TypeForm::packed_union)
+                && systemverilog_packed_members(type) != nullptr) {
+                return extent;
+            }
 
             auto element_type = type;
             element_type.executable_width.reset();
@@ -11666,8 +11685,43 @@ private:
                     = declaration->vhdl->name;
             }
         }
+        // A member of a package instance is constrained by that instance's
+        // generics (IEEE 1076-2008 4.9).
+        const auto instance_member = declaration_id
+                && prefix->vhdl->referenced_name
+            ? CompiledDesignResolver { unit_ }
+                  .resolve_vhdl_package_members(
+                      *prefix->vhdl->referenced_name, prefix->vhdl->scope,
+                      attribute_prefix)
+                  .unique()
+            : std::nullopt;
+        const bool instance_frame = instance_member
+            && instance_member->package_instance
+            && instance_member->member == *declaration_id
+            && !instance_member->generic_bindings.empty();
+        if (instance_frame && !push_vhdl_package_frame(*instance_member)) {
+            return std::nullopt;
+        }
+        struct InstanceFrameGuard {
+            std::vector<CallFrame>& frames;
+            bool active;
+            ~InstanceFrameGuard()
+            {
+                if (active) {
+                    frames.pop_back();
+                }
+            }
+        } instance_frame_guard { call_frames_, instance_frame };
         if (effective_subtype) {
-            effective_subtype = CompiledDesignResolver { unit_ }
+            const std::array instance_bindings {
+                instance_frame ? instance_member->generic_bindings
+                               : CompiledBindingFrame { }
+            };
+            effective_subtype = CompiledDesignResolver { unit_,
+                instance_frame
+                    ? std::span<const CompiledBindingFrame> {
+                          instance_bindings }
+                    : std::span<const CompiledBindingFrame> { } }
                 .effective_vhdl_subtype(
                     *effective_subtype, expression.scope);
         }
@@ -15823,7 +15877,10 @@ std::optional<sv::TypeReference> specialized_systemverilog_type_actual(
             const bool identity_match = result.target.target.valid()
                 && formal.declared_type
                 && *formal.declared_type == result.target.target;
-            const bool name_match = !name.empty() && formal.name == name;
+            // Another unit's type parameter in the context is found only
+            // by identity, never by a coincident name.
+            const bool name_match = !actual.type_context && !name.empty()
+                && formal.name == name;
             if (identity_match || name_match) {
                 selected = &actual;
                 break;

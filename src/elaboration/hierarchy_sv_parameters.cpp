@@ -11,6 +11,7 @@
 #include <charconv>
 #include <cstdint>
 #include <ranges>
+#include <set>
 
 namespace fsim::elaboration::hierarchy_sv_parameters_detail {
 
@@ -122,6 +123,35 @@ bool compiled_systemverilog_string_declaration(
         && (declaration.type->value_form
                 == semantic::sv::TypeForm::string
             || declaration.type->target.spelling == "string");
+}
+
+bool systemverilog_named_type_spelling(const std::string_view spelling)
+{
+    static constexpr std::string_view builtin[] {
+        "logic", "bit", "reg", "int", "integer", "byte", "shortint",
+        "longint", "real", "shortreal", "realtime", "time", "wire",
+        "event", "chandle", "void", "signed", "unsigned",
+    };
+    return !spelling.empty() && std::ranges::find(builtin, spelling)
+        == std::ranges::end(builtin);
+}
+
+bool compiled_systemverilog_string_declaration(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Declaration& declaration)
+{
+    if (compiled_systemverilog_string_declaration(declaration)) return true;
+    if (!declaration.type || declaration.type->container_form
+        || declaration.type->value_form == semantic::sv::TypeForm::class_handle
+        || !systemverilog_named_type_spelling(
+            declaration.type->target.spelling)) {
+        return false;
+    }
+    const auto effective = semantic::CompiledDesignResolver { specialization }
+        .effective_systemverilog_type(*declaration.type, declaration.scope);
+    return effective && !effective->container_form
+        && (effective->value_form == semantic::sv::TypeForm::string
+            || effective->target.spelling == "string");
 }
 
 std::string compiled_systemverilog_type_identity(
@@ -437,9 +467,29 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 // A string formal keeps the string identity of its actual
                 // (IEEE 1800-2017 6.16).
                 std::string constant_error;
-                auto constant = evaluate_hir_systemverilog_constant(
-                    working_specialization, *binding.expression,
-                    constant_error);
+                // An assignment pattern or unpacked aggregate takes the
+                // formal's layout (IEEE 1800-2017 10.9, 6.24.3).
+                const auto actual_view = working_specialization.find_expression(
+                    *binding.expression);
+                const bool typed_actual = formal->systemverilog->type
+                    && ((actual_view && actual_view->systemverilog != nullptr
+                            && actual_view->systemverilog->kind
+                                == semantic::sv::ExpressionKind::
+                                    assignment_pattern)
+                        || hir_systemverilog_unpacked_aggregate_type(
+                            working_specialization,
+                            *formal->systemverilog->type));
+                auto constant = typed_actual
+                    ? evaluate_hir_systemverilog_typed_constant(
+                          working_specialization, *binding.expression,
+                          *formal->systemverilog->type, constant_error)
+                    : std::nullopt;
+                if (!constant) {
+                    constant_error.clear();
+                    constant = evaluate_hir_systemverilog_constant(
+                        working_specialization, *binding.expression,
+                        constant_error);
+                }
                 if (constant) {
                     identity_value = constant->canonical();
                 } else if (const auto value
@@ -462,7 +512,216 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             binding.vhdl_type,
         });
     }
+    append_systemverilog_type_actual_context(
+        child, working_specialization, result.actuals);
     return result;
+}
+
+void HierarchyBuilder::append_systemverilog_type_actual_context(
+    const semantic::CompiledUnitView& child,
+    const semantic::SpecializedHirUnit& parent,
+    std::vector<semantic::SpecializedHirActualIdentity>& actuals) const
+{
+    // A type actual's typedefs, members and dimensions are expressions of
+    // the parent; they evaluate in the child only with the parent's values
+    // for the parameters they reach (IEEE 1800-2017 6.20.3).
+    const auto& parent_actuals = parent.specialization().actual_identities;
+    if (parent_actuals.empty() || child.systemverilog == nullptr) {
+        return;
+    }
+    struct Walker {
+        const semantic::CompiledDesign& design;
+        const semantic::CompiledDesignResolver resolver;
+        std::set<semantic::DeclarationId> declarations;
+        std::set<semantic::TypeId> types;
+        std::set<semantic::ExpressionId> expressions;
+
+        void range(const semantic::sv::PackedRange& value)
+        {
+            if (value.left_expression) {
+                expression(*value.left_expression);
+            }
+            if (value.right_expression) {
+                expression(*value.right_expression);
+            }
+        }
+
+        void type(const semantic::sv::TypeReference& value)
+        {
+            if (value.target.target.valid()) {
+                definition(value.target.target);
+            }
+            if (value.packed_range) {
+                range(*value.packed_range);
+            }
+            for (const auto& dimension : value.packed_dimensions) {
+                range(dimension);
+            }
+            for (const auto& dimension : value.unpacked_dimensions) {
+                range(dimension);
+            }
+            for (const auto& element : value.container_element_types) {
+                type(element);
+            }
+            if (value.type_of) {
+                expression(*value.type_of);
+            }
+        }
+
+        void definition(const semantic::TypeId id)
+        {
+            if (!types.insert(id).second) {
+                return;
+            }
+            const auto view = design.find_type(id);
+            if (!view || view->systemverilog == nullptr) {
+                return;
+            }
+            const auto& record = *view->systemverilog;
+            type(record.base);
+            for (const auto& member : record.members) {
+                type(member.type);
+            }
+            for (const auto& literal : record.enumeration_literals) {
+                if (literal.value) {
+                    expression(*literal.value);
+                }
+            }
+            if (record.declaration.valid()) {
+                declaration(record.declaration);
+            }
+        }
+
+        void expression(const semantic::ExpressionId id)
+        {
+            if (!expressions.insert(id).second) {
+                return;
+            }
+            const auto view = design.find_expression(id);
+            if (!view || view->systemverilog == nullptr) {
+                return;
+            }
+            const auto& record = *view->systemverilog;
+            if (record.referenced_name) {
+                auto selected = record.referenced_name->selected;
+                if (!selected) {
+                    selected = resolver
+                                   .resolve_systemverilog(
+                                       record.referenced_name->spelling,
+                                       record.scope)
+                                   .unique();
+                }
+                // A member of a structure parameter (`cfg.NumIds`) depends
+                // on the parameter.
+                if (const auto dot = record.referenced_name->spelling.find('.');
+                    !selected && dot != std::string::npos) {
+                    selected = resolver
+                                   .resolve_systemverilog(
+                                       std::string_view {
+                                           record.referenced_name->spelling }
+                                           .substr(0U, dot),
+                                       record.scope)
+                                   .unique();
+                }
+                if (selected) {
+                    declaration(*selected);
+                }
+            }
+            for (const auto operand : record.operands) {
+                expression(operand);
+            }
+            for (const auto& association : record.associations) {
+                expression(association.value);
+            }
+        }
+
+        void declaration(const semantic::DeclarationId id)
+        {
+            if (!declarations.insert(id).second) {
+                return;
+            }
+            const auto view = design.find_declaration(id);
+            if (!view || view->systemverilog == nullptr) {
+                return;
+            }
+            const auto& record = *view->systemverilog;
+            using Form = semantic::sv::DeclarationForm;
+            // Only constants and types shape a type; a variable reached
+            // through `type(v)` contributes its declared type.
+            if (record.form != Form::parameter
+                && record.form != Form::local_parameter
+                && record.form != Form::type_parameter
+                && record.form != Form::typedef_declaration
+                && !record.array_parameter
+                && !record.array_local_parameter) {
+                if (record.type) {
+                    type(*record.type);
+                }
+                return;
+            }
+            if (record.type) {
+                type(*record.type);
+            }
+            if (record.default_type) {
+                type(*record.default_type);
+            }
+            if (record.declared_type) {
+                definition(*record.declared_type);
+            }
+            if (record.initializer) {
+                expression(*record.initializer);
+            }
+        }
+    };
+    Walker walker { *compiled_, semantic::CompiledDesignResolver { parent },
+        { }, { }, { } };
+    const auto initial_size = actuals.size();
+    for (std::size_t index { }; index < initial_size; ++index) {
+        const auto& actual = actuals[index];
+        const auto formal = compiled_->find_declaration(actual.declaration);
+        if (!formal || formal->systemverilog == nullptr
+            || formal->systemverilog->form
+                != semantic::sv::DeclarationForm::type_parameter) {
+            continue;
+        }
+        if (actual.systemverilog_type) {
+            walker.type(*actual.systemverilog_type);
+        }
+        if (actual.actual_declaration) {
+            walker.declaration(*actual.actual_declaration);
+        }
+    }
+    // A type actual forwarded from the parent's own type parameter carries
+    // the context the parent was given.
+    std::set<semantic::DeclarationId> forwarded;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& parent_actual : parent_actuals) {
+            if (parent_actual.systemverilog_type
+                && walker.declarations.contains(parent_actual.declaration)
+                && forwarded.insert(parent_actual.declaration).second) {
+                walker.type(*parent_actual.systemverilog_type);
+                changed = true;
+            }
+        }
+    }
+    const std::set<semantic::DeclarationId> child_declarations {
+        child.systemverilog->declarations.begin(),
+        child.systemverilog->declarations.end(),
+    };
+    for (const auto& parent_actual : parent_actuals) {
+        if (!walker.declarations.contains(parent_actual.declaration)
+            || child_declarations.contains(parent_actual.declaration)
+            || std::ranges::any_of(actuals,
+                [&](const semantic::SpecializedHirActualIdentity& existing) {
+                    return existing.declaration == parent_actual.declaration;
+                })) {
+            continue;
+        }
+        auto context = parent_actual;
+        context.type_context = true;
+        actuals.push_back(std::move(context));
+    }
 }
 
 } // namespace fsim::elaboration

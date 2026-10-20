@@ -628,7 +628,10 @@ void Interpreter::Impl::ExecutionContext::write_blocking_word(
         if (owner.signals[signal].initial_value.width()
             != value.width) {
             throw std::invalid_argument(
-                "SimIR signal assignment width mismatch");
+                "SimIR signal assignment width mismatch (signal "
+                + std::to_string(signal) + " has width "
+                + std::to_string(owner.signals[signal].initial_value.width())
+                + ", value has width " + std::to_string(value.width) + ")");
         }
         // Direct publication bypasses commit_driver's origin capture.
         owner.publish_native_word(

@@ -1476,10 +1476,102 @@ public:
         const semantic::sv::TypeReference& type)
     {
         auto result = evaluate_typed(expression, type);
-        if (result && hir_systemverilog_explicit_integral_type(type)) {
+        if (result && hir_systemverilog_explicit_integral_type(type)
+            && !unpacked_aggregate(type)) {
             result = convert_record_type(std::move(*result), type);
         }
         return result;
+    }
+
+    /// The bits `path` (`.m`, `[n]`, ...) selects in the bit stream of a
+    /// value of `type` (IEEE 1800-2017 6.24.3, 7.2.1, 7.4).
+    [[nodiscard]] std::optional<HirSystemVerilogAggregateSlice>
+    aggregate_slice(semantic::sv::TypeReference type, std::string_view path)
+    {
+        const auto whole = aggregate_width(type);
+        if (!whole) {
+            return std::nullopt;
+        }
+        std::uint64_t offset { };
+        while (!path.empty()) {
+            if (path.front() == '[') {
+                const auto close = path.find(']');
+                if (close == std::string_view::npos) {
+                    return std::nullopt;
+                }
+                const auto digits = path.substr(1U, close - 1U);
+                std::int64_t index { };
+                const auto parsed = std::from_chars(digits.data(),
+                    digits.data() + digits.size(), index);
+                if (parsed.ec != std::errc {}
+                    || parsed.ptr != digits.data() + digits.size()) {
+                    return std::nullopt;
+                }
+                type = with_unpacked_dimensions(type);
+                const auto bounds = unpacked_bounds(type);
+                if (!bounds || bounds->empty()) {
+                    return std::nullopt;
+                }
+                const auto [left, right] = bounds->front();
+                if (index < std::min(left, right)
+                    || index > std::max(left, right)) {
+                    return std::nullopt;
+                }
+                const auto count = static_cast<std::uint64_t>(
+                    std::max(left, right) - std::min(left, right)) + 1U;
+                const auto position = static_cast<std::uint64_t>(
+                    left <= right ? index - left : left - index);
+                type.unpacked_dimensions.erase(
+                    type.unpacked_dimensions.begin());
+                if (type.unpacked_dimensions.empty()) {
+                    type.container_form.reset();
+                }
+                const auto element = aggregate_width(type);
+                if (!element) {
+                    return std::nullopt;
+                }
+                offset += (count - 1U - position) * *element;
+                path.remove_prefix(close + 1U);
+                continue;
+            }
+            if (path.front() == '.') {
+                path.remove_prefix(1U);
+            }
+            const auto end = path.find_first_of(".[");
+            const auto name = path.substr(0U, end);
+            bool union_form { };
+            const auto* const members = aggregate_members(type, &union_form);
+            if (members == nullptr) {
+                return std::nullopt;
+            }
+            const auto member = std::ranges::find(
+                *members, name, &semantic::sv::PackedMember::name);
+            if (member == members->end()) {
+                return std::nullopt;
+            }
+            const auto member_offset = aggregate_member_offset(*members,
+                static_cast<std::size_t>(member - members->begin()),
+                union_form);
+            if (!member_offset) {
+                return std::nullopt;
+            }
+            offset += *member_offset;
+            type = member->type;
+            path = end == std::string_view::npos ? std::string_view { }
+                                                 : path.substr(end);
+        }
+        const auto width = aggregate_width(type);
+        if (!width || *width == 0U || offset + *width > *whole) {
+            return std::nullopt;
+        }
+        return HirSystemVerilogAggregateSlice { offset, *width, *whole,
+            effective_aggregate_type(type).signed_value };
+    }
+
+    [[nodiscard]] bool unpacked_aggregate_type(
+        const semantic::sv::TypeReference& type)
+    {
+        return unpacked_aggregate(type);
     }
 
 private:
@@ -1514,6 +1606,9 @@ private:
 
     struct Frame {
         semantic::DeclarationId callable;
+        // The class whose parameters a class constant is evaluated with
+        // (IEEE 1800-2017 8.25); its local parameters are kept here.
+        const semantic::sv::ClassDeclaration* class_owner { };
         std::map<semantic::DeclarationId, Value> values;
         std::map<semantic::DeclarationId, LocalUnpackedArray> arrays;
         std::size_t array_elements { };
@@ -1851,6 +1946,23 @@ private:
             return finish(expression_width(
                 record.operands.front(), visiting));
         }
+        // A class property select has its declared type's width (20.6.2).
+        if (record.kind == ExpressionKind::class_property
+            && !record.class_member_identity.empty()) {
+            const auto found = semantic::CompiledDesignResolver {
+                specialization_ }
+                .resolve_systemverilog_class_property(
+                    record.class_member_identity);
+            if (const auto* property = found.unique()) {
+                std::unordered_set<std::uint32_t> type_visiting;
+                if (const auto width = resolved_type_width(
+                        property->type, &specialization_, type_visiting);
+                    width && *width != 0U
+                    && *width <= maximum_constant_width) {
+                    return finish(static_cast<std::uint32_t>(*width));
+                }
+            }
+        }
         if (const auto selected
             = systemverilog_constant_name_declaration(
                 specialization_, record)) {
@@ -1917,6 +2029,27 @@ private:
             if (const auto found = frame->values.find(declaration);
                 found != frame->values.end()) {
                 return found->second;
+            }
+        }
+        // A class local parameter is evaluated in the innermost class
+        // frame and kept there, never in the specialization caches.
+        if (!frames_.empty() && frames_.back().class_owner != nullptr) {
+            const auto& properties = frames_.back().class_owner->properties;
+            const auto property = std::ranges::find(properties, declaration,
+                &semantic::sv::ClassProperty::declaration);
+            if (property != properties.end()) {
+                if (!property->parameter || !property->initializer) {
+                    error_ = "class property '" + property->name
+                        + "' is not a constant";
+                    return std::nullopt;
+                }
+                const auto depth = frames_.size();
+                auto value = evaluate(*property->initializer);
+                if (value && frames_.size() == depth) {
+                    frames_.back().values.insert_or_assign(
+                        declaration, *value);
+                }
+                return value;
             }
         }
         // Outside every frame, a declaration's value depends only on the
@@ -2991,7 +3124,19 @@ private:
             || !record.referenced_name->selected) {
             return std::nullopt;
         }
-        const auto type = declaration_type(*record.referenced_name->selected);
+        auto type = declaration_type(*record.referenced_name->selected);
+        // A member of a structure (`s.m`) has its member's dimensions
+        // (IEEE 1800-2017 7.2.1).
+        if (const auto dot = record.text.find('.');
+            type && dot != std::string::npos) {
+            semantic::sv::TypeReference member_type;
+            if (!packed_member_slice(*type,
+                    std::string_view { record.text }.substr(dot + 1U),
+                    &member_type)) {
+                return std::nullopt;
+            }
+            type = std::move(member_type);
+        }
         if (!type || type->packed_dimensions.size() < 2U
             || !type->unpacked_dimensions.empty() || type->container_form) {
             return std::nullopt;
@@ -4388,9 +4533,34 @@ private:
         return specialization_.design().find_type(type);
     }
 
+    /// The bit offset of `members[index]` within its packed aggregate:
+    /// a structure's later members occupy its lower bits (IEEE 1800-2017
+    /// 7.2.1). A member width the parser could not fold (`logic [N-1:0]`
+    /// from a package parameter) resolves here.
+    [[nodiscard]] std::uint64_t packed_member_offset(
+        const std::vector<semantic::sv::PackedMember>& members,
+        const std::size_t index, const bool union_form) const
+    {
+        if (union_form) {
+            return 0U;
+        }
+        std::uint64_t offset { };
+        for (auto later = index + 1U; later < members.size(); ++later) {
+            std::unordered_set<std::uint32_t> visiting;
+            const auto width = resolved_type_width(
+                members[later].type, &specialization_, visiting);
+            if (!width) {
+                return members[index].lsb_offset;
+            }
+            offset += *width;
+        }
+        return offset;
+    }
+
     /// The members of a packed structure or union type, or null.
     [[nodiscard]] const std::vector<semantic::sv::PackedMember>*
-    packed_members(semantic::sv::TypeReference type) const
+    packed_members(semantic::sv::TypeReference type,
+        bool* union_form = nullptr) const
     {
         if (const auto effective
             = semantic::CompiledDesignResolver { specialization_ }
@@ -4430,7 +4600,328 @@ private:
                     != semantic::sv::TypeForm::packed_union)) {
             return nullptr;
         }
+        if (union_form != nullptr) {
+            *union_form = definition->systemverilog->form
+                == semantic::sv::TypeForm::packed_union;
+        }
         return &definition->systemverilog->members;
+    }
+
+    /// A type through its typedefs and type parameters (IEEE 1800-2017
+    /// 6.18, 6.20.3).
+    [[nodiscard]] semantic::sv::TypeReference effective_aggregate_type(
+        semantic::sv::TypeReference type) const
+    {
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (const auto effective = resolver.effective_systemverilog_type(
+                type, specialization_.scope())) {
+            type = *effective;
+        }
+        if (const auto underlying = resolver.underlying_systemverilog_type(
+                type, specialization_.scope())) {
+            type = *underlying;
+        }
+        return type;
+    }
+
+    /// The members of a structure or packed union whose value is a bit
+    /// stream (IEEE 1800-2017 6.24.3, 7.2, 7.3), or null.
+    [[nodiscard]] const std::vector<semantic::sv::PackedMember>*
+    aggregate_members(const semantic::sv::TypeReference& input,
+        bool* const union_form = nullptr) const
+    {
+        if (const auto* const packed = packed_members(input, union_form)) {
+            return packed;
+        }
+        const auto type = effective_aggregate_type(input);
+        const auto definition = type.target.target.valid()
+            ? find_design_type(type.target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr) {
+            return nullptr;
+        }
+        const auto form = definition->systemverilog->form;
+        if (form != semantic::sv::TypeForm::packed_structure
+            && form != semantic::sv::TypeForm::packed_union
+            && form != semantic::sv::TypeForm::unpacked_structure) {
+            return nullptr;
+        }
+        if (union_form != nullptr) {
+            *union_form = form == semantic::sv::TypeForm::packed_union;
+        }
+        return &definition->systemverilog->members;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> dimension_bound(
+        const std::optional<std::int64_t> value,
+        const std::optional<semantic::ExpressionId> expression)
+    {
+        if (value) {
+            return value;
+        }
+        if (!expression) {
+            return std::nullopt;
+        }
+        if (const auto known
+            = specialization_.evaluate_integral_expression(*expression)) {
+            return known;
+        }
+        const auto evaluated = evaluate(*expression);
+        return evaluated ? evaluated->integer_value() : std::nullopt;
+    }
+
+    /// The fixed unpacked dimensions of a type, outermost first.
+    [[nodiscard]] std::optional<std::vector<std::pair<std::int64_t,
+        std::int64_t>>>
+    unpacked_bounds(const semantic::sv::TypeReference& type)
+    {
+        if (type.container_form
+            && *type.container_form != semantic::sv::TypeForm::static_array) {
+            return std::nullopt;
+        }
+        std::vector<std::pair<std::int64_t, std::int64_t>> bounds;
+        for (const auto& dimension : type.unpacked_dimensions) {
+            const auto left
+                = dimension_bound(dimension.left, dimension.left_expression);
+            const auto right
+                = dimension_bound(dimension.right, dimension.right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            bounds.emplace_back(*left, *right);
+        }
+        return bounds;
+    }
+
+    /// A type with unpacked dimensions, through a typedef of an array.
+    [[nodiscard]] semantic::sv::TypeReference with_unpacked_dimensions(
+        semantic::sv::TypeReference type) const
+    {
+        if (type.unpacked_dimensions.empty()) {
+            const auto effective = effective_aggregate_type(type);
+            if (!effective.unpacked_dimensions.empty()) {
+                return effective;
+            }
+        }
+        return type;
+    }
+
+    /// The bits of a fixed-size type's bit stream: a structure's members
+    /// and an array's elements in order (IEEE 1800-2017 6.24.3).
+    [[nodiscard]] std::optional<std::uint64_t> aggregate_width(
+        const semantic::sv::TypeReference& input, const unsigned depth = 0U)
+    {
+        if (depth > 32U) {
+            return std::nullopt;
+        }
+        const auto type = with_unpacked_dimensions(input);
+        if (!type.unpacked_dimensions.empty()) {
+            const auto bounds = unpacked_bounds(type);
+            if (!bounds) {
+                return std::nullopt;
+            }
+            auto element = type;
+            element.unpacked_dimensions.clear();
+            element.container_form.reset();
+            auto width = aggregate_width(element, depth + 1U);
+            for (const auto& [left, right] : *bounds) {
+                const auto count = static_cast<std::uint64_t>(
+                    std::max(left, right) - std::min(left, right)) + 1U;
+                if (!width || *width == 0U
+                    || *width > maximum_constant_width / count) {
+                    return std::nullopt;
+                }
+                *width *= count;
+            }
+            return width;
+        }
+        bool union_form { };
+        if (const auto* const members = aggregate_members(type, &union_form)) {
+            std::uint64_t total { };
+            for (const auto& member : *members) {
+                const auto width = aggregate_width(member.type, depth + 1U);
+                if (!width || *width == 0U
+                    || *width > maximum_constant_width - total) {
+                    return std::nullopt;
+                }
+                total = union_form ? std::max(total, *width) : total + *width;
+            }
+            return total;
+        }
+        std::unordered_set<std::uint32_t> visiting;
+        return resolved_type_width(type, &specialization_, visiting);
+    }
+
+    /// The offset of `members[index]` in its aggregate's bit stream: later
+    /// members occupy lower bits (IEEE 1800-2017 7.2.1, 6.24.3).
+    [[nodiscard]] std::optional<std::uint64_t> aggregate_member_offset(
+        const std::vector<semantic::sv::PackedMember>& members,
+        const std::size_t index, const bool union_form)
+    {
+        if (union_form) {
+            return 0U;
+        }
+        std::uint64_t offset { };
+        for (auto later = index + 1U; later < members.size(); ++later) {
+            const auto width = aggregate_width(members[later].type);
+            if (!width) {
+                return std::nullopt;
+            }
+            offset += *width;
+        }
+        return offset;
+    }
+
+    /// True for a structure or fixed-size array type that is not packed.
+    [[nodiscard]] bool unpacked_aggregate(
+        const semantic::sv::TypeReference& input)
+    {
+        const auto type = with_unpacked_dimensions(input);
+        if (!type.unpacked_dimensions.empty()) {
+            return unpacked_bounds(type).has_value();
+        }
+        if (packed_members(type) != nullptr) {
+            return false;
+        }
+        return aggregate_members(type) != nullptr;
+    }
+
+    /// The value of an assignment pattern for an unpacked structure or
+    /// fixed-size array, as its bit stream: positional items in order, or
+    /// member keys and `default:` (IEEE 1800-2017 10.9.1, 10.9.2).
+    [[nodiscard]] std::optional<Value> evaluate_unpacked_pattern(
+        const semantic::sv::Expression& pattern,
+        const semantic::sv::TypeReference& input)
+    {
+        const auto type = with_unpacked_dimensions(input);
+        const auto width = aggregate_width(type);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
+        PackedLogic4 packed { static_cast<std::size_t>(*width), Logic4::x };
+        const auto place = [&](const semantic::ExpressionId item,
+                               const semantic::sv::TypeReference& item_type,
+                               const std::uint64_t offset) -> bool {
+            const auto item_width = aggregate_width(item_type);
+            auto value = item_width ? evaluate_typed(item, item_type)
+                                    : std::nullopt;
+            if (!value) {
+                return false;
+            }
+            const auto fitted = resized(std::move(*value),
+                static_cast<std::uint32_t>(*item_width));
+            for (std::uint64_t bit { }; bit < *item_width; ++bit) {
+                if (offset + bit < packed.width()) {
+                    packed.set(offset + bit,
+                        runtime::to_logic4(fitted.packed.get_logic9(bit)));
+                }
+            }
+            return true;
+        };
+        const auto& associations = pattern.associations;
+        if (!type.unpacked_dimensions.empty()) {
+            const auto bounds = unpacked_bounds(type);
+            if (!bounds || bounds->empty()) {
+                return std::nullopt;
+            }
+            const auto [left, right] = bounds->front();
+            const auto count = static_cast<std::uint64_t>(
+                std::max(left, right) - std::min(left, right)) + 1U;
+            auto element = type;
+            element.unpacked_dimensions.erase(
+                element.unpacked_dimensions.begin());
+            if (element.unpacked_dimensions.empty()) {
+                element.container_form.reset();
+            }
+            const auto element_width = aggregate_width(element);
+            if (!element_width) {
+                return std::nullopt;
+            }
+            if (associations.size() == 1U
+                && associations.front().choice_spelling == "default") {
+                for (std::uint64_t index { }; index < count; ++index) {
+                    if (!place(associations.front().value, element,
+                            (count - 1U - index) * *element_width)) {
+                        return std::nullopt;
+                    }
+                }
+            } else if (associations.size() == count
+                && std::ranges::all_of(associations,
+                    [](const auto& association) {
+                        return association.choice_spelling.empty();
+                    })) {
+                for (std::uint64_t index { }; index < count; ++index) {
+                    if (!place(associations[index].value, element,
+                            (count - 1U - index) * *element_width)) {
+                        return std::nullopt;
+                    }
+                }
+            } else {
+                return std::nullopt;
+            }
+            return make_value(std::move(packed), false, false);
+        }
+        bool union_form { };
+        const auto* const members = aggregate_members(type, &union_form);
+        if (members == nullptr || union_form) {
+            return std::nullopt;
+        }
+        const bool positional = std::ranges::all_of(associations,
+            [](const auto& association) {
+                return association.choice_spelling.empty();
+            });
+        if (positional && associations.size() != members->size()) {
+            return std::nullopt;
+        }
+        std::optional<semantic::ExpressionId> default_value;
+        std::unordered_set<std::string> assigned;
+        const auto place_member = [&](const std::size_t index,
+                                      const semantic::ExpressionId item) {
+            const auto offset
+                = aggregate_member_offset(*members, index, false);
+            return offset
+                && place(item, (*members)[index].type, *offset);
+        };
+        for (std::size_t index { }; index < associations.size(); ++index) {
+            const auto& association = associations[index];
+            if (positional) {
+                if (!place_member(index, association.value)) {
+                    return std::nullopt;
+                }
+                continue;
+            }
+            if (association.choice_spelling == "default") {
+                default_value = association.value;
+                continue;
+            }
+            std::string_view member_name = association.choice_spelling;
+            if (member_name == "@key" && association.choices.size() == 1U) {
+                const auto choice = specialization_.find_expression(
+                    association.choices.front());
+                if (choice && choice->systemverilog != nullptr
+                    && choice->systemverilog->kind == ExpressionKind::name) {
+                    member_name = choice->systemverilog->text;
+                }
+            }
+            const auto member = std::ranges::find(*members, member_name,
+                &semantic::sv::PackedMember::name);
+            if (member == members->end()
+                || !place_member(
+                    static_cast<std::size_t>(member - members->begin()),
+                    association.value)) {
+                return std::nullopt;
+            }
+            assigned.insert(member->name);
+        }
+        if (default_value) {
+            for (std::size_t index { }; index < members->size(); ++index) {
+                if (!assigned.contains((*members)[index].name)
+                    && !place_member(index, *default_value)) {
+                    return std::nullopt;
+                }
+            }
+        }
+        return make_value(std::move(packed), false, false);
     }
 
     /// An expression evaluated for a packed structure type: an assignment
@@ -4441,7 +4932,17 @@ private:
         const semantic::sv::TypeReference& type)
     {
         const auto view = specialization_.find_expression(expression);
-        const auto* const members = packed_members(type);
+        if (view && view->systemverilog != nullptr
+            && view->systemverilog->kind == ExpressionKind::assignment_pattern
+            && unpacked_aggregate(type)) {
+            if (auto image
+                = evaluate_unpacked_pattern(*view->systemverilog, type)) {
+                return image;
+            }
+            error_.clear();
+        }
+        bool union_form { };
+        const auto* const members = packed_members(type, &union_form);
         // A positional pattern for a packed array: each item converts to
         // the element width, the first item the leftmost (10.9.1).
         if (view && view->systemverilog != nullptr && members == nullptr
@@ -4534,9 +5035,12 @@ private:
             }
             const auto fitted = resized(std::move(*value),
                 static_cast<std::uint32_t>(*member_width));
+            const auto lsb = packed_member_offset(*members,
+                static_cast<std::size_t>(&member - members->data()),
+                union_form);
             for (std::uint64_t bit = 0U; bit < *member_width; ++bit) {
-                if (member.lsb_offset + bit < packed.width()) {
-                    packed.set(member.lsb_offset + bit,
+                if (lsb + bit < packed.width()) {
+                    packed.set(lsb + bit,
                         runtime::to_logic4(fitted.packed.get_logic9(bit)));
                 }
             }
@@ -4587,7 +5091,8 @@ private:
     /// structure or union type.
     [[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>>
     packed_member_slice(
-        semantic::sv::TypeReference type, std::string_view path) const
+        semantic::sv::TypeReference type, std::string_view path,
+        semantic::sv::TypeReference* const member_type = nullptr) const
     {
         std::uint64_t offset { };
         while (!path.empty()) {
@@ -4637,7 +5142,10 @@ private:
             if (member == members.end()) {
                 return std::nullopt;
             }
-            offset += member->lsb_offset;
+            offset += packed_member_offset(members,
+                static_cast<std::size_t>(member - members.begin()),
+                definition->systemverilog->form
+                    == semantic::sv::TypeForm::packed_union);
             type = member->type;
             path = separator == std::string_view::npos
                 ? std::string_view { }
@@ -4648,6 +5156,9 @@ private:
             type, &specialization_, visiting);
         if (!width || *width == 0U) {
             return std::nullopt;
+        }
+        if (member_type != nullptr) {
+            *member_type = std::move(type);
         }
         return std::pair { offset, *width };
     }
@@ -5575,22 +6086,115 @@ private:
             : std::string_view { record.text }.starts_with(prefix)
             ? std::string_view { record.text }.substr(prefix.size())
             : std::string_view { };
-        for (const auto& declaration :
+        const auto cut = identity.rfind("::");
+        const auto member = cut == std::string_view::npos
+            ? identity : identity.substr(cut + 2U);
+        const semantic::sv::ClassDeclaration* owner { };
+        const semantic::sv::ClassProperty* property { };
+        const semantic::sv::ClassParameter* formal { };
+        for (const auto& candidate :
             specialization_.design().systemverilog_hir.classes()) {
-            const auto property = std::ranges::find(declaration.properties,
-                identity, &semantic::sv::ClassProperty::canonical_identity);
-            if (property == declaration.properties.end()) {
-                continue;
-            }
-            if (!property->parameter || !property->initializer
-                || !declaration.parameters.empty()) {
+            if (candidate.forward_declaration) continue;
+            if (const auto found = std::ranges::find(candidate.properties,
+                    identity,
+                    &semantic::sv::ClassProperty::canonical_identity);
+                found != candidate.properties.end()) {
+                owner = &candidate;
+                property = &*found;
                 break;
             }
+            if (cut != std::string_view::npos
+                && identity.substr(0U, cut) == candidate.canonical_identity) {
+                if (const auto found = std::ranges::find(
+                        candidate.parameters, member,
+                        &semantic::sv::ClassParameter::name);
+                    found != candidate.parameters.end()
+                    && !found->type_parameter) {
+                    owner = &candidate;
+                    formal = &*found;
+                    break;
+                }
+            }
+        }
+        if (owner == nullptr
+            || (property != nullptr
+                && (!property->parameter || !property->initializer))) {
+            error_ = "class member '" + std::string { identity }
+                + "' is not a class constant";
+            return std::nullopt;
+        }
+        if (owner->parameters.empty() && property != nullptr) {
             return evaluate(*property->initializer);
         }
-        error_ = "class property '" + std::string { identity }
-            + "' is not a constant of a non-parameterized class";
-        return std::nullopt;
+        // A parameterized class's constant has a value in the selected
+        // specialization (IEEE 1800-2017 8.25.1): the selection's actuals,
+        // else the parameters' defaults. The actuals are written where the
+        // selection is, so they are evaluated before the class frame.
+        const auto* selection = record.class_owner.empty()
+            ? nullptr : &record.class_owner.front();
+        if (selection != nullptr && !selection->class_identity.empty()
+            && selection->class_identity
+                != semantic::sv::class_declaration_identity(*owner)) {
+            error_ = "class constant inherited through a parameterized base";
+            return std::nullopt;
+        }
+        std::vector<std::optional<Value>> bound(owner->parameters.size());
+        if (selection != nullptr) {
+            std::size_t position { };
+            for (const auto& actual : selection->interface_parameter_actuals) {
+                auto index = position++;
+                if (actual.formal) {
+                    index = static_cast<std::size_t>(std::distance(
+                        owner->parameters.begin(),
+                        std::ranges::find(owner->parameters, *actual.formal,
+                            &semantic::sv::ClassParameter::name)));
+                }
+                if (index >= bound.size()) {
+                    error_ = "class specialization actual has no formal";
+                    return std::nullopt;
+                }
+                const auto& parameter = owner->parameters[index];
+                if (parameter.type_parameter
+                    || actual.kind != semantic::sv::ActualKind::expression
+                    || !actual.expression) {
+                    continue;
+                }
+                bound[index] = parameter.type
+                    ? evaluate_for_type(*actual.expression, *parameter.type)
+                    : evaluate(*actual.expression);
+                if (!bound[index]) return std::nullopt;
+            }
+        }
+        frames_.push_back(Frame { });
+        frames_.back().class_owner = owner;
+        struct Pop {
+            std::vector<Frame>& frames;
+            ~Pop() { frames.pop_back(); }
+        } pop { frames_ };
+        for (std::size_t index { }; index < bound.size(); ++index) {
+            const auto& parameter = owner->parameters[index];
+            if (parameter.type_parameter) continue;
+            auto value = std::move(bound[index]);
+            if (!value && parameter.default_value) {
+                value = parameter.type
+                    ? evaluate_for_type(*parameter.default_value,
+                          *parameter.type)
+                    : evaluate(*parameter.default_value);
+            }
+            if (!value) {
+                if (error_.empty()) {
+                    error_ = "class parameter '" + parameter.name
+                        + "' has no value";
+                }
+                return std::nullopt;
+            }
+            frames_.back().values.insert_or_assign(
+                parameter.declaration, std::move(*value));
+        }
+        if (formal != nullptr) {
+            return frames_.back().values.at(formal->declaration);
+        }
+        return value_for_declaration(property->declaration);
     }
 
     [[nodiscard]] std::optional<Value> evaluate_impl(
@@ -5830,6 +6434,40 @@ bool hir_systemverilog_constant_expression(
                 result = !source.operands.empty()
                     && operands_are_constant();
                 break;
+            // A class's parameter or local parameter (8.25.1).
+            case ExpressionKind::class_static_property: {
+                constexpr std::string_view prefix { "@sv-static-property:" };
+                const auto identity = !source.class_member_identity.empty()
+                    ? std::string_view { source.class_member_identity }
+                    : std::string_view { source.text }.starts_with(prefix)
+                    ? std::string_view { source.text }.substr(prefix.size())
+                    : std::string_view { };
+                const auto cut = identity.rfind("::");
+                for (const auto& owner :
+                    specialization.design().systemverilog_hir.classes()) {
+                    if (owner.forward_declaration) continue;
+                    if (std::ranges::any_of(owner.properties,
+                            [&](const semantic::sv::ClassProperty& property) {
+                                return property.parameter
+                                    && property.canonical_identity
+                                        == identity;
+                            })
+                        || (cut != std::string_view::npos
+                            && identity.substr(0U, cut)
+                                == owner.canonical_identity
+                            && std::ranges::any_of(owner.parameters,
+                                [&](const semantic::sv::ClassParameter&
+                                        parameter) {
+                                    return !parameter.type_parameter
+                                        && parameter.name
+                                            == identity.substr(cut + 2U);
+                                }))) {
+                        result = true;
+                        break;
+                    }
+                }
+                break;
+            }
             case ExpressionKind::call: {
                 const auto call_arguments_are_valid
                     = operands_are_constant()
@@ -6041,6 +6679,25 @@ evaluate_hir_systemverilog_typed_constant(
         return std::nullopt;
     }
     return value;
+}
+
+std::optional<HirSystemVerilogAggregateSlice>
+hir_systemverilog_aggregate_slice(
+    const semantic::SpecializedHirUnit& owner,
+    const semantic::sv::TypeReference& type,
+    const std::string_view path)
+{
+    std::string error;
+    return HirConstantEvaluator { owner, error }.aggregate_slice(type, path);
+}
+
+bool hir_systemverilog_unpacked_aggregate_type(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type)
+{
+    std::string error;
+    return HirConstantEvaluator { specialization, error }
+        .unpacked_aggregate_type(type);
 }
 
 bool hir_systemverilog_scalar_expression_applicable(

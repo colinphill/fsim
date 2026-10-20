@@ -2012,6 +2012,7 @@ void HierarchyBuilder::finish()
     if (!materialize_compiled_systemverilog_package_initializers()) {
         return;
     }
+    compose_vhdl_output_routes();
     validate_process_drivers();
     initialize_constant_driven_nets();
     // A multi-bit VHDL scalar's projected transactions are marked as one

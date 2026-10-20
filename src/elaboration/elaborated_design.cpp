@@ -526,6 +526,17 @@ void ElaboratedDesign::replace_process_record(
     process_builder_->replace(process, std::move(instance));
 }
 
+void ElaboratedDesign::rebuild_process_record(
+    const std::size_t process,
+    runtime::simir::Process program)
+{
+    if (!process_builder_) {
+        throw std::logic_error(
+            "fresh process rows are no longer mutable");
+    }
+    process_builder_->rebuild(process, std::move(program));
+}
+
 std::shared_ptr<const runtime::simir::ProcessProgramTemplate>
 ElaboratedDesign::intern_process_template(
     const runtime::simir::ProcessProgramView& process)
@@ -684,10 +695,43 @@ void detail::RuntimeProcessProgramTableBuilder::replace(
     };
 }
 
+void detail::RuntimeProcessProgramTableBuilder::rebuild(
+    const std::size_t process,
+    runtime::simir::Process program)
+{
+    if (process >= table_->rows.size()
+        || program.id != table_->rows[process].instance.id) {
+        throw std::out_of_range("runtime process row is out of range");
+    }
+    const runtime::simir::ProcessProgramView view { program };
+    auto common = template_pool_.intern(view);
+    const auto template_id = intern_table_template(std::move(common));
+    table_->rows[process] = RuntimeProcessProgramRow {
+        template_id,
+        runtime::simir::ProcessInstanceProgram { std::move(program) },
+    };
+}
+
 std::shared_ptr<const detail::RuntimeProcessProgramTable>
 detail::RuntimeProcessProgramTableBuilder::freeze() && noexcept
 {
     template_pool_.clear();
+    // A rebuilt row may name a template interned after later rows' ones;
+    // number templates by first use, as the published table requires.
+    std::vector<std::uint32_t> renumbered(
+        table_->templates.size(), std::numeric_limits<std::uint32_t>::max());
+    std::vector<std::shared_ptr<const runtime::simir::ProcessProgramTemplate>>
+        templates;
+    templates.reserve(table_->templates.size());
+    for (auto& row : table_->rows) {
+        auto& id = renumbered[row.template_id];
+        if (id == std::numeric_limits<std::uint32_t>::max()) {
+            id = static_cast<std::uint32_t>(templates.size());
+            templates.push_back(table_->templates[row.template_id]);
+        }
+        row.template_id = id;
+    }
+    table_->templates = std::move(templates);
     return std::move(table_);
 }
 

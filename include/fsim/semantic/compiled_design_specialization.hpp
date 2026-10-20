@@ -98,6 +98,12 @@ struct SpecializedHirActualIdentity {
     // A record actual of scalar elements, evaluated in the parent so the
     // target unit can select its elements (IEEE 1076-2008 6.5.6.2, 8.3).
     std::optional<SpecializedHirVhdlRecordValue> vhdl_record_value { };
+    // A parameter of another unit that a type actual's declaration depends
+    // on (`.T(d_t)` with `typedef logic [W-1:0] d_t;` in a parameterized
+    // parent): the parent's value, so the type's shape evaluates in this
+    // unit as it does in the parent (IEEE 1800-2017 6.20.3). Not a formal
+    // of this unit.
+    bool type_context { };
 
     friend bool operator==(const SpecializedHirActualIdentity&,
         const SpecializedHirActualIdentity&) = default;

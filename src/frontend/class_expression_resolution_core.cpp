@@ -126,12 +126,12 @@ void Resolver::run() {
     // A specialization's parameter in a module constant, `C#(7)::v`.
     for (auto& parameter : unit.parameters) {
       if (parameter.kind == ParameterKind::Value) {
-        substitute_class_parameter_references(parameter.default_value, scope);
+        resolve_module_constant(parameter.default_value, scope);
       }
     }
     for (auto& instance : unit.instances) {
       for (auto& override_value : instance.parameter_overrides) {
-        substitute_class_parameter_references(override_value.value, scope);
+        resolve_module_constant(override_value.value, scope);
         // A class-scoped type actual (`m #(C#(8)::t) u ();`), including
         // one through a class typedef (`m #(c8_t::t) u ();`) that parses
         // as a scoped name.
@@ -165,6 +165,16 @@ void Resolver::run() {
     resolve_scoped_types(unit.ports, scope);
     resolve_scoped_types(unit.signals, scope);
     resolve_scoped_types(unit.variables, scope);
+    // Class constants in packed dimensions (`logic [C#(5)::b-1:0] v;`).
+    const auto ranges = [&](auto& declarations) {
+      for (auto& declaration : declarations) {
+        resolve_range_constants(declaration.type, scope);
+      }
+    };
+    ranges(unit.ports);
+    ranges(unit.signals);
+    ranges(unit.variables);
+    ranges(unit.type_aliases);
     // A variable declared with a forward typedef (`typedef T; T v;`) takes
     // the type the later typedef gives it (IEEE 1800-2017 6.18), which
     // matters when that type is a string.
@@ -189,6 +199,34 @@ void Resolver::run() {
     resolve_forward_string(unit.variables);
     add_objects(scope, unit.signals);
     add_objects(scope, unit.variables);
+    // `$bits(h.p)` of a class handle's property is a constant: the
+    // property's type width (IEEE 1800-2017 20.6.2). Resolve the operand
+    // of such queries in parameter values once the unit's objects are in
+    // scope.
+    const auto resolve_bits_operands = [&](const auto& self,
+                                           Expression& expression) -> void {
+      if (expression.kind == ExpressionKind::Call
+          && expression.text == "$bits" && expression.operands.size() == 1U
+          && expression.operands.front().kind == ExpressionKind::Identifier
+          && expression.operands.front().text.find('.')
+              != std::string::npos) {
+        (void)resolve_expression(expression.operands.front(), scope);
+        return;
+      }
+      for (auto& operand : expression.operands) self(self, operand);
+    };
+    for (auto& parameter : unit.parameters) {
+      if (parameter.kind == ParameterKind::Value) {
+        resolve_bits_operands(resolve_bits_operands, parameter.default_value);
+      }
+    }
+    for (auto& instance : unit.instances) {
+      for (auto& override_value : instance.parameter_overrides) {
+        if (!override_value.type_value) {
+          resolve_bits_operands(resolve_bits_operands, override_value.value);
+        }
+      }
+    }
     // An object of a named conditional generate block is visible as
     // `label.name` (IEEE 1800-2017 27.6).
     for (const auto& region : unit.generate_regions) {
@@ -276,6 +314,7 @@ void Resolver::run() {
       }
     }
     for (auto& region : unit.generate_regions) {
+      resolve_generate_constants(region, scope);
       resolve_generate_body(region.then_body, scope);
       resolve_generate_body(region.else_body, scope);
       for (auto& alternative : region.alternatives) {
@@ -529,6 +568,11 @@ void Resolver::hydrate_task_bodies() {
 }
 void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited) {
   auto scope = inherited;
+  for (auto& constant : body.constants) {
+    if (constant.kind == ParameterKind::Value) {
+      resolve_module_constant(constant.default_value, scope);
+    }
+  }
   resolve_scoped_types(body.type_aliases, scope);
   resolve_scoped_types(body.signals, scope);
   resolve_scoped_types(body.variables, scope);
@@ -571,6 +615,7 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
     resolve_statement(statement, scope, std::nullopt);
   }
   for (auto& region : body.generate_regions) {
+    resolve_generate_constants(region, scope);
     resolve_generate_body(region.then_body, scope);
     resolve_generate_body(region.else_body, scope);
     for (auto& alternative : region.alternatives) {
@@ -1113,6 +1158,106 @@ Resolver::selected_parameter_actuals(const std::string_view spelling) {
   }
   return actuals;
 }
+void Resolver::resolve_class_scope_constants(
+    Expression& expression, const Scope& scope, const std::size_t depth) {
+  if (depth > 64U) return;
+  // $bits of a class-scoped data type is its width (IEEE 1800-2017 20.6.2).
+  const auto* type_operand = expression.systemverilog_type_operand.get();
+  if (expression.kind == ExpressionKind::Call && expression.text == "$bits"
+      && ((type_operand != nullptr
+              && type_operand->named_type.find("::") != std::string::npos)
+          || (expression.operands.size() == 1U
+              && expression.operands.front().kind
+                  == ExpressionKind::Identifier
+              && expression.operands.front().text.find("::")
+                  != std::string::npos))) {
+    Type named;
+    if (type_operand != nullptr) {
+      named = *type_operand;
+    } else {
+      named.named_type = expression.operands.front().text;
+      named.spelling = named.named_type;
+    }
+    if (const auto scoped = resolve_class_scoped_type(named, scope);
+        scoped && !scoped->systemverilog_container) {
+      if (const auto width = scoped->width()) {
+        const auto span = expression.span;
+        expression = Expression{
+            ExpressionKind::IntegerLiteral, std::to_string(*width), {}, span};
+        return;
+      }
+    }
+  }
+  if (expression.kind == ExpressionKind::Identifier
+      && expression.text.find('.') == std::string::npos) {
+    const auto at = expression.text.rfind("::");
+    if (at != std::string::npos && at != 0U) {
+      const auto member = expression.text.substr(at + 2U);
+      const auto selection = resolve_class_selection(
+          std::string_view{expression.text}.substr(0U, at), scope,
+          expression.systemverilog_class_selection.get());
+      if (selection && selection->declaration != nullptr) {
+        const auto& owner = *selection->declaration;
+        const auto match = find_property(owner.canonical_identity, member);
+        const auto formal = std::ranges::find_if(owner.parameters,
+            [&](const ParameterDeclaration& parameter) {
+              return parameter.kind == ParameterKind::Value
+                  && parameter.name == member;
+            });
+        if ((match.property != nullptr && match.property->is_parameter)
+            || (match.property == nullptr
+                && formal != owner.parameters.end())) {
+          const auto* declaring =
+              match.property != nullptr ? match.owner : &owner;
+          const auto type = match.property != nullptr
+              ? resolve_alias_type(match.property->declaration.type,
+                    declaring->canonical_identity)
+              : formal->type;
+          expression.kind = ExpressionKind::Call;
+          expression.text = "@sv-static-property:"
+              + declaring->canonical_identity + "::" + member;
+          expression.operands.clear();
+          if (!selection->type.systemverilog_class_parameter_actuals.empty()) {
+            expression.systemverilog_class_owner =
+                std::make_shared<const Type>(selection->type);
+          }
+          retain_result_type(expression, type);
+          return;
+        }
+      }
+    }
+  }
+  for (auto& operand : expression.operands) {
+    resolve_class_scope_constants(operand, scope, depth + 1U);
+  }
+}
+void Resolver::resolve_module_constant(
+    Expression& expression, const Scope& scope) {
+  substitute_class_parameter_references(expression, scope);
+  resolve_class_scope_constants(expression, scope);
+}
+void Resolver::resolve_generate_constants(
+    GenerateRegion& region, const Scope& scope) {
+  resolve_module_constant(region.initial, scope);
+  resolve_module_constant(region.condition, scope);
+  resolve_module_constant(region.iteration, scope);
+  for (auto& alternative : region.alternatives) {
+    for (auto& choice : alternative.choices) {
+      resolve_module_constant(choice.left, scope);
+      if (choice.right) resolve_module_constant(*choice.right, scope);
+    }
+  }
+}
+void Resolver::resolve_range_constants(Type& type, const Scope& scope) {
+  if (type.packed_range_expression) {
+    resolve_module_constant(type.packed_range_expression->left, scope);
+    resolve_module_constant(type.packed_range_expression->right, scope);
+  }
+  for (auto& range : type.systemverilog_packed_dimensions) {
+    resolve_module_constant(range.left, scope);
+    resolve_module_constant(range.right, scope);
+  }
+}
 void Resolver::substitute_class_parameter_references(
     Expression& expression, const Scope& scope, const std::size_t depth) {
   if (depth > 16U) return;
@@ -1319,6 +1464,29 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         && value.text.starts_with(static_prefix)) {
       value = Expression{ExpressionKind::Identifier,
           value.text.substr(static_prefix.size()), {}, value.span};
+    }
+    // A member of a structure parameter (`c.depth`): its root is the
+    // actual's name, or else the value is not substituted here.
+    if (value.kind == ExpressionKind::Identifier
+        && value.text.find('.') != std::string::npos) {
+      const auto dot = value.text.find('.');
+      const auto root = std::string_view{value.text}.substr(0U, dot);
+      if (const auto found = values.find(root);
+          found != values.end()
+          && found->second.kind == ExpressionKind::Identifier) {
+        value.text = found->second.text + value.text.substr(dot);
+        return value;
+      }
+      const bool class_name = std::ranges::any_of(owner.parameters,
+          [&](const ParameterDeclaration& candidate) {
+            return candidate.name == root;
+          }) || std::ranges::any_of(owner.properties,
+          [&](const SystemVerilogClassProperty& candidate) {
+            return candidate.is_parameter
+                && candidate.declaration.name == root;
+          });
+      if (class_name) return std::nullopt;
+      return value;
     }
     if (value.kind == ExpressionKind::Identifier) {
       if (const auto found = values.find(value.text); found != values.end()) {
@@ -1824,6 +1992,44 @@ void Resolver::normalize_selection_actuals(
   return specialize_class_alias(type, scope, std::move(selection),
       *alias->second);
 }
+// A package typedef's actuals name that package's parameters (IEEE
+// 1800-2017 26.3), wherever the typedef is used.
+void Resolver::anchor_alias_actuals(
+    std::vector<SystemVerilogClassTypeActual>& actuals,
+    const std::string_view declaring) const {
+  const auto cut = declaring.rfind("::");
+  const auto package_name = cut == std::string_view::npos
+      ? declaring : declaring.substr(cut + 2U);
+  const auto library = cut == std::string_view::npos
+      ? std::string_view{} : declaring.substr(0U, cut);
+  const auto unit = std::ranges::find_if(design_.units,
+      [&](const DesignUnit& candidate) {
+        return candidate.kind == UnitKind::SystemVerilogPackage
+            && candidate.name == package_name
+            && (library.empty()
+                || effective_library(candidate.library) == library);
+      });
+  if (unit == design_.units.end()) return;
+  const auto qualify = [&](const auto& self, Expression& expression) -> void {
+    if (expression.kind == ExpressionKind::Identifier) {
+      if (expression.text.find("::") != std::string::npos) return;
+      const auto root = std::string_view{expression.text}.substr(
+          0U, expression.text.find('.'));
+      if (std::ranges::any_of(unit->parameters,
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.kind == ParameterKind::Value
+                    && parameter.name == root;
+              })) {
+        expression.text = unit->name + "::" + expression.text;
+      }
+      return;
+    }
+    for (auto& operand : expression.operands) self(self, operand);
+  };
+  for (auto& actual : actuals) {
+    if (!actual.type_actual) qualify(qualify, actual.value);
+  }
+}
 [[nodiscard]] Type Resolver::specialize_class_alias(
     const Type& type, const Scope& scope, ClassSelection selection,
     const Type& alias_type) const {
@@ -1838,6 +2044,10 @@ void Resolver::normalize_selection_actuals(
       if (owner_alias != class_aliases_.end()) {
         selection.type.systemverilog_class_parameter_actuals =
             owner_alias->second->systemverilog_class_parameter_actuals;
+        anchor_alias_actuals(
+            selection.type.systemverilog_class_parameter_actuals,
+            std::string_view{owner_alias->first}.substr(
+                0U, owner_alias->first.rfind("::")));
         break;
       }
       const auto parent = lexical.rfind("::");

@@ -128,6 +128,7 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
                 = *value.vhdl_selected_name_spelling;
         }
     }
+    output.operator_symbol_call = value.vhdl_operator_symbol_call;
     output.argument_names = value.call_argument_names;
     for (const auto& operand : value.operands) {
         if (const auto operand_id = expression(

@@ -235,9 +235,12 @@ public:
     void set_hir_code_coverage_context(
         const CoverageHirContext* coverage, bool module) noexcept;
     void set_hir_code_coverage_active(bool active) noexcept;
+    using HirInstanceUnits = std::unordered_map<std::string,
+        std::shared_ptr<const std::optional<semantic::SpecializedHirUnit>>>;
     void set_systemverilog_interface_handles(
         const std::unordered_map<std::string, std::uint64_t>* handles,
-        const std::unordered_map<std::string, std::string>* types = nullptr)
+        const std::unordered_map<std::string, std::string>* types = nullptr,
+        const HirInstanceUnits* instance_units = nullptr)
         noexcept;
     // Design-wide disable target labels (named blocks and tasks that a
     // disable statement may name from another process) and the labels a
@@ -1127,6 +1130,9 @@ private:
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
         // A parameter of the interface (`vif.P`): each instance's value.
         std::vector<std::pair<std::uint64_t, PackedLogic4>> parameters;
+        // A packed structure field of the member (`vif.data.x`): its
+        // offset in each candidate signal; `width` is the field's.
+        std::optional<std::uint32_t> select_offset;
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
     };
@@ -1380,10 +1386,16 @@ private:
         std::span<const semantic::ExpressionId> actuals);
     void release_hir_vhdl_global_files(
         std::span<const HirVhdlGlobalFile> files);
-    [[nodiscard]] std::optional<semantic::DeclarationId>
+    // A design-level constant read through a name; a member of a package
+    // instance carries that instance's generic actuals (IEEE 1076-2008 4.9).
+    struct HirLazyGlobalConstant {
+        semantic::DeclarationId declaration;
+        std::optional<semantic::CompiledVhdlPackageMember> instance;
+    };
+    [[nodiscard]] std::optional<HirLazyGlobalConstant>
     hir_vhdl_lazy_global_constant(semantic::ExpressionId expression) const;
     [[nodiscard]] bool materialize_hir_vhdl_global_constant(
-        semantic::DeclarationId declaration);
+        const HirLazyGlobalConstant& constant);
     bool materializing_hir_vhdl_global_constant_ { };
     // std::randomize lvalue arguments and their solver identities; a
     // with-clause expression structurally equal to one names that target.
@@ -1648,6 +1660,8 @@ private:
         std::optional<TaggedMember> tagged;
         /// The dimensions of a multidimensional packed member.
         std::vector<HirPackedRange> shape;
+        /// The member's declared type, where a type path selected it.
+        std::optional<semantic::sv::TypeReference> member_type;
     };
     [[nodiscard]] std::optional<std::size_t>
     hir_systemverilog_member_offset(
@@ -3579,8 +3593,8 @@ private:
     // The packed member `path` of a structure parameter value (7.2.1).
     [[nodiscard]] std::optional<HirHierarchicalParameter>
     hir_parameter_member_slice(const HirHierarchicalParameter& whole,
-        semantic::UnitId unit, std::string_view formal,
-        std::string_view path) const;
+        std::string_view owner_instance, semantic::UnitId unit,
+        std::string_view formal, std::string_view path) const;
     // The signal an external name denotes (IEEE 1076-2008 8.7), checked
     // against the name's subtype; a mismatch is reported.
     [[nodiscard]] std::optional<SignalId> hir_vhdl_external_signal(
@@ -3807,6 +3821,26 @@ private:
         systemverilog_interface_handles_ { };
     const std::unordered_map<std::string, std::string>*
         systemverilog_interface_types_ { };
+    // Each interface instance's specialization, by instance path: a
+    // function or task called through the instance has its types
+    // (IEEE 1800-2017 25.7).
+    const HirInstanceUnits* systemverilog_instance_units_ { };
+    [[nodiscard]] const semantic::SpecializedHirUnit* hir_callee_unit(
+        std::string_view receiver) const;
+    // Lowers in another specialization for its lifetime; a null unit keeps
+    // the current one.
+    class HirUnitSwap {
+    public:
+        HirUnitSwap(Lowerer& lowerer, const semantic::SpecializedHirUnit* unit);
+        ~HirUnitSwap();
+        HirUnitSwap(const HirUnitSwap&) = delete;
+        HirUnitSwap& operator=(const HirUnitSwap&) = delete;
+
+    private:
+        Lowerer& lowerer_;
+        const semantic::SpecializedHirUnit* saved_ { };
+        bool active_ { };
+    };
     const ContainerDeclarationBindings*
         container_declaration_bindings_ { };
     semantic::ScopeId hir_process_scope_;
@@ -3835,6 +3869,9 @@ private:
     struct HirCallableFrame {
         semantic::DeclarationId declaration;
         semantic::ScopeId scope;
+        // The specialization of the interface instance whose function or
+        // task this frame runs, when it is not the caller's.
+        const semantic::SpecializedHirUnit* callee_unit { };
         // A function or procedure called from a process evaluates
         // 'DRIVING_VALUE in that caller process, even while its deferred body
         // is lowered in the callable's nested scope.

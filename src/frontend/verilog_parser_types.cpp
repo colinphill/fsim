@@ -57,9 +57,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
         const auto member_progress = position();
         // Members of an unpacked structure may be random variables
         // (IEEE 1800-2017 7.2.1, 18.4).
-        if (!packed) {
-            (void)(match_keyword("rand") || match_keyword("randc"));
-        }
+        const bool random_member = !packed
+            && (match_keyword("rand") || match_keyword("randc"));
         const auto member_start = current();
         Type member_type;
         if (tagged && keyword("void")) {
@@ -151,7 +150,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type(bool* const complete)
                     0,
                     cover(member_start.span, previous().span),
                     { },
-                    std::move(member_initializer)
+                    std::move(member_initializer),
+                    random_member
                 };
                 if (!packed || !declarator_type.named_type.empty()
                     || declarator_type.packed_aggregate
@@ -477,9 +477,15 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
         element.enumeration_literals.clear();
         element.systemverilog_enumeration_values.clear();
     }
+    // A packed structure of parameter-dependent width spans its members
+    // (IEEE 1800-2017 7.2.1, 7.4.1).
+    if (!element.packed_members.empty() && !element.packed_range
+        && !element.packed_range_expression) {
+        (void)aggregate_width_expression(element, current().span);
+    }
     // A packed union is a packed element as a structure is (7.3.1).
     const bool packed_aggregate = !element.packed_members.empty()
-        && element.packed_range;
+        && (element.packed_range || element.packed_range_expression);
     if (!element.named_type.empty() || !element.enumeration_literals.empty()
         || element.systemverilog_container
         || (element.domain != ValueDomain::Logic4
@@ -500,8 +506,9 @@ bool VerilogParser::aggregate_width_expression(
 {
     // A packed structure whose members have parameter-dependent ranges
     // spans [sum of member widths - 1 : 0], folded at elaboration.
+    const bool is_union = type.packed_aggregate == PackedAggregateKind::Union;
     if (type.packed_range || type.packed_range_expression
-        || type.packed_aggregate != PackedAggregateKind::Struct
+        || (type.packed_aggregate != PackedAggregateKind::Struct && !is_union)
         || type.packed_members.empty()) {
         return false;
     }
@@ -528,8 +535,20 @@ bool VerilogParser::aggregate_width_expression(
                     binary("+", binary("-", range.right, range.left),
                         literal(1U)) },
                 span };
+        } else if (!member.nested_types.empty()
+            && !member.nested_types.front().named_type.empty()) {
+            // A member of a named type has that type's width (20.6.2).
+            width = Expression { ExpressionKind::Call, "$bits",
+                { Expression { ExpressionKind::Identifier,
+                    member.nested_types.front().named_type, { }, span } },
+                span };
         } else {
             return false;
+        }
+        // The members of a packed union share one width (7.3.1).
+        if (is_union) {
+            total = std::move(*width);
+            break;
         }
         total = total ? binary("+", std::move(*total), std::move(*width))
                       : std::move(*width);

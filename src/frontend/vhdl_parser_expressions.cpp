@@ -807,6 +807,7 @@ Expression VhdlParser::parse_primary()
                     std::move(actuals), span };
                 expression.selected_operator_prefix
                     = std::move(selected_operator_prefix);
+                expression.vhdl_operator_symbol_call = true;
                 return parse_vhdl_name_suffixes(
                     std::move(expression), start.span);
             }
@@ -819,6 +820,7 @@ Expression VhdlParser::parse_primary()
                     std::move(actuals), span };
                 expression.selected_operator_prefix
                     = std::move(selected_operator_prefix);
+                expression.vhdl_operator_symbol_call = true;
                 return parse_vhdl_name_suffixes(
                     std::move(expression), start.span);
             }

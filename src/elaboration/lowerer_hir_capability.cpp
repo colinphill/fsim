@@ -852,9 +852,8 @@ namespace {
     {
         const bool zero_width = subtype.executable_width
             && *subtype.executable_width == 0U;
-        const bool null_index_range = std::ranges::any_of(
-            subtype.constraints,
-            [&](const semantic::vhdl::RangeConstraint& range) {
+        const auto null_range = [&](
+                                    const semantic::vhdl::RangeConstraint& range) {
                 if (range.kind
                         != semantic::vhdl::RangeKind::array_index) {
                     return false;
@@ -881,7 +880,16 @@ namespace {
                     ? *left > *right
                     : range.descending;
                 return descending ? *left < *right : *left > *right;
-            });
+            };
+        // A null element constraint (`t(0 to 3)(6 to 5)`) makes the whole
+        // array null too (IEEE 1076-2008 5.3.2.1).
+        const bool null_index_range
+            = std::ranges::any_of(subtype.constraints, null_range)
+            || std::ranges::any_of(subtype.element_constraints,
+                [&](const semantic::vhdl::ElementConstraint& element) {
+                    return std::ranges::any_of(
+                        element.constraints, null_range);
+                });
         if (!zero_width && !null_index_range) {
             return false;
         }
@@ -1228,13 +1236,62 @@ void Lowerer::set_disable_labels(
 
 void Lowerer::set_systemverilog_interface_handles(
     const std::unordered_map<std::string, std::uint64_t>* const handles,
-    const std::unordered_map<std::string, std::string>* const types)
+    const std::unordered_map<std::string, std::string>* const types,
+    const HirInstanceUnits* const instance_units)
     noexcept
 {
     systemverilog_interface_handles_ = handles;
     if (types != nullptr) {
         systemverilog_interface_types_ = types;
     }
+    if (instance_units != nullptr) {
+        systemverilog_instance_units_ = instance_units;
+    }
+}
+
+const semantic::SpecializedHirUnit* Lowerer::hir_callee_unit(
+    const std::string_view receiver) const
+{
+    if (systemverilog_instance_units_ == nullptr || receiver.empty()) {
+        return nullptr;
+    }
+    constexpr std::string_view instance_prefix { "@instance:" };
+    const auto path = receiver.starts_with(instance_prefix)
+        ? std::string { receiver.substr(instance_prefix.size()) }
+        : hierarchy_ + "." + std::string { receiver };
+    const auto found = systemverilog_instance_units_->find(path);
+    return found != systemverilog_instance_units_->end() && found->second
+            && *found->second && &**found->second != specialized_hir_unit_
+        ? &**found->second
+        : nullptr;
+}
+
+Lowerer::HirUnitSwap::HirUnitSwap(
+    Lowerer& lowerer, const semantic::SpecializedHirUnit* const unit)
+    : lowerer_ { lowerer }
+    , saved_ { lowerer.specialized_hir_unit_ }
+    , active_ { unit != nullptr && unit != lowerer.specialized_hir_unit_ }
+{
+    if (!active_) {
+        return;
+    }
+    lowerer_.clear_hir_effective_vhdl_subtype_cache();
+    lowerer_.clear_hir_expression_resolution_cache();
+    lowerer_.clear_hir_vhdl_subtype_name_cache();
+    lowerer_.clear_hir_pure_integral_attempt_cache();
+    lowerer_.specialized_hir_unit_ = unit;
+}
+
+Lowerer::HirUnitSwap::~HirUnitSwap()
+{
+    if (!active_) {
+        return;
+    }
+    lowerer_.clear_hir_effective_vhdl_subtype_cache();
+    lowerer_.clear_hir_expression_resolution_cache();
+    lowerer_.clear_hir_vhdl_subtype_name_cache();
+    lowerer_.clear_hir_pure_integral_attempt_cache();
+    lowerer_.specialized_hir_unit_ = saved_;
 }
 
 std::string Lowerer::hir_generic_interface_type(
@@ -1354,10 +1411,8 @@ Lowerer::hir_systemverilog_parameter_member(
         = declaration->systemverilog->initializer;
     auto remaining = std::string_view { text }.substr(separator + 1U);
     while (true) {
-        if (!type.target.target.valid()) {
-            type = resolver.effective_systemverilog_type(
-                type, declaration->systemverilog->scope).value_or(type);
-        }
+        type = resolver.underlying_systemverilog_type(
+            type, declaration->systemverilog->scope).value_or(type);
         auto definition = type.target.target.valid()
             ? specialized_hir_unit_->find_type(type.target.target)
             : std::nullopt;
@@ -1487,6 +1542,20 @@ std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
     }
     const auto prefix = specialized_hir_unit_->find_expression(
         source.operands.front());
+    // A subtype of a package instance is bounded by that instance's
+    // generics (IEEE 1076-2008 4.9); the evaluator binds them.
+    if (prefix && prefix->vhdl != nullptr && prefix->vhdl->referenced_name) {
+        const auto instance = hir_resolver()
+                                  .resolve_vhdl_package_members(
+                                      *prefix->vhdl->referenced_name,
+                                      prefix->vhdl->scope)
+                                  .unique();
+        if (instance && instance->package_instance
+            && !instance->generic_bindings.empty()) {
+            return specialized_hir_unit_->evaluate_integral_expression(
+                expression_id);
+        }
+    }
     const auto declaration = prefix && prefix->vhdl != nullptr
             && prefix->vhdl->referenced_name
             && prefix->vhdl->referenced_name->selected
@@ -4453,6 +4522,12 @@ bool Lowerer::hir_expression_signed(
         return element->packed_tail ? element->packed_tail->signed_value
                                     : element->type.signed_elements;
     }
+    // A member of an unpacked structure has its declared signedness
+    // (IEEE 1800-2017 7.2, 11.8.1).
+    if (const auto member = hir_container_aggregate_selection(expression_id);
+        member && member->leaf.element_kind == ContainerElementKind::Packed) {
+        return member->leaf.signed_elements;
+    }
     // An element of an object's array of values has the element's
     // signedness.
     constexpr std::string_view container_index_prefix {
@@ -6173,27 +6248,104 @@ Lowerer::hir_virtual_interface_member(
         }
     }
     std::ranges::sort(paths);
+    // A member, or a packed structure field of one (`vif.data.x`).
+    const auto member_place = [&](const std::string& path)
+        -> std::optional<std::tuple<SignalId, std::uint64_t, std::uint64_t>> {
+        if (const auto whole = design_.signal_by_name_.find(path + "." + member);
+            whole != design_.signal_by_name_.end()
+            && whole->second < design_.signal_info_.size()) {
+            return std::tuple { whole->second, std::uint64_t { },
+                static_cast<std::uint64_t>(
+                    design_.signal_info_[whole->second].width) };
+        }
+        for (auto dot = member.find_last_of('.');
+             dot != std::string::npos && dot != 0U;
+             dot = member.find_last_of('.', dot - 1U)) {
+            const auto signal = design_.signal_by_name_.find(
+                path + "." + member.substr(0U, dot));
+            if (signal == design_.signal_by_name_.end()
+                || signal->second >= design_.signal_info_.size()) {
+                continue;
+            }
+            const auto& info = design_.signal_info_[signal->second];
+            const std::vector<PackedMemberMetadata>* members
+                = &info.packed_members;
+            std::uint64_t offset { };
+            std::uint64_t width { };
+            std::string_view remaining { member };
+            remaining.remove_prefix(dot + 1U);
+            while (!remaining.empty()) {
+                const auto separator = remaining.find('.');
+                const auto segment = remaining.substr(0U, separator);
+                const auto field = members == nullptr
+                    ? std::vector<PackedMemberMetadata>::const_iterator { }
+                    : std::ranges::find(
+                          *members, segment, &PackedMemberMetadata::name);
+                if (members == nullptr || field == members->end()
+                    || !field->width()) {
+                    return std::nullopt;
+                }
+                offset += field->lsb_offset;
+                width = *field->width();
+                members = field->nested_types.empty()
+                    ? nullptr
+                    : &field->nested_types.front().packed_members;
+                if (separator == std::string_view::npos) {
+                    break;
+                }
+                remaining.remove_prefix(separator + 1U);
+            }
+            if (width == 0U || offset + width > info.width) {
+                return std::nullopt;
+            }
+            return std::tuple { signal->second, offset, width };
+        }
+        return std::nullopt;
+    };
     for (const auto& path : paths) {
         const auto handle = systemverilog_interface_handles_->find(path);
         if (handle == systemverilog_interface_handles_->end()
             || !handles.insert(handle->second).second) {
             continue;
         }
-        const auto signal = design_.signal_by_name_.find(path + "." + member);
-        if (signal == design_.signal_by_name_.end()
-            || signal->second >= design_.signal_info_.size()) {
+        const auto place = member_place(path);
+        if (!place) {
             continue;
         }
-        const auto& info = design_.signal_info_[signal->second];
+        const auto [signal, offset, width] = *place;
+        const auto select = width != design_.signal_info_[signal].width
+            ? std::optional { static_cast<std::uint32_t>(offset) }
+            : std::nullopt;
         if (result.candidates.empty()) {
-            result.width = info.width;
-            result.domain = info.source_domain;
-        } else if (info.width != result.width) {
+            result.width = width;
+            result.domain = design_.signal_info_[signal].source_domain;
+            result.select_offset = select;
+        } else if (width != result.width || select != result.select_offset) {
             continue;
         }
-        result.candidates.emplace_back(handle->second, signal->second);
+        result.candidates.emplace_back(handle->second, signal);
     }
     if (result.candidates.empty()) {
+        // An interface instance inside the designated one (`v.tx`) is a
+        // virtual interface value of its type (IEEE 1800-2017 25.3, 25.9).
+        handles.clear();
+        for (const auto& path : paths) {
+            const auto handle = systemverilog_interface_handles_->find(path);
+            const auto inner = systemverilog_interface_handles_->find(
+                path + "." + member);
+            if (handle == systemverilog_interface_handles_->end()
+                || inner == systemverilog_interface_handles_->end()
+                || !handles.insert(handle->second).second) {
+                continue;
+            }
+            result.parameters.emplace_back(handle->second,
+                PackedLogic4::from_aval_bval(64U, inner->second, 0U));
+        }
+        if (!result.parameters.empty()) {
+            result.width = 64U;
+            result.domain = frontend::ValueDomain::Bit2;
+            return result;
+        }
         // A parameter of the interface (IEEE 1800-2017 25.9): the
         // designated instance's elaborated value.
         handles.clear();
@@ -7747,6 +7899,42 @@ Lowerer::hir_runtime_binding(
                     && local->second < register_domains_.size()) {
                     result.width = register_widths_[local->second];
                     result.domain = register_domains_[local->second];
+                    // A formal bound to a null actual, or to an array of
+                    // null elements, has zero-bit storage; its bounds come
+                    // from the active invocation (IEEE 1076-2008 4.2.2.2,
+                    // 5.3.2.1).
+                    if (result.width == 0U && !null_vhdl_array && effective
+                        && composite_vhdl_storage) {
+                        auto actual_shape = *effective;
+                        if (const auto range
+                            = hir_vhdl_callable_formal_range(declaration_id);
+                            range && *range) {
+                            const auto& formal_range = **range;
+                            semantic::vhdl::RangeConstraint index;
+                            index.kind = semantic::vhdl::RangeKind::array_index;
+                            index.left = formal_range.left;
+                            index.right = formal_range.right;
+                            index.descending = formal_range.descending;
+                            index.null = formal_range.left != formal_range.right
+                                && formal_range.descending
+                                    != (formal_range.left > formal_range.right);
+                            std::erase_if(actual_shape.constraints,
+                                [](const semantic::vhdl::RangeConstraint& range) {
+                                    return range.kind
+                                        == semantic::vhdl::RangeKind::array_index;
+                                });
+                            actual_shape.constraints.insert(
+                                actual_shape.constraints.begin(), index);
+                        }
+                        if (const auto* elements
+                            = hir_vhdl_callable_formal_element_constraints(
+                                declaration_id)) {
+                            actual_shape.element_constraints = *elements;
+                        }
+                        null_vhdl_array = vhdl_null_array_subtype(
+                            *specialized_hir_unit_, actual_shape,
+                            vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008);
+                    }
                 } else {
                     const auto width = effective
                         ? vhdl_subtype_width(*effective)
@@ -7811,6 +7999,24 @@ Lowerer::hir_runtime_binding(
                 } else if (frame.interface_receiver) {
                     found = signals_.find(
                         *frame.interface_receiver + "." + result.name);
+                    // The instance's own objects are not the caller's
+                    // homographs (IEEE 1800-2017 25.7, 23.8).
+                    const auto global = found == signals_.end()
+                        ? design_.signal_by_name_.find(hierarchy_ + "."
+                              + *frame.interface_receiver + "."
+                              + result.name)
+                        : design_.signal_by_name_.end();
+                    if (global != design_.signal_by_name_.end()) {
+                        signal_id = global->second;
+                        hierarchical_reference_used_ = true;
+                    } else if (found == signals_.end()
+                        && declaration->systemverilog != nullptr
+                        && declaration->systemverilog->scope
+                            == specialized_hir_unit_->scope()
+                        && frame.callee_unit != nullptr) {
+                        hierarchical_reference_missed_ = true;
+                        return std::nullopt;
+                    }
                 }
             }
             if (!signal_id && found == signals_.end()) {
@@ -8099,6 +8305,10 @@ Lowerer::hir_container_object_binding_for_declaration(
                            receiver + "." + name);
                 receiver_object != container_objects_.end()) {
                 found = receiver_object->second;
+            } else if (const auto global = design_.container_by_name_.find(
+                           hierarchy_ + "." + receiver + "." + name);
+                global != design_.container_by_name_.end()) {
+                found = global->second;
             }
             if (found) {
                 const auto info = std::ranges::find_if(
@@ -10414,9 +10624,21 @@ Lowerer::hir_string_binding(
     // A declaration typed by a type parameter is a string where the active
     // specialization binds `string` (IEEE 1800-2017 8.25).
     const auto bound_string = [&] {
-        if (hir_generic_binding_frames_.empty() || !source.type
-            || source.type->target.spelling.empty()
-            || source.type->container_form) {
+        if (!source.type || source.type->target.spelling.empty()
+            || source.type->container_form
+            || source.type->value_form
+                == semantic::sv::TypeForm::class_handle
+            || source.type->value_form
+                == semantic::sv::TypeForm::packed_structure
+            || source.type->value_form == semantic::sv::TypeForm::enumeration) {
+            return false;
+        }
+        static constexpr std::string_view builtin[] {
+            "logic", "bit", "reg", "int", "integer", "byte", "shortint",
+            "longint", "real", "shortreal", "realtime", "time", "event",
+        };
+        if (std::ranges::find(builtin, source.type->target.spelling)
+            != std::ranges::end(builtin)) {
             return false;
         }
         const auto bound = hir_resolver().effective_systemverilog_type(
@@ -20375,6 +20597,7 @@ Lowerer::hir_systemverilog_member_selection(
             member->signed_value,
             std::nullopt,
             {},
+            std::nullopt,
         };
     }
     const auto declaration_id = hir_referenced_declaration(expression_id);
@@ -20512,13 +20735,10 @@ Lowerer::hir_systemverilog_type_member_path(
     const auto type_resolver = hir_resolver();
     std::size_t resolved_parameters { };
     while (!remaining.empty()) {
-        // Types from other units (an imported package typedef) keep only
-        // their spelling across object linking.
-        if (!current.target.target.valid()) {
-            current = type_resolver.effective_systemverilog_type(
-                current, scope)
-                          .value_or(current);
-        }
+        // A typedef denotes its base type (IEEE 1800-2017 6.18), including
+        // another unit's type kept only by spelling.
+        current = type_resolver.underlying_systemverilog_type(current, scope)
+                      .value_or(current);
         if (!current.target.target.valid()) {
             return std::nullopt;
         }
@@ -20707,6 +20927,7 @@ Lowerer::hir_systemverilog_type_member_path(
                 member->type.signed_value,
                 std::move(tagged),
                 std::move(shape),
+                member->type,
             };
         }
         current = member->type;
@@ -22193,12 +22414,18 @@ Lowerer::hir_vhdl_expression_subtype(
                 const bool null_range = packed_range.left != packed_range.right
                     && packed_range.descending
                         != (packed_range.left > packed_range.right);
+                // A formal bound to a null actual, or to an array of null
+                // elements, has no storage (IEEE 1076-2008 5.3.2.1).
+                const bool null_storage = !string_formal && binding
+                    && binding->width == 0U;
                 if ((!string_formal
-                        && (!binding || binding->width == 0U
-                            || binding->width % (distance + 1U) != 0U))
+                        && (!binding
+                            || (!null_storage
+                                && (null_range
+                                    || binding->width % (distance + 1U)
+                                        != 0U))))
                     || distance
-                        == std::numeric_limits<std::uint64_t>::max()
-                    || (!string_formal && null_range)) {
+                        == std::numeric_limits<std::uint64_t>::max()) {
                     return std::nullopt;
                 }
                 semantic::vhdl::RangeConstraint constraint;
@@ -22207,7 +22434,7 @@ Lowerer::hir_vhdl_expression_subtype(
                 constraint.left = packed_range.left;
                 constraint.right = packed_range.right;
                 constraint.descending = packed_range.descending;
-                constraint.null = string_formal && null_range;
+                constraint.null = null_range;
                 const auto existing = std::ranges::find_if(
                     subtype->constraints,
                     [](const auto& candidate) {

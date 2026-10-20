@@ -173,18 +173,23 @@ struct SelectedProperty {
 using PropertyDomains
     = std::map<std::string, std::vector<PackedLogic4>, std::less<>>;
 
-// An element `a[i]` of a container takes the container's domain.
+// An element `a[i]` or `a[i][j]` of a container takes the container's
+// domain.
 [[nodiscard]] std::string_view element_container(
-    const std::string_view canonical_identity) {
-  if (!canonical_identity.ends_with(']')) return canonical_identity;
-  const auto open = canonical_identity.rfind('[');
-  if (open == std::string_view::npos) return canonical_identity;
-  const auto index = canonical_identity.substr(
-      open + 1U, canonical_identity.size() - open - 2U);
-  return !index.empty() && std::ranges::all_of(index, [](const char digit) {
-           return digit >= '0' && digit <= '9';
-         })
-      ? canonical_identity.substr(0, open) : canonical_identity;
+    std::string_view canonical_identity) {
+  while (canonical_identity.ends_with(']')) {
+    const auto open = canonical_identity.rfind('[');
+    if (open == std::string_view::npos) break;
+    const auto index = canonical_identity.substr(
+        open + 1U, canonical_identity.size() - open - 2U);
+    if (index.empty() || !std::ranges::all_of(index, [](const char digit) {
+          return digit >= '0' && digit <= '9';
+        })) {
+      break;
+    }
+    canonical_identity = canonical_identity.substr(0, open);
+  }
+  return canonical_identity;
 }
 
 [[nodiscard]] bool has_exact_domain(
@@ -491,6 +496,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
   };
   const auto configure = [&](SystemVerilogConstraintSolver& solver,
                              const SystemVerilogClassRandomizeVariables& all) {
+    for (const auto& container : containers) {
+      for (const auto& shape : container.shapes) {
+        solver.set_container_shape(
+            nodes[container.node].path + container.name + shape.path,
+            shape.shape);
+      }
+    }
     // Soft constraints added later take priority; a containing object's
     // soft constraints outrank those of its rand member objects (IEEE
     // 1800-2017 18.5.14.1), so the members (in reverse preorder) come
@@ -572,37 +584,61 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         32, true, "int", true, 0, 0, 0, 0, {}};
     return value;
   };
-  const auto materialize = [&](const std::size_t c,
-                               const std::size_t count) {
+  // The name of element `index` of container `c` in the solve.
+  const auto element_name = [&](const std::size_t c, const std::size_t index) {
+    const auto& container = containers[c];
+    return container.element_paths.empty()
+        ? container.name + "[" + std::to_string(index) + "]"
+        : container.name + container.element_paths.at(index);
+  };
+  const auto materialize = [&](const std::size_t c, std::size_t count) {
     const auto& container = containers[c];
     const bool chosen = randomized_container[c];
+    if (!container.element_paths.empty()) count = container.values.size();
     for (std::size_t index = 0; index < count; ++index) {
-      auto element = container.element;
+      const bool profiled = index < container.element_profiles.size();
+      auto element = profiled
+          ? container.element_profiles[index] : container.element;
       if (index < container.values.size()) {
         element.packed = container.values[index];
       } else {
         element.packed = PackedLogic4(
             element.packed.width(), Logic4::zero);
       }
+      const bool random = chosen
+          && (!profiled
+              || (element.random_state
+                  && element.random_state->kind
+                      != SystemVerilogClassRandomKind::None));
       if (element.random_state) {
-        element.random_state->kind = chosen
-            ? SystemVerilogClassRandomKind::Rand
-            : SystemVerilogClassRandomKind::None;
+        if (!profiled || !random) {
+          element.random_state->kind = random
+              ? SystemVerilogClassRandomKind::Rand
+              : SystemVerilogClassRandomKind::None;
+        }
         element.random_state->enabled = true;
       }
-      (void)synthetic(container.node,
-          container.name + "[" + std::to_string(index) + "]",
-          std::move(element), chosen);
+      (void)synthetic(container.node, element_name(c, index),
+          std::move(element), random);
     }
-    (void)synthetic(container.node, container.name + "[]",
-        count_property(count, false), false);
+    if (container.element_paths.empty()) {
+      (void)synthetic(container.node, container.name + "[]",
+          count_property(count, false), false);
+      return;
+    }
+    // Each container of a nested property has its element count.
+    for (const auto& shape : container.shapes) {
+      (void)synthetic(container.node, container.name + shape.path + "[]",
+          count_property(shape.size, false), false);
+    }
   };
   // Phase one gives each random resizable container a size; phase two
   // materializes every container's elements.
   const auto add_sizes = [&] {
     for (std::size_t c = 0; c < containers.size(); ++c) {
       const auto& container = containers[c];
-      if (container.resizable && randomized_container[c]) {
+      if (container.resizable && randomized_container[c]
+          && container.element_paths.empty()) {
         const auto index = synthetic(container.node,
             container.name + ".size()",
             count_property(container.values.size(), true), true);
@@ -1031,7 +1067,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     const bool sized = std::ranges::any_of(
         std::views::iota(std::size_t{}, containers.size()),
         [&](const std::size_t c) {
-          return containers[c].resizable && randomized_container[c];
+          return containers[c].resizable && randomized_container[c]
+              && containers[c].element_paths.empty();
         });
     std::vector<std::size_t> sizes(containers.size());
     for (std::size_t c = 0; c < containers.size(); ++c) {
@@ -1050,7 +1087,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           return sizing.result;
         }
         for (std::size_t c = 0; c < containers.size(); ++c) {
-          if (!containers[c].resizable || !randomized_container[c]) continue;
+          if (!containers[c].resizable || !randomized_container[c]
+              || !containers[c].element_paths.empty()) {
+            continue;
+          }
           auto& node = nodes[containers[c].node];
           const auto name = containers[c].name + ".size()";
           const auto found = std::ranges::find(
@@ -1156,7 +1196,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
       std::vector<PackedLogic4> values;
       values.reserve(sizes[c]);
       for (std::size_t index = 0; index < sizes[c]; ++index) {
-        const auto name = container.name + "[" + std::to_string(index) + "]";
+        const auto name = element_name(c, index);
         const auto found = std::ranges::find(
             node.object->property_names, name);
         if (found == node.object->property_names.end()) {

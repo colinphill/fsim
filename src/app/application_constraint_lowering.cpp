@@ -281,10 +281,24 @@ class Lowerer final {
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
         && expression.text == ".size" && expression.operands.size() == 1U) {
+      if (expression.operands.front().kind
+          == sv::ConstraintExpressionKind::index) {
+        const auto path = aggregate_path(expression.operands.front());
+        if (!path) {
+          error_ = "constraint size() receiver is not a container";
+          return std::nullopt;
+        }
+        return builder_.constant(
+            low_value(32, node_size(*path).value_or(0U)), index_profile());
+      }
       const auto* binding = exact_binding(expression.operands.front());
       if (binding == nullptr) {
         error_ = "constraint size() receiver has no exact binding";
         return std::nullopt;
+      }
+      if (nested_ != nullptr && nested_->contains(binding->canonical_identity)) {
+        return builder_.constant(low_value(32,
+            nested_->at(binding->canonical_identity).size()), index_profile());
       }
       if (const auto* elements = container(binding->canonical_identity)) {
         return builder_.constant(
@@ -556,10 +570,14 @@ class Lowerer final {
             && expression.operands.size() == 3U)) {
       // A bit- or part-select of a packed value (IEEE 1800-2017 11.5.1).
       const auto* binding = exact_binding(expression.operands[0]);
-      const bool packed = binding == nullptr
-          || (!container_variables_.contains(binding->canonical_identity)
-              && !variables_.contains(
-                  binding->canonical_identity + ".size()"));
+      const bool element_of_container = expression.operands[0].kind
+              == sv::ConstraintExpressionKind::index
+          && aggregate_path(expression.operands[0]).has_value();
+      const bool packed = !element_of_container
+          && (binding == nullptr
+              || (!container_variables_.contains(binding->canonical_identity)
+                  && !variables_.contains(
+                      binding->canonical_identity + ".size()")));
       if (packed) {
         if (const auto selected = packed_select(expression)) return selected;
         if (!error_.empty()) return std::nullopt;
@@ -594,22 +612,60 @@ class Lowerer final {
                 builder_.resize(*value, unsigned_profile), factor);
       return builder_.resize(shifted, profile);
     }
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text.starts_with(member_prefix)
+        && expression.operands.size() == 1U) {
+      // A member of an element of an array of structures (`a[i].m`) is a
+      // variable of its own (IEEE 1800-2017 7.2, 18.4).
+      const auto path = member_path(expression);
+      if (!path) {
+        if (error_.empty()) {
+          error_ = "constraint member selection '" + expression.text
+              + "' is not of a structure element";
+        }
+        return std::nullopt;
+      }
+      if (path->empty()) {
+        // Outside the array: guarded from constraining (18.5.8.1).
+        return builder_.constant(low_value(32, 0), index_profile());
+      }
+      const auto found = variables_.find(*path);
+      if (found == variables_.end()
+          || found->second >= solver_variables_.size()) {
+        error_ = "constraint member '" + *path
+            + "' has no solver variable";
+        return std::nullopt;
+      }
+      use(found->second);
+      return variable_node(found->second,
+          solver_variables_[found->second].profile);
+    }
     if (expression.kind == sv::ConstraintExpressionKind::index
         && expression.operands.size() == 2U
-        && expression.operands[0].kind
-            == sv::ConstraintExpressionKind::name) {
-      const auto* binding = exact_binding(expression.operands[0]);
-      if (binding == nullptr) {
-        error_ = "constraint element selection has no exact binding";
-        return std::nullopt;
+        && (expression.operands[0].kind
+                == sv::ConstraintExpressionKind::name
+            || expression.operands[0].kind
+                == sv::ConstraintExpressionKind::index)) {
+      std::string path;
+      if (expression.operands[0].kind
+          == sv::ConstraintExpressionKind::name) {
+        const auto* binding = exact_binding(expression.operands[0]);
+        if (binding == nullptr) {
+          error_ = "constraint element selection has no exact binding";
+          return std::nullopt;
+        }
+        path = binding->canonical_identity;
+      } else {
+        const auto selected = aggregate_path(expression.operands[0]);
+        if (!selected) {
+          if (error_.empty()) {
+            error_ = "constraint element selection is not of a container";
+          }
+          return std::nullopt;
+        }
+        path = *selected;
       }
-      const auto* elements = container(binding->canonical_identity);
-      if (elements == nullptr) {
-        error_ = "constraint container '" + binding->canonical_identity
-            + "' has no element solver variables";
-        return std::nullopt;
-      }
-      const auto profile = binding_profile(*binding);
+      const auto profile = element_profile(expression.operands[0], path);
       const auto outside = [&] {
         // A selection outside the array occurs only where a guard keeps
         // it from constraining (IEEE 1800-2017 18.5.8.1).
@@ -617,24 +673,41 @@ class Lowerer final {
             runtime::PackedLogic4(profile.width, runtime::Logic4::zero),
             profile);
       };
-      if (const auto position = constant_value(expression.operands[1])) {
-        if (*position < 0
-            || static_cast<std::uint64_t>(*position) >= elements->size()) {
-          return outside();
-        }
-        const auto element = (*elements)[static_cast<std::size_t>(*position)];
+      if (path.empty()) return outside();
+      const auto* elements = container(path);
+      if (elements == nullptr) {
+        error_ = "constraint container '" + path
+            + "' has no element solver variables";
+        return std::nullopt;
+      }
+      if (const auto position
+          = select_position(path, expression.operands[1])) {
+        if (!*position) return outside();
+        const auto element = (*elements)[**position];
         use(element);
         return variable_node(element, profile);
       }
       // A random index selects among the elements.
       const auto selector = lower(expression.operands[1]);
       if (!selector) return std::nullopt;
+      const auto* held = shape(path);
+      if (held != nullptr && held->associative && held->string_keys) {
+        error_ = "constraint string-keyed selection needs a constant key";
+        return std::nullopt;
+      }
       auto result = outside();
       for (std::size_t index = elements->size(); index-- > 0U;) {
         use((*elements)[index]);
+        const auto key = held != nullptr && held->associative
+            ? builder_.constant(held->keys[index],
+                  runtime::SystemVerilogConstraintVariableProfile{
+                      runtime::SystemVerilogConstraintDomainKind::BitVector,
+                      held->keys[index].width(), false, "bit", false})
+            : builder_.constant(low_value(32,
+                  static_cast<std::uint64_t>(index_at(path, index))),
+                  index_profile());
         result = builder_.conditional(
-            builder_.binary(Operator::Equal, *selector,
-                builder_.constant(low_value(32, index), index_profile())),
+            builder_.binary(Operator::Equal, *selector, key),
             variable_node((*elements)[index], profile), result);
       }
       return result;
@@ -741,29 +814,21 @@ class Lowerer final {
       const auto& selection = expression.operands[0];
       if (selection.kind != sv::ConstraintExpressionKind::index
           || selection.operands.size() != 2U
-          || selection.operands[0].kind
-              != sv::ConstraintExpressionKind::name
+          || (selection.operands[0].kind
+                  != sv::ConstraintExpressionKind::name
+              && selection.operands[0].kind
+                  != sv::ConstraintExpressionKind::index)
           || selection.operands[1].kind
               != sv::ConstraintExpressionKind::name) {
         error_ = "constraint foreach requires one named container index";
         return std::nullopt;
       }
-      const auto* binding = exact_binding(selection.operands[0]);
-      if (binding == nullptr) {
-        error_ = "constraint foreach container has no exact binding";
-        return std::nullopt;
-      }
-      const auto* elements = container(binding->canonical_identity);
-      if (elements == nullptr) {
-        error_ = "constraint foreach container has no materialized elements";
-        return std::nullopt;
-      }
+      const auto loop = foreach_loop(selection);
+      if (!loop) return std::nullopt;
       std::vector<ExpressionId> predicates;
-      predicates.reserve(elements->size());
-      for (std::size_t index = 0; index < elements->size(); ++index) {
-        iterators_.push_back({selection.operands[1].text, index,
-            (*elements)[index], binding_profile(*binding),
-            false});
+      predicates.reserve(loop->size());
+      for (const auto& frame : *loop) {
+        iterators_.push_back(frame);
         const auto predicate = lower(expression.operands[1]);
         iterators_.pop_back();
         if (!predicate) return std::nullopt;
@@ -910,6 +975,18 @@ class Lowerer final {
     return split(expression, clauses, false);
   }
 
+  /// The containers whose elements are containers, each with the paths of
+  /// its elements, and the solver holding the containers' shapes under
+  /// `prefix` + path.
+  void set_container_shapes(
+      const std::map<std::string, std::vector<std::string>>* nested,
+      const runtime::SystemVerilogConstraintSolver* shapes,
+      const std::string_view prefix) {
+    nested_ = nested;
+    shapes_ = shapes;
+    shape_prefix_ = prefix;
+  }
+
  private:
   struct Guard {
     const sv::ConstraintExpression* condition{};
@@ -976,23 +1053,14 @@ class Lowerer final {
         && expression.operands.size() == 2U
         && expression.operands[0].kind == Kind::index
         && expression.operands[0].operands.size() == 2U
+        && (expression.operands[0].operands[0].kind == Kind::name
+            || expression.operands[0].operands[0].kind == Kind::index)
         && expression.operands[0].operands[1].kind == Kind::name) {
-      const auto& selection = expression.operands[0];
-      const auto* binding = exact_binding(selection.operands[0]);
-      if (binding == nullptr) {
-        error_ = "constraint foreach container has no exact binding";
-        return false;
-      }
       deferred_ = false;
-      const auto* elements = container(binding->canonical_identity);
-      if (elements == nullptr) {
-        error_ = "constraint foreach container has no materialized elements";
-        return deferred_;
-      }
-      const auto profile = binding_profile(*binding);
-      for (std::size_t index = 0; index < elements->size(); ++index) {
-        iterators_.push_back({selection.operands[1].text, index,
-            (*elements)[index], profile, false});
+      const auto loop = foreach_loop(expression.operands[0]);
+      if (!loop) return deferred_;
+      for (const auto& frame : *loop) {
+        iterators_.push_back(frame);
         const bool lowered = split(expression.operands[1], clauses, soft);
         iterators_.pop_back();
         if (!lowered) return false;
@@ -1157,6 +1225,202 @@ class Lowerer final {
     return clause;
   }
 
+  /// The shape of the container at `path`; none indexes positions.
+  [[nodiscard]] const runtime::SystemVerilogConstraintContainerShape*
+  shape(const std::string& path) const {
+    return shapes_ == nullptr ? nullptr
+        : shapes_->container_shape(shape_prefix_ + path);
+  }
+
+  /// The number of elements of the container at `path`.
+  [[nodiscard]] std::optional<std::size_t> node_size(
+      const std::string& path) const {
+    if (const auto found = container_variables_.find(path);
+        found != container_variables_.end()) {
+      return found->second.size();
+    }
+    if (nested_ != nullptr) {
+      if (const auto found = nested_->find(path); found != nested_->end()) {
+        return found->second.size();
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// The language index of the element at `position` (IEEE 1800-2017
+  /// 7.4.2, 7.8): an associative array's key, a fixed-size array's index
+  /// counted from its left bound.
+  [[nodiscard]] std::int64_t index_at(
+      const std::string& path, const std::size_t position) const {
+    const auto* held = shape(path);
+    const auto at = static_cast<std::int64_t>(position);
+    if (held == nullptr) return at;
+    if (held->associative) {
+      if (!held->string_keys && position < held->keys.size()) {
+        if (const auto key = held->keys[position].known_unsigned_value()) {
+          return static_cast<std::int64_t>(*key);
+        }
+      }
+      return at;
+    }
+    if (held->fixed) return held->descending ? held->left - at : held->left + at;
+    return at;
+  }
+
+  /// The position of the element that `selector` selects in the container
+  /// at `path`: nothing when the selector is not constant, an empty
+  /// position when it selects no element.
+  [[nodiscard]] std::optional<std::optional<std::size_t>> select_position(
+      const std::string& path, const sv::ConstraintExpression& selector) {
+    const auto size = node_size(path).value_or(0U);
+    const auto* held = shape(path);
+    if (held != nullptr && held->associative && held->string_keys) {
+      if (selector.kind != sv::ConstraintExpressionKind::string_literal) {
+        return std::nullopt;
+      }
+      auto text = std::string_view{selector.text};
+      if (text.size() >= 2U && text.front() == '"' && text.back() == '"') {
+        text = text.substr(1U, text.size() - 2U);
+      }
+      const auto found = std::ranges::find(held->string_key_values, text);
+      if (found == held->string_key_values.end()) {
+        return std::optional<std::size_t>{};
+      }
+      return std::optional<std::size_t>{static_cast<std::size_t>(
+          std::distance(held->string_key_values.begin(), found))};
+    }
+    if (held != nullptr && held->associative) {
+      // A wide key compares by value (IEEE 1800-2017 7.8.4).
+      std::optional<runtime::PackedLogic4> value;
+      if (const auto retained = literal(selector)) {
+        value = retained->first;
+      } else if (const auto constant = constant_value(selector)) {
+        value = low_value(64, static_cast<std::uint64_t>(*constant));
+      } else {
+        return std::nullopt;
+      }
+      for (std::size_t position = 0; position < held->keys.size();
+           ++position) {
+        const auto& key = held->keys[position];
+        const auto width = std::max(key.width(), value->width());
+        bool equal = true;
+        for (std::size_t bit = 0; equal && bit < width; ++bit) {
+          const auto left = bit < key.width()
+              ? key.get(bit) : runtime::Logic4::zero;
+          const auto right = bit < value->width()
+              ? value->get(bit) : runtime::Logic4::zero;
+          // A negative constant extends past a narrower key's sign.
+          equal = left == right
+              || (bit >= key.width() && key.width() > 0U
+                  && right == key.get(key.width() - 1U));
+        }
+        if (equal) return std::optional<std::size_t>{position};
+      }
+      return std::optional<std::size_t>{};
+    }
+    const auto index = constant_value(selector);
+    if (!index) return std::nullopt;
+    auto at = *index;
+    if (held != nullptr && held->fixed) {
+      at = held->descending ? held->left - *index : *index - held->left;
+    }
+    if (at < 0 || static_cast<std::uint64_t>(at) >= size) {
+      return std::optional<std::size_t>{};
+    }
+    return std::optional<std::size_t>{static_cast<std::size_t>(at)};
+  }
+
+  /// The container an expression names: a container property, or an
+  /// element of a nested or multi-dimensional one (`a[1]` of
+  /// `int a[2][3]`) selected by a constant or loop index. An empty path is
+  /// a selection outside the array. Nothing when it names no container.
+  [[nodiscard]] std::optional<std::string> aggregate_path(
+      const sv::ConstraintExpression& expression) {
+    if (expression.kind == sv::ConstraintExpressionKind::name) {
+      if (iterator(expression.text) != nullptr) return std::nullopt;
+      const auto* binding = exact_binding(expression);
+      if (binding == nullptr) return std::nullopt;
+      if (node_size(binding->canonical_identity)) {
+        return binding->canonical_identity;
+      }
+      (void)container(binding->canonical_identity);
+      return std::nullopt;
+    }
+    if (expression.kind != sv::ConstraintExpressionKind::index
+        || expression.operands.size() != 2U) {
+      return std::nullopt;
+    }
+    const auto base = aggregate_path(expression.operands[0]);
+    if (!base || base->empty()) return base;
+    if (nested_ == nullptr || !nested_->contains(*base)) return std::nullopt;
+    const auto position = select_position(*base, expression.operands[1]);
+    if (!position) return std::nullopt;
+    if (!*position) return std::string{};
+    auto child = *base + "[" + std::to_string(**position) + "]";
+    if (!node_size(child)) return std::nullopt;
+    return child;
+  }
+
+  static constexpr std::string_view member_prefix{"@sv-select:"};
+
+  /// The variable a member selection names: `a[i].m` of an array of
+  /// structures, whose elements' members the class randomizer
+  /// materializes as `a[i].m`. An empty path is a selection outside the
+  /// array; nothing when it names no such member.
+  [[nodiscard]] std::optional<std::string> member_path(
+      const sv::ConstraintExpression& expression) {
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text.starts_with(member_prefix)
+        && expression.operands.size() == 1U) {
+      const auto base = member_path(expression.operands.front());
+      if (!base || base->empty()) return base;
+      return *base + "."
+          + expression.text.substr(member_prefix.size());
+    }
+    if (expression.kind != sv::ConstraintExpressionKind::index
+        || expression.operands.size() != 2U) {
+      return std::nullopt;
+    }
+    const auto base = aggregate_path(expression.operands[0]);
+    if (!base || base->empty()) return base;
+    const auto position = select_position(*base, expression.operands[1]);
+    if (!position) {
+      error_ = "constraint structure element selection needs a constant "
+          "or loop index";
+      return std::nullopt;
+    }
+    if (!*position) return std::string{};
+    return *base + "[" + std::to_string(**position) + "]";
+  }
+
+  /// The name an element or container selection starts from.
+  [[nodiscard]] const sv::ConstraintBinding* root_binding(
+      const sv::ConstraintExpression& expression) const {
+    const auto* current = &expression;
+    while (current->kind == sv::ConstraintExpressionKind::index
+           && !current->operands.empty()) {
+      current = &current->operands.front();
+    }
+    return exact_binding(*current);
+  }
+
+  /// The profile of the elements of the container at `path`.
+  [[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
+  element_profile(const sv::ConstraintExpression& selection,
+                  const std::string& path) const {
+    const auto* binding = root_binding(selection);
+    if (selection.kind == sv::ConstraintExpressionKind::name
+        && binding != nullptr) {
+      return binding_profile(*binding);
+    }
+    if (const auto found = container_variables_.find(path);
+        found != container_variables_.end() && !found->second.empty()
+        && found->second.front() < solver_variables_.size()) {
+      return solver_variables_[found->second.front()].profile;
+    }
+    return binding != nullptr ? binding_profile(*binding) : index_profile();
+  }
+
   struct Iterator {
     std::string name;
     std::size_t index{};
@@ -1164,6 +1428,61 @@ class Lowerer final {
     runtime::SystemVerilogConstraintVariableProfile profile;
     bool item{};
   };
+
+  /// The iterations of `foreach (a[i])`: each element of the container
+  /// `a` names, with `i` its index (IEEE 1800-2017 18.5.8.1). An element
+  /// that is itself a container is iterated by an inner loop over `a[i]`.
+  [[nodiscard]] std::optional<std::vector<Iterator>> foreach_loop(
+      const sv::ConstraintExpression& selection) {
+    std::string path;
+    if (selection.operands[0].kind == sv::ConstraintExpressionKind::name) {
+      const auto* binding = exact_binding(selection.operands[0]);
+      if (binding == nullptr) {
+        error_ = "constraint foreach container has no exact binding";
+        return std::nullopt;
+      }
+      path = binding->canonical_identity;
+    } else {
+      const auto selected = aggregate_path(selection.operands[0]);
+      if (!selected) {
+        error_ = "constraint foreach container has no materialized elements";
+        return std::nullopt;
+      }
+      // A loop over an element outside the array has no iterations.
+      if (selected->empty()) return std::vector<Iterator>{};
+      path = *selected;
+    }
+    const auto* held = shape(path);
+    if (held != nullptr && held->associative && held->string_keys) {
+      error_ = "constraint foreach over a string-keyed array is not "
+          "supported";
+      return std::nullopt;
+    }
+    std::vector<Iterator> loop;
+    const auto& name = selection.operands[1].text;
+    if (nested_ != nullptr) {
+      if (const auto found = nested_->find(path); found != nested_->end()) {
+        for (std::size_t position = 0; position < found->second.size();
+             ++position) {
+          loop.push_back({name,
+              static_cast<std::size_t>(index_at(path, position)),
+              std::nullopt, index_profile(), false});
+        }
+        return loop;
+      }
+    }
+    const auto* elements = container(path);
+    if (elements == nullptr) {
+      error_ = "constraint foreach container has no materialized elements";
+      return std::nullopt;
+    }
+    const auto profile = element_profile(selection.operands[0], path);
+    for (std::size_t position = 0; position < elements->size(); ++position) {
+      loop.push_back({name, static_cast<std::size_t>(index_at(path, position)),
+          (*elements)[position], profile, false});
+    }
+    return loop;
+  }
 
   [[nodiscard]] static runtime::SystemVerilogConstraintVariableProfile
   index_profile() {
@@ -1423,11 +1742,17 @@ class Lowerer final {
     }
     if (expression.kind == sv::ConstraintExpressionKind::call
         && expression.text == ".size" && expression.operands.size() == 1U) {
+      if (expression.operands.front().kind
+          == sv::ConstraintExpressionKind::index) {
+        const auto path = aggregate_path(expression.operands.front());
+        if (!path) return std::nullopt;
+        return static_cast<std::int64_t>(node_size(*path).value_or(0U));
+      }
       const auto* binding = exact_binding(expression.operands.front());
       if (binding == nullptr) return std::nullopt;
-      const auto found = container_variables_.find(binding->canonical_identity);
-      if (found == container_variables_.end()) return std::nullopt;
-      return static_cast<std::int64_t>(found->second.size());
+      const auto size = node_size(binding->canonical_identity);
+      if (!size) return std::nullopt;
+      return static_cast<std::int64_t>(*size);
     }
     if (expression.kind == sv::ConstraintExpressionKind::unary
         && expression.operands.size() == 1U
@@ -1467,6 +1792,9 @@ class Lowerer final {
   std::vector<Guard> guards_;
   bool deferred_{};
   std::span<const runtime::SystemVerilogConstraintVariable> solver_variables_;
+  const std::map<std::string, std::vector<std::string>>* nested_{};
+  const runtime::SystemVerilogConstraintSolver* shapes_{};
+  std::string shape_prefix_;
   runtime::SystemVerilogConstraintExpressionBuilder builder_;
 };
 
@@ -1768,17 +2096,36 @@ void configure_class_constraints(
   };
   // The class randomizer materializes container `c` as `c[]` and its
   // elements `c[0]`, `c[1]`, ...
+  // A nested container `c[1]` has its own count `c[1][]`; its parent
+  // lists it among its element containers.
   std::map<std::string, std::vector<runtime::SystemVerilogConstraintVariableId>>
       container_variables;
+  std::map<std::string, std::vector<std::string>> nested_containers;
   for (const auto& [identity, id] : variables) {
     if (!identity.ends_with("[]")) continue;
     const auto base = identity.substr(0, identity.size() - 2U);
-    auto& elements = container_variables[base];
+    std::vector<runtime::SystemVerilogConstraintVariableId> elements;
+    std::vector<std::string> children;
     for (std::size_t index = 0;; ++index) {
-      const auto element = variables.find(
-          base + "[" + std::to_string(index) + "]");
-      if (element == variables.end()) break;
-      elements.push_back(element->second);
+      auto element_name = base + "[" + std::to_string(index) + "]";
+      if (const auto element = variables.find(element_name);
+          element != variables.end()) {
+        elements.push_back(element->second);
+      } else if (variables.contains(element_name + "[]")) {
+        children.push_back(std::move(element_name));
+      } else if (const auto member = variables.lower_bound(element_name + ".");
+                 member != variables.end()
+                 && member->first.starts_with(element_name + ".")) {
+        // An element of an array of structures: its members `c[0].m`.
+        children.push_back(std::move(element_name));
+      } else {
+        break;
+      }
+    }
+    if (children.empty()) {
+      container_variables.emplace(base, std::move(elements));
+    } else {
+      nested_containers.emplace(base, std::move(children));
     }
   }
   for (const auto& composed : declaration->composed_constraints) {
@@ -1842,6 +2189,8 @@ void configure_class_constraints(
       }
       Lowerer lowerer{specialization.specialization_identity, variables,
           container_variables, dependencies, error, solver.variables()};
+      lowerer.set_container_shapes(
+          &nested_containers, &solver, identity_prefix);
       std::vector<Lowerer::Clause> clauses;
       if (!lowerer.lower_clauses(expression, clauses)) {
         throw std::invalid_argument{

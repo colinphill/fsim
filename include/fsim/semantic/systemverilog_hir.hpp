@@ -952,6 +952,8 @@ struct PackedMember {
     std::uint64_t lsb_offset { };
     SourceSpanId source;
     std::optional<ExpressionId> initializer;
+    // Declared rand or randc in an unpacked structure (IEEE 1800-2017 18.4).
+    bool random { };
 };
 
 struct ContainerType {

@@ -339,6 +339,20 @@ systemverilog_constraint_expression_clause(
     std::vector<SystemVerilogConstraintVariableId> variables,
     SystemVerilogConstraintExpression expression);
 
+/// How the language index of one container in a solve maps to the position
+/// of its element: a fixed-size array counts from its left bound, an
+/// associative array lists its keys in element order (IEEE 1800-2017 7.4,
+/// 7.8); a dynamic array or queue indexes positions directly.
+struct SystemVerilogConstraintContainerShape {
+  bool fixed{};
+  std::int64_t left{};
+  bool descending{};
+  bool associative{};
+  bool string_keys{};
+  std::vector<PackedLogic4> keys;
+  std::vector<std::string> string_key_values;
+};
+
 /// Deterministic finite-domain solver. Variable and domain declaration order
 /// define the current search order; source-independent ordering is introduced
 /// by the later solve-before/dependency scheduling layer.
@@ -392,6 +406,17 @@ class SystemVerilogConstraintSolver final {
       const noexcept {
     return limits_;
   }
+  /// The shape of the container whose elements are `path[0]`, `path[1]`,
+  /// ...; a container without one indexes its positions directly.
+  void set_container_shape(
+      std::string path, SystemVerilogConstraintContainerShape shape) {
+    container_shapes_.insert_or_assign(std::move(path), std::move(shape));
+  }
+  [[nodiscard]] const SystemVerilogConstraintContainerShape* container_shape(
+      std::string_view path) const {
+    const auto found = container_shapes_.find(path);
+    return found == container_shapes_.end() ? nullptr : &found->second;
+  }
 
  private:
   SystemVerilogConstraintSolverLimits limits_;
@@ -409,6 +434,8 @@ class SystemVerilogConstraintSolver final {
   std::vector<std::pair<SystemVerilogConstraintVariableId,
                         SystemVerilogConstraintVariableId>> solve_before_;
   std::size_t domain_values_{};
+  std::map<std::string, SystemVerilogConstraintContainerShape, std::less<>>
+      container_shapes_;
 };
 
 /// Bind and register one source-ordered inline constraint block. The identity

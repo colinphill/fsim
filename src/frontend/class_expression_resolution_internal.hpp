@@ -227,6 +227,14 @@ class Resolver final {
   // Replaces `C#(...)::name` value references in a module constant.
   void substitute_class_parameter_references(
       Expression& expression, const Scope& scope, std::size_t depth = 0U);
+  // A class constant at a module constant site (`C#(5)::b`, `P::C::n`,
+  // `CFG::w`) names that member of the selected specialization; the
+  // elaboration-time evaluator binds the selection's actuals.
+  void resolve_class_scope_constants(
+      Expression& expression, const Scope& scope, std::size_t depth = 0U);
+  void resolve_module_constant(Expression& expression, const Scope& scope);
+  void resolve_generate_constants(GenerateRegion& region, const Scope& scope);
+  void resolve_range_constants(Type& type, const Scope& scope);
   [[nodiscard]] std::optional<Expression> class_specialization_parameter_value(
       const SystemVerilogClassDeclaration& owner, std::string_view spelling,
       std::string_view member) const;
@@ -253,6 +261,9 @@ class Resolver final {
   void normalize_selection_actuals(ClassSelection& selection,
       const Scope& scope, bool parsed = false) const;
   // A class typedef as specialization `selection` sees it (8.25.1).
+  void anchor_alias_actuals(
+      std::vector<SystemVerilogClassTypeActual>& actuals,
+      std::string_view declaring) const;
   [[nodiscard]] Type specialize_class_alias(const Type& type,
       const Scope& scope, ClassSelection selection,
       const Type& alias_type) const;

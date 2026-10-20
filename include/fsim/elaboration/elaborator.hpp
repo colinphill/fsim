@@ -995,6 +995,8 @@ private:
         runtime::simir::ProcessInstanceProgram instance);
     void replace_process_record(
         std::size_t process, runtime::simir::Process instance);
+    void rebuild_process_record(
+        std::size_t process, runtime::simir::Process program);
     [[nodiscard]] std::shared_ptr<const runtime::simir::ProcessProgramTemplate>
     intern_process_template(
         const runtime::simir::ProcessProgramView& process);

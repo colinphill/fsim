@@ -99,6 +99,9 @@ public:
             const auto identity = class_declaration_identity(declaration);
             for (const auto& parameter : declaration.parameters) {
                 class_parameters_.insert(parameter.declaration);
+                // `C#(5)::P` selects a formal as a member (8.25.1).
+                class_member_identities_.insert(
+                    declaration.canonical_identity + "::" + parameter.name);
                 if (parameter.type_parameter) {
                     type_parameter_names_.insert(parameter.name);
                 }
@@ -2005,11 +2008,19 @@ private:
                                 });
                         });
                 };
+                // A component without a scope is a member of the structure
+                // its predecessor names (`s.m`, IEEE 1800-2017 7.2).
                 std::string_view rest { binding.canonical_identity };
                 bool found = true;
+                bool first = true;
                 while (found) {
                     const auto separator = rest.find('.');
-                    found = property_exists(rest.substr(0U, separator));
+                    const auto component = rest.substr(0U, separator);
+                    found = (!first
+                                && component.find("::")
+                                    == std::string_view::npos)
+                        || property_exists(component);
+                    first = false;
                     if (separator == std::string_view::npos) {
                         break;
                     }

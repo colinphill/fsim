@@ -3617,7 +3617,11 @@ void Interpreter::Impl::publish(
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
-        throw std::invalid_argument("SimIR signal assignment width mismatch");
+        throw std::invalid_argument(
+            "SimIR signal assignment width mismatch (signal "
+            + std::to_string(signal_id) + " has width "
+            + std::to_string(signal.initial_value.width())
+            + ", value has width " + std::to_string(value.width()) + ")");
     }
     value = normalize_signal_value(signal_id, std::move(value));
     publish_normalized(signal_id, std::move(value), notify_fanout);

@@ -234,7 +234,11 @@ void Interpreter::Impl::commit(
         require_all_region_forwarding_role_journals_flushed();
     }
     if (driven_values[signal_id].width() != value.width()) {
-        throw std::invalid_argument("SimIR signal assignment width mismatch");
+        throw std::invalid_argument(
+            "SimIR signal assignment width mismatch (signal "
+            + std::to_string(signal_id) + " has width "
+            + std::to_string(driven_values[signal_id].width())
+            + ", value has width " + std::to_string(value.width()) + ")");
     }
     value = normalize_signal_value(
         signal_id, std::move(value));
@@ -1588,14 +1592,36 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
         bool& running;
         ~Reset() { running = false; }
     } reset { running_vhdl_resolvers };
-    for (const auto& [signal_id, resolver] : vhdl_resolvers) {
-        auto value = run_vhdl_resolver(signal_id);
+    const auto publish = [&](const SignalId signal_id, PackedLogic4 value) {
         vhdl_resolved_values.insert_or_assign(signal_id, value);
         if (signal_id < driven_values.size()) {
             driven_values[signal_id] = value;
         }
         signals[signal_id].initial_value = std::move(value);
         refresh_direct_signal_planes(signal_id);
+    };
+    std::vector<SignalId> converted;
+    for (const auto& [signal_id, resolver] : vhdl_resolvers) {
+        publish(signal_id, run_vhdl_resolver(signal_id));
+        if (!resolver.sources.empty()) {
+            converted.push_back(signal_id);
+        }
+    }
+    // A conversion may read another converted signal (nested port
+    // associations); repeat them until the chain's initial values settle.
+    for (std::size_t pass { }; pass < converted.size(); ++pass) {
+        bool changed { };
+        for (const auto signal_id : converted) {
+            auto value = run_vhdl_resolver(signal_id);
+            if (value == vhdl_resolved_values.at(signal_id)) {
+                continue;
+            }
+            changed = true;
+            publish(signal_id, std::move(value));
+        }
+        if (!changed) {
+            break;
+        }
     }
     pending_vhdl_resolutions.clear();
     pending_vhdl_resolution_set.clear();

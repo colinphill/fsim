@@ -15,6 +15,165 @@ namespace sv = semantic::sv;
 
 namespace {
 
+// The width of a value in the packed image a class property holds an
+// unpacked structure as: its members concatenated, first most significant.
+[[nodiscard]] std::optional<std::uint64_t> structure_image_width(
+    const frontend::Type& type)
+{
+    if (type.packed_aggregate != frontend::PackedAggregateKind::UnpackedStruct
+        || type.systemverilog_container) {
+        return type.width();
+    }
+    std::uint64_t total { };
+    for (const auto& member : type.packed_members) {
+        const auto width = member.nested_types.empty()
+            ? member.width()
+            : structure_image_width(member.nested_types.front());
+        if (!width) return std::nullopt;
+        total += *width;
+    }
+    return total;
+}
+
+// An integral cast to `type`'s width and signedness, as the constraint
+// lowering spells it; nothing for a type that is not a bounded integral.
+[[nodiscard]] std::optional<std::string> integral_cast_text(
+    const frontend::Type& type)
+{
+    const auto width = type.width();
+    if (!width || *width == 0U || *width > 4096U
+        || type.domain == frontend::ValueDomain::String
+        || type.systemverilog_container
+        || type.systemverilog_scalar != frontend::SystemVerilogScalarKind::None
+        || !type.systemverilog_class_declaration.empty()) {
+        return std::nullopt;
+    }
+    return std::string { "@sv-cast:" }
+        + (type.is_signed ? "signed:" : "unsigned:") + std::to_string(*width);
+}
+
+// The value a function returns when its body is one `return e;` or
+// `F = e;` and it declares no variables of its own.
+[[nodiscard]] const frontend::Expression* single_returned_value(
+    const frontend::SystemVerilogClassMethod& method)
+{
+    if (method.kind != frontend::SystemVerilogClassMethodKind::Function
+        || !method.variables.empty() || !method.type_aliases.empty()
+        || method.is_virtual || method.is_pure || !method.defined) {
+        return nullptr;
+    }
+    if (method.statements.size() != 1U) return nullptr;
+    const auto* body = &method.statements.front();
+    while (body->kind == frontend::StatementKind::Block
+        && body->statements.size() == 1U) {
+        body = &body->statements.front();
+    }
+    const auto& statement = *body;
+    if (statement.kind == frontend::StatementKind::Return) {
+        return statement.value.kind == frontend::ExpressionKind::Invalid
+            ? nullptr : &statement.value;
+    }
+    if (statement.kind == frontend::StatementKind::Assignment
+        && statement.assignment_kind == frontend::AssignmentKind::Blocking
+        && statement.target.kind == frontend::ExpressionKind::Identifier
+        && statement.target.text == method.name) {
+        return &statement.value;
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool names_identifier(
+    const frontend::Expression& expression, const std::string_view name)
+{
+    if (expression.kind == frontend::ExpressionKind::Identifier
+        && expression.text == name) {
+        return true;
+    }
+    return std::ranges::any_of(expression.operands,
+        [&](const frontend::Expression& operand) {
+            return names_identifier(operand, name);
+        });
+}
+
+void substitute_formals(frontend::Expression& expression,
+    const std::map<std::string, frontend::Expression, std::less<>>& actuals)
+{
+    if (expression.kind == frontend::ExpressionKind::Identifier) {
+        if (const auto found = actuals.find(expression.text);
+            found != actuals.end()) {
+            expression = found->second;
+            return;
+        }
+    }
+    for (auto& operand : expression.operands) {
+        substitute_formals(operand, actuals);
+    }
+}
+
+// A call in a constraint of a function whose body is one returned
+// expression is that expression of its actual arguments, cast to the
+// function's type (IEEE 1800-2017 18.5.12): the function sees its
+// arguments' solved values, so its result is the expression of them.
+void inline_constraint_functions(frontend::Expression& expression,
+    const std::vector<frontend::SystemVerilogClassMethod>& methods,
+    const std::size_t depth = 0U)
+{
+    for (auto& operand : expression.operands) {
+        inline_constraint_functions(operand, methods, depth);
+    }
+    if (expression.kind != frontend::ExpressionKind::Call || depth > 8U) {
+        return;
+    }
+    const auto method = std::ranges::find(
+        methods, expression.text, &frontend::SystemVerilogClassMethod::name);
+    if (method == methods.end()) return;
+    const auto* value = single_returned_value(*method);
+    const auto result_cast = integral_cast_text(method->return_type);
+    if (value == nullptr || !result_cast
+        || method->arguments.size() < expression.operands.size()
+        || names_identifier(*value, method->name)) {
+        return;
+    }
+    std::map<std::string, frontend::Expression, std::less<>> actuals;
+    for (std::size_t index = 0; index < method->arguments.size(); ++index) {
+        const auto& formal = method->arguments[index];
+        const auto formal_cast = integral_cast_text(formal.type);
+        if (formal.direction != frontend::PortDirection::Input
+            || formal.reference || !formal_cast) {
+            return;
+        }
+        const auto* actual = index < expression.operands.size()
+                && expression.operands[index].kind
+                    != frontend::ExpressionKind::Invalid
+            ? &expression.operands[index]
+            : formal.default_value ? &*formal.default_value : nullptr;
+        if (actual == nullptr) return;
+        frontend::Expression cast;
+        cast.kind = frontend::ExpressionKind::Call;
+        cast.text = *formal_cast;
+        cast.operands = { *actual };
+        cast.span = actual->span;
+        actuals.emplace(formal.name, std::move(cast));
+    }
+    auto body = *value;
+    substitute_formals(body, actuals);
+    inline_constraint_functions(body, methods, depth + 1U);
+    frontend::Expression result;
+    result.kind = frontend::ExpressionKind::Call;
+    result.text = *result_cast;
+    result.span = expression.span;
+    result.operands = { std::move(body) };
+    expression = std::move(result);
+}
+
+[[nodiscard]] bool is_structure(const frontend::Type& type)
+{
+    return !type.packed_members.empty()
+        && (type.packed_aggregate == frontend::PackedAggregateKind::Struct
+            || type.packed_aggregate
+                == frontend::PackedAggregateKind::UnpackedStruct);
+}
+
 sv::ClassLifetime class_lifetime(
     const frontend::SystemVerilogClassLifetime lifetime) noexcept
 {
@@ -456,6 +615,12 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
     binding.specialization_identity = specialization.specialization_identity;
     binding.canonical_identity = found->owner_identity + "::" + found->name;
     binding.type = class_property_type(found->type, binding_source);
+    // An unpacked structure is held as its packed image.
+    if (!binding.type.executable_width
+        && found->type.packed_aggregate
+            == frontend::PackedAggregateKind::UnpackedStruct) {
+        binding.type.executable_width = structure_image_width(found->type);
+    }
     // The elements of an array of an enumeration are enumerated values.
     if (found->type.systemverilog_container
         && (!found->type.enumeration_literals.empty()
@@ -533,6 +698,55 @@ SystemVerilogHirBuilder::dotted_property_binding(
             return binding;
         }
         const auto& type = found->type;
+        // `s.m.n` through a structure property names its member variable
+        // `s.m.n`, which the randomizer gives each member (IEEE 1800-2017
+        // 7.2, 18.4).
+        if (!type.systemverilog_container && is_structure(type)) {
+            const frontend::Type* aggregate = &type;
+            auto rest = spelling.substr(dot + 1U);
+            while (true) {
+                const auto next = rest.find('.');
+                const auto member_name = rest.substr(0U, next);
+                const auto member = std::ranges::find(
+                    aggregate->packed_members, member_name,
+                    &frontend::PackedMember::name);
+                if (member == aggregate->packed_members.end()) {
+                    return std::nullopt;
+                }
+                identity += '.';
+                identity += member_name;
+                frontend::Type member_type;
+                if (member->nested_types.empty()) {
+                    member_type.domain = member->domain;
+                    member_type.spelling = member->spelling;
+                    member_type.packed_range = member->packed_range;
+                    member_type.is_signed = member->is_signed;
+                } else {
+                    member_type = member->nested_types.front();
+                }
+                if (next == std::string_view::npos) {
+                    sv::ConstraintBinding binding;
+                    binding.kind = sv::ConstraintReferenceKind::property;
+                    binding.specialization_identity
+                        = specialization.specialization_identity;
+                    binding.canonical_identity = std::move(identity);
+                    binding.type
+                        = class_property_type(member_type, binding_source);
+                    if (!binding.type.executable_width) {
+                        binding.type.executable_width
+                            = structure_image_width(member_type);
+                    }
+                    return binding;
+                }
+                if (member->nested_types.empty()
+                    || member_type.systemverilog_container
+                    || !is_structure(member->nested_types.front())) {
+                    return std::nullopt;
+                }
+                aggregate = &member->nested_types.front();
+                rest.remove_prefix(next + 1U);
+            }
+        }
         if (type.systemverilog_class_declaration.empty()
             || type.systemverilog_container) {
             return std::nullopt;
@@ -757,11 +971,13 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
             break;
         }
     }
-    // A member of a packed structure property (`s.a`) is a constant
-    // part-select of the property's bits (IEEE 1800-2017 7.2.1, 18.3).
+    // A member of a packed union property (`u.a`) is a constant
+    // part-select of the property's bits (IEEE 1800-2017 7.3.1, 18.3).
+    // A structure's members are variables of their own (see
+    // dotted_property_binding). `s.size` names a member; the size method
+    // of an array was rewritten above.
     if (expression.kind == sv::ConstraintExpressionKind::name
-        && expression.text.find('.') != std::string::npos
-        && !expression.text.ends_with(".size")) {
+        && expression.text.find('.') != std::string::npos) {
         std::string_view path { expression.text };
         if (path.starts_with("this.")) path.remove_prefix(5U);
         const auto dot = path.find('.');
@@ -782,8 +998,10 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
         }
         if (dot != std::string_view::npos && root_type != nullptr
             && !root_type->packed_members.empty()
-            && root_type->packed_aggregate != frontend::PackedAggregateKind::UnpackedStruct
-            && root_type->packed_aggregate != frontend::PackedAggregateKind::UnpackedUnion
+            && (root_type->packed_aggregate
+                    == frontend::PackedAggregateKind::Union
+                || root_type->packed_aggregate
+                    == frontend::PackedAggregateKind::TaggedUnion)
             && !root_type->systemverilog_container) {
             const frontend::Type* current = root_type;
             std::uint64_t offset { };
@@ -795,13 +1013,41 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                 const auto member = std::ranges::find(
                     current->packed_members, segment,
                     &frontend::PackedMember::name);
-                if (member == current->packed_members.end()
-                    || !member->width()) {
+                if (member == current->packed_members.end()) {
                     width.reset();
                     break;
                 }
-                offset += member->lsb_offset;
-                width = member->width();
+                if (current->packed_aggregate
+                    == frontend::PackedAggregateKind::UnpackedStruct) {
+                    // The members after this one fill the lower bits.
+                    std::optional<std::uint64_t> below { 0U };
+                    for (auto later = std::next(member);
+                         below && later != current->packed_members.end();
+                         ++later) {
+                        const auto later_width = later->nested_types.empty()
+                            ? later->width()
+                            : structure_image_width(
+                                  later->nested_types.front());
+                        below = later_width
+                            ? std::optional { *below + *later_width }
+                            : std::nullopt;
+                    }
+                    width = member->nested_types.empty() ? member->width()
+                        : structure_image_width(
+                              member->nested_types.front());
+                    if (!below || !width) {
+                        width.reset();
+                        break;
+                    }
+                    offset += *below;
+                } else {
+                    if (!member->width()) {
+                        width.reset();
+                        break;
+                    }
+                    offset += member->lsb_offset;
+                    width = member->width();
+                }
                 remaining = next == std::string_view::npos
                     ? std::string_view { }
                     : remaining.substr(next + 1U);
@@ -1330,8 +1576,9 @@ void SystemVerilogHirBuilder::add_class(
         retained.origin = origin(
             retained.source, output.origin, retained.canonical_identity);
         for (const auto& input_expression : constraint.expressions) {
-            retained.expressions.push_back(
-                constraint_expression(input_expression));
+            auto inlined = input_expression;
+            inline_constraint_functions(inlined, input.methods);
+            retained.expressions.push_back(constraint_expression(inlined));
         }
         for (auto& retained_expression : retained.expressions) {
             resolve_constraint_expression(retained_expression, input);

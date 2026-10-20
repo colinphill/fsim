@@ -3657,7 +3657,11 @@ void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
     impl_->require_writable_aggregate_signal(signal);
     // Validate eagerly so a malformed drive does not fail much later.
     if (impl_->get_signal(signal).initial_value.width() != value.width()) {
-        throw std::invalid_argument("SimIR signal assignment width mismatch");
+        throw std::invalid_argument(
+            "SimIR signal assignment width mismatch (signal "
+            + std::to_string(signal) + " has width "
+            + std::to_string(impl_->get_signal(signal).initial_value.width())
+            + ", value has width " + std::to_string(value.width()) + ")");
     }
     impl_->scheduler.schedule_at(
         time, SchedulerPhase::update, order,

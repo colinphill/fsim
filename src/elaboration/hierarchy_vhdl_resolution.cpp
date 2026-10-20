@@ -2,8 +2,15 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
+#include <map>
+#include <ranges>
+#include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace fsim::elaboration {
@@ -245,6 +252,17 @@ bool vhdl_conversion_actual(
                     return false;
                 }
                 const auto kind = value->vhdl->kind;
+                // A type conversion or conversion function of a signal name
+                // (`p(3 downto 2) => std_ulogic_vector(s)`).
+                if (kind == semantic::vhdl::ExpressionKind::call
+                    && value->vhdl->operands.size() == 1U
+                    && !value->vhdl->text.starts_with('@')) {
+                    const auto operand = specialization.find_expression(
+                        value->vhdl->operands.front());
+                    return operand && operand->vhdl != nullptr
+                        && operand->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::name;
+                }
                 return kind == semantic::vhdl::ExpressionKind::logic_literal
                     || kind == semantic::vhdl::ExpressionKind::integer_literal
                     || kind == semantic::vhdl::ExpressionKind::string_literal
@@ -256,8 +274,13 @@ bool vhdl_conversion_actual(
             })) {
         return true;
     }
+    // A conversion function may be an operator symbol written as a call
+    // (`"not"(s)`); the operator form `not s` is an expression actual.
     if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || (expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            && !(expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::unary
+                && expression->vhdl->operator_symbol_call))
         || expression->vhdl->operands.size() != 1U
         || expression->vhdl->text.starts_with('@')
         || expression->vhdl->text.starts_with(
@@ -271,6 +294,279 @@ bool vhdl_conversion_actual(
 }
 
 } // namespace
+
+void HierarchyBuilder::compose_vhdl_output_routes()
+{
+    // A part of a formal placed in a part of an actual.
+    struct Route {
+        SignalId formal { };
+        std::uint32_t formal_offset { };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+    struct Piece {
+        SignalId signal { };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+    const auto signal_width = [&](const SignalId signal) {
+        return static_cast<std::uint64_t>(
+            design_.signal_info_[signal].width);
+    };
+    const auto vhdl_standard = [](const std::string_view standard) {
+        return standard == "1987" || standard == "1993"
+            || standard == "2000" || standard == "2002"
+            || standard == "2008" || standard == "2019";
+    };
+    // An output adapter (`port_result_N`) that only copies parts of its
+    // formals into parts of its actuals; any other operation keeps it.
+    std::map<std::size_t, std::vector<std::pair<SignalId, Route>>> adapters;
+    std::unordered_map<SignalId, std::vector<std::size_t>> writers;
+    std::unordered_set<SignalId> input_targets;
+    for (std::size_t index { }; index < design_.process_count(); ++index) {
+        const auto process = design_.process_view(index);
+        for (const auto& region : process.driver_regions()) {
+            auto& list = writers[region.signal];
+            if (list.empty() || list.back() != index) {
+                list.push_back(index);
+            }
+        }
+        const std::string_view name { process.name() };
+        const auto leaf = name.substr(name.find_last_of('.') + 1U);
+        if (leaf.starts_with("port_actual_")) {
+            for (const auto& region : process.driver_regions()) {
+                input_targets.insert(region.signal);
+            }
+        }
+        if (!leaf.starts_with("port_result_")
+            || !vhdl_standard(process.language_standard())
+            || process.scheduling_domain()
+                != ProcessSchedulingDomain::generic) {
+            continue;
+        }
+        std::unordered_map<RegisterId, Piece> pieces;
+        std::vector<std::pair<SignalId, Route>> routes;
+        bool eligible = true;
+        const auto place = [&](const SignalId signal, const RegisterId source,
+                               const std::uint64_t offset) {
+            const auto piece = pieces.find(source);
+            if (piece == pieces.end() || signal >= design_.signal_info_.size()
+                || offset + piece->second.width > signal_width(signal)) {
+                return false;
+            }
+            routes.emplace_back(signal, Route { piece->second.signal,
+                piece->second.offset, static_cast<std::uint32_t>(offset),
+                piece->second.width });
+            return true;
+        };
+        for (const auto& operation : process.operations()) {
+            if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+                if (read->kind != SignalReadKind::current || read->clock
+                    || read->gate || read->signal >= design_.signal_info_.size()
+                    || signal_width(read->signal)
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    eligible = false;
+                    break;
+                }
+                pieces.insert_or_assign(read->destination, Piece { read->signal,
+                    0U, static_cast<std::uint32_t>(
+                        signal_width(read->signal)) });
+            } else if (const auto* extract
+                = operation_get_if<Extract>(&operation)) {
+                const auto piece = pieces.find(extract->source);
+                if (piece == pieces.end()
+                    || static_cast<std::uint64_t>(extract->offset)
+                            + extract->width
+                        > piece->second.width) {
+                    eligible = false;
+                    break;
+                }
+                pieces.insert_or_assign(extract->destination,
+                    Piece { piece->second.signal,
+                        piece->second.offset + extract->offset,
+                        extract->width });
+            } else if (const auto* copy
+                = operation_get_if<CopyRegister>(&operation)) {
+                const auto piece = pieces.find(copy->source);
+                if (piece == pieces.end()) {
+                    eligible = false;
+                    break;
+                }
+                const auto value = piece->second;
+                pieces.insert_or_assign(copy->destination, value);
+            } else if (const auto* write
+                = operation_get_if<WriteUpdate>(&operation)) {
+                const auto piece = pieces.find(write->source);
+                if (piece == pieces.end()
+                    || write->signal >= design_.signal_info_.size()
+                    || piece->second.width != signal_width(write->signal)
+                    || !place(write->signal, write->source, 0U)) {
+                    eligible = false;
+                    break;
+                }
+            } else if (const auto* slice
+                = operation_get_if<WriteUpdateSlice>(&operation)) {
+                if (!place(slice->signal, slice->source, slice->offset)) {
+                    eligible = false;
+                    break;
+                }
+            } else if (!operation_holds<WaitSensitivity>(operation)
+                && !operation_holds<Jump>(operation)
+                && !operation_holds<Halt>(operation)
+                && !operation_holds<DebugPoint>(operation)) {
+                eligible = false;
+                break;
+            }
+        }
+        if (eligible && !routes.empty()) {
+            adapters.emplace(index, std::move(routes));
+        }
+    }
+    if (adapters.empty()) {
+        return;
+    }
+    // Each destination must be unresolved, written by route adapters only,
+    // and covered exactly once by its routes.
+    std::map<SignalId, std::vector<Route>> destinations;
+    for (const auto& [index, routes] : adapters) {
+        for (const auto& [signal, route] : routes) {
+            destinations[signal].push_back(route);
+        }
+    }
+    std::unordered_set<SignalId> rejected;
+    for (auto& [signal, routes] : destinations) {
+        const auto& info = design_.signal_info_[signal];
+        const auto& runtime_signal = design_.signals_[signal];
+        bool eligible = !runtime_signal.vhdl_resolver
+            && !resolver_by_signal_.contains(signal)
+            && !vhdl_function_resolvers_.contains(signal)
+            && !vhdl_guarded_signal_kinds_.contains(signal)
+            && !vhdl_unprotected_shared_signals_.contains(signal)
+            && !input_targets.contains(signal)
+            && info.systemverilog_net_type.empty()
+            && !explicit_resolution(signal)
+            && native_resolution(info) == ResolutionKind::none
+            && signal_width(signal) != 0U;
+        std::ranges::sort(routes, {}, &Route::offset);
+        std::uint64_t covered { };
+        for (const auto& route : routes) {
+            const auto& formal = design_.signals_[route.formal];
+            // An inout formal is also driven from its actual; a converted
+            // formal settles through its own program.
+            if (route.offset != covered || route.formal == signal
+                || formal.vhdl_resolver || input_targets.contains(route.formal)
+                || formal.value_kind != runtime_signal.value_kind) {
+                eligible = false;
+                break;
+            }
+            covered += route.width;
+        }
+        if (!eligible || covered != signal_width(signal)) {
+            rejected.insert(signal);
+        }
+    }
+    // An adapter is replaced only when every destination it writes is; a
+    // destination only when all of its writers are replaced adapters.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& [signal, routes] : destinations) {
+            if (rejected.contains(signal)) {
+                continue;
+            }
+            const auto found = writers.find(signal);
+            const bool foreign = found != writers.end()
+                && std::ranges::any_of(found->second,
+                    [&](const std::size_t writer) {
+                        const auto adapter = adapters.find(writer);
+                        return adapter == adapters.end()
+                            || std::ranges::any_of(adapter->second,
+                                [&](const auto& route) {
+                                    return rejected.contains(route.first);
+                                });
+                    });
+            if (foreign) {
+                rejected.insert(signal);
+                changed = true;
+            }
+        }
+    }
+    for (const auto& [index, routes] : adapters) {
+        if (std::ranges::any_of(routes, [&](const auto& route) {
+                return rejected.contains(route.first);
+            })) {
+            continue;
+        }
+        const auto adapter = design_.process_view(index);
+        Process stub;
+        stub.id = adapter.id();
+        stub.name = adapter.name();
+        stub.language_standard = adapter.language_standard();
+        stub.compatibility_profile = adapter.compatibility_profile();
+        stub.initialize = false;
+        stub.operations.emplace_back(Halt { });
+        design_.rebuild_process_record(index, std::move(stub));
+    }
+    for (const auto& [signal, routes] : destinations) {
+        if (rejected.contains(signal)) {
+            continue;
+        }
+        const auto process_index = design_.process_count();
+        Process program;
+        program.id = static_cast<ProcessId>(process_index);
+        if (static_cast<std::size_t>(program.id) != process_index) {
+            throw std::length_error { "too many SimIR processes" };
+        }
+        const auto& name = design_.signal_info_[signal].name;
+        const auto separator = name.find_last_of('.');
+        program.name = (separator == std::string::npos
+                ? std::string { }
+                : name.substr(0U, separator + 1U))
+            + "composer_" + name.substr(separator + 1U);
+        const auto kind = design_.signals_[signal].value_kind;
+        const auto allocate = [&](const ValueKind value_kind) {
+            program.register_value_kinds.push_back(value_kind);
+            return static_cast<RegisterId>(program.register_count++);
+        };
+        // The resolver input is unused: the program has no drivers.
+        const auto input = allocate(ValueKind::logic4);
+        std::unordered_map<SignalId, RegisterId> formals;
+        std::vector<SignalId> sources;
+        std::vector<RegisterId> parts;
+        for (const auto& route : routes | std::views::reverse) {
+            auto [formal, inserted] = formals.try_emplace(route.formal);
+            if (inserted) {
+                formal->second = allocate(kind);
+                program.operations.emplace_back(
+                    ReadSignal { formal->second, route.formal });
+                sources.push_back(route.formal);
+            }
+            if (route.formal_offset == 0U
+                && route.width == signal_width(route.formal)) {
+                parts.push_back(formal->second);
+                continue;
+            }
+            const auto part = allocate(kind);
+            program.operations.emplace_back(Extract { part, formal->second,
+                route.formal_offset, route.width });
+            parts.push_back(part);
+        }
+        const auto output = allocate(kind);
+        if (parts.size() == 1U) {
+            program.operations.emplace_back(CopyRegister { output, parts[0] });
+        } else {
+            program.operations.emplace_back(Concatenate { output,
+                std::move(parts),
+                static_cast<std::uint32_t>(signal_width(signal)) });
+        }
+        program.operations.emplace_back(Halt { });
+        program.initialize = false;
+        design_.append_process_record(std::move(program));
+        VhdlSignalResolver resolver {
+            static_cast<ProcessId>(process_index), input, output, { } };
+        resolver.sources = std::move(sources);
+        design_.signals_[signal].vhdl_resolver = std::move(resolver);
+    }
+}
 
 bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     Lowerer& lowerer,
@@ -324,14 +620,19 @@ bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
     }
     // A resolved source's effective value settles after its drivers; an
     // aggregate of such signals (std_logic) keeps the port adapter, which
-    // follows it. Resolution kinds are bound later, so use the domain.
+    // follows it. Resolution kinds are bound later, so read the declared
+    // resolution from the source's type.
+    // One association is a whole conversion of its source, as for a plain
+    // conversion actual.
     if (const auto expression = specialization.find_expression(actual);
         expression && expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && expression->vhdl->associations.size() > 1U
         && std::ranges::any_of(program->sources, [&](const SignalId source) {
                return source < design_.signal_info_.size()
-                   && (design_.signal_info_[source].source_domain
-                           == frontend::ValueDomain::Logic9
+                   && (native_resolution(design_.signal_info_[source])
+                           != ResolutionKind::none
+                       || explicit_resolution(source)
                        || (source < design_.signals_.size()
                            && design_.signals_[source].vhdl_resolver));
            })) {

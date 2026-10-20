@@ -1059,6 +1059,11 @@ namespace {
         {
             auto aggregate
                 = actual_specialization.find_expression(actual_id);
+            if (auto element = derive_array_element(formal_specialization,
+                    actual_specialization, formal_subtype, formal_scope,
+                    actual_id)) {
+                return std::move(*element);
+            }
             if (!aggregate || aggregate->vhdl == nullptr
                 || aggregate->vhdl->kind
                     != semantic::vhdl::ExpressionKind::aggregate
@@ -1273,6 +1278,102 @@ namespace {
             Scope scope;
         };
 
+        // The element subtype of a one-dimensional array subtype, with the
+        // subtype's element constraint applied.
+        [[nodiscard]] static std::optional<std::pair<Subtype, Scope>>
+        array_element_subtype(
+            const SpecializedUnit& specialization,
+            const Subtype& owner,
+            const Scope owner_scope)
+        {
+            const auto array = composite_subtype(specialization, owner,
+                owner_scope, semantic::vhdl::TypeForm::array);
+            if (!array || array->definition->array_dimensions.size() != 1U
+                || !array->definition->element_subtype) {
+                return std::nullopt;
+            }
+            auto subtype = semantic::vhdl::constrained_element_subtype(
+                array->subtype, "", *array->definition->element_subtype);
+            subtype = link_subtype(
+                specialization, std::move(subtype), array->scope);
+            return std::pair { std::move(subtype), array->scope };
+        }
+
+        // An array port whose element subtype is an unconstrained array
+        // takes the element's index ranges from its actual: a signal name,
+        // an aggregate of signal names or subelement associations (IEEE
+        // 1076-2008 5.3.2.2, 6.5.6.3). Returns nullopt when the formal is
+        // not such an array.
+        [[nodiscard]] static std::optional<Result> derive_array_element(
+            const SpecializedUnit& formal_specialization,
+            const SpecializedUnit& actual_specialization,
+            const Subtype& formal_subtype,
+            const Scope formal_scope,
+            const semantic::ExpressionId actual_id)
+        {
+            const auto formal_element = array_element_subtype(
+                formal_specialization, formal_subtype, formal_scope);
+            if (!formal_element) {
+                return std::nullopt;
+            }
+            const auto formal_shape = array_shape(formal_specialization,
+                formal_element->first, formal_element->second);
+            if (!formal_shape.known || !formal_shape.array
+                || formal_shape.constrained) {
+                return std::nullopt;
+            }
+            const auto actual = actual_specialization.find_expression(
+                actual_id);
+            if (!actual || actual->vhdl == nullptr) {
+                return Result { };
+            }
+            std::optional<std::vector<semantic::vhdl::RangeConstraint>> ranges;
+            const auto element_ranges = [&](const std::pair<Subtype, Scope>& element)
+                -> bool {
+                const auto shape = array_shape(
+                    actual_specialization, element.first, element.second);
+                if (!shape.known || !shape.array || !shape.constrained
+                    || !shape.ranges) {
+                    return false;
+                }
+                if (!ranges) {
+                    ranges = *shape.ranges;
+                    return true;
+                }
+                return same_static_array_ranges(*ranges, *shape.ranges);
+            };
+            if (actual->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+                if (actual->vhdl->associations.empty()) {
+                    return Result { };
+                }
+                for (const auto& association : actual->vhdl->associations) {
+                    const auto element = actual_subtype(
+                        actual_specialization, association.value);
+                    if (!element || !element_ranges(*element)) {
+                        return Result { };
+                    }
+                }
+            } else if (const auto whole = actual_subtype(
+                           actual_specialization, actual_id)) {
+                const auto element = array_element_subtype(
+                    actual_specialization, whole->first, whole->second);
+                if (!element || !element_ranges(*element)) {
+                    return Result { };
+                }
+            }
+            if (!ranges) {
+                return Result { };
+            }
+            auto candidate = formal_subtype;
+            candidate.element_constraints.push_back(
+                { { std::string { } }, std::move(*ranges) });
+            candidate.executable_width.reset();
+            return Result {
+                Result::Status::specialized, std::move(candidate), { }
+            };
+        }
+
         struct ArrayShape {
             bool known { };
             bool array { };
@@ -1295,6 +1396,16 @@ namespace {
             const Subtype& input,
             const Scope input_scope)
         {
+            return composite_subtype(specialization, input, input_scope,
+                semantic::vhdl::TypeForm::record);
+        }
+
+        [[nodiscard]] static std::optional<RecordSubtype> composite_subtype(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            const Scope input_scope,
+            const semantic::vhdl::TypeForm form)
+        {
             auto current = link_subtype(specialization, input, input_scope);
             std::unordered_set<std::uint32_t> visited;
             for (;;) {
@@ -1313,7 +1424,7 @@ namespace {
                         && declaration->vhdl != nullptr
                     ? declaration->vhdl->scope
                     : input_scope;
-                if (type->vhdl->form == semantic::vhdl::TypeForm::record) {
+                if (type->vhdl->form == form) {
                     return RecordSubtype {
                         std::move(current), type->vhdl, type_scope
                     };
@@ -8125,6 +8236,9 @@ namespace {
         }
         bool normalized_actual { };
         for (auto& actual : actuals) {
+            if (actual.type_context) {
+                continue;
+            }
             const auto declaration = result->find_declaration(
                 actual.declaration);
             if (!declaration || declaration->systemverilog == nullptr
@@ -8259,10 +8373,16 @@ namespace {
                       ? frontend::systemverilog_scalar_kind(
                             declaration->systemverilog->type->target.spelling)
                       : frontend::SystemVerilogScalarKind::None;
-                  const auto scalar_applicable
-                      = target_scalar != frontend::SystemVerilogScalarKind::None
-                      || hir_systemverilog_scalar_expression_applicable(
-                          *result, *declaration->systemverilog->initializer);
+                  const auto& declared_type = declaration->systemverilog->type;
+                  // An unpacked aggregate's value is its bit stream
+                  // (6.24.3); it has no integral conversion.
+                  const bool unpacked_aggregate = declared_type
+                      && hir_systemverilog_unpacked_aggregate_type(
+                          *result, *declared_type);
+                  const auto scalar_applicable = !unpacked_aggregate
+                      && (target_scalar != frontend::SystemVerilogScalarKind::None
+                          || hir_systemverilog_scalar_expression_applicable(
+                              *result, *declaration->systemverilog->initializer));
                   if (scalar_applicable) {
                       std::string scalar_error;
                       auto scalar = evaluate_hir_systemverilog_declaration_value(
@@ -8282,31 +8402,44 @@ namespace {
                       return;
                   }
                   std::string constant_error;
-                  auto constant = compiled_systemverilog_integral_constant_type(
-                                      declaration->systemverilog->type)
-                      ? evaluate_hir_systemverilog_constant(
+                  // A pattern takes the layout of the parameter's structure
+                  // or array type (IEEE 1800-2017 10.9), not that of a
+                  // concatenation of its items.
+                  auto constant = !unpacked_aggregate
+                          && !compiled_systemverilog_integral_constant_type(
+                              declared_type)
+                      ? std::optional<HirSystemVerilogConstant> { }
+                      : declared_type
+                      ? evaluate_hir_systemverilog_typed_constant(*result,
+                            *declaration->systemverilog->initializer,
+                            *declared_type, constant_error)
+                      : evaluate_hir_systemverilog_constant(
                             *result, *declaration->systemverilog->initializer,
-                            constant_error)
-                      : std::optional<HirSystemVerilogConstant> { };
-                  if (constant && declaration->systemverilog->type
+                            constant_error);
+                  if (constant && declared_type && !unpacked_aggregate
                       && hir_systemverilog_explicit_integral_type(
-                          *declaration->systemverilog->type)) {
+                          *declared_type)) {
                       constant = convert_hir_systemverilog_constant(
-                          std::move(*constant),
-                          *declaration->systemverilog->type,
+                          std::move(*constant), *declared_type,
                           constant_error, &*result);
                   }
-                  // A keyed pattern takes the layout of the parameter's
-                  // structure type (IEEE 1800-2017 10.9.2).
-                  if (!constant && declaration->systemverilog->type
-                      && compiled_systemverilog_integral_constant_type(
-                          declaration->systemverilog->type)) {
-                      std::string typed_error;
-                      if (auto typed
-                          = evaluate_hir_systemverilog_typed_constant(
-                              *result, *declaration->systemverilog->initializer,
-                              *declaration->systemverilog->type, typed_error)) {
-                          constant = std::move(typed);
+                  if (!constant && declared_type
+                      && (unpacked_aggregate
+                          || compiled_systemverilog_integral_constant_type(
+                              declared_type))) {
+                      std::string fallback_error;
+                      auto fallback = evaluate_hir_systemverilog_constant(
+                          *result, *declaration->systemverilog->initializer,
+                          fallback_error);
+                      if (fallback && !unpacked_aggregate
+                          && hir_systemverilog_explicit_integral_type(
+                              *declared_type)) {
+                          fallback = convert_hir_systemverilog_constant(
+                              std::move(*fallback), *declared_type,
+                              fallback_error, &*result);
+                      }
+                      if (fallback) {
+                          constant = std::move(fallback);
                           constant_error.clear();
                       }
                   }
@@ -10191,6 +10324,17 @@ namespace {
         const auto expression_nominal_type = [&](const semantic::ExpressionId id)
             -> std::optional<semantic::TypeId> {
             const auto expression = compiled.find_expression(id);
+            // An explicitly typed assignment pattern (`T'{...}`) has type T
+            // (IEEE 1800-2017 10.9).
+            if (expression && expression->systemverilog != nullptr
+                && expression->systemverilog->kind
+                    == ExpressionKind::assignment_pattern
+                && expression->systemverilog->nominal_type_target) {
+                std::unordered_set<std::uint32_t> visiting;
+                return nominal_type_identity(nominal_type_identity,
+                    *expression->systemverilog->nominal_type_target,
+                    visiting);
+            }
             if (!expression || expression->systemverilog == nullptr
                 || !expression->systemverilog->referenced_name) {
                 return std::nullopt;
@@ -11132,6 +11276,10 @@ namespace {
                         *value.referenced_name->selected);
                     if (referenced && referenced->systemverilog != nullptr
                         && !referenced->systemverilog->name.starts_with("$")
+                        // An unpacked array parameter is held as a constant
+                        // variable (IEEE 1800-2017 6.20.1).
+                        && !referenced->systemverilog->array_parameter
+                        && !referenced->systemverilog->array_local_parameter
                         && (referenced->systemverilog->form
                                 == DeclarationForm::variable
                             || referenced->systemverilog->form
@@ -12686,12 +12834,26 @@ namespace {
                     }
                 }
             }
-            if (expression.text.find("::") != std::string::npos) {
+            if (!expression.text.starts_with('@')
+                && expression.text.find("::") != std::string::npos) {
                 const auto first = expression.text.find("::");
                 const auto second = expression.text.find("::", first + 2U);
+                // `pkg::C::member` selects a member of a package's class
+                // (IEEE 1800-2017 8.23, 26.3).
+                const auto names_class = [&] {
+                    const auto scoped = "::"
+                        + expression.text.substr(0U, second);
+                    return std::ranges::any_of(
+                        compiled.systemverilog_hir.classes(),
+                        [&](const semantic::sv::ClassDeclaration& candidate) {
+                            return candidate.canonical_identity.ends_with(
+                                scoped);
+                        });
+                };
                 if (first != 0U && second != std::string::npos
                     && compiled_systemverilog_package(compiled, unit,
-                        std::string_view { expression.text }.substr(0U, first))) {
+                        std::string_view { expression.text }.substr(0U, first))
+                    && !names_class()) {
                     append("FSIM-ELAB-SVPKG-005",
                         "a package-scoped item must be package::name",
                         expression.source);
@@ -15548,7 +15710,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 packed_default_resolver, packed_fallback_resolver);
         });
     lowerer.set_systemverilog_interface_handles(
-        &systemverilog_interface_handles_, &systemverilog_interface_types_);
+        &systemverilog_interface_handles_, &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_);
     lowerer.set_hir_container_declaration_bindings(
         &root_materialization.container_declaration_bindings);
     {
@@ -16069,6 +16232,26 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
             ? generated_path(owner_path, record.name)
             : compiled_instance_path(*compiled_, unit.scope,
                   record.scope, owner_path, record.name);
+        // A function or task called through the instance takes its formal,
+        // result and local types from the instance's parameters (IEEE
+        // 1800-2017 25.7), and a parameter read through it has the
+        // instance's layout (23.6); the caller's processes lower before the
+        // instance elaborates.
+        std::shared_ptr<const std::optional<semantic::SpecializedHirUnit>>
+            callee;
+        const auto& callee_unit = *occurrence->linked_target->systemverilog;
+        {
+            auto parameters = resolve_compiled_systemverilog_parameters(
+                *occurrence->linked_target, record, *instance,
+                occurrence_path, owner);
+            if (parameters.status
+                == CompiledSystemVerilogParameterResult::Status::ready) {
+                callee = std::make_shared<
+                    const std::optional<semantic::SpecializedHirUnit>>(
+                    compiled_specialization(validated_compiled_,
+                        callee_unit.id, parameters.actuals, nullptr));
+            }
+        }
         const auto reserve = [&](const std::string& child_path) {
             auto [handle, inserted]
                 = systemverilog_interface_handles_.try_emplace(
@@ -16079,6 +16262,10 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
             systemverilog_interface_types_.insert_or_assign(
                 child_path,
                 occurrence->linked_target->systemverilog->name);
+            if (callee && *callee) {
+                systemverilog_instance_specializations_.insert_or_assign(
+                    child_path, callee);
+            }
         };
         const auto array_indices
             = compiled_instance_array_indices(record, owner);
@@ -16885,6 +17072,38 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
         }
         return true;
     }
+    // An unpacked array parameter, kept as a constant container, is
+    // published as its bit stream for an element read from another scope
+    // (IEEE 1800-2017 6.20.2, 6.24.3, 23.6). The `@aggregate:` name keeps
+    // integral evaluators from selecting bits of the stream.
+    if ((declaration->systemverilog->array_parameter
+            || declaration->systemverilog->array_local_parameter)
+        && declaration->systemverilog->type
+        && !published_parameter_names.contains(
+            declaration->systemverilog->name)) {
+        const auto& actuals = specialized.specialization().actual_identities;
+        const auto actual = std::ranges::find(actuals, declaration_id,
+            &semantic::SpecializedHirActualIdentity::declaration);
+        std::optional<HirSystemVerilogConstant> image;
+        std::string image_error;
+        if (actual != actuals.end() && actual->actual_expression) {
+            image = decode_hir_systemverilog_constant(actual->identity);
+        } else if (declaration->systemverilog->initializer
+            && hir_systemverilog_unpacked_aggregate_type(
+                specialized, *declaration->systemverilog->type)) {
+            image = evaluate_hir_systemverilog_typed_constant(specialized,
+                *declaration->systemverilog->initializer,
+                *declaration->systemverilog->type, image_error);
+        }
+        if (image) {
+            published_parameter_names.insert(
+                declaration->systemverilog->name);
+            specialization.parameter_identity_values.emplace_back(
+                "@aggregate:" + declaration->systemverilog->name,
+                image->canonical());
+        }
+        return true;
+    }
     if (form != Form::parameter && form != Form::local_parameter
         && form != Form::type_parameter) {
         return true;
@@ -16900,7 +17119,24 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
         &semantic::SpecializedHirActualIdentity::declaration);
     std::optional<std::string> display;
     std::optional<std::string> identity_value;
-    if (actual != specialization_actuals.end()
+    // A default unpacked aggregate value is its declared type's bit stream
+    // (IEEE 1800-2017 6.24.3, 10.9); an override's identity already is.
+    const bool default_aggregate = declaration->systemverilog->type
+        && declaration->systemverilog->initializer
+        && (actual == specialization_actuals.end()
+            || !actual->actual_expression)
+        && hir_systemverilog_unpacked_aggregate_type(
+            specialized, *declaration->systemverilog->type);
+    if (default_aggregate) {
+        std::string typed_error;
+        if (const auto typed = evaluate_hir_systemverilog_typed_constant(
+                specialized, *declaration->systemverilog->initializer,
+                *declaration->systemverilog->type, typed_error)) {
+            display = typed->display();
+            identity_value = typed->canonical();
+        }
+    }
+    if (!display && actual != specialization_actuals.end()
         && (actual->identity.starts_with("svconst-v3:")
             || actual->identity.starts_with("svscalar-v1:"))) {
         display = compiled_systemverilog_identity_display(
@@ -16937,11 +17173,16 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
                     && effective->target.target.valid()
                 ? specialized.find_type(effective->target.target)
                 : std::nullopt;
-            return definition && definition->systemverilog != nullptr
-                && (definition->systemverilog->form
-                        == semantic::sv::TypeForm::packed_structure
-                    || definition->systemverilog->form
-                        == semantic::sv::TypeForm::packed_union);
+            // An unpacked structure or array constant is held as its bit
+            // stream (6.24.3), so a member or element of it can be read
+            // hierarchically too (7.2, 7.4, 23.6).
+            return (definition && definition->systemverilog != nullptr
+                       && (definition->systemverilog->form
+                               == semantic::sv::TypeForm::packed_structure
+                           || definition->systemverilog->form
+                               == semantic::sv::TypeForm::packed_union))
+                || hir_systemverilog_unpacked_aggregate_type(
+                    specialized, *declaration->systemverilog->type);
         }();
         if (structure_type) {
             std::string typed_error;
@@ -17897,6 +18138,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     std::int64_t high { };
                 };
                 std::vector<FormalIndexInterval> intervals;
+                // A formal shaped by one slice choice takes that slice's
+                // direction (`f(X'range) => ...` with X descending).
+                std::optional<bool> slice_choice_descending;
                 const semantic::CompiledDesignResolver index_resolver {
                     port_actual_specialization
                 };
@@ -17963,12 +18207,68 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                                 choice_source.operands.back());
                             const bool slice_descending
                                 = choice_source.text == "downto";
+                            slice_choice_descending = slice_descending;
                             if (first && last
                                 && ((slice_descending && *first < *last)
                                     || (!slice_descending
                                         && *first > *last))) {
                                 supported_choices = false;
                                 break;
+                            }
+                        } else if (choice_source.kind
+                                == semantic::vhdl::ExpressionKind::call
+                            && (choice_source.text == "'range"
+                                || choice_source.text == "'reverse_range")
+                            && !choice_source.operands.empty()) {
+                            // `f(X'range) => ...` names X's static range
+                            // (IEEE 1076-2008 16.2.3).
+                            const auto prefix
+                                = port_actual_specialization.find_expression(
+                                    choice_source.operands.front());
+                            const auto prefix_declaration = prefix
+                                    && prefix->vhdl != nullptr
+                                    && prefix->vhdl->kind
+                                        == semantic::vhdl::ExpressionKind::name
+                                    && prefix->vhdl->referenced_name
+                                    && prefix->vhdl->referenced_name->selected
+                                ? port_actual_specialization.find_declaration(
+                                      *prefix->vhdl->referenced_name->selected)
+                                : std::nullopt;
+                            const auto prefix_subtype = prefix_declaration
+                                    && prefix_declaration->vhdl != nullptr
+                                    && prefix_declaration->vhdl->subtype
+                                ? index_resolver.effective_vhdl_subtype(
+                                      *prefix_declaration->vhdl->subtype,
+                                      prefix_declaration->vhdl->scope)
+                                : std::nullopt;
+                            if (prefix_subtype
+                                && prefix_subtype->constraints.size() == 1U
+                                && prefix_subtype->constraints.front().kind
+                                    == semantic::vhdl::RangeKind::array_index) {
+                                const auto& constraint
+                                    = prefix_subtype->constraints.front();
+                                const auto bound = [&](
+                                    const std::optional<std::int64_t> value,
+                                    const std::optional<semantic::ExpressionId>
+                                        expression)
+                                    -> std::optional<std::int64_t> {
+                                    if (value) {
+                                        return value;
+                                    }
+                                    return expression
+                                        ? port_actual_specialization
+                                              .evaluate_integral_expression(
+                                                  *expression)
+                                        : std::nullopt;
+                                };
+                                first = bound(constraint.left,
+                                    constraint.left_expression);
+                                last = bound(constraint.right,
+                                    constraint.right_expression);
+                                slice_choice_descending
+                                    = constraint.descending
+                                    != (choice_source.text
+                                        == "'reverse_range");
                             }
                         } else {
                             first = static_index(choice_id);
@@ -18021,6 +18321,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     }
                 }
                 if (supported_choices && !intervals.empty()) {
+                    if (intervals.size() == 1U && slice_choice_descending) {
+                        index_descending = *slice_choice_descending;
+                    }
                     const auto low = intervals.front().low;
                     const auto high = intervals.back().high;
                     const auto distance = index_distance(low, high);
@@ -19840,7 +20143,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             });
         lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_,
-            &systemverilog_interface_types_);
+            &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_);
         const auto source_language = compiled_frontend_language(
             unit->language);
         lowerer.set_hir_code_coverage_context(
@@ -20234,16 +20538,51 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             const auto selected
                 = working_specialization.find_declaration(
                     *declaration.alias_target->selected);
-            if (selected && selected->vhdl != nullptr) {
+            // A package object is outside this unit's specialization.
+            const auto stored = std::ranges::find(
+                compiled_->vhdl_hir.declarations(),
+                *declaration.alias_target->selected,
+                &semantic::vhdl::Declaration::id);
+            const auto* aliased = selected && selected->vhdl != nullptr
+                ? selected->vhdl
+                : stored != compiled_->vhdl_hir.declarations().end()
+                ? &*stored
+                : nullptr;
+            if (aliased != nullptr) {
                 // An alias of a subprogram or of a non-signal object needs
                 // no signal storage; references resolve through it.
-                const auto form = selected->vhdl->form;
-                if (selected->vhdl->callable
+                const auto form = aliased->form;
+                if (aliased->callable
                     || (form != Form::signal && form != Form::port
                         && form != Form::alias)) {
                     return true;
                 }
-                target_name = selected->vhdl->name;
+                target_name = aliased->name;
+            }
+        } else {
+            // A use-visible package object (`alias a is sv;`).
+            auto aliased_name = *declaration.alias_target;
+            aliased_name.overloads.clear();
+            const semantic::CompiledDeclarationPredicate value_object
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      return candidate.vhdl != nullptr
+                          && !candidate.vhdl->callable
+                          && semantic::vhdl::is_value_object_form(
+                              candidate.vhdl->form);
+                  };
+            const auto resolved
+                = semantic::CompiledDesignResolver { working_specialization }
+                      .resolve_vhdl(aliased_name, declaration.scope,
+                          value_object)
+                      .unique();
+            const auto stored = resolved
+                ? std::ranges::find(compiled_->vhdl_hir.declarations(),
+                      *resolved, &semantic::vhdl::Declaration::id)
+                : compiled_->vhdl_hir.declarations().end();
+            if (stored != compiled_->vhdl_hir.declarations().end()
+                && stored->form != Form::signal
+                && stored->form != Form::port) {
+                return true;
             }
         }
         const auto target = std::ranges::find_if(

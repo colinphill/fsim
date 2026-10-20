@@ -508,23 +508,497 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             }
         }
     }
+    using runtime::simir::ContainerElementKind;
+    // The containers of a property and its packed elements, in pre-order,
+    // each with its path from the property: a nested container by
+    // element, a multi-dimensional fixed-size array by dimension (IEEE
+    // 1800-2017 7.4.2, 7.4.5). False when an element is neither.
+    const auto extent = [](const std::int64_t left, const std::int64_t right) {
+        return static_cast<std::size_t>(
+                   left >= right ? left - right : right - left)
+            + 1U;
+    };
+    const auto fixed_shape = [](const std::int64_t left,
+                                 const std::int64_t right) {
+        runtime::SystemVerilogConstraintContainerShape shape;
+        shape.fixed = true;
+        shape.left = left;
+        shape.descending = left > right;
+        return shape;
+    };
+    const auto visit_container = [&](auto&& self,
+                                     runtime::simir::ContainerValue& value,
+                                     const std::string& path,
+                                     const auto& leaf,
+                                     const auto& node,
+                                     const auto& aggregate) -> bool {
+        const auto& type = value.type;
+        if (type.fixed && type.dimensions.size() > 1U) {
+            if (type.element_kind != ContainerElementKind::Packed) {
+                return false;
+            }
+            const auto rank = type.dimensions.size();
+            std::vector<std::size_t> strides(rank, 1U);
+            for (std::size_t k = rank - 1U; k-- > 0U;) {
+                strides[k] = strides[k + 1U]
+                    * extent(type.dimensions[k + 1U].first,
+                        type.dimensions[k + 1U].second);
+            }
+            if (strides.front()
+                    * extent(type.dimensions.front().first,
+                        type.dimensions.front().second)
+                != value.elements.size()) {
+                return false;
+            }
+            // Elements are stored with the rightmost dimension varying
+            // fastest.
+            const auto dimension = [&](auto&& next, const std::size_t k,
+                                       const std::size_t offset,
+                                       const std::string& prefix) -> void {
+                const auto [left, right] = type.dimensions[k];
+                const auto count = extent(left, right);
+                node(prefix, count, fixed_shape(left, right));
+                for (std::size_t position = 0; position < count;
+                     ++position) {
+                    const auto child
+                        = prefix + "[" + std::to_string(position) + "]";
+                    const auto at = offset + position * strides[k];
+                    if (k + 1U == rank) {
+                        leaf(child, value.elements[at]);
+                    } else {
+                        next(next, k + 1U, at, child);
+                    }
+                }
+            };
+            dimension(dimension, 0U, 0U, path);
+            return true;
+        }
+        runtime::SystemVerilogConstraintContainerShape shape;
+        if (type.fixed) shape = fixed_shape(type.index_left, type.index_right);
+        if (type.associative) {
+            shape.associative = true;
+            shape.string_keys = type.string_indices;
+            shape.keys = value.keys;
+            shape.string_key_values = value.string_keys;
+        }
+        if (type.element_kind == ContainerElementKind::Packed) {
+            node(path, value.elements.size(), shape);
+            for (std::size_t index = 0; index < value.elements.size();
+                 ++index) {
+                leaf(path + "[" + std::to_string(index) + "]",
+                    value.elements[index]);
+            }
+            return true;
+        }
+        // An array of unpacked structures: each element's members.
+        if (type.element_kind == ContainerElementKind::Aggregate
+            && !type.aggregate_value) {
+            node(path, value.nested_elements.size(), shape);
+            for (std::size_t index = 0; index < value.nested_elements.size();
+                 ++index) {
+                if (!aggregate(path + "[" + std::to_string(index) + "]",
+                        value.nested_elements[index])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (type.element_kind != ContainerElementKind::Container) {
+            return false;
+        }
+        node(path, value.nested_elements.size(), shape);
+        for (std::size_t index = 0; index < value.nested_elements.size();
+             ++index) {
+            if (!self(self, value.nested_elements[index],
+                    path + "[" + std::to_string(index) + "]", leaf, node,
+                    aggregate)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto no_aggregate = [](const std::string&,
+                                 runtime::simir::ContainerValue&) {
+        return false;
+    };
+    // A nested, multi-dimensional or associative property is listed with
+    // its whole shape and written back from this value.
+    std::vector<std::optional<runtime::simir::ContainerValue>> shaped_values;
+    // A structure property is listed member by member; each member is
+    // written back to these bits (offset, width) of the property.
+    std::vector<std::vector<std::pair<std::size_t, std::size_t>>>
+        structure_bits;
+    const auto definition_of = [&](const semantic::sv::TypeReference& type)
+        -> const semantic::sv::TypeDefinition* {
+        // A type of another unit (a `$unit` or package typedef) keeps only
+        // its spelling; it resolves when the spelling names one typedef.
+        const auto named = [&](const semantic::sv::TypeReference& reference)
+            -> const semantic::sv::TypeDefinition* {
+            if (reference.target.target.valid()) {
+                return built.systemverilog_hir.find_type(
+                    reference.target.target);
+            }
+            auto spelling = std::string_view { reference.target.spelling };
+            if (const auto cut = spelling.rfind("::");
+                cut != std::string_view::npos) {
+                spelling.remove_prefix(cut + 2U);
+            }
+            if (spelling.empty()) return nullptr;
+            const semantic::sv::TypeDefinition* found = nullptr;
+            for (const auto& candidate : built.systemverilog_hir.types()) {
+                if (candidate.name != spelling) continue;
+                if (found != nullptr) return nullptr;
+                found = &candidate;
+            }
+            return found;
+        };
+        const auto* definition = named(type);
+        for (std::size_t depth = 0; depth < 16U && definition != nullptr
+             && definition->members.empty()
+             && (definition->base.target.target.valid()
+                 || !definition->base.target.spelling.empty());
+             ++depth) {
+            definition = named(definition->base);
+        }
+        return definition;
+    };
+    const auto structure_of = [&](const semantic::sv::TypeReference& type)
+        -> const semantic::sv::TypeDefinition* {
+        if (type.container_form) return nullptr;
+        const auto* definition = definition_of(type);
+        return definition != nullptr && !definition->members.empty()
+                && (definition->form
+                        == semantic::sv::TypeForm::packed_structure
+                    || definition->form
+                        == semantic::sv::TypeForm::unpacked_structure)
+            ? definition
+            : nullptr;
+    };
+    // The bits a value of `type` takes in a structure's image.
+    const auto image_width = [&](auto&& self,
+                                 const semantic::sv::TypeReference& type)
+        -> std::optional<std::size_t> {
+        if (type.container_form) return std::nullopt;
+        if (const auto* definition = structure_of(type)) {
+            std::size_t total { };
+            for (const auto& member : definition->members) {
+                const auto width = self(self, member.type);
+                if (!width) return std::nullopt;
+                total += *width;
+            }
+            return total;
+        }
+        if (type.executable_width) {
+            return static_cast<std::size_t>(*type.executable_width);
+        }
+        if (type.packed_range && type.packed_range->left
+            && type.packed_range->right) {
+            return static_cast<std::size_t>(support::index_distance(
+                       *type.packed_range->left, *type.packed_range->right))
+                + 1U;
+        }
+        if (const auto* definition = definition_of(type);
+            definition != nullptr && definition->members.empty()
+            && definition->base.executable_width) {
+            return static_cast<std::size_t>(
+                *definition->base.executable_width);
+        }
+        return std::nullopt;
+    };
+    struct StructureLeaf {
+        std::string path;
+        std::size_t offset { };
+        std::size_t width { };
+        const semantic::sv::TypeReference* type { };
+        bool random { };
+    };
+    // The members of a structure, first member most significant; an
+    // unpacked structure's member is random when declared rand, a packed
+    // structure's members with the structure (IEEE 1800-2017 7.2, 18.4).
+    const auto structure_leaves = [&](auto&& self,
+                                      const semantic::sv::TypeDefinition&
+                                          definition,
+                                      const std::string& path,
+                                      std::size_t top, const bool random,
+                                      std::vector<StructureLeaf>& leaves)
+        -> bool {
+        const bool packed
+            = definition.form == semantic::sv::TypeForm::packed_structure;
+        for (const auto& member : definition.members) {
+            const auto width = image_width(image_width, member.type);
+            if (!width || *width == 0U || *width > top) return false;
+            top -= *width;
+            const bool member_random = random && (packed || member.random);
+            if (const auto* nested = structure_of(member.type)) {
+                if (!self(self, *nested, path + "." + member.name,
+                        top + *width, member_random, leaves)) {
+                    return false;
+                }
+                continue;
+            }
+            if (*width > 4096U) return false;
+            leaves.push_back({ path + "." + member.name, top, *width,
+                &member.type, member_random });
+        }
+        return true;
+    };
+    // The members of an unpacked structure held as a value (an element of
+    // an array of structures), in declaration order: `visit` receives each
+    // packed member's path, value, type and whether it is random.
+    const auto box_leaves = [&](auto&& self,
+                                runtime::simir::ContainerValue& box,
+                                const semantic::sv::TypeDefinition& definition,
+                                const std::string& path, const bool random,
+                                const auto& visit) -> bool {
+        if (box.nested_elements.size() != definition.members.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < definition.members.size();
+             ++index) {
+            const auto& member = definition.members[index];
+            auto& held = box.nested_elements[index];
+            const bool member_random = random && member.random;
+            if (const auto* nested = structure_of(member.type)) {
+                if (!self(self, held, *nested, path + "." + member.name,
+                        member_random, visit)) {
+                    return false;
+                }
+                continue;
+            }
+            if (held.elements.size() != 1U
+                || (held.type.element_kind != ContainerElementKind::Packed
+                    && held.type.element_kind
+                        != ContainerElementKind::Scalar)) {
+                return false;
+            }
+            // A real member is not a random variable (IEEE 1800-2017 18.4).
+            visit(path + "." + member.name, held.elements.front(), member.type,
+                member_random
+                    && held.type.element_kind == ContainerElementKind::Packed);
+        }
+        return true;
+    };
+    // The default value of a fixed-size array of unpacked structures, in
+    // the layout the elaborated design gives it: aggregate boxes of
+    // one-element packed members (IEEE 1800-2017 7.2, 7.4.1).
+    const auto box_type = [&](auto&& self,
+                              const semantic::sv::TypeDefinition& definition)
+        -> std::optional<runtime::simir::ContainerType> {
+        runtime::simir::ContainerType box;
+        box.element_kind = ContainerElementKind::Aggregate;
+        box.element_width = 0U;
+        box.aggregate_value = true;
+        for (const auto& member : definition.members) {
+            if (member.type.container_form
+                || !member.type.unpacked_dimensions.empty()) {
+                return std::nullopt;
+            }
+            const auto* nested = structure_of(member.type);
+            if (nested != nullptr
+                && nested->form == semantic::sv::TypeForm::unpacked_structure) {
+                auto inner = self(self, *nested);
+                if (!inner) return std::nullopt;
+                box.member_names.push_back(member.name);
+                box.element_types.push_back(std::move(*inner));
+                continue;
+            }
+            const auto width = image_width(image_width, member.type);
+            if (!width || *width == 0U || *width > 4096U
+                || (nested != nullptr
+                    && nested->form
+                        != semantic::sv::TypeForm::packed_structure)) {
+                return std::nullopt;
+            }
+            runtime::simir::ContainerType leaf;
+            leaf.element_kind = ContainerElementKind::Packed;
+            leaf.element_width = static_cast<std::uint32_t>(*width);
+            leaf.two_state = !member.type.four_state;
+            leaf.signed_elements = member.type.signed_value;
+            leaf.fixed = true;
+            leaf.dimensions.emplace_back(0, 0);
+            box.member_names.push_back(member.name);
+            box.element_types.push_back(std::move(leaf));
+        }
+        return box;
+    };
+    const auto default_structure_array
+        = [&](const semantic::sv::TypeDefinition& definition,
+              const semantic::sv::TypeReference& type)
+        -> std::optional<runtime::simir::ContainerValue> {
+        if (type.unpacked_dimensions.size() != 1U) return std::nullopt;
+        const auto& range = type.unpacked_dimensions.front();
+        if (!range.left || !range.right
+            || extent(*range.left, *range.right) > (1U << 20)) {
+            return std::nullopt;
+        }
+        auto element = box_type(box_type, definition);
+        if (!element) return std::nullopt;
+        auto array = std::move(*element);
+        array.aggregate_value = false;
+        array.fixed = true;
+        array.index_left = static_cast<std::int32_t>(*range.left);
+        array.index_right = static_cast<std::int32_t>(*range.right);
+        array.dimensions.emplace_back(array.index_left, array.index_right);
+        return runtime::simir::default_container_value(array);
+    };
+    const auto leaf_profile = [](const semantic::sv::TypeReference& type,
+                                 const runtime::PackedLogic4& value,
+                                 const bool random) {
+        runtime::SystemVerilogClassPropertyValue element;
+        element.kind = type.four_state
+            ? runtime::SystemVerilogClassPropertyKind::Logic4
+            : runtime::SystemVerilogClassPropertyKind::Bit2;
+        element.packed = value;
+        element.random_state = runtime::SystemVerilogClassRandomState {
+            random ? runtime::SystemVerilogClassRandomKind::Rand
+                   : runtime::SystemVerilogClassRandomKind::None,
+            value.width(),
+            type.signed_value,
+            type.target.spelling.empty()
+                ? std::string { "$constraint-value" }
+                : type.target.spelling,
+            true, 0, 0, 0, 0, { } };
+        return element;
+    };
+    // The structure of each array of structures' elements, for write-back.
+    std::vector<const semantic::sv::TypeDefinition*> element_structures;
     for (std::size_t node = 0; node <= members.size(); ++node) {
         const auto target = node_handle(node);
         const auto& target_object = class_heap.object(target);
         for (const auto& property :
             class_specialization(target_object.specialization_identity)
                 .properties) {
-            if (property.static_storage || !property.type.container_form
-                || property.type.container_element_types.size() != 1U
-                || property.type.container_element_types.front()
-                       .container_form) {
+            if (!property.static_storage && !property.type.container_form) {
+                const auto* structure = structure_of(property.type);
+                if (structure == nullptr
+                    || std::ranges::find(target_object.property_names,
+                           property.canonical_identity)
+                        == target_object.property_names.end()) {
+                    continue;
+                }
+                const auto& held = class_heap.property(
+                    target, property.canonical_identity);
+                const auto width = structure == nullptr ? std::nullopt
+                    : image_width(image_width, property.type);
+                std::vector<StructureLeaf> leaves;
+                if (structure == nullptr || !width
+                    || held.packed.width() != *width
+                    || !structure_leaves(structure_leaves, *structure,
+                        std::string { }, *width, true, leaves)) {
+                    continue;
+                }
+                runtime::SystemVerilogClassRandomizeContainer container;
+                container.node = node;
+                container.name = property.canonical_identity;
+                std::vector<std::pair<std::size_t, std::size_t>> bits;
+                for (const auto& leaf : leaves) {
+                    runtime::PackedLogic4 value(
+                        leaf.width, runtime::Logic4::zero);
+                    for (std::size_t bit = 0; bit < leaf.width; ++bit) {
+                        value.set(bit, held.packed.get(leaf.offset + bit));
+                    }
+                    auto element = leaf_profile(*leaf.type, value, leaf.random);
+                    container.element_paths.push_back(leaf.path);
+                    container.values.push_back(element.packed);
+                    container.element_profiles.push_back(std::move(element));
+                    bits.emplace_back(leaf.offset, leaf.width);
+                }
+                container.element = container.element_profiles.front();
+                shaped_values.resize(containers.size());
+                shaped_values.emplace_back();
+                structure_bits.resize(containers.size());
+                structure_bits.push_back(std::move(bits));
+                containers.push_back(std::move(container));
                 continue;
             }
+            if (property.static_storage || !property.type.container_form
+                || property.type.container_element_types.size() != 1U) {
+                continue;
+            }
+            const auto* leaf_type = &property.type;
+            while (leaf_type->container_form
+                && leaf_type->container_element_types.size() == 1U) {
+                leaf_type = &leaf_type->container_element_types.front();
+            }
+            if (leaf_type->container_form) continue;
+            const bool nested = property.type.container_element_types.front()
+                                    .container_form.has_value();
             const auto form = *property.type.container_form;
             const bool resizable
                 = form == semantic::sv::TypeForm::dynamic_array
                 || form == semantic::sv::TypeForm::queue;
-            if (!resizable && form != semantic::sv::TypeForm::static_array) {
+            if (!resizable && form != semantic::sv::TypeForm::static_array
+                && form != semantic::sv::TypeForm::associative_array) {
+                continue;
+            }
+            // An array of unpacked structures joins the solve member by
+            // member of each element (`a[i].m`, IEEE 1800-2017 7.2, 18.4);
+            // it keeps its size. A fixed-size one never written holds its
+            // default elements.
+            const auto* element_structure = structure_of(*leaf_type);
+            const bool written = std::ranges::find(
+                                     target_object.property_names,
+                                     property.canonical_identity)
+                != target_object.property_names.end();
+            auto structure_array = element_structure != nullptr && written
+                    && element_structure->form
+                        == semantic::sv::TypeForm::unpacked_structure
+                ? class_heap.property(target, property.canonical_identity)
+                      .container
+                : std::nullopt;
+            if (!structure_array && element_structure != nullptr && written
+                && element_structure->form
+                    == semantic::sv::TypeForm::unpacked_structure
+                && form == semantic::sv::TypeForm::static_array && !nested) {
+                structure_array = default_structure_array(
+                    *element_structure, property.type);
+            }
+            if (structure_array) {
+                runtime::SystemVerilogClassRandomizeContainer container;
+                container.node = node;
+                container.name = property.canonical_identity;
+                auto shaped = *structure_array;
+                bool valid = true;
+                const auto leaf = [&](const std::string&,
+                                      const runtime::PackedLogic4&) {
+                    valid = false;
+                };
+                const auto shape_node = [&](const std::string& path,
+                                            const std::size_t size,
+                                            runtime::SystemVerilogConstraintContainerShape
+                                                shape) {
+                    container.shapes.push_back(
+                        { path, size, std::move(shape) });
+                };
+                const auto aggregate = [&](const std::string& path,
+                                           runtime::simir::ContainerValue& box) {
+                    return box_leaves(box_leaves, box, *element_structure, path,
+                        true,
+                        [&](const std::string& member_path,
+                            const runtime::PackedLogic4& value,
+                            const semantic::sv::TypeReference& type,
+                            const bool random) {
+                            container.element_paths.push_back(member_path);
+                            container.values.push_back(value);
+                            container.element_profiles.push_back(
+                                leaf_profile(type, value, random));
+                        });
+                };
+                if (!visit_container(visit_container, shaped, std::string { },
+                        leaf, shape_node, aggregate)
+                    || !valid) {
+                    continue;
+                }
+                container.element = container.element_profiles.empty()
+                    ? leaf_profile(*leaf_type,
+                          runtime::PackedLogic4(1U, runtime::Logic4::zero),
+                          false)
+                    : container.element_profiles.front();
+                shaped_values.resize(containers.size());
+                shaped_values.push_back(std::move(shaped));
+                element_structures.resize(containers.size());
+                element_structures.push_back(element_structure);
+                containers.push_back(std::move(container));
                 continue;
             }
             // The constraints' profile of the elements, where they name
@@ -532,7 +1006,8 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             const auto named = class_constraint_property_types->find(
                 property.canonical_identity);
             // Otherwise the element type, through its typedefs.
-            auto declared = named != class_constraint_property_types->end()
+            auto declared = nested ? *leaf_type
+                : named != class_constraint_property_types->end()
                 ? named->second : property.type;
             for (std::size_t depth = 0; depth < 16U
                  && !declared.executable_width && !declared.packed_range;
@@ -573,11 +1048,9 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                         *declared.packed_range->right) + 1U);
             }
             const auto width = declared.executable_width.value_or(0U);
-            const auto& element_type
-                = property.type.container_element_types.front();
             if (width == 0U || width > 4096U
-                || element_type.value_form == semantic::sv::TypeForm::string
-                || element_type.value_form
+                || leaf_type->value_form == semantic::sv::TypeForm::string
+                || leaf_type->value_form
                     == semantic::sv::TypeForm::class_handle
                 || std::ranges::find(target_object.property_names,
                        property.canonical_identity)
@@ -620,40 +1093,137 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                     }
                 }
             }
+            std::optional<runtime::simir::ContainerValue> shaped;
             if (const auto& stored = class_heap.property(
                     target, property.canonical_identity).container) {
-                if (stored->type.element_kind
-                        != runtime::simir::ContainerElementKind::Packed
-                    || stored->type.associative
+                if (nested || stored->type.associative
+                    || stored->type.dimensions.size() > 1U) {
+                    shaped = *stored;
+                } else if (stored->type.element_kind
+                        != ContainerElementKind::Packed
                     || std::ranges::any_of(stored->elements,
                         [&](const auto& element) {
                             return element.width() != width;
                         })) {
                     continue;
+                } else {
+                    container.values = stored->elements;
+                    if (stored->type.fixed) {
+                        container.shapes.push_back({ std::string { },
+                            stored->elements.size(),
+                            fixed_shape(stored->type.index_left,
+                                stored->type.index_right) });
+                    }
                 }
-                container.values = stored->elements;
-            } else if (!resizable) {
-                // An array never written holds its default elements; only
-                // zero-based ranges map indices to positions directly.
-                if (property.type.unpacked_dimensions.size() != 1U) continue;
-                const auto& range = property.type.unpacked_dimensions.front();
-                if (!range.left || !range.right || *range.left != 0
-                    || *range.right < 0 || *range.right > (1 << 20)) {
+            } else if (!resizable && !nested
+                && form == semantic::sv::TypeForm::static_array) {
+                // An array never written holds its default elements.
+                std::vector<runtime::simir::ContainerDimension> dimensions;
+                for (const auto& range : property.type.unpacked_dimensions) {
+                    if (!range.left || !range.right
+                        || extent(*range.left, *range.right) > (1U << 20)) {
+                        dimensions.clear();
+                        break;
+                    }
+                    dimensions.emplace_back(
+                        static_cast<std::int32_t>(*range.left),
+                        static_cast<std::int32_t>(*range.right));
+                }
+                if (dimensions.empty()) continue;
+                runtime::simir::ContainerType type;
+                type.element_width = static_cast<std::uint32_t>(width);
+                type.two_state = !declared.four_state;
+                type.signed_elements = declared.signed_value;
+                type.fixed = true;
+                type.index_left = dimensions.front().first;
+                type.index_right = dimensions.front().second;
+                type.dimensions = dimensions;
+                if (dimensions.size() > 1U) {
+                    shaped = runtime::simir::default_container_value(type);
+                } else {
+                    container.values.assign(
+                        extent(type.index_left, type.index_right),
+                        container.element.packed);
+                    container.shapes.push_back({ std::string { },
+                        container.values.size(),
+                        fixed_shape(type.index_left, type.index_right) });
+                }
+            }
+            if (shaped) {
+                // A nested or associative property keeps its sizes.
+                container.resizable = false;
+                container.shapes.clear();
+                bool packed = true;
+                const auto leaf = [&](const std::string& path,
+                                      const runtime::PackedLogic4& value) {
+                    packed = packed && value.width() == width;
+                    container.element_paths.push_back(path);
+                    container.values.push_back(value);
+                };
+                const auto shape_node = [&](const std::string& path,
+                                            const std::size_t size,
+                                            runtime::SystemVerilogConstraintContainerShape
+                                                shape) {
+                    container.shapes.push_back(
+                        { path, size, std::move(shape) });
+                };
+                if (!visit_container(visit_container, *shaped, std::string { },
+                        leaf, shape_node, no_aggregate)
+                    || !packed) {
                     continue;
                 }
-                container.values.assign(
-                    static_cast<std::size_t>(*range.right) + 1U,
-                    container.element.packed);
             }
+            shaped_values.resize(containers.size());
+            shaped_values.push_back(std::move(shaped));
             containers.push_back(std::move(container));
         }
     }
+    shaped_values.resize(containers.size());
+    structure_bits.resize(containers.size());
+    element_structures.resize(containers.size());
     const auto result = runtime::randomize_systemverilog_class_graph(
         class_heap, handle, request, members, containers);
-    for (const auto& container : containers) {
+    for (std::size_t c = 0; c < containers.size(); ++c) {
+        const auto& container = containers[c];
         if (!container.committed) continue;
+        if (!structure_bits[c].empty()) {
+            auto& packed = class_heap.property(
+                node_handle(container.node), container.name).packed;
+            for (std::size_t leaf = 0; leaf < structure_bits[c].size();
+                 ++leaf) {
+                const auto [offset, width] = structure_bits[c][leaf];
+                for (std::size_t bit = 0; bit < width; ++bit) {
+                    packed.set(offset + bit, container.values[leaf].get(bit));
+                }
+            }
+            continue;
+        }
         auto& stored = class_heap.property(
             node_handle(container.node), container.name).container;
+        if (auto& shaped = shaped_values[c]) {
+            std::size_t next { };
+            const auto leaf = [&](const std::string&,
+                                  runtime::PackedLogic4& value) {
+                value = container.values.at(next++);
+            };
+            const auto shape_node = [](const std::string&, std::size_t,
+                                       const runtime::SystemVerilogConstraintContainerShape&) {
+            };
+            const auto aggregate = [&](const std::string& path,
+                                       runtime::simir::ContainerValue& box) {
+                return element_structures[c] != nullptr
+                    && box_leaves(box_leaves, box, *element_structures[c], path,
+                        true,
+                        [&](const std::string&, runtime::PackedLogic4& value,
+                            const semantic::sv::TypeReference&, bool) {
+                            value = container.values.at(next++);
+                        });
+            };
+            (void)visit_container(visit_container, *shaped, std::string { },
+                leaf, shape_node, aggregate);
+            stored = std::move(*shaped);
+            continue;
+        }
         if (!stored) {
             runtime::simir::ContainerValue created;
             created.type.element_width = static_cast<std::uint32_t>(
@@ -667,9 +1237,15 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             if (!container.resizable) {
                 const auto last = static_cast<std::int32_t>(
                     container.values.size()) - 1;
-                created.type.index_left = 0;
-                created.type.index_right = last;
-                created.type.dimensions.emplace_back(0, last);
+                const auto left = container.shapes.empty()
+                    ? 0 : static_cast<std::int32_t>(
+                          container.shapes.front().shape.left);
+                const auto right = container.shapes.empty()
+                    || !container.shapes.front().shape.descending
+                    ? left + last : left - last;
+                created.type.index_left = left;
+                created.type.index_right = right;
+                created.type.dimensions.emplace_back(left, right);
             }
             stored = std::move(created);
         }

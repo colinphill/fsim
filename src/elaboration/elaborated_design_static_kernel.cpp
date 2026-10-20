@@ -706,6 +706,34 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }, operations.expanded(op));
         }
     }
+    // A port-association program (a resolver with sources) runs on the
+    // host in the cycle its sources update, so its sources stay host
+    // signals. The program and the adapters it replaced (halted stubs) are
+    // host programs, not VHDL processes the kernel must hold.
+    std::vector<std::uint8_t> host_program(process_count, 0U);
+    for (const auto& signal : signals_) {
+        if (!signal.vhdl_resolver || signal.vhdl_resolver->sources.empty()) {
+            continue;
+        }
+        if (signal.vhdl_resolver->process < process_count) {
+            host_program[signal.vhdl_resolver->process] = 1U;
+        }
+        for (const auto source : signal.vhdl_resolver->sources) {
+            if (source < signal_count) {
+                host_touched[source] = 1U;
+            }
+        }
+    }
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (!views[index].valid() || candidates[index]) {
+            continue;
+        }
+        const auto& operations = views[index].operations();
+        if (!views[index].initialize() && operations.size() == 1U
+            && operation_holds<Halt>(operations.expanded(0U))) {
+            host_program[index] = 1U;
+        }
+    }
     // Fork children of a behavioral member run as kernel threads, so their
     // writes stay inside the kernel like the member's own (only behavioral
     // members fork).
@@ -1132,6 +1160,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         // another reads is kernel-owned (a host round trip would add deltas).
         for (std::size_t index = 0U; index < process_count; ++index) {
             if (views[index].valid() && !candidates[index]
+                && host_program[index] == 0U
                 && views[index].scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog) {
                 if (diagnose) {

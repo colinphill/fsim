@@ -45,6 +45,26 @@ struct SystemVerilogClassRandomizeContainer {
   std::vector<PackedLogic4> values;
   /// Set when the call committed new elements.
   bool committed{};
+  /// One container of the property: the property itself (empty `path`) or
+  /// a nested one (`[1]`, `[1][0]`), with its element count and shape.
+  struct Shape {
+    std::string path;
+    std::size_t size{};
+    SystemVerilogConstraintContainerShape shape;
+  };
+  /// The property's containers in pre-order. A property whose elements are
+  /// themselves containers (nested or multi-dimensional arrays) or which is
+  /// associative lists each of them and names its element values by
+  /// `element_paths` (`[1][0]`, by position); such a property keeps its
+  /// sizes. Otherwise at most the property itself is listed and its
+  /// elements are `[0]`, `[1]`, ...
+  std::vector<Shape> shapes;
+  std::vector<std::string> element_paths;
+  /// A structure property (packed, or held as its packed image) joins the
+  /// solve member by member: `element_paths` are its members (`.a`,
+  /// `.b.c`), each with its own profile here; a member that is not random
+  /// keeps its value (IEEE 1800-2017 7.2, 18.4).
+  std::vector<SystemVerilogClassPropertyValue> element_profiles;
 };
 
 /// The non-null objects reachable from `root` through class-handle

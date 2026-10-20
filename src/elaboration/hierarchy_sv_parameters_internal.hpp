@@ -29,6 +29,13 @@ namespace fsim::elaboration::hierarchy_sv_parameters_detail {
 
 [[nodiscard]] bool compiled_systemverilog_string_declaration(
     const semantic::sv::Declaration& declaration) noexcept;
+// A spelling that names a typedef or type parameter, not a built-in type.
+[[nodiscard]] bool systemverilog_named_type_spelling(std::string_view spelling);
+// Also a declaration whose type parameter the specialization binds to
+// `string` (IEEE 1800-2017 6.20.3).
+[[nodiscard]] bool compiled_systemverilog_string_declaration(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Declaration& declaration);
 
 [[nodiscard]] std::string compiled_systemverilog_type_identity(
     const semantic::sv::TypeReference& type);

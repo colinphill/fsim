@@ -118,6 +118,9 @@ struct Expression {
     // Preserve the selected package prefix for a VHDL operator-symbol call.
     // `text` remains the operator token consumed by expression lowering.
     std::optional<std::string> selected_operator_prefix;
+    // A VHDL operator symbol written as a function call (`"not"(s)`), which
+    // may name a port conversion function (IEEE 1076-2008 6.5.7.1).
+    bool vhdl_operator_symbol_call { };
     // Exact token spelling for a VHDL selected name containing an extended
     // identifier. `text` remains the decoded lowering spelling.
     std::optional<std::string> vhdl_selected_name_spelling;
@@ -381,6 +384,9 @@ struct PackedMember {
     // Optional SystemVerilog member default. Parameter substitution retains a
     // normalized contextual packed constant before runtime default construction.
     std::optional<Expression> initializer;
+    // A member of an unpacked structure declared rand or randc (IEEE
+    // 1800-2017 18.4).
+    bool random { };
 
     [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };

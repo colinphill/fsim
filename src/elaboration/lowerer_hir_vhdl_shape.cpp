@@ -504,6 +504,39 @@ bool Lowerer::hir_vhdl_null_value(
     if (value->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal) {
         return value->vhdl->text == "\"\"";
     }
+    // An aggregate whose named choices are all static null ranges has no
+    // elements (IEEE 1076-2008 9.3.3.3).
+    if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && !value->vhdl->associations.empty()
+        && std::ranges::all_of(value->vhdl->associations,
+            [&](const semantic::vhdl::AggregateAssociation& association) {
+                return !association.positional()
+                    && !association.choices.empty()
+                    && std::ranges::all_of(association.choices,
+                        [&](const semantic::ExpressionId choice_id) {
+                            const auto choice
+                                = specialized_hir_unit_->find_expression(
+                                    choice_id);
+                            if (!choice || choice->vhdl == nullptr
+                                || choice->vhdl->kind
+                                    != semantic::vhdl::ExpressionKind::binary
+                                || choice->vhdl->operands.size() != 2U
+                                || (choice->vhdl->text != "to"
+                                    && choice->vhdl->text != "downto")) {
+                                return false;
+                            }
+                            const auto left = hir_constant_integer(
+                                choice->vhdl->operands[0]);
+                            const auto right = hir_constant_integer(
+                                choice->vhdl->operands[1]);
+                            return left && right
+                                && (choice->vhdl->text == "to"
+                                        ? *left > *right
+                                        : *left < *right);
+                        });
+            })) {
+        return true;
+    }
     const auto shape = hir_vhdl_shape(expression_id);
     return shape && shape->null();
 }
@@ -525,10 +558,30 @@ Lowerer::hir_vhdl_concatenation_subtype(
     }
     // The array operands share the result's base type; an element operand
     // has the element type (IEEE 1076-2008 9.2.5).
-    std::optional<semantic::vhdl::SubtypeIndication> array;
-    semantic::TypeId root;
-    std::size_t arrays { };
+    struct ArrayOperand {
+        semantic::vhdl::SubtypeIndication subtype;
+        semantic::TypeId root;
+        semantic::TypeId element_root;
+    };
+    std::vector<ArrayOperand> operands;
+    // A string literal or aggregate takes its type from this context
+    // (IEEE 1076-2008 9.3.2, 9.3.3.1); only the other operands fix it.
+    const auto context_typed = [&](const semantic::ExpressionId operand) {
+        const auto value = specialized_hir_unit_->find_expression(operand);
+        return value && value->vhdl != nullptr
+            && (value->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal
+                || value->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate);
+    };
+    const bool typed_operand = std::ranges::any_of(source.operands,
+        [&](const semantic::ExpressionId operand) {
+            return !context_typed(operand);
+        });
     for (const auto operand : source.operands) {
+        if (typed_operand && context_typed(operand)) {
+            continue;
+        }
         const auto subtype = hir_vhdl_expression_subtype(operand);
         if (!subtype || !subtype->type_mark.target.valid()) {
             continue;
@@ -542,15 +595,48 @@ Lowerer::hir_vhdl_concatenation_subtype(
             || definition->vhdl->form != semantic::vhdl::TypeForm::array) {
             continue;
         }
-        if (!array) {
-            array = subtype;
-            root = operand_root;
-        } else if (operand_root != root) {
+        const auto element_root = definition->vhdl->element_subtype
+                && definition->vhdl->element_subtype->type_mark.target.valid()
+            ? semantic::vhdl_root_type(*specialized_hir_unit_,
+                  definition->vhdl->element_subtype->type_mark.target)
+            : semantic::TypeId { };
+        operands.push_back({ *subtype, operand_root, element_root });
+    }
+    // The result's type is the one every array-typed operand either has or
+    // is an element of; an array of arrays takes element operands that are
+    // arrays themselves (`rows & x"00"`).
+    std::optional<semantic::vhdl::SubtypeIndication> array;
+    semantic::TypeId root;
+    std::size_t arrays { };
+    for (const auto& candidate : operands) {
+        const bool fits = std::ranges::all_of(operands,
+            [&](const ArrayOperand& operand) {
+                return operand.root == candidate.root
+                    || (candidate.element_root.valid()
+                        && operand.root == candidate.element_root);
+            });
+        if (!fits) {
+            continue;
+        }
+        if (array && root != candidate.root) {
             return std::nullopt;
         }
-        ++arrays;
+        if (!array) {
+            array = candidate.subtype;
+            root = candidate.root;
+        }
     }
-    if (!array || arrays < 2U) {
+    if (!array) {
+        return std::nullopt;
+    }
+    arrays = static_cast<std::size_t>(std::ranges::count_if(operands,
+        [&](const ArrayOperand& operand) { return operand.root == root; }));
+    const auto context_operands = typed_operand
+        ? std::ranges::count_if(source.operands, context_typed)
+        : 0;
+    if (arrays == 0U
+        || operands.size() + static_cast<std::size_t>(context_operands)
+            < 2U) {
         return std::nullopt;
     }
     array->type_mark.target = root;
@@ -614,7 +700,8 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
     const auto function_result = function_call
         ? hir_vhdl_function_result_shape(expression_id, hir_process_scope_)
         : std::nullopt;
-    if (function_result && function_result->width != 0U) {
+    if (function_result
+        && (function_result->width != 0U || function_result->null_range)) {
         HirVhdlShape called;
         called.ranges.push_back(function_result->range);
         called.element_constraints = function_result->element_constraints;
@@ -843,9 +930,14 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
     if (result && result->ranges.size() == 1U && !result->ranges.front()
         && (source.kind == Kind::string_literal
             || source.kind == Kind::aggregate || concatenation)) {
-        if (const auto declared = concatenation
+        if (auto declared = concatenation
                 ? hir_vhdl_concatenation_subtype(expression_id)
                 : hir_vhdl_expression_subtype(expression_id)) {
+            // The operands' element constraints give the element length
+            // the range is counted in (9.2.5).
+            if (declared->element_constraints.empty()) {
+                declared->element_constraints = result->element_constraints;
+            }
             const auto width = hir_expression_width(
                 expression_id, hir_process_scope_, &*declared);
             if (width && *width != 0U) {

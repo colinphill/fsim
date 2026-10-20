@@ -999,8 +999,16 @@ std::optional<ContainerType> Lowerer::hir_systemverilog_container_type(
     result.associative
         = form == semantic::sv::TypeForm::associative_array;
     if (result.associative && source.associative_index) {
+        // The index type keeps its packed range (`a[bit [64:0]]`) only in
+        // its full metadata (IEEE 1800-2017 7.8.1).
         semantic::sv::TypeReference index_reference;
-        index_reference.target = *source.associative_index;
+        if (source.associative_index_metadata) {
+            index_reference
+                = semantic::sv::type_reference_from_associative_index_metadata(
+                    *source.associative_index_metadata);
+        } else {
+            index_reference.target = *source.associative_index;
+        }
         index_reference = effective_reference(index_reference);
         const auto resolved_spelling = simple_spelling(
             index_reference.target.spelling);
@@ -6485,17 +6493,29 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
         || systemverilog_interface_types_ == nullptr) {
         return std::nullopt;
     }
-    const auto receiver_declaration
-        = hir_resolver()
-              .resolve_systemverilog(
-                  receiver, scope.valid() ? scope : hir_process_scope_,
-                  [&](const semantic::CompiledDeclarationView& candidate) {
-                      return candidate.systemverilog != nullptr
-                          && hir_systemverilog_virtual_interface_type(
-                              *candidate.systemverilog);
-                  },
-                  false)
-              .unique();
+    const auto resolve_handle = [&](const std::string_view name) {
+        return hir_resolver()
+            .resolve_systemverilog(
+                name, scope.valid() ? scope : hir_process_scope_,
+                [&](const semantic::CompiledDeclarationView& candidate) {
+                    return candidate.systemverilog != nullptr
+                        && hir_systemverilog_virtual_interface_type(
+                            *candidate.systemverilog);
+                },
+                false)
+            .unique();
+    };
+    auto receiver_declaration = resolve_handle(receiver);
+    // `vif.sub.f()`: an interface instance inside the designated one
+    // (IEEE 1800-2017 25.3, 25.9).
+    std::string steps;
+    if (!receiver_declaration) {
+        if (const auto dot = receiver.find('.');
+            dot != std::string_view::npos && dot != 0U) {
+            receiver_declaration = resolve_handle(receiver.substr(0U, dot));
+            steps = std::string { receiver.substr(dot) };
+        }
+    }
     const auto declaration = receiver_declaration
         ? specialized_hir_unit_->find_declaration(*receiver_declaration)
         : std::nullopt;
@@ -6519,8 +6539,10 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
         const auto handle = systemverilog_interface_handles_->find(path);
         if (type == interface_type
             && handle != systemverilog_interface_handles_->end()
+            && (steps.empty()
+                || systemverilog_interface_handles_->contains(path + steps))
             && seen.insert(handle->second).second) {
-            instances.emplace_back(handle->second, path);
+            instances.emplace_back(handle->second, path + steps);
         }
     }
     if (instances.empty()) {
@@ -7129,7 +7151,14 @@ Lowerer::lower_hir_class_callable_invocation(
         const SizeRestoreGuard specialization_frames {
             hir_generic_binding_frames_
         };
+        // A task called through an interface instance has that instance's
+        // types (IEEE 1800-2017 25.7).
+        const auto* const callee_unit = profile.interface_receiver
+            ? hir_callee_unit(*profile.interface_receiver)
+            : nullptr;
+        const HirUnitSwap callee_swap { *this, callee_unit };
         HirCallableFrame frame;
+        frame.callee_unit = callee_unit;
         if (profile.specialization) {
             frame.class_specialization = profile.specialization;
             frame.generic_bindings = class_specializations().binding_frame(
@@ -7332,19 +7361,26 @@ Lowerer::lower_hir_class_callable_invocation(
         const bool real_inout_actual = packed_copy_out_targets[index]
             && frontend::is_real_scalar_kind(
                 hir_systemverilog_scalar_kind(actual.expression));
+        // The frame's formal has the called instance's type (25.7).
+        const auto& callee_frame = hir_callable_frames_[frame_index];
+        const auto formal_width = index < callee_frame.arguments.size()
+                && !callee_frame.argument_is_container[index]
+                && !callee_frame.argument_is_string[index]
+            ? register_width(callee_frame.arguments[index])
+            : actual.width;
         lowered_actuals[index] = packed_copy_out_targets[index]
                 && !real_inout_actual
             ? std::optional<RegisterId> {
                   packed_copy_out_targets[index]->captured }
             : lower_hir_callable_actual(
-                  actual.expression, formals[index], actual.width);
+                  actual.expression, formals[index], formal_width);
         if (!lowered_actuals[index]) {
             return std::nullopt;
         }
-        if (register_width(*lowered_actuals[index]) != actual.width) {
+        if (register_width(*lowered_actuals[index]) != formal_width) {
             lowered_actuals[index] = resize_register(
                 *lowered_actuals[index],
-                actual.width,
+                formal_width,
                 hir_actual_extension_signed(
                     actual.expression, actual.signed_value));
         }
@@ -9254,10 +9290,41 @@ Lowerer::hir_callable_formal_binding(
         && same_nominal_boolean_array_storage(*domain)) {
         domain = frontend::ValueDomain::Bit2;
     }
-    if (!width || *width == 0U || !domain
+    // An unconstrained array formal takes its actual's bounds (IEEE
+    // 1076-2008 4.2.2.2); a null array, or an array of null elements, has
+    // no storage (5.3.2.1).
+    const bool null_array_actual = width && *width == 0U
+        && subtype->unconstrained && !unspecified
+        && hir_vhdl_array_type_family(*subtype) && [&] {
+               const auto null_index
+                   = [&](const semantic::vhdl::RangeConstraint& range) {
+                         if (range.kind
+                             != semantic::vhdl::RangeKind::array_index) {
+                             return false;
+                         }
+                         if (range.null) {
+                             return true;
+                         }
+                         const auto left = hir_range_left(range);
+                         const auto right = hir_range_right(range);
+                         return left && right
+                             && (range.descending ? *left < *right
+                                                  : *left > *right);
+                     };
+               const auto shape = hir_vhdl_contextual_shape(
+                   actual, *subtype, declaration->vhdl->scope);
+               return shape && shape->complete()
+                   && (shape->null()
+                       || std::ranges::any_of(shape->element_constraints,
+                           [&](const auto& element) {
+                               return std::ranges::any_of(
+                                   element.constraints, null_index);
+                           }));
+           }();
+    if (!width || (*width == 0U && !null_array_actual) || !domain
         || !callable_scalar_domain(*domain)
         || (*domain == frontend::ValueDomain::Integer
-            && *width != 32U && *width != 64U)) {
+            && *width != 32U && *width != 64U && !null_array_actual)) {
         return std::nullopt;
     }
     HirRuntimeBinding result;
@@ -12180,7 +12247,28 @@ Lowerer::hir_vhdl_returned_result_shape(
         : range.descending != (range.left > range.right)
         ? 0U
         : index_distance(range.left, range.right) + 1U;
-    if (!width || *width == 0U || length == 0U || *width % length != 0U) {
+    if (length == 0U) {
+        // A null return value gives a null result (IEEE 1076-2008 5.3.2.1).
+        const auto type = hir_callable_type(body, 0U, true);
+        if (!type || type->string || type->container || type->width != 0U) {
+            return std::nullopt;
+        }
+        HirVhdlFunctionResultShape result { 0U, type->domain, range };
+        result.element_constraints = shape->element_constraints;
+        result.null_range = true;
+        if (const auto* array = semantic::vhdl_base_type_definition(
+                *specialized_hir_unit_, return_subtype->type_mark.target);
+            array != nullptr && array->element_subtype) {
+            if (const auto element = hir_effective_vhdl_subtype(
+                    semantic::vhdl::constrained_element_subtype(
+                        *return_subtype, "", *array->element_subtype))) {
+                result.element_width
+                    = vhdl_subtype_width(*element).value_or(0U);
+            }
+        }
+        return result;
+    }
+    if (!width || *width == 0U || *width % length != 0U) {
         return std::nullopt;
     }
     const auto type = hir_callable_type(body, *width);
@@ -14481,9 +14569,16 @@ Lowerer::lower_hir_function_call_value(
         expression_id, hir_process_scope_, resolution->body);
     const auto result_width = result_shape
         ? result_shape->width : expected_width;
-    const auto type = hir_callable_type(
-        resolution->body, result_width,
-        result_shape && result_shape->null_range);
+    // A function called through an interface instance has that instance's
+    // types (IEEE 1800-2017 25.7).
+    const auto* const callee_unit = interface_callable
+        ? hir_callee_unit(interface_callable->receiver)
+        : nullptr;
+    const auto type = [&] {
+        const HirUnitSwap swap { *this, callee_unit };
+        return hir_callable_type(resolution->body, result_width,
+            result_shape && result_shape->null_range);
+    }();
     const auto actuals = bind_hir_function_actuals(
         expression_id, resolution->body);
     const auto declaration = specialized_hir_unit_->find_declaration(
@@ -15647,6 +15742,7 @@ Lowerer::lower_hir_function_call_value(
         frame.type = *type;
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
+            frame.callee_unit = callee_unit;
         }
         frame.formals = formals;
         frame.generic_bindings = resolution->generic_bindings;
@@ -15809,9 +15905,12 @@ Lowerer::lower_hir_function_call_value(
                 frame.invocation_strings.push_back(
                     frame.string_arguments.back());
             } else {
-                const auto binding = hir_callable_formal_binding(
-                    formal, *scope, (*actuals)[index],
-                    hir_process_scope_);
+                const auto binding = [&] {
+                    const HirUnitSwap swap { *this, frame.callee_unit };
+                    return hir_callable_formal_binding(
+                        formal, *scope, (*actuals)[index],
+                        hir_process_scope_);
+                }();
                 if (!binding) {
                     return std::nullopt;
                 }
@@ -15923,9 +16022,13 @@ Lowerer::lower_hir_function_call_value(
             }
             continue;
         }
-        const auto formal = hir_callable_formal_binding(
-            formals[index], *scope, (*actuals)[index],
-            hir_process_scope_);
+        // An interface function's formal has its instance's type (25.7).
+        const auto formal = [&] {
+            const HirUnitSwap swap { *this, frame.callee_unit };
+            return hir_callable_formal_binding(
+                formals[index], *scope, (*actuals)[index],
+                hir_process_scope_);
+        }();
         if (!formal) {
             return std::nullopt;
         }
@@ -16024,9 +16127,12 @@ Lowerer::lower_hir_function_call_value(
             process_.operations.emplace_back(CopyRegister {
                 frame.arguments[index], *lowered_actuals[index] });
         } else {
-            const auto formal = hir_callable_formal_binding(
-                formals[index], *scope, (*actuals)[index],
-                hir_process_scope_);
+            const auto formal = [&] {
+                const HirUnitSwap swap { *this, frame.callee_unit };
+                return hir_callable_formal_binding(
+                    formals[index], *scope, (*actuals)[index],
+                    hir_process_scope_);
+            }();
             if (!formal) {
                 return std::nullopt;
             }
@@ -17145,6 +17251,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         }
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
+            frame.callee_unit = hir_callee_unit(interface_callable->receiver);
             bind_hir_instance_parameters(frame);
         }
         const auto debug_declaration
@@ -17216,9 +17323,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
                 frame.invocation_strings.push_back(
                     frame.string_arguments.back());
             } else {
-                const auto binding = hir_callable_formal_binding(
-                    formal, *scope, (*actuals)[index],
-                    hir_process_scope_);
+                const auto binding = [&] {
+                    const HirUnitSwap swap { *this, frame.callee_unit };
+                    return hir_callable_formal_binding(
+                        formal, *scope, (*actuals)[index],
+                        hir_process_scope_);
+                }();
                 if (!binding) {
                     return std::nullopt;
                 }
@@ -17376,9 +17486,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             process_.operations.emplace_back(CopyRegister {
                 frame.arguments[index], *lowered_actuals[index] });
         } else {
-            const auto formal = hir_callable_formal_binding(
-                formals[index], *scope, (*actuals)[index],
-                hir_process_scope_);
+            const auto formal = [&] {
+                const HirUnitSwap swap { *this, frame.callee_unit };
+                return hir_callable_formal_binding(
+                    formals[index], *scope, (*actuals)[index],
+                    hir_process_scope_);
+            }();
             if (!formal) {
                 return std::nullopt;
             }
@@ -17785,6 +17898,40 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         if (const auto aliased
             = hir_vhdl_alias_target_expression((*actuals)[index])) {
             (*actuals)[index] = *aliased;
+        }
+        // One association naming an index or a range of the formal
+        // (`x(0) => s`, `dst(3 downto 0) => b`) covers every scalar
+        // subelement of the formal (IEEE 1076-2008 6.5.7.1), so the formal
+        // denotes that actual; an unconstrained formal takes the choice's
+        // bounds (5.3.2.2).
+        if (const auto subelements = specialized_hir_unit_->find_expression(
+                (*actuals)[index]);
+            subelements && subelements->vhdl != nullptr
+            && subelements->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && (subelements->vhdl->text.empty()
+                || subelements->vhdl->text == "@vhdl-formal-subelements")
+            && subelements->vhdl->associations.size() == 1U) {
+            const auto& association
+                = subelements->vhdl->associations.front();
+            // An index or a range of the formal; a record element choice is
+            // a name.
+            const auto choice = association.choices.size() == 1U
+                ? specialized_hir_unit_->find_expression(
+                      association.choices.front())
+                : std::nullopt;
+            const bool array_choice = choice && choice->vhdl != nullptr
+                && choice->vhdl->kind != semantic::vhdl::ExpressionKind::name;
+            const auto formal_width = formal->vhdl->subtype
+                ? formal->vhdl->subtype->executable_width
+                : std::nullopt;
+            const auto actual_width = hir_expression_width(
+                association.value, hir_process_scope_);
+            if (array_choice && actual_width
+                && (!formal_width || *formal_width == 0U
+                    || *formal_width == *actual_width)) {
+                (*actuals)[index] = association.value;
+            }
         }
         const auto actual = specialized_hir_unit_->find_expression(
             (*actuals)[index]);
@@ -19297,6 +19444,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         || hir_callable_frames_[callable_index].lowered) {
         return callable_index < hir_callable_frames_.size();
     }
+    const HirUnitSwap callee_swap { *this,
+        hir_callable_frames_[callable_index].callee_unit };
     auto declaration = specialized_hir_unit_->find_declaration(
         hir_callable_frames_[callable_index].declaration);
     if (!declaration) {

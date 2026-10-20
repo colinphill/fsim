@@ -1392,7 +1392,9 @@ void Interpreter::Impl::StaticKernel::commit_round()
             }
         } else if (width != slot.width) {
             fail(entry.member, entry.instruction,
-                "SimIR signal assignment width mismatch");
+                "SimIR signal assignment width mismatch (signal width "
+                    + std::to_string(slot.width) + ", value width "
+                    + std::to_string(width) + ")");
         }
         touch(slot_index);
         slot.last_writer = member_process_[entry.member];

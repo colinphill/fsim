@@ -17,8 +17,12 @@ namespace fsim::frontend {
 namespace {
 
 using NameMap = std::map<std::string, std::string, std::less<>>;
+// The hidden name an interface typedef is imported as, if it is one.
+using TypeNames
+    = std::function<std::optional<std::string>(const std::string&)>;
 
-void rename_expression(Expression& expression, const NameMap& names) {
+void rename_expression(Expression& expression, const NameMap& names,
+                       const TypeNames* types = nullptr) {
   if (expression.kind == ExpressionKind::Identifier) {
     const auto dot = expression.text.find('.');
     const auto head = std::string_view{expression.text}.substr(
@@ -27,16 +31,23 @@ void rename_expression(Expression& expression, const NameMap& names) {
       expression.text = found->second
           + (dot == std::string::npos ? std::string{}
                                       : expression.text.substr(dot));
+    } else if (types != nullptr && dot == std::string::npos) {
+      // An interface typedef named in an expression (`$bits(row_t)`,
+      // IEEE 1800-2017 20.6.2) is imported with the type that names it.
+      if (auto hidden = (*types)(expression.text)) {
+        expression.text = std::move(*hidden);
+      }
     }
   }
   for (auto& operand : expression.operands) {
-    rename_expression(operand, names);
+    rename_expression(operand, names, types);
   }
 }
 
-void rename_range(PackedRangeExpression& range, const NameMap& names) {
-  rename_expression(range.left, names);
-  rename_expression(range.right, names);
+void rename_range(PackedRangeExpression& range, const NameMap& names,
+                  const TypeNames* types = nullptr) {
+  rename_expression(range.left, names, types);
+  rename_expression(range.right, names, types);
 }
 
 }  // namespace
@@ -206,34 +217,37 @@ std::optional<Type> VerilogParser::import_interface_type(DesignUnit& unit) {
 
   // Imports an interface typedef, and those it names, as hidden typedefs.
   std::function<std::optional<std::string>(const std::string&)> import_alias;
+  const TypeNames type_names = [&](const std::string& name) {
+    return import_alias(name);
+  };
   std::function<void(Type&)> rename_type = [&](Type& type) {
     if (type.packed_range_expression) {
-      rename_range(*type.packed_range_expression, context.names);
+      rename_range(*type.packed_range_expression, context.names, &type_names);
     }
     for (auto& dimension : type.systemverilog_packed_dimensions) {
-      rename_range(dimension, context.names);
+      rename_range(dimension, context.names, &type_names);
     }
     for (auto& value : type.systemverilog_enumeration_values) {
-      rename_expression(value, context.names);
+      rename_expression(value, context.names, &type_names);
     }
     for (auto& member : type.packed_members) {
       if (member.packed_range_expression) {
-        rename_range(*member.packed_range_expression, context.names);
+        rename_range(*member.packed_range_expression, context.names, &type_names);
       }
       for (auto& nested : member.nested_types) {
         rename_type(nested);
       }
       if (member.initializer) {
-        rename_expression(*member.initializer, context.names);
+        rename_expression(*member.initializer, context.names, &type_names);
       }
     }
     if (type.systemverilog_container) {
       auto& container = *type.systemverilog_container;
       for (auto& range : container.static_range_expressions) {
-        rename_range(range, context.names);
+        rename_range(range, context.names, &type_names);
       }
       if (container.queue_maximum) {
-        rename_expression(*container.queue_maximum, context.names);
+        rename_expression(*container.queue_maximum, context.names, &type_names);
       }
       for (auto& element : container.element_types) {
         rename_type(element);

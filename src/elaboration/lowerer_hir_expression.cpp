@@ -4770,6 +4770,48 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             effective->executable_width = aggregate_expected_width;
         }
     }
+    // A formal shaped by one slice choice takes that slice's direction
+    // (`f(X'range) => ...`, IEEE 1076-2008 6.5.7.1).
+    const auto formal_slice_descending
+        = [&](const semantic::vhdl::Expression& selected)
+        -> std::optional<bool> {
+        if (selected.text != "@vhdl-formal-subelements"
+            || selected.associations.size() != 1U
+            || selected.associations.front().choices.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto choice = specialized_hir_unit_->find_expression(
+            selected.associations.front().choices.front());
+        if (!choice || choice->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        if (choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+            && (choice->vhdl->text == "to"
+                || choice->vhdl->text == "downto")) {
+            return choice->vhdl->text == "downto";
+        }
+        if (choice->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            || (choice->vhdl->text != "'range"
+                && choice->vhdl->text != "'reverse_range")
+            || choice->vhdl->operands.empty()) {
+            return std::nullopt;
+        }
+        const auto prefix = hir_vhdl_expression_subtype(
+            choice->vhdl->operands.front());
+        const auto prefix_subtype = prefix
+            ? hir_effective_vhdl_subtype(*prefix)
+            : std::nullopt;
+        if (!prefix_subtype) {
+            return std::nullopt;
+        }
+        for (const auto& range : prefix_subtype->constraints) {
+            if (range.kind == semantic::vhdl::RangeKind::array_index) {
+                return range.descending
+                    != (choice->vhdl->text == "'reverse_range");
+            }
+        }
+        return std::nullopt;
+    };
     // A named aggregate in an unconstrained context ranges over its choices
     // in the direction of its index subtype (IEEE 1076-2008 9.3.3.3).
     if (effective && !positional_aggregate
@@ -4811,6 +4853,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             range.left = named->left;
             range.right = named->right;
             range.descending = false;
+            if (formal_slice_descending(aggregate).value_or(false)) {
+                std::swap(*range.left, *range.right);
+                range.descending = true;
+            }
             effective->constraints.push_back(range);
             effective->unconstrained = false;
             effective->executable_width = aggregate_expected_width;
@@ -6145,8 +6191,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                         count = *packed_width / *element_width;
                     }
                 }
-                const auto origin = index_origin(
+                auto origin = index_origin(
                     declared_dimension.index_subtype);
+                if (origin) {
+                    if (const auto descending
+                        = formal_slice_descending(*selected_aggregate)) {
+                        origin->second = *descending;
+                    }
+                }
                 if (shape && shape->low && shape->high && origin) {
                     constraint.left = origin->second
                         ? shape->high : shape->low;
@@ -7110,6 +7162,129 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             value,
             span);
     };
+    // A range choice whose value is an array of the aggregate's element type
+    // supplies a slice: its elements, left to right, go to the range's
+    // indices (IEEE 1076-2008 9.3.3.3). Returns whether it was a slice.
+    const bool formal_subelements
+        = aggregate.text == "@vhdl-formal-subelements";
+    const auto assign_slice = [&](const std::int64_t left,
+                                  const std::int64_t right,
+                                  const bool descending,
+                                  const semantic::vhdl::AggregateAssociation&
+                                      association,
+                                  const frontend::SourceSpan& span) -> bool {
+        const auto count = index_distance(left, right) + 1U;
+        const auto associated_value
+            = specialized_hir_unit_->find_expression(
+                association.value);
+        const bool contextual_character_slice
+            = associated_value && associated_value->vhdl != nullptr
+            && associated_value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            && element
+            && hir_vhdl_predefined_character_subtype(
+                *element, aggregate.scope);
+        // The literal's own length gives its bounds; only the
+        // array type comes from the aggregate (9.3.2).
+        std::optional<semantic::vhdl::SubtypeIndication> slice_type;
+        // In a formal part a range choice always names a slice of
+        // the formal, whose type the actual takes (6.5.7.1).
+        const bool formal_slice = formal_subelements
+            && !contextual_character_slice && dimensions.size() == 1U
+            && effective
+            && count <= std::numeric_limits<std::size_t>::max()
+                / *element_width;
+        if (formal_slice) {
+            slice_type = *effective;
+            semantic::vhdl::RangeConstraint slice_range;
+            slice_range.kind = semantic::vhdl::RangeKind::array_index;
+            slice_range.left = left;
+            slice_range.right = right;
+            slice_range.descending = descending;
+            slice_type->constraints = { std::move(slice_range) };
+            slice_type->unconstrained = false;
+            slice_type->executable_width = count * *element_width;
+        } else if (contextual_character_slice) {
+            slice_type = *effective;
+            slice_type->constraints.clear();
+            slice_type->element_constraints.clear();
+            slice_type->executable_width.reset();
+            slice_type->unconstrained = true;
+        }
+        const auto* value_context = slice_type ? &*slice_type
+                                               : nullptr;
+        const auto value_width = formal_slice
+            ? std::optional<std::size_t> { count * *element_width }
+            : contextual_character_slice
+                && associated_value->vhdl->decoded_string
+            ? std::optional<std::size_t> {
+                  associated_value->vhdl->decoded_string->size()
+                  * *element_width }
+            : hir_expression_width(association.value,
+                  hir_process_scope_, value_context);
+        const auto array_segment
+            = array_segment_layout(association.value);
+        const bool type_proven_array_segment = array_segment
+            && array_segment->first == count && value_width
+            && array_segment->second == *value_width;
+        if ((type_proven_array_segment
+                || contextual_character_slice || formal_slice)
+            && value_width
+            && count <= std::numeric_limits<std::size_t>::max()
+                / *element_width
+            && *value_width == count * *element_width
+            && *value_width
+                <= std::numeric_limits<std::uint32_t>::max()) {
+            const auto slice = lower_hir_expression(
+                association.value, *value_width,
+                frontend::SystemVerilogScalarKind::None,
+                value_context);
+            if (!slice) {
+                valid = false;
+                return true;
+            }
+            const auto low = std::min(*range->left, *range->right);
+            const auto high = std::max(*range->left, *range->right);
+            auto index = left;
+            for (std::uint64_t element_index { }; element_index < count;
+                ++element_index) {
+                if (index < low || index > high) {
+                    report(
+                        "FSIM-ELAB-VHARRAYAGG-003",
+                        "VHDL array aggregate index "
+                            + std::to_string(index)
+                            + " is outside the contextual range",
+                        span);
+                    valid = false;
+                    return true;
+                }
+                const auto slot = static_cast<std::size_t>(
+                    index_distance(index, *range->right));
+                if (values[slot]) {
+                    report(
+                        "FSIM-ELAB-VHARRAYAGG-004",
+                        "VHDL array aggregate index is assigned "
+                        "more than once",
+                        span);
+                    valid = false;
+                    return true;
+                }
+                const auto selected = allocate_register(
+                    *element_width, register_domain(*slice));
+                process_.operations.emplace_back(Extract {
+                    selected,
+                    *slice,
+                    static_cast<std::uint32_t>(
+                        (count - 1U - element_index) * *element_width),
+                    static_cast<std::uint32_t>(*element_width),
+                });
+                values[slot] = selected;
+                index += descending ? -1 : 1;
+            }
+            return true;
+        }
+        return false;
+    };
     for (std::size_t association_index = 0U;
         association_index < aggregate.associations.size();
         ++association_index) {
@@ -7192,98 +7367,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                     || (!descending && *left > *right)) {
                     return;
                 }
-                // A range choice whose value is an array of the aggregate's
-                // element type supplies a slice: its elements, left to
-                // right, go to the range's indices (IEEE 1076-2008 9.3.3.3).
-                const auto count = index_distance(*left, *right) + 1U;
-                const auto associated_value
-                    = specialized_hir_unit_->find_expression(
-                        association.value);
-                const bool contextual_character_slice
-                    = associated_value && associated_value->vhdl != nullptr
-                    && associated_value->vhdl->kind
-                        == semantic::vhdl::ExpressionKind::string_literal
-                    && element
-                    && hir_vhdl_predefined_character_subtype(
-                        *element, aggregate.scope);
-                // The literal's own length gives its bounds; only the
-                // array type comes from the aggregate (9.3.2).
-                std::optional<semantic::vhdl::SubtypeIndication> slice_type;
-                if (contextual_character_slice) {
-                    slice_type = *effective;
-                    slice_type->constraints.clear();
-                    slice_type->element_constraints.clear();
-                    slice_type->executable_width.reset();
-                    slice_type->unconstrained = true;
-                }
-                const auto* value_context = slice_type ? &*slice_type
-                                                       : nullptr;
-                const auto value_width = contextual_character_slice
-                        && associated_value->vhdl->decoded_string
-                    ? std::optional<std::size_t> {
-                          associated_value->vhdl->decoded_string->size()
-                          * *element_width }
-                    : hir_expression_width(association.value,
-                          hir_process_scope_, value_context);
-                const auto array_segment
-                    = array_segment_layout(association.value);
-                const bool type_proven_array_segment = array_segment
-                    && array_segment->first == count && value_width
-                    && array_segment->second == *value_width;
-                if ((type_proven_array_segment
-                        || contextual_character_slice)
-                    && value_width
-                    && count <= std::numeric_limits<std::size_t>::max()
-                        / *element_width
-                    && *value_width == count * *element_width
-                    && *value_width
-                        <= std::numeric_limits<std::uint32_t>::max()) {
-                    const auto slice = lower_hir_expression(
-                        association.value, *value_width,
-                        frontend::SystemVerilogScalarKind::None,
-                        value_context);
-                    if (!slice) {
-                        valid = false;
-                        return;
-                    }
-                    const auto low = std::min(*range->left, *range->right);
-                    const auto high = std::max(*range->left, *range->right);
-                    auto index = *left;
-                    for (std::uint64_t element_index { }; element_index < count;
-                        ++element_index) {
-                        if (index < low || index > high) {
-                            report(
-                                "FSIM-ELAB-VHARRAYAGG-003",
-                                "VHDL array aggregate index "
-                                    + std::to_string(index)
-                                    + " is outside the contextual range",
-                                span);
-                            valid = false;
-                            return;
-                        }
-                        const auto slot = static_cast<std::size_t>(
-                            index_distance(index, *range->right));
-                        if (values[slot]) {
-                            report(
-                                "FSIM-ELAB-VHARRAYAGG-004",
-                                "VHDL array aggregate index is assigned "
-                                "more than once",
-                                span);
-                            valid = false;
-                            return;
-                        }
-                        const auto selected = allocate_register(
-                            *element_width, register_domain(*slice));
-                        process_.operations.emplace_back(Extract {
-                            selected,
-                            *slice,
-                            static_cast<std::uint32_t>(
-                                (count - 1U - element_index) * *element_width),
-                            static_cast<std::uint32_t>(*element_width),
-                        });
-                        values[slot] = selected;
-                        index += descending ? -1 : 1;
-                    }
+                if (assign_slice(*left, *right, descending, association, span)) {
                     return;
                 }
                 auto index = *left;
@@ -7341,6 +7425,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                             "range",
                         hir_source_span(source.source));
                     valid = false;
+                    return;
+                }
+                if (assign_slice(selected_range.left, selected_range.right,
+                        selected_range.descending, association, span)) {
                     return;
                 }
                 auto index = selected_range.left;
@@ -10427,7 +10515,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         if (materialize_hir_vhdl_global_constant(*constant)) {
             const auto result = lower_hir_expression(expression_id,
                 expected_width, scalar_context, vhdl_array_context);
-            hir_local_registers_.erase(constant->value());
+            hir_local_registers_.erase(constant->declaration.value());
             return result;
         }
     }
@@ -11145,6 +11233,7 @@ Lowerer::hir_hierarchical_parameter(
     }
     // `ifcs[1].P`: a parameter of an element of an interface array.
     std::string selected_name;
+    bool element_select { };
     constexpr std::string_view selected_prefix { "@sv-select:" };
     if (expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
@@ -11179,6 +11268,18 @@ Lowerer::hir_hierarchical_parameter(
             return std::nullopt;
         }
         selected_name = *path;
+    } else if (expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index
+        && expression->systemverilog->text == "index"
+        && published_prefix.empty()) {
+        // An element of another instance's unpacked array parameter
+        // (`a.ARR[0]`, `p.FOO.A[3]`, IEEE 1800-2017 7.4, 23.6).
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!path || path->find('.') == std::string::npos) {
+            return std::nullopt;
+        }
+        selected_name = *path;
+        element_select = true;
     } else if (expression->systemverilog->kind
         != semantic::sv::ExpressionKind::name) {
         return std::nullopt;
@@ -11260,7 +11361,11 @@ Lowerer::hir_hierarchical_parameter(
             }
             for (const auto& [formal, identity] :
                 specialization.parameter_identity_values) {
-                if (formal != parameter) {
+                // An unpacked array parameter's bit stream (6.24.3).
+                if (formal != parameter
+                    && !(formal.starts_with("@aggregate:")
+                        && std::string_view { formal }.substr(11U)
+                            == parameter)) {
                     continue;
                 }
                 matched_specialization = &specialization;
@@ -11340,22 +11445,36 @@ Lowerer::hir_hierarchical_parameter(
         }
         // A member of another instance's structure parameter (`i.FOO.A`,
         // IEEE 1800-2017 7.2.1, 23.6).
+        // The formal is the segment after a dot outside brackets; the rest
+        // (`.m`, `[n]`) selects in its value.
         std::vector<std::size_t> dots;
+        std::size_t depth { };
         for (std::size_t position = 0; position < name.size(); ++position) {
-            if (name[position] == '.') {
+            if (name[position] == '[') {
+                ++depth;
+            } else if (name[position] == ']' && depth != 0U) {
+                --depth;
+            } else if (name[position] == '.' && depth == 0U) {
                 dots.push_back(position);
             }
         }
-        for (std::size_t split = dots.size() > 1U ? dots.size() - 1U : 0U;
-             split-- > 0U;) {
-            const auto member_path = name.substr(dots[split + 1U] + 1U);
-            if (member_path.find('[') != std::string_view::npos) {
+        for (std::size_t split = dots.size(); split-- > 0U;) {
+            const auto segment_end = split + 1U < dots.size()
+                ? dots[split + 1U] : name.size();
+            const auto segment = name.substr(
+                dots[split] + 1U, segment_end - dots[split] - 1U);
+            const auto bracket = segment.find('[');
+            const auto formal = std::string { segment.substr(0U, bracket) };
+            const auto member_path
+                = (bracket == std::string_view::npos
+                          ? std::string { }
+                          : std::string { segment.substr(bracket) })
+                + std::string { name.substr(segment_end) };
+            if (member_path.empty() || formal.empty()) {
                 continue;
             }
             const auto member_instance
                 = std::string { name.substr(0U, dots[split]) };
-            const auto formal = std::string { name.substr(dots[split] + 1U,
-                dots[split + 1U] - dots[split] - 1U) };
             matched_specialization = nullptr;
             std::optional<HirHierarchicalParameter> whole;
             for (std::string_view outer = hierarchy_;
@@ -11375,6 +11494,7 @@ Lowerer::hir_hierarchical_parameter(
                 continue;
             }
             if (auto member = hir_parameter_member_slice(*whole,
+                    matched_specialization->instance,
                     *matched_specialization->source_unit, formal,
                     member_path)) {
                 hierarchical_reference_used_ = true;
@@ -11382,15 +11502,63 @@ Lowerer::hir_hierarchical_parameter(
             }
         }
     }
-    hierarchical_reference_missed_ = true;
+    // An element select that names no parameter is an ordinary index.
+    if (!element_select) {
+        hierarchical_reference_missed_ = true;
+    }
     return std::nullopt;
 }
 
 std::optional<Lowerer::HirHierarchicalParameter>
 Lowerer::hir_parameter_member_slice(const HirHierarchicalParameter& whole,
+    const std::string_view owner_instance,
     const semantic::UnitId unit_id, const std::string_view formal,
     std::string_view path) const
 {
+    // The owning instance lays its parameter's value out (IEEE 1800-2017
+    // 6.24.3, 7.2.1, 7.4).
+    if (systemverilog_instance_units_ != nullptr) {
+        const auto owner = systemverilog_instance_units_->find(
+            std::string { owner_instance });
+        if (owner != systemverilog_instance_units_->end() && owner->second
+            && *owner->second) {
+            const auto& unit_hir = **owner->second;
+            const auto source_unit = unit_hir.design().find_unit(unit_id);
+            if (source_unit && source_unit->systemverilog != nullptr) {
+                for (const auto id : source_unit->systemverilog->declarations) {
+                    const auto declaration = unit_hir.find_declaration(id);
+                    if (!declaration || declaration->systemverilog == nullptr
+                        || declaration->systemverilog->name != formal
+                        || !declaration->systemverilog->type) {
+                        continue;
+                    }
+                    const auto slice = hir_systemverilog_aggregate_slice(
+                        unit_hir, *declaration->systemverilog->type, path);
+                    if (!slice || slice->whole_width != whole.value.width()
+                        || slice->offset + slice->width
+                            > whole.value.width()) {
+                        break;
+                    }
+                    runtime::PackedLogic4 value {
+                        static_cast<std::size_t>(slice->width),
+                        runtime::Logic4::x };
+                    for (std::uint64_t bit = 0U; bit < slice->width; ++bit) {
+                        value.set(static_cast<std::size_t>(bit),
+                            whole.value.get(
+                                static_cast<std::size_t>(slice->offset + bit)));
+                    }
+                    return HirHierarchicalParameter {
+                        std::move(value), slice->signed_value };
+                }
+            }
+        }
+    }
+    if (path.starts_with('[')) {
+        return std::nullopt;
+    }
+    if (path.starts_with('.')) {
+        path.remove_prefix(1U);
+    }
     const auto& design = specialized_hir_unit_->design();
     const auto unit = design.find_unit(unit_id);
     if (!unit || unit->systemverilog == nullptr) {
@@ -11584,9 +11752,19 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(Binary {
             BinaryOperator::case_equal, selected, *handle, constant });
-        const auto value = allocate_register(member.width, member.domain);
-        process_.operations.emplace_back(ReadSignal {
-            value, signal, SignalReadKind::current });
+        auto value = allocate_register(member.width, member.domain);
+        if (member.select_offset) {
+            const auto whole = allocate_register(
+                design_.signal_info_[signal].width, member.domain);
+            process_.operations.emplace_back(ReadSignal {
+                whole, signal, SignalReadKind::current });
+            process_.operations.emplace_back(Extract { value, whole,
+                *member.select_offset,
+                static_cast<std::uint32_t>(member.width) });
+        } else {
+            process_.operations.emplace_back(ReadSignal {
+                value, signal, SignalReadKind::current });
+        }
         record_implicit_signal_dependency(signal);
         const auto next = allocate_register(member.width, member.domain);
         process_.operations.emplace_back(ConditionalSelect {
@@ -12412,13 +12590,35 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             auto value = *declaration->systemverilog->initializer;
             const auto& actuals
                 = specialized_hir_unit_->specialization().actual_identities;
-            if (const auto bound = std::ranges::find(actuals, *declaration_id,
-                    &semantic::SpecializedHirActualIdentity::declaration);
-                bound != actuals.end() && bound->actual_expression) {
+            const auto bound = std::ranges::find(actuals, *declaration_id,
+                &semantic::SpecializedHirActualIdentity::declaration);
+            if (bound != actuals.end() && bound->actual_expression) {
                 value = *bound->actual_expression;
             }
-            auto typed = lower_hir_systemverilog_parameter_pattern(
-                expression_id, value);
+            std::optional<RegisterId> typed;
+            // The specialization's canonical value is authoritative: a
+            // forwarded actual names the parent's formal, whose initializer
+            // is only its default.
+            if (bound != actuals.end()) {
+                if (const auto canonical
+                    = decode_hir_systemverilog_constant(bound->identity);
+                    canonical && !canonical->scalar && !canonical->unbounded) {
+                    const auto type = hir_systemverilog_parameter_type(
+                        expression_id);
+                    const auto width = type
+                        ? hir_systemverilog_type_width(*type,
+                              declaration->systemverilog->scope)
+                        : std::nullopt;
+                    if (width && *width == canonical->width) {
+                        typed = load_constant(
+                            canonical->packed, canonical->domain);
+                    }
+                }
+            }
+            if (!typed) {
+                typed = lower_hir_systemverilog_parameter_pattern(
+                    expression_id, value);
+            }
             // A structure parameter set by an integral value (`8'h34`).
             if (!typed && !path->empty()) {
                 const auto type = hir_systemverilog_parameter_type(
@@ -16644,11 +16844,24 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? hir_static_container_expression_type(
                       call.operands.front())
                 : std::nullopt;
-            auto packed_bits = call.text == "$bits"
-                    && call.operands.size() == 1U && !receiver_type
-                ? hir_expression_width(
-                      call.operands.front(), hir_process_scope_)
-                : std::nullopt;
+            std::optional<std::size_t> packed_bits;
+            if (call.text == "$bits" && call.operands.size() == 1U
+                && !receiver_type) {
+                // A typedef another instance or array element publishes
+                // (`ifc[0].type_t`, IEEE 1800-2017 20.6.2, 23.6) is not a
+                // value.
+                if (const auto typedef_bits = hir_hierarchical_parameter(
+                        call.operands.front(), "$bits:")) {
+                    if (const auto bits
+                        = typedef_bits->value.known_unsigned_value()) {
+                        packed_bits = static_cast<std::size_t>(*bits);
+                    }
+                }
+                if (!packed_bits) {
+                    packed_bits = hir_expression_width(
+                        call.operands.front(), hir_process_scope_);
+                }
+            }
             // A hierarchical reference (`ifc.member`) has its signal's
             // width.
             if (!packed_bits && call.text == "$bits"
@@ -27347,6 +27560,15 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 == semantic::sv::ExpressionKind::name
             && !declaration && !operand_source.text.empty()) {
             text = operand_source.text;
+        } else if (const auto member
+            = operand_source.kind == semantic::sv::ExpressionKind::name
+                && operand_source.text.find('.') != std::string::npos
+                ? hir_systemverilog_member_selection(operand_id)
+                : std::nullopt;
+            member && member->member_type) {
+            // A member select has its member's type (20.6.1).
+            text = hir_systemverilog_type_name(
+                *specialized_hir_unit_, *member->member_type);
         } else if (declaration
             && declaration->systemverilog != nullptr
             && declaration->systemverilog->type) {
@@ -28308,8 +28530,18 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind
             != semantic::vhdl::ExpressionKind::aggregate
-        || expression->vhdl->associations.size() < 2U
-        || !std::ranges::all_of(expression->vhdl->associations,
+        || expression->vhdl->associations.size() < 2U) {
+        return std::nullopt;
+    }
+    // A target aggregate is either positional or named throughout; a named
+    // element names one index or a discrete range of the value's index
+    // range (IEEE 1076-2008 9.3.3.3, 10.6.2.1).
+    const bool named = std::ranges::all_of(expression->vhdl->associations,
+        [](const auto& association) {
+            return association.choices.size() == 1U;
+        });
+    if (!named
+        && !std::ranges::all_of(expression->vhdl->associations,
             [](const auto& association) {
                 return association.positional();
             })) {
@@ -28529,9 +28761,14 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         || source_width % *element_width != 0U) {
         return std::nullopt;
     }
-    const auto extent = [&](const Subtype& subtype,
+    struct IndexBounds {
+        std::int64_t left { };
+        std::int64_t right { };
+        bool descending { };
+    };
+    const auto bounds = [&](const Subtype& subtype,
                             const TypeDefinition* definition)
-        -> std::optional<std::uint64_t> {
+        -> std::optional<IndexBounds> {
         const semantic::vhdl::RangeConstraint* range { };
         if (!subtype.constraints.empty()) {
             if (subtype.constraints.size() != 1U) {
@@ -28557,10 +28794,25 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (!left || !right) {
             return std::nullopt;
         }
-        const auto distance = index_distance(*left, *right);
+        return IndexBounds { *left, *right, range->descending };
+    };
+    const auto extent = [&](const Subtype& subtype,
+                            const TypeDefinition* definition)
+        -> std::optional<std::uint64_t> {
+        const auto selected = bounds(subtype, definition);
+        if (!selected) {
+            return std::nullopt;
+        }
+        const auto distance = index_distance(selected->left, selected->right);
         return distance == std::numeric_limits<std::uint64_t>::max()
             ? std::nullopt : std::optional { distance + 1U };
     };
+    const auto source_bounds = named
+        ? bounds(*source_effective, source_array->definition)
+        : std::nullopt;
+    if (named && !source_bounds) {
+        return std::nullopt;
+    }
     auto source_count = extent(*source_effective, source_array->definition);
     if (!source_count) {
         const bool source_unconstrained = source_effective->constraints.empty()
@@ -28579,6 +28831,39 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         || *source_count * *element_width != source_width) {
         return std::nullopt;
     }
+
+    // The (low, high) index pair a named element's choice selects.
+    const auto choice_bounds = [&](const semantic::ExpressionId choice_id)
+        -> std::optional<std::pair<std::int64_t, std::int64_t>> {
+        const auto choice = specialized_hir_unit_->find_expression(choice_id);
+        if (!choice || choice->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        if (choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+            && (choice->vhdl->text == "to" || choice->vhdl->text == "downto")
+            && choice->vhdl->operands.size() == 2U) {
+            const auto left = hir_constant_integer(choice->vhdl->operands[0]);
+            const auto right
+                = hir_constant_integer(choice->vhdl->operands[1]);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            const bool descending = choice->vhdl->text == "downto";
+            const auto low = descending ? *right : *left;
+            const auto high = descending ? *left : *right;
+            return low <= high ? std::optional { std::pair { low, high } }
+                               : std::nullopt;
+        }
+        const auto index = hir_constant_integer(choice_id);
+        return index ? std::optional { std::pair { *index, *index } }
+                     : std::nullopt;
+    };
+    struct NamedSegment {
+        std::uint64_t position { };
+        std::uint64_t count { };
+        std::size_t index { };
+    };
+    std::vector<NamedSegment> named_segments;
 
     HirVhdlAggregateTargetSegments result;
     std::uint64_t target_count { };
@@ -28650,6 +28935,25 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (target_count > std::numeric_limits<std::uint64_t>::max() - count) {
             return std::nullopt;
         }
+        if (named) {
+            const auto selected = choice_bounds(association.choices.front());
+            const auto source_low = std::min(
+                source_bounds->left, source_bounds->right);
+            const auto source_high = std::max(
+                source_bounds->left, source_bounds->right);
+            if (!selected || selected->first < source_low
+                || selected->second > source_high
+                || index_distance(selected->first, selected->second) + 1U
+                    != count) {
+                return std::nullopt;
+            }
+            // Positions count from the value's left bound.
+            const auto position = source_bounds->descending
+                ? index_distance(selected->second, source_bounds->left)
+                : index_distance(selected->first, source_bounds->left);
+            named_segments.push_back(
+                NamedSegment { position, count, result.targets.size() });
+        }
         target_count += count;
         target_width += *width;
         result.targets.push_back(association.value);
@@ -28659,6 +28963,21 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
     if (!has_array_segment || target_count != *source_count
         || target_width != source_width) {
         return std::nullopt;
+    }
+    if (named) {
+        std::ranges::sort(named_segments, { }, &NamedSegment::position);
+        HirVhdlAggregateTargetSegments ordered;
+        std::uint64_t next { };
+        for (const auto& segment : named_segments) {
+            if (segment.position != next) {
+                return std::nullopt;
+            }
+            next += segment.count;
+            ordered.targets.push_back(result.targets[segment.index]);
+            ordered.widths.push_back(result.widths[segment.index]);
+            ordered.subtypes.push_back(result.subtypes[segment.index]);
+        }
+        return ordered;
     }
     return result;
 }
@@ -30094,11 +30413,13 @@ Lowerer::hir_systemverilog_parameter_member_slice(
         const auto segment = path.substr(0U, separator);
         type = fully_effective_systemverilog_type(
             type_resolver, *type, type_scope);
+        // A typedef denotes its base type, named in the typedef's own scope
+        // (IEEE 1800-2017 6.18).
+        type = type_resolver.underlying_systemverilog_type(*type, type_scope)
+                   .value_or(*type);
         auto definition = type->target.target.valid()
             ? specialized_hir_unit_->find_type(type->target.target)
             : std::nullopt;
-        // A typedef of a package type (`typedef pkg::S t;`) names that
-        // type in the typedef's own scope.
         for (std::size_t depth { }; depth < 8U && definition
              && definition->systemverilog != nullptr
              && definition->systemverilog->form

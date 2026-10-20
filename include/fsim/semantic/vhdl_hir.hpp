@@ -419,6 +419,8 @@ struct Expression {
     std::vector<AggregateAssociation> associations;
     std::string nominal_type;
     std::optional<std::string> decoded_string;
+    // An operator symbol written as a function call (`"not"(s)`).
+    bool operator_symbol_call { };
     // VHDL-2019 unspecified interface types are inferred from associated
     // typed actuals. These identities are populated only when exactly one
     // callable profile yields one consistent type per implicit formal.
