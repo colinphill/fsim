@@ -729,6 +729,17 @@ namespace {
 
 } // namespace
 
+std::optional<ContainerValue>
+hierarchy_sv_type_layout_detail::systemverilog_constant_container_initializer(
+    const semantic::SpecializedHirUnit& specialization,
+    const ContainerType& type,
+    const semantic::ExpressionId initializer,
+    const semantic::sv::TypeReference* const element_type)
+{
+    return constant_container_initializer(
+        specialization, type, initializer, element_type);
+}
+
 bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
     const semantic::sv::Unit& unit,
     SystemVerilogHirMaterialization& materialization,

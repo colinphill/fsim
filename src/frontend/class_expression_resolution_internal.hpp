@@ -25,6 +25,9 @@ struct Scope {
   // Module and interface instances of the enclosing unit, by instance name,
   // with the name of the instantiated unit.
   std::map<std::string, std::string, std::less<>> instances{};
+  // Type aliases declared in enclosing procedural blocks, by name
+  // (IEEE 1800-2017 6.18).
+  std::map<std::string, const Type*, std::less<>> aliases{};
   // Statements of a method body (not property initializers or
   // constraints).
   bool method_body{};
@@ -163,6 +166,12 @@ class Resolver final {
       const Type& receiver, const Scope& scope) const;
   [[nodiscard]] std::optional<Type> resolve_class_scoped_type(
       const Type& type, const Scope& scope) const;
+  void normalize_selection_actuals(
+      ClassSelection& selection, const Scope& scope) const;
+  // A class typedef as specialization `selection` sees it (8.25.1).
+  [[nodiscard]] Type specialize_class_alias(const Type& type,
+      const Scope& scope, ClassSelection selection,
+      const Type& alias_type) const;
   // Resolves class-scoped member types of a packed aggregate
   // (`struct packed { C#(1)::t f; }`) and re-lays it out.
   void resolve_class_scoped_members(Type& type, const Scope& scope) const;
@@ -212,6 +221,8 @@ class Resolver final {
       const Scope& scope,
       const std::optional<std::string>& expected_class,
       SystemVerilogScalarKind expected_scalar);
+  void resolve_scope_inline_constraints(
+      Expression& expression, const Scope& scope);
   std::optional<Type> resolve_expression(
       Expression& expression,
       const Scope& scope,

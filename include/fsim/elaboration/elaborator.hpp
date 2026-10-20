@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -26,6 +27,10 @@ class ProcessProgramView;
 struct ProcessInstanceProgram;
 struct StaticKernelRuntimeSpec;
 struct ProcessProgramTemplate;
+}
+
+namespace fsim::semantic::sv {
+class ClassSpecializationIndex;
 }
 
 namespace fsim::elaboration {
@@ -875,7 +880,7 @@ public:
     boundary_conversions() const noexcept;
     [[nodiscard]] const std::vector<StringObjectInfo>&
     string_objects() const noexcept;
-    [[nodiscard]] const std::vector<ContainerObjectInfo>&
+    [[nodiscard]] const std::deque<ContainerObjectInfo>&
     container_objects() const noexcept;
     [[nodiscard]] const std::vector<runtime::simir::ContainerElementSignalAlias>&
     container_element_signal_aliases() const noexcept;
@@ -1018,7 +1023,9 @@ private:
     std::vector<runtime::simir::Signal> signals_;
     std::vector<StringObjectInfo> string_object_info_;
     std::vector<runtime::simir::StringObject> string_objects_;
-    std::vector<ContainerObjectInfo> container_object_info_;
+    // A deque: lowering allocates class static containers while bindings
+    // hold references to earlier objects' types.
+    std::deque<ContainerObjectInfo> container_object_info_;
     std::vector<runtime::simir::ContainerObject> container_objects_;
     std::vector<runtime::simir::ContainerSignalAlias>
         container_signal_aliases_;
@@ -1070,10 +1077,10 @@ private:
     std::unordered_map<std::string,
         std::unordered_map<runtime::simir::SignalId, std::size_t>>
         virtual_interface_write_counts_;
-    // Construction draft: the class specialization each declaration's
-    // parameterized class type selects (`Box#(7) a;`), computed once.
-    std::optional<std::unordered_map<std::uint32_t, std::string>>
-        class_declaration_specializations_;
+    // Construction draft: the design's class specializations, computed
+    // once on first use.
+    std::shared_ptr<semantic::sv::ClassSpecializationIndex>
+        class_specializations_;
 };
 
 struct ElaborationResult {

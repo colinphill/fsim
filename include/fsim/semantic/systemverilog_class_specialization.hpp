@@ -2,9 +2,12 @@
 #pragma once
 
 #include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -59,6 +62,9 @@ struct SpecializedClassParameter {
     std::string display_identity;
     std::string canonical_identity;
     std::optional<ExpressionId> expression;
+    // The instantiating specialization's parameters and localparams that
+    // `expression` reads (`Cls #(PMINUS1 + 1)` in a parameterized class).
+    std::vector<std::pair<DeclarationId, ExpressionId>> context_bindings;
     std::optional<TypeReference> type;
     SourceSpanId source;
     OriginId origin;
@@ -160,6 +166,10 @@ struct ClassSpecializationResult {
     // (`Box#(7) a;`), by declaration.
     std::vector<std::pair<DeclarationId, std::string>>
         declaration_specializations;
+    // The specialization a static member selection's class names
+    // (`Box#(7)::f()`), by expression.
+    std::vector<std::pair<ExpressionId, std::string>>
+        expression_specializations;
 
     [[nodiscard]] bool ok() const noexcept { return errors.empty(); }
     [[nodiscard]] const ClassSpecialization* find(
@@ -173,6 +183,87 @@ struct ClassSpecializationResult {
         }
         return nullptr;
     }
+};
+
+/// Dense number of one specialization in a ClassSpecializationIndex.
+using ClassSpecializationId = std::uint32_t;
+
+/// One design's class specializations, computed once, with the lookups
+/// lowering needs: by identity, by declaration or static selection, the
+/// base chain and the derived set.
+class ClassSpecializationIndex final {
+public:
+    /// Specialize the classes of a compiled model; the model and HIR must
+    /// outlive the index, which materializes further specializations on
+    /// demand.
+    ClassSpecializationIndex(const Model& semantics, const Hir& hir);
+    explicit ClassSpecializationIndex(ClassSpecializationResult result);
+    ~ClassSpecializationIndex();
+    ClassSpecializationIndex(const ClassSpecializationIndex&) = delete;
+    ClassSpecializationIndex& operator=(
+        const ClassSpecializationIndex&) = delete;
+
+    [[nodiscard]] const ClassSpecializationResult& result() const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept
+    {
+        return result().specializations.size();
+    }
+    /// References are invalidated by specialize().
+    [[nodiscard]] const ClassSpecialization& at(
+        ClassSpecializationId id) const
+    {
+        return result().specializations.at(id);
+    }
+    /// The specialization a class-handle type names, its actuals evaluated
+    /// in the parameter environment of specialization `context` (none:
+    /// constant actuals only); materialized when new.
+    [[nodiscard]] std::optional<ClassSpecializationId> specialize(
+        const TypeReference& type,
+        std::optional<ClassSpecializationId> context,
+        SourceSpanId source = { });
+    [[nodiscard]] std::optional<ClassSpecializationId> find(
+        std::string_view specialization_identity) const;
+    /// The specialization a bare class name denotes.
+    [[nodiscard]] std::optional<ClassSpecializationId> default_for(
+        std::string_view declaration_identity) const;
+    /// The specialization a parameterized class type of a declaration
+    /// selects (`Box#(7) a;`).
+    [[nodiscard]] std::optional<ClassSpecializationId> for_declaration(
+        DeclarationId declaration) const;
+    /// The specialization a static member selection names
+    /// (`Box#(7)::f()`).
+    [[nodiscard]] std::optional<ClassSpecializationId> for_expression(
+        ExpressionId expression) const;
+    [[nodiscard]] std::optional<ClassSpecializationId> base(
+        ClassSpecializationId id) const;
+    /// The specialization in `id`'s base chain (itself included) whose
+    /// class is `declaration_identity`.
+    [[nodiscard]] std::optional<ClassSpecializationId> ancestor(
+        ClassSpecializationId id,
+        std::string_view declaration_identity) const;
+    /// Every specialization that derives from `id`, directly or not.
+    [[nodiscard]] std::span<const ClassSpecializationId> derived(
+        ClassSpecializationId id) const;
+    /// The method `declaration` as specialization `id` sees it, inherited
+    /// entries included.
+    [[nodiscard]] const SpecializedClassMethod* method(
+        ClassSpecializationId id, DeclarationId declaration) const;
+    /// The parameter bindings of `id` and of its bases.
+    [[nodiscard]] CompiledBindingFrame binding_frame(
+        ClassSpecializationId id) const;
+
+private:
+    struct Live;
+    void index_from(std::size_t first);
+
+    std::unique_ptr<Live> live_;
+    ClassSpecializationResult frozen_;
+    std::map<std::string, ClassSpecializationId, std::less<>> by_identity_;
+    std::map<std::string, ClassSpecializationId, std::less<>> defaults_;
+    std::map<DeclarationId, ClassSpecializationId> declarations_;
+    std::map<ExpressionId, ClassSpecializationId> expressions_;
+    std::vector<std::optional<ClassSpecializationId>> bases_;
+    std::vector<std::vector<ClassSpecializationId>> derived_;
 };
 
 /// Materialize default and explicitly requested SystemVerilog class

@@ -2991,7 +2991,8 @@ Process VerilogParser::parse_always() {
   if (body) {
     if (body->kind == StatementKind::Block
         && body->label.empty()
-        && body->systemverilog_imports.empty()) {
+        && body->systemverilog_imports.empty()
+        && body->type_aliases.empty()) {
       process.variables = std::move(body->declarations);
       process.statements = std::move(body->statements);
     } else {

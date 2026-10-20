@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -135,7 +136,7 @@ namespace {
             return type;
         };
 
-        std::vector<ContainerObjectInfo> object_info;
+        std::deque<ContainerObjectInfo> object_info;
         std::vector<ContainerObject> objects;
         std::vector<ContainerElementSignalAlias> element_aliases;
         std::vector<ContainerAggregateSignalAlias> aggregate_aliases;

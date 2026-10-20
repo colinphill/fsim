@@ -941,12 +941,10 @@ Simulation::Impl::Impl(
         [this](const runtime::SystemVerilogClassHandle handle,
             const std::string_view property)
             -> std::optional<runtime::simir::ContainerValue> {
-            const auto found = class_value_containers.find(
-                { handle, std::string { property } });
-            return found == class_value_containers.end()
-                ? std::nullopt
-                : std::optional<runtime::simir::ContainerValue> {
-                      found->second };
+            if (!class_heap.contains(handle)) {
+                return std::nullopt;
+            }
+            return class_heap.property(handle, property).container;
         });
     const auto invoke_source_with_notifications = [this](auto&& invoke) {
         const bool outermost = source_function_dispatch_depth == 0U;
@@ -1353,23 +1351,20 @@ Simulation::Impl::Impl(
                     "released handle"
                 };
             }
-            const auto key = std::pair { handle, std::string { property } };
+            auto& stored = class_heap.property(handle, property).container;
             if (write) {
-                class_value_containers.insert_or_assign(key, value);
-            } else if (const auto found = class_value_containers.find(key);
-                       found != class_value_containers.end()) {
+                stored = value;
+            } else if (stored) {
                 // Elements a randomize call created keep the declared type
                 // the reading process gives them.
-                if (found->second.type != value.type
-                    && found->second.type.element_kind
-                        == value.type.element_kind
-                    && found->second.type.element_width
-                        == value.type.element_width
-                    && found->second.type.element_kind
+                if (stored->type != value.type
+                    && stored->type.element_kind == value.type.element_kind
+                    && stored->type.element_width == value.type.element_width
+                    && stored->type.element_kind
                         == runtime::simir::ContainerElementKind::Packed) {
-                    found->second.type = value.type;
+                    stored->type = value.type;
                 }
-                value = found->second;
+                value = *stored;
             }
         });
     interpreter->set_class_property_read_hook(

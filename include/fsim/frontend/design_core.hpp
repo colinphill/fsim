@@ -125,6 +125,9 @@ struct Expression {
     // The data type of `type(data_type)` (IEEE 1800-2017 6.23); a
     // `type(expression)` keeps its expression as the only operand.
     std::shared_ptr<const Type> systemverilog_type_operand;
+    // The parameterized class a static member selection names
+    // (`C#(int)::f()`, IEEE 1800-2017 8.25.1), with its actuals.
+    std::shared_ptr<const Type> systemverilog_class_owner;
     Expression() = default;
 
     Expression(

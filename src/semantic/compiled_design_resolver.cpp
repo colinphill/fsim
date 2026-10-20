@@ -3150,9 +3150,30 @@ CompiledDesignResolver::effective_systemverilog_type(
         if (reference.target.spelling.empty()) {
             return std::nullopt;
         }
-        return resolve_systemverilog_named_type(
-            reference.target.spelling, scope, false, reference.source_order)
-            .unique();
+        if (const auto named = resolve_systemverilog_named_type(
+                reference.target.spelling, scope, false,
+                reference.source_order)
+                .unique()) {
+            return named;
+        }
+        // A type parameter of a base class is visible in the derived class
+        // (IEEE 1800-2017 8.13, 8.25); a class specialization's frame binds
+        // the parameters of its whole base chain, derived first.
+        for (auto frame = binding_frames_.rbegin();
+             frame != binding_frames_.rend(); ++frame) {
+            for (const auto& binding : *frame) {
+                const auto declaration = find_declaration(
+                    *design_, effective_, binding.formal);
+                if (declaration && declaration->systemverilog != nullptr
+                    && declaration->systemverilog->form
+                        == sv::DeclarationForm::type_parameter
+                    && declaration->systemverilog->name
+                        == reference.target.spelling) {
+                    return binding.formal;
+                }
+            }
+        }
+        return std::nullopt;
     };
     std::set<DeclarationId> visiting;
     const auto materialize = [&](const auto& self,

@@ -40,7 +40,7 @@ resolve_systemverilog_template_element_signals(
     semantic::DeclarationId declaration,
     const semantic::SpecializedHirOverlay& overlay,
     const elaboration_detail::ContainerDeclarationBindings& bindings,
-    std::span<const ContainerObjectInfo> object_info,
+    const std::deque<ContainerObjectInfo>& object_info,
     std::span<const runtime::simir::ContainerObject> objects,
     std::span<const runtime::simir::ContainerElementSignalAlias>
         element_aliases,

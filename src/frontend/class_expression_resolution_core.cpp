@@ -228,6 +228,12 @@ void Resolver::run() {
     for (auto& task : unit.tasks) resolve_task(task, scope);
     for (auto& process : unit.processes) {
       auto process_scope = scope;
+      for (auto& alias : process.type_aliases) {
+        if (auto scoped = resolve_class_scoped_type(alias.type, process_scope)) {
+          alias.type = std::move(*scoped);
+        }
+        process_scope.aliases.insert_or_assign(alias.name, &alias.type);
+      }
       resolve_scoped_types(process.variables, process_scope);
       add_objects(process_scope, process.variables);
       for (auto& variable : process.variables) {
@@ -540,6 +546,12 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
   for (auto& task : body.tasks) resolve_task(task, scope);
   for (auto& process : body.processes) {
     auto process_scope = scope;
+    for (auto& alias : process.type_aliases) {
+      if (auto scoped = resolve_class_scoped_type(alias.type, process_scope)) {
+        alias.type = std::move(*scoped);
+      }
+      process_scope.aliases.insert_or_assign(alias.name, &alias.type);
+    }
     resolve_scoped_types(process.variables, process_scope);
     add_objects(process_scope, process.variables);
     for (auto& variable : process.variables) {
@@ -768,10 +780,88 @@ bool Resolver::class_assignable(
     }
     return nullptr;
   };
+  // A type parameter of a base class names the type the extends clause
+  // binds to it, or its default (IEEE 1800-2017 8.13, 8.25).
+  const auto inherited_parameter = [&](const std::string& identity)
+      -> std::optional<Type> {
+    const auto* current = find_class(identity);
+    std::set<std::string> visited;
+    while (current != nullptr && current->base
+           && visited.insert(current->canonical_identity).second) {
+      if (std::ranges::any_of(current->parameters,
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.name == type.named_type;
+              })) {
+        return std::nullopt;
+      }
+      const auto* base = find_base_class(*current);
+      if (base == nullptr) return std::nullopt;
+      const auto formal = std::ranges::find(
+          base->parameters, type.named_type, &ParameterDeclaration::name);
+      if (formal == base->parameters.end()) {
+        current = base;
+        continue;
+      }
+      if (formal->kind != ParameterKind::Type) return std::nullopt;
+      const auto index = static_cast<std::size_t>(
+          std::distance(base->parameters.begin(), formal));
+      const auto& actuals = current->base->parameter_actuals;
+      const SystemVerilogClassParameterActual* actual = nullptr;
+      for (std::size_t position = 0; position < actuals.size(); ++position) {
+        if (actuals[position].name.empty()
+                ? position == index
+                : actuals[position].name == formal->name) {
+          actual = &actuals[position];
+          break;
+        }
+      }
+      if (actual == nullptr) {
+        return formal->default_type
+            ? std::optional{resolve_alias_type(
+                  *formal->default_type, base->canonical_identity)}
+            : std::nullopt;
+      }
+      std::optional<Type> bound = actual->type_actual;
+      if (!bound && actual->value.kind == ExpressionKind::Identifier) {
+        bound = Type{};
+        bound->named_type = actual->value.text;
+      }
+      if (!bound) return std::nullopt;
+      if (class_identity(*bound) || bound->named_type.empty()) return bound;
+      // A class or typedef named in the derived class's scope.
+      const auto scope_end = current->canonical_identity.rfind("::");
+      if (scope_end != std::string::npos) {
+        if (const auto* named = find_class(
+                current->canonical_identity.substr(0, scope_end) + "::"
+                + bound->named_type)) {
+          return class_type(*named);
+        }
+      }
+      auto resolved = resolve_alias_type(*bound, current->canonical_identity);
+      if (!class_identity(resolved)
+          && resolved.named_type == bound->named_type) {
+        return std::nullopt;
+      }
+      return resolved;
+    }
+    return std::nullopt;
+  };
   for (;;) {
     auto alias = class_aliases_.find(
         lexical_identity + "::" + type.named_type);
     if (alias == class_aliases_.end()) {
+      if (auto inherited = inherited_parameter(lexical_identity)) {
+        if (type.systemverilog_container) {
+          auto& elements = type.systemverilog_container->element_types;
+          if (elements.empty()) {
+            elements.push_back(std::move(*inherited));
+          } else {
+            elements.front() = std::move(*inherited);
+          }
+          return type;
+        }
+        return std::move(*inherited);
+      }
       if (const auto* inherited = inherited_alias(lexical_identity)) {
         if (type.systemverilog_container) {
           auto& elements = type.systemverilog_container->element_types;
@@ -1265,61 +1355,87 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   ClassSelection selection{
       declarations.front(), class_type(*declarations.front())};
 
+  // A typedef of a specialization (`C::T`, `P::T` or `T`) supplies its
+  // parameter values (IEEE 1800-2017 8.25.1).
   const auto hash = spelling.find('#');
   const auto selected = spelling.rfind("::");
-  if (selected != std::string_view::npos
+  std::optional<Type> alias_type;
+  if (hash == std::string_view::npos && selected == std::string_view::npos) {
+    Type named;
+    named.named_type = std::string{spelling};
+    if (const auto local = scope.aliases.find(spelling);
+        local != scope.aliases.end()) {
+      if (!local->second->systemverilog_class_parameter_actuals.empty()) {
+        alias_type = *local->second;
+      }
+    } else if (auto resolved = resolve_alias_type(
+                   named, scope.lexical_identity);
+        !resolved.systemverilog_class_parameter_actuals.empty()) {
+      alias_type = std::move(resolved);
+    }
+  } else if (selected != std::string_view::npos
       && (hash == std::string_view::npos || selected < hash)) {
-    const auto owners = resolve_class_name(spelling.substr(0, selected), scope);
+    const auto owner = spelling.substr(0, selected);
+    const auto name = std::string{spelling.substr(selected + 2U)};
+    const auto owners = resolve_class_name(owner, scope);
     if (owners.size() == 1U) {
-      const auto alias = class_aliases_.find(
-          owners.front()->canonical_identity + "::"
-          + std::string{spelling.substr(selected + 2U)});
-      if (alias != class_aliases_.end()) {
-        const auto identity = class_identity(*alias->second);
-        if (identity
-            && *identity == selection.declaration->canonical_identity) {
-          selection.type = *alias->second;
-          for (std::size_t index = 0;
-               index
-                   < selection.type.systemverilog_class_parameter_actuals
-                         .size();
-               ++index) {
-            auto& actual =
-                selection.type.systemverilog_class_parameter_actuals[index];
-            std::size_t formal_index = index;
-            if (actual.name) {
-              const auto formal = std::ranges::find(
-                  selection.declaration->parameters,
-                  *actual.name,
-                  &ParameterDeclaration::name);
-              if (formal == selection.declaration->parameters.end()) {
-                continue;
-              }
-              formal_index = static_cast<std::size_t>(std::distance(
-                  selection.declaration->parameters.begin(), formal));
-            }
-            if (formal_index >= selection.declaration->parameters.size()) {
-              continue;
-            }
-            const auto& formal =
-                selection.declaration->parameters[formal_index];
-            if (formal.kind == ParameterKind::Type
-                && !actual.type_actual
-                && actual.value.valid()) {
-              actual.type_actual = std::make_shared<Type>(
-                  selected_type_actual(actual.value.text, scope));
-            } else if (
-                actual.type_actual
-                && actual.type_actual->systemverilog_class_declaration
-                       .empty()
-                && !actual.type_actual->named_type.empty()) {
-              *actual.type_actual = selected_type_actual(
-                  actual.type_actual->named_type, scope);
-            }
-          }
-          return selection;
+      if (const auto alias = class_aliases_.find(
+              owners.front()->canonical_identity + "::" + name);
+          alias != class_aliases_.end()) {
+        alias_type = *alias->second;
+      }
+    } else if (owner.find("::") == std::string_view::npos) {
+      for (const auto& unit : design_.units) {
+        if (unit.name != owner) continue;
+        if (const auto alias = class_aliases_.find(
+                effective_library(unit.library) + "::" + unit.name + "::"
+                + name);
+            alias != class_aliases_.end()) {
+          alias_type = *alias->second;
+          break;
         }
       }
+    }
+  }
+  if (alias_type) {
+    const auto identity = class_identity(*alias_type);
+    if (identity && *identity == selection.declaration->canonical_identity) {
+      selection.type = std::move(*alias_type);
+      for (std::size_t index = 0;
+           index < selection.type.systemverilog_class_parameter_actuals.size();
+           ++index) {
+        auto& actual =
+            selection.type.systemverilog_class_parameter_actuals[index];
+        std::size_t formal_index = index;
+        if (actual.name) {
+          const auto formal = std::ranges::find(
+              selection.declaration->parameters,
+              *actual.name,
+              &ParameterDeclaration::name);
+          if (formal == selection.declaration->parameters.end()) {
+            continue;
+          }
+          formal_index = static_cast<std::size_t>(std::distance(
+              selection.declaration->parameters.begin(), formal));
+        }
+        if (formal_index >= selection.declaration->parameters.size()) {
+          continue;
+        }
+        const auto& formal = selection.declaration->parameters[formal_index];
+        if (formal.kind == ParameterKind::Type
+            && !actual.type_actual
+            && actual.value.valid()) {
+          actual.type_actual = std::make_shared<Type>(
+              selected_type_actual(actual.value.text, scope));
+        } else if (
+            actual.type_actual
+            && actual.type_actual->systemverilog_class_declaration.empty()
+            && !actual.type_actual->named_type.empty()) {
+          *actual.type_actual = selected_type_actual(
+              actual.type_actual->named_type, scope);
+        }
+      }
+      return selection;
     }
   }
 
@@ -1425,6 +1541,19 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         ? &formal.default_value
         : nullptr);
   }
+  // Class local parameters (`localparam int n = W * 2`) follow the
+  // parameters they are computed from (IEEE 1800-2017 8.25, 6.20.4).
+  if (any_value_actual) {
+    for (const auto& property : selection.declaration->properties) {
+      if (property.is_parameter && property.declaration.initializer
+          && std::ranges::none_of(values, [&](const auto& value) {
+               return value.first == property.declaration.name;
+             })) {
+        values.emplace_back(property.declaration.name,
+            &*property.declaration.initializer);
+      }
+    }
+  }
   // Type parameters bound here also type the selected type's members
   // (`typedef struct packed {T a;} t`), with their own value-parameter
   // ranges (`localparam type T = logic [W-1:0]`).
@@ -1455,6 +1584,14 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       if (actual.type_actual) {
         actual.type_actual = std::make_shared<Type>(
             self(self, std::move(*actual.type_actual)));
+      } else if (actual.value.kind == ExpressionKind::Identifier) {
+        // A type parameter named as an actual (`item#(T)`, parsed as an
+        // expression) is the type it is bound to.
+        if (const auto found = bindings.find(actual.value.text);
+            found != bindings.end()) {
+          actual.type_actual = std::make_shared<Type>(found->second);
+          actual.value = {};
+        }
       }
     }
     return retained;
@@ -1520,49 +1657,10 @@ void Resolver::resolve_class_scoped_members(
   }
   return type;
 }
-[[nodiscard]] std::optional<Type> Resolver::resolve_class_scoped_type(
-    const Type& type, const Scope& scope) const {
-  // `C::t` or `C #(...)::t`: a type declared in a class, specialized by the
-  // selected class actuals (IEEE 1800-2017 8.25.1).
-  const auto separator = type.named_type.rfind("::");
-  if (separator == std::string::npos || separator == 0U) return std::nullopt;
-  const auto owners = resolve_class_name(
-      std::string_view{type.named_type}.substr(0U, separator), scope);
-  if (owners.size() != 1U) return std::nullopt;
-  const auto alias = class_aliases_.find(owners.front()->canonical_identity
-      + "::" + type.named_type.substr(separator + 2U));
-  if (alias == class_aliases_.end()) {
-    // A nested class, possibly inherited from a base (`Derived::Inner`).
-    if (find_class(owners.front()->canonical_identity + "::"
-            + type.named_type.substr(separator + 2U))) {
-      return std::nullopt;
-    }
-    const auto nested = resolve_class_name(type.named_type, scope);
-    if (nested.size() != 1U) return std::nullopt;
-    auto resolved = class_type(*nested.front());
-    resolved.systemverilog_container = type.systemverilog_container;
-    return resolved;
-  }
-  ClassSelection selection{owners.front(), class_type(*owners.front())};
-  selection.type.systemverilog_class_parameter_actuals =
-      type.systemverilog_class_parameter_actuals;
-  // `typedef C#(8) c8_t; c8_t::t`: the typedef's specialization actuals.
-  if (selection.type.systemverilog_class_parameter_actuals.empty()) {
-    const auto owner_name = type.named_type.substr(0U, separator);
-    std::string lexical = scope.lexical_identity;
-    for (;;) {
-      const auto owner_alias = class_aliases_.find(
-          lexical + "::" + owner_name);
-      if (owner_alias != class_aliases_.end()) {
-        selection.type.systemverilog_class_parameter_actuals =
-            owner_alias->second->systemverilog_class_parameter_actuals;
-        break;
-      }
-      const auto parent = lexical.rfind("::");
-      if (parent == std::string::npos) break;
-      lexical.resize(parent);
-    }
-  }
+// A type parameter's actual named as an expression (`C#(D)`) denotes the
+// named type (IEEE 1800-2017 8.25).
+void Resolver::normalize_selection_actuals(
+    ClassSelection& selection, const Scope& scope) const {
   std::size_t next_positional{};
   for (auto& actual : selection.type.systemverilog_class_parameter_actuals) {
     std::size_t formal_index = next_positional++;
@@ -1587,7 +1685,94 @@ void Resolver::resolve_class_scoped_members(
           actual.type_actual->named_type, scope);
     }
   }
-  auto resolved = specialize_selected_type(*alias->second, selection);
+}
+[[nodiscard]] std::optional<Type> Resolver::resolve_class_scoped_type(
+    const Type& type, const Scope& scope) const {
+  // `C::t` or `C #(...)::t`: a type declared in a class, specialized by the
+  // selected class actuals (IEEE 1800-2017 8.25.1).
+  const auto separator = type.named_type.rfind("::");
+  if (separator == std::string::npos || separator == 0U) return std::nullopt;
+  const auto owners = resolve_class_name(
+      std::string_view{type.named_type}.substr(0U, separator), scope);
+  if (owners.size() != 1U) return std::nullopt;
+  const auto alias = class_aliases_.find(owners.front()->canonical_identity
+      + "::" + type.named_type.substr(separator + 2U));
+  if (alias == class_aliases_.end()) {
+    // A nested class, possibly inherited from a base (`Derived::Inner`).
+    if (find_class(owners.front()->canonical_identity + "::"
+            + type.named_type.substr(separator + 2U))) {
+      return std::nullopt;
+    }
+    // A typedef a base class declares (IEEE 1800-2017 8.13), seen in the
+    // base specialization the extends clause selects.
+    ClassSelection inherited{owners.front(), class_type(*owners.front())};
+    inherited.type.systemverilog_class_parameter_actuals =
+        type.systemverilog_class_parameter_actuals;
+    normalize_selection_actuals(inherited, scope);
+    std::set<std::string> visited;
+    while (inherited.declaration->base
+           && visited.insert(inherited.declaration->canonical_identity)
+                  .second) {
+      const auto* base = find_base_class(*inherited.declaration);
+      if (base == nullptr) break;
+      auto base_type = class_type(*base);
+      for (const auto& actual :
+           inherited.declaration->base->parameter_actuals) {
+        SystemVerilogClassTypeActual retained;
+        if (!actual.name.empty()) retained.name = actual.name;
+        retained.value = actual.value;
+        if (actual.type_actual) {
+          retained.type_actual = std::make_shared<Type>(*actual.type_actual);
+        }
+        retained.span = actual.span;
+        base_type.systemverilog_class_parameter_actuals.push_back(
+            std::move(retained));
+      }
+      ClassSelection next{base,
+          specialize_selected_type(std::move(base_type), inherited)};
+      const auto base_alias = class_aliases_.find(base->canonical_identity
+          + "::" + type.named_type.substr(separator + 2U));
+      if (base_alias != class_aliases_.end()) {
+        return specialize_class_alias(
+            type, scope, std::move(next), *base_alias->second);
+      }
+      inherited = std::move(next);
+    }
+    const auto nested = resolve_class_name(type.named_type, scope);
+    if (nested.size() != 1U) return std::nullopt;
+    auto resolved = class_type(*nested.front());
+    resolved.systemverilog_container = type.systemverilog_container;
+    return resolved;
+  }
+  ClassSelection selection{owners.front(), class_type(*owners.front())};
+  selection.type.systemverilog_class_parameter_actuals =
+      type.systemverilog_class_parameter_actuals;
+  return specialize_class_alias(type, scope, std::move(selection),
+      *alias->second);
+}
+[[nodiscard]] Type Resolver::specialize_class_alias(
+    const Type& type, const Scope& scope, ClassSelection selection,
+    const Type& alias_type) const {
+  const auto separator = type.named_type.rfind("::");
+  // `typedef C#(8) c8_t; c8_t::t`: the typedef's specialization actuals.
+  if (selection.type.systemverilog_class_parameter_actuals.empty()) {
+    const auto owner_name = type.named_type.substr(0U, separator);
+    std::string lexical = scope.lexical_identity;
+    for (;;) {
+      const auto owner_alias = class_aliases_.find(
+          lexical + "::" + owner_name);
+      if (owner_alias != class_aliases_.end()) {
+        selection.type.systemverilog_class_parameter_actuals =
+            owner_alias->second->systemverilog_class_parameter_actuals;
+        break;
+      }
+      const auto parent = lexical.rfind("::");
+      if (parent == std::string::npos) break;
+      lexical.resize(parent);
+    }
+  }
+  normalize_selection_actuals(selection, scope);
+  auto resolved = specialize_selected_type(alias_type, selection);
   if (type.systemverilog_container && !resolved.systemverilog_container) {
     // `C::t x[string]`: the declared dimensions hold elements of the type.
     auto container = type.systemverilog_container;
@@ -1703,6 +1888,13 @@ Resolver::resolve_class_name(
     }
   };
   if (const auto exact = find_class(normalized)) return {exact};
+  // A typedef of a class declared in an enclosing block.
+  if (const auto alias = scope.aliases.find(normalized);
+      alias != scope.aliases.end()) {
+    if (const auto identity = class_identity(*alias->second)) {
+      if (const auto declaration = find_class(*identity)) return {declaration};
+    }
+  }
   if (const auto selected = normalized.rfind("::");
       selected != std::string::npos) {
     const auto owners = resolve_class_name(
@@ -2242,9 +2434,14 @@ void Resolver::retain_result_type(
       if (method && method->method) {
         expression.kind = ExpressionKind::Call;
         if (method->method->is_static) {
-          // A static method called through a handle (8.10).
+          // A static method called through a handle (8.10), in the
+          // handle's class specialization (8.25).
           expression.text = "@sv-static-method:"
               + method->method->canonical_identity;
+          if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
+            expression.systemverilog_class_owner =
+                std::make_shared<const Type>(*receiver_type);
+          }
           expression.operands.clear();
           retain_call_profile(expression, *method->method, false);
         } else {
@@ -2339,11 +2536,16 @@ void Resolver::retain_result_type(
     }
     if (match.property->is_static) {
       // A static property reached through an object handle denotes the
-      // class's single storage (IEEE 1800-2017 8.9).
+      // class's single storage (IEEE 1800-2017 8.9), the one of the
+      // handle's specialization (8.25).
       expression.text = (type.systemverilog_container
               ? "@sv-static-container-property:"
               : "@sv-static-property:")
           + match.owner->canonical_identity + "::" + member;
+      if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
+        expression.systemverilog_class_owner =
+            std::make_shared<const Type>(*receiver_type);
+      }
       expression.operands.clear();
     } else {
       expression.text = (type.systemverilog_container
@@ -2448,6 +2650,14 @@ void Resolver::retain_result_type(
                  ? "@sv-static-container-property:"
                  : "@sv-static-property:")
             + match.owner->canonical_identity + "::" + member;
+        // The selected specialization owns the storage (IEEE 1800-2017
+        // 8.25.1).
+        if (const auto selection = resolve_class_selection(owner_name, scope);
+            selection
+            && !selection->type.systemverilog_class_parameter_actuals.empty()) {
+          expression.systemverilog_class_owner =
+              std::make_shared<const Type>(selection->type);
+        }
         retain_result_type(expression, type);
         if (const auto identity = class_identity(type)) {
           expression.nominal_type = *identity;
@@ -2491,9 +2701,25 @@ void Resolver::retain_result_type(
       return std::nullopt;
     }
     if (match.property) {
-      const auto type = resolve_alias_type(
+      auto type = resolve_alias_type(
           match.property->declaration.type,
           match.owner->canonical_identity);
+      // A property inherited from a base and typed by the base's type
+      // parameter has the type the extends clause binds (IEEE 1800-2017
+      // 8.13, 8.25).
+      if (match.owner != scope.class_owner && !class_identity(type)
+          && !type.named_type.empty()
+          && std::ranges::any_of(match.owner->parameters,
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.kind == ParameterKind::Type
+                    && parameter.name == type.named_type;
+              })) {
+        auto bound = resolve_alias_type(match.property->declaration.type,
+            scope.class_owner->canonical_identity);
+        if (class_identity(bound) || bound.named_type != type.named_type) {
+          type = std::move(bound);
+        }
+      }
       // In a method body, an unpacked array, queue or associative array
       // of values stays a name of the property, which the elaborated
       // method reads and writes as a container of the object.

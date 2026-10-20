@@ -14,6 +14,7 @@
 
 #include <bit>
 #include <charconv>
+#include <deque>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -372,6 +373,63 @@ void Interpreter::Impl::execute_scope_randomize(
             &staged_targets[target_index] });
     }
 
+    // An array's packed elements join the solve as `<identity>[i]`, with
+    // `<identity>[]` holding their count, as a class's do (18.12, 18.5.8.1).
+    struct StagedContainer {
+        ContainerRegisterId id { };
+        ContainerValue value;
+        std::size_t first { };
+        bool randomized { };
+    };
+    std::vector<StagedContainer> staged_containers;
+    std::deque<PackedLogic4> container_elements;
+    for (const auto& container : operation.containers) {
+        auto value = process.executor
+            ? process.executor->read_container_register(container.container)
+            : read_container_register(process, container.container);
+        if ((value.type.element_kind != ContainerElementKind::Packed
+                && value.type.element_kind != ContainerElementKind::Scalar)
+            || std::ranges::any_of(value.elements, [&](const auto& element) {
+                   return element.width() != container.element_width
+                       || element.is_logic9();
+               })) {
+            throw std::invalid_argument {
+                "std::randomize array elements do not match their profile"
+            };
+        }
+        const SystemVerilogConstraintVariableProfile element_profile {
+            container.domain_kind == ScopeRandomizeDomainKind::enumeration
+                ? SystemVerilogConstraintDomainKind::Enumeration
+                : container.domain_kind == ScopeRandomizeDomainKind::integer
+                ? SystemVerilogConstraintDomainKind::Integer
+                : SystemVerilogConstraintDomainKind::BitVector,
+            container.element_width,
+            container.signed_value,
+            container.nominal_type,
+        };
+        const auto first = container_elements.size();
+        for (std::size_t index = 0; index < value.elements.size(); ++index) {
+            container_elements.push_back(value.elements[index]);
+            request.variables.push_back({
+                container.canonical_identity + "["
+                    + std::to_string(index) + "]",
+                element_profile,
+                container.randomized
+                    ? container.domain
+                    : std::vector<PackedLogic4> { value.elements[index] },
+                &container_elements.back() });
+        }
+        container_elements.push_back(PackedLogic4::from_aval_bval(
+            32U, value.elements.size(), 0U));
+        request.variables.push_back({
+            container.canonical_identity + "[]",
+            { SystemVerilogConstraintDomainKind::Integer, 32U, true, "int" },
+            { container_elements.back() },
+            &container_elements.back() });
+        staged_containers.push_back({ container.container, std::move(value),
+            first, container.randomized });
+    }
+
     // Calling-scope values named by the with-clause are read now
     // (IEEE 1800-2017 18.7).
     std::vector<SystemVerilogConstraintTemplate> bound_constraints;
@@ -442,6 +500,23 @@ void Interpreter::Impl::execute_scope_randomize(
                 using std::swap;
                 swap(get_register(process, target_registers[index]),
                     staged_targets[index]);
+            }
+        }
+        for (auto& staged : staged_containers) {
+            if (!staged.randomized) {
+                continue;
+            }
+            for (std::size_t index = 0; index < staged.value.elements.size();
+                 ++index) {
+                staged.value.elements[index]
+                    = std::move(container_elements[staged.first + index]);
+            }
+            if (process.executor) {
+                process.executor->write_container_register(
+                    staged.id, staged.value);
+            } else {
+                get_container_register(process, staged.id)
+                    = std::move(staged.value);
             }
         }
     }

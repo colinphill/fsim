@@ -406,6 +406,9 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     string_by_name_.clear();
     container_by_name_.clear();
     virtual_interface_write_counts_.clear();
+    // The index refers to the compiled design, which may not outlive
+    // elaboration.
+    class_specializations_.reset();
 }
 
 const std::vector<SignalInfo>&
@@ -432,7 +435,7 @@ ElaboratedDesign::string_objects() const noexcept
     return string_object_info_;
 }
 
-const std::vector<ContainerObjectInfo>&
+const std::deque<ContainerObjectInfo>&
 ElaboratedDesign::container_objects() const noexcept
 {
     return container_object_info_;
@@ -1147,7 +1150,8 @@ ElaboratedDesignState ElaboratedDesign::state() const&
     }
     ElaboratedDesignState result {
         top_, roots_, signal_info_, boundary_conversions_, signals_,
-        string_object_info_, string_objects_, container_object_info_,
+        string_object_info_, string_objects_,
+        { container_object_info_.begin(), container_object_info_.end() },
         container_objects_, container_signal_aliases_,
         container_element_signal_aliases_, container_aggregate_signal_aliases_,
         vhdl_protected_object_info_,
@@ -1206,7 +1210,9 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.top_, design.roots_, design.signal_info_,
         design.boundary_conversions_, design.signals_,
         design.string_object_info_, design.string_objects_,
-        design.container_object_info_, design.container_objects_,
+        { design.container_object_info_.begin(),
+            design.container_object_info_.end() },
+        design.container_objects_,
         design.container_signal_aliases_,
         design.container_element_signal_aliases_,
         design.container_aggregate_signal_aliases_,
@@ -1268,7 +1274,9 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(top_), std::move(roots_), std::move(signal_info_),
         std::move(boundary_conversions_), std::move(signals_),
         std::move(string_object_info_), std::move(string_objects_),
-        std::move(container_object_info_), std::move(container_objects_),
+        { std::make_move_iterator(container_object_info_.begin()),
+            std::make_move_iterator(container_object_info_.end()) },
+        std::move(container_objects_),
         std::move(container_signal_aliases_),
         std::move(container_element_signal_aliases_),
         std::move(container_aggregate_signal_aliases_),
@@ -1820,7 +1828,9 @@ ElaboratedDesign::from_state_with_process_rows(
     result.signals_ = std::move(state.signals);
     result.string_object_info_ = std::move(state.string_object_info);
     result.string_objects_ = std::move(state.string_objects);
-    result.container_object_info_ = std::move(state.container_object_info);
+    result.container_object_info_.assign(
+        std::make_move_iterator(state.container_object_info.begin()),
+        std::make_move_iterator(state.container_object_info.end()));
     result.container_objects_ = std::move(state.container_objects);
     result.container_signal_aliases_ = std::move(state.container_signal_aliases);
     result.container_element_signal_aliases_

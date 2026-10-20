@@ -620,19 +620,18 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                     }
                 }
             }
-            if (const auto stored = class_value_containers.find(
-                    { target, property.canonical_identity });
-                stored != class_value_containers.end()) {
-                if (stored->second.type.element_kind
+            if (const auto& stored = class_heap.property(
+                    target, property.canonical_identity).container) {
+                if (stored->type.element_kind
                         != runtime::simir::ContainerElementKind::Packed
-                    || stored->second.type.associative
-                    || std::ranges::any_of(stored->second.elements,
+                    || stored->type.associative
+                    || std::ranges::any_of(stored->elements,
                         [&](const auto& element) {
                             return element.width() != width;
                         })) {
                     continue;
                 }
-                container.values = stored->second.elements;
+                container.values = stored->elements;
             } else if (!resizable) {
                 // An array never written holds its default elements; only
                 // zero-based ranges map indices to positions directly.
@@ -651,20 +650,11 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     }
     const auto result = runtime::randomize_systemverilog_class_graph(
         class_heap, handle, request, members, containers);
-    std::vector<std::pair<std::pair<std::uint64_t, std::string>,
-        std::optional<runtime::simir::ContainerValue>>>
-        prior_containers;
     for (const auto& container : containers) {
         if (!container.committed) continue;
-        auto key = std::pair<std::uint64_t, std::string> {
-            node_handle(container.node), container.name
-        };
-        auto stored = class_value_containers.find(key);
-        prior_containers.emplace_back(key,
-            stored == class_value_containers.end()
-                ? std::nullopt
-                : std::optional { stored->second });
-        if (stored == class_value_containers.end()) {
+        auto& stored = class_heap.property(
+            node_handle(container.node), container.name).container;
+        if (!stored) {
             runtime::simir::ContainerValue created;
             created.type.element_width = static_cast<std::uint32_t>(
                 container.element.packed.width());
@@ -681,10 +671,9 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                 created.type.index_right = last;
                 created.type.dimensions.emplace_back(0, last);
             }
-            stored = class_value_containers.emplace(
-                std::move(key), std::move(created)).first;
+            stored = std::move(created);
         }
-        stored->second.elements = container.values;
+        stored->elements = container.values;
     }
     if (result.language_result() != 0) {
         try {
@@ -699,14 +688,6 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             for (auto& [member_handle, properties] : prior_members) {
                 class_heap.object(member_handle).properties
                     = std::move(properties);
-            }
-            for (auto& [key, prior] : prior_containers) {
-                if (prior) {
-                    class_value_containers.insert_or_assign(
-                        key, std::move(*prior));
-                } else {
-                    class_value_containers.erase(key);
-                }
             }
             return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
         }
@@ -796,12 +777,27 @@ void Simulation::Impl::assign_property_value(
                 "class-handle property assignment contains X or Z"
             };
         }
-        const auto [owner, name] = static_property_parts(canonical_identity);
+        const auto [named_owner, name] = static_property_parts(
+            canonical_identity);
+        // A static property of a specialization is named through the
+        // specialization's identity.
+        const semantic::sv::ClassSpecialization* specialization = nullptr;
+        std::string_view owner = named_owner;
+        if (const auto exact = std::ranges::find(
+                built.compiled_systemverilog_class_specializations,
+                named_owner,
+                &semantic::sv::ClassSpecialization::specialization_identity);
+            exact != built.compiled_systemverilog_class_specializations.end()
+            && exact->declaration_identity != named_owner) {
+            owner = exact->declaration_identity;
+            specialization = &*exact;
+        }
         // The property's type comes from the specialization of the object
         // that holds it, or of the base it inherits the property from: a
         // type parameter's actual can be a class (IEEE 1800-2017 8.25).
-        const auto* specialization = &class_specialization(owner);
-        for (auto current = object_specialization;
+        for (auto current = specialization == nullptr
+                 ? object_specialization
+                 : std::string_view { };
              !current.empty();) {
             const auto& candidate = class_specialization(current);
             if (std::ranges::any_of(candidate.properties,
@@ -816,6 +812,9 @@ void Simulation::Impl::assign_property_value(
                 break;
             }
             current = candidate.base->specialization_identity;
+        }
+        if (specialization == nullptr) {
+            specialization = &class_specialization(owner);
         }
         const auto property = std::ranges::find_if(
             specialization->properties, [&](const auto& candidate) {

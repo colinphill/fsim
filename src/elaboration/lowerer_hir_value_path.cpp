@@ -54,6 +54,38 @@ namespace {
 
 } // namespace
 
+std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    auto current = expression_id;
+    for (std::size_t depth { }; depth < 16U; ++depth) {
+        const auto expression = specialized_hir_unit_->find_expression(
+            current);
+        if (!expression || expression->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->systemverilog;
+        if (source.kind == semantic::sv::ExpressionKind::index
+            && source.text == "index" && source.operands.size() == 2U) {
+            current = source.operands.front();
+            continue;
+        }
+        if (depth == 0U || source.kind != semantic::sv::ExpressionKind::call
+            || !source.text.starts_with("@sv-container-index:")) {
+            return std::nullopt;
+        }
+        auto path = hir_sv_value_path(expression_id);
+        if (!path || !path->leaf || path->string_leaf) {
+            return std::nullopt;
+        }
+        return path;
+    }
+    return std::nullopt;
+}
+
 std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     const semantic::ExpressionId expression_id) const
 {
@@ -67,6 +99,8 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     };
     std::vector<PendingStep> pending;
     std::optional<HirContainerObjectBinding> root;
+    std::optional<HirSvValuePath::ClassRoot> class_root;
+    std::shared_ptr<const ContainerType> class_root_type;
     auto current = expression_id;
     for (std::size_t depth { }; depth < 64U; ++depth) {
         const auto expression = specialized_hir_unit_->find_expression(
@@ -104,8 +138,83 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             current = source.operands.front();
             continue;
         }
+        // A value-container property of an object (`obj.v`, `obj.v[i]`)
+        // or of a class (`C::v`) roots the path (IEEE 1800-2017 8.4, 8.9).
+        constexpr auto property_prefix
+            = std::string_view { "@sv-container-property:" };
+        constexpr auto element_prefix
+            = std::string_view { "@sv-container-index:" };
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && ((source.text.starts_with(property_prefix)
+                    && source.operands.size() == 1U)
+                || (source.text.starts_with(element_prefix)
+                    && source.operands.size() >= 2U))) {
+            const bool element = source.text.starts_with(element_prefix);
+            auto identity = source.text.substr(element
+                    ? element_prefix.size()
+                    : property_prefix.size());
+            auto type = hir_class_value_container_type(identity);
+            if (!type) {
+                return std::nullopt;
+            }
+            if (element) {
+                pending.push_back(PendingStep { std::nullopt,
+                    { source.operands.begin() + 1, source.operands.end() } });
+            }
+            const auto* property = hir_resolver()
+                .resolve_systemverilog_class_property(identity, false)
+                .unique();
+            if (property == nullptr) {
+                return std::nullopt;
+            }
+            class_root = HirSvValuePath::ClassRoot {
+                source.operands.front(), std::move(identity) };
+            class_root_type = std::make_shared<const ContainerType>(
+                std::move(*type));
+            root = HirContainerObjectBinding { property->declaration,
+                class_root->identity, { }, std::nullopt,
+                class_root_type.get(), false };
+            break;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-static-container-property:")
+            && source.operands.empty()) {
+            root = hir_class_static_container_binding(current);
+            break;
+        }
         if (source.kind == semantic::sv::ExpressionKind::name) {
             root = hir_container_object_binding(current);
+            // A container property of `this` named by its simple name in a
+            // method (IEEE 1800-2017 8.11).
+            if (!root && hir_class_receiver_register_
+                && source.text.find('.') == std::string::npos) {
+                if (const auto declaration
+                    = hir_referenced_declaration(current)) {
+                    for (const auto& candidate : specialized_hir_unit_
+                             ->design().systemverilog_hir.classes()) {
+                        for (const auto& property : candidate.properties) {
+                            if (property.declaration != *declaration
+                                || property.static_storage) {
+                                continue;
+                            }
+                            auto type = hir_class_value_container_type(
+                                property.canonical_identity);
+                            if (!type) {
+                                break;
+                            }
+                            class_root = HirSvValuePath::ClassRoot {
+                                std::nullopt, property.canonical_identity };
+                            class_root_type
+                                = std::make_shared<const ContainerType>(
+                                    std::move(*type));
+                            root = HirContainerObjectBinding {
+                                property.declaration,
+                                property.canonical_identity, { },
+                                std::nullopt, class_root_type.get(), false };
+                        }
+                    }
+                }
+            }
             if (!root) {
                 // `s.a.b` names an unpacked structure and its members.
                 const auto names = dotted_names(source.text);
@@ -145,9 +254,22 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         return std::nullopt;
     }
     std::ranges::reverse(pending);
+    // `obj.v[i][j]` of a multidimensional array arrives as nested selects:
+    // one step takes an index per fixed dimension.
+    while (pending.size() >= 2U && root->type->fixed
+        && !pending[0].member && !pending[1].member
+        && pending[0].indices.size()
+            < std::max<std::size_t>(root->type->dimensions.size(), 1U)) {
+        auto& indices = pending[0].indices;
+        indices.insert(indices.end(), pending[1].indices.begin(),
+            pending[1].indices.end());
+        pending.erase(pending.begin() + 1);
+    }
 
     HirSvValuePath path;
     path.root = *root;
+    path.class_root = std::move(class_root);
+    path.class_root_type = std::move(class_root_type);
     path.type = *root->type;
     for (std::size_t ordinal { }; ordinal < pending.size(); ++ordinal) {
         const auto& step = pending[ordinal];
@@ -255,13 +377,14 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
 
 std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_index(
     const HirSvValuePath& path,
-    const HirSvValuePath::Step& step)
+    const HirSvValuePath::Step& step,
+    const std::optional<ContainerRegisterId> container)
 {
     HirContainerElementBinding level;
     level.declaration = path.root.declaration;
     level.name = path.root.name;
     level.object = path.root.object;
-    level.local = path.root.local;
+    level.local = container ? container : path.root.local;
     level.type = &step.container;
     level.selected_type = &step.container;
     level.indices = step.indices;
@@ -274,10 +397,27 @@ std::optional<Lowerer::HirSvValuePathCursor>
 Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
 {
     HirSvValuePathCursor cursor;
-    cursor.root = path.root.local
-        ? *path.root.local
-        : allocate_container_register(*path.root.type);
-    if (!path.root.local) {
+    if (path.class_root && !path.class_root->receiver) {
+        if (!hir_class_receiver_register_) {
+            return std::nullopt;
+        }
+        cursor.root = allocate_container_register(*path.root.type);
+        process_.operations.emplace_back(ClassPropertyContainerRead {
+            cursor.root, *hir_class_receiver_register_,
+            path.class_root->identity });
+        cursor.class_receiver = *hir_class_receiver_register_;
+    } else if (path.class_root) {
+        const auto held = lower_hir_class_value_container(
+            *path.class_root->receiver, path.class_root->identity);
+        if (!held || held->container.type != *path.root.type) {
+            return std::nullopt;
+        }
+        cursor.root = held->container.value;
+        cursor.class_receiver = held->receiver;
+    } else if (path.root.local) {
+        cursor.root = *path.root.local;
+    } else {
+        cursor.root = allocate_container_register(*path.root.type);
         process_.operations.emplace_back(ReadContainerObject {
             cursor.root, path.root.object });
         record_container_object_dependency(path.root.object);
@@ -297,7 +437,8 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
             if (step.indices.size() != 1U) {
                 return std::nullopt;
             }
-            const auto lowered = lower_hir_sv_value_path_index(path, step);
+            const auto lowered = lower_hir_sv_value_path_index(
+                path, step, cursor.container);
             if (!lowered) {
                 return std::nullopt;
             }
@@ -342,7 +483,13 @@ void Lowerer::publish_hir_sv_value_path(
             level->members });
         child = level->container;
     }
-    if (!path.root.local) {
+    if (path.class_root) {
+        if (cursor.class_receiver) {
+            process_.operations.emplace_back(ClassPropertyContainerWrite {
+                *cursor.class_receiver, cursor.root,
+                path.class_root->identity });
+        }
+    } else if (!path.root.local) {
         process_.operations.emplace_back(WriteContainerObject {
             path.root.object, cursor.root, std::nullopt });
     }
@@ -370,7 +517,8 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_read(
             false });
         return destination;
     }
-    const auto index = lower_hir_sv_value_path_index(path, step);
+    const auto index = lower_hir_sv_value_path_index(
+        path, step, cursor->container);
     if (!index) {
         return std::nullopt;
     }
@@ -415,7 +563,8 @@ Lowerer::lower_hir_sv_value_path_container_read(const HirSvValuePath& path)
         if (step.indices.size() != 1U) {
             return std::nullopt;
         }
-        index = lower_hir_sv_value_path_index(path, step);
+        index = lower_hir_sv_value_path_index(
+            path, step, cursor->container);
     }
     if (!index) {
         return std::nullopt;
@@ -449,7 +598,8 @@ bool Lowerer::lower_hir_sv_value_path_write(
         index = load_constant(
             unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
     } else {
-        index = lower_hir_sv_value_path_index(path, step);
+        index = lower_hir_sv_value_path_index(
+            path, step, cursor->container);
     }
     if (!index) {
         return false;
@@ -629,7 +779,7 @@ namespace fsim::elaboration {
 bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
     const HirSvValuePath& path, const RegisterId value)
 {
-    if (!path.leaf || path.string_leaf || path.root.local
+    if (!path.leaf || path.string_leaf || path.root.local || path.class_root
         || path.root.read_only || path.steps.empty()) {
         return false;
     }
@@ -641,7 +791,7 @@ bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
         if (step.indices.size() != 1U) {
             return false;
         }
-        index = lower_hir_sv_value_path_index(path, step);
+        index = lower_hir_sv_value_path_index(path, step, std::nullopt);
         signed_index = step.container.signed_indices;
         first_member = 1U;
     } else {

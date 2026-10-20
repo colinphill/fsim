@@ -2090,11 +2090,22 @@ bool Lowerer::initialize_hir_declarations(
                 ? lower_hir_vhdl_access_expression(
                       *initializer, binding->width,
                       &*declaration->vhdl->subtype)
-                : lower_hir_expression(*initializer, binding->width,
-                      frontend::SystemVerilogScalarKind::None,
-                      !enumeration_literals.empty() && vhdl_initializer_subtype
-                          ? &*vhdl_initializer_subtype
-                          : nullptr);
+                : [&] {
+                      // `C#(7) h = new` allocates the declaration's class
+                      // specialization (IEEE 1800-2017 8.25).
+                      const auto saved_target = std::exchange(
+                          hir_allocation_target_,
+                          std::optional { declaration_id });
+                      auto value = lower_hir_expression(*initializer,
+                          binding->width,
+                          frontend::SystemVerilogScalarKind::None,
+                          !enumeration_literals.empty()
+                                  && vhdl_initializer_subtype
+                              ? &*vhdl_initializer_subtype
+                              : nullptr);
+                      hir_allocation_target_ = saved_target;
+                      return value;
+                  }();
             if (!initial) {
                 if (declaration->vhdl != nullptr) {
                     report(
@@ -2578,7 +2589,7 @@ resolve_systemverilog_template_element_signals(
     const semantic::DeclarationId declaration,
     const semantic::SpecializedHirOverlay& overlay,
     const ContainerDeclarationBindings& bindings,
-    const std::span<const ContainerObjectInfo> object_info,
+    const std::deque<ContainerObjectInfo>& object_info,
     const std::span<const ContainerObject> objects,
     const std::span<const ContainerElementSignalAlias> element_aliases,
     const std::span<const ContainerAggregateSignalAlias> aggregate_aliases,

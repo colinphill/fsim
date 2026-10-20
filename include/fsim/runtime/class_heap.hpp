@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir_container_value.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -123,6 +124,10 @@ struct SystemVerilogClassRandomState {
   std::uint64_t randc_domain_signature{};
   std::uint64_t randc_cycle{};
   std::vector<std::uint64_t> randc_used_values;
+  /// A wide randc property no constraint references walks a keyed
+  /// permutation of its values instead of recording them; this counts the
+  /// values drawn in the current cycle.
+  std::uint64_t randc_position{};
 };
 
 struct SystemVerilogClassRandomStream {
@@ -182,6 +187,10 @@ struct SystemVerilogClassPropertyValue {
   SystemVerilogClassHandle handle{};
   std::vector<SystemVerilogClassHandle> handles;
   std::optional<SystemVerilogClassHandleContainer> handle_container;
+  // A value-container property (an unpacked array, queue or associative
+  // array of values); empty until first written, when it reads as its
+  // type's default value.
+  std::optional<simir::ContainerValue> container;
   std::optional<SystemVerilogClassRandomState> random_state;
 };
 

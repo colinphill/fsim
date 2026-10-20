@@ -379,6 +379,28 @@ void Resolver::retain_task_profile(
         && is_class_property_access(expression.operands.front())) {
       return packed_member_type(*receiver_type, member);
     }
+    // A member of a value element of an object's array (`obj.v[i].m`) is
+    // a member path on the indexed property (`index.m`).
+    constexpr std::string_view element_prefix{"@sv-container-index:"};
+    if (!identity
+        && expression.operands.front().kind == ExpressionKind::Call
+        && expression.operands.front().text.starts_with(element_prefix)
+        && expression.operands.front().operands.size() == 2U) {
+      auto element = std::move(expression.operands.front());
+      Expression property{ExpressionKind::Call,
+          "@sv-container-property:"
+              + element.text.substr(element_prefix.size()),
+          {std::move(element.operands[0])}, element.span};
+      Expression selected{ExpressionKind::Index,
+          "index." + std::string{member},
+          {std::move(property), std::move(element.operands[1])},
+          expression.span};
+      selected.systemverilog_source_order
+          = expression.systemverilog_source_order;
+      expression = std::move(selected);
+      return resolve_expression(
+          expression, scope, expected_class, expected_scalar);
+    }
     if (!identity) {
       auto receiver = std::move(expression.operands.front());
       receiver.text += "." + std::string{member};
@@ -684,8 +706,6 @@ void Resolver::retain_task_profile(
     }
     constexpr std::string_view container_property_prefix{
         "@sv-container-property:"};
-    constexpr std::string_view static_container_property_prefix{
-        "@sv-static-container-property:"};
     if (receiver_type && receiver_type->systemverilog_container) {
       const auto method = expression.text.substr(1U);
       const bool instance_property =
@@ -693,22 +713,16 @@ void Resolver::retain_task_profile(
           && expression.operands.front().text.starts_with(
               container_property_prefix)
           && expression.operands.front().operands.size() == 1U;
-      const bool static_property =
-          expression.operands.front().kind == ExpressionKind::Call
-          && expression.operands.front().text.starts_with(
-              static_container_property_prefix);
-      if (instance_property || static_property) {
-        const auto prefix = instance_property
-            ? container_property_prefix
-            : static_container_property_prefix;
-        const auto property =
-            expression.operands.front().text.substr(prefix.size());
+      // A static property's methods apply to the class's one container
+      // object, which the container method lowering binds directly
+      // (IEEE 1800-2017 8.9, 7.10).
+      if (instance_property) {
+        const auto property = expression.operands.front().text.substr(
+            container_property_prefix.size());
         std::vector<Expression> operands;
-        if (instance_property) {
         auto receiver = std::move(
             expression.operands.front().operands.front());
         operands.push_back(std::move(receiver));
-        }
         for (auto& operand : expression.operands | std::views::drop(1)) {
           resolve_expression(
               operand,
@@ -927,6 +941,11 @@ void Resolver::retain_task_profile(
     // (IEEE 1800-2017 8.10).
     if (match->method->is_static && expression.operands.front().text != "super") {
       expression.text = "@sv-static-method:" + match->method->canonical_identity;
+      // The handle's class specialization selects the method's (8.25).
+      if (!receiver_type->systemverilog_class_parameter_actuals.empty()) {
+        expression.systemverilog_class_owner =
+            std::make_shared<const Type>(*receiver_type);
+      }
       expression.operands.erase(expression.operands.begin());
       if (!expression.call_argument_names.empty()) {
         expression.call_argument_names.erase(
@@ -934,10 +953,22 @@ void Resolver::retain_task_profile(
       }
       retain_call_profile(expression, *match->method, false);
     }
-    if (const auto identity = class_identity(match->method->return_type)) {
+    // The result type as the receiver's specialization sees it
+    // (`T get()` of `C#(D)` returns a D, IEEE 1800-2017 8.25).
+    auto return_type = match->method->return_type;
+    if (const auto* receiver_class = find_class(*class_identity(*receiver_type));
+        receiver_class != nullptr && !receiver_class->parameters.empty()
+        && match->method->canonical_identity.starts_with(
+            receiver_class->canonical_identity + "::")) {
+      ClassSelection selection{receiver_class, *receiver_type};
+      normalize_selection_actuals(selection, scope);
+      return_type = specialize_selected_method(
+          *match->method, selection, scope).return_type;
+    }
+    if (const auto identity = class_identity(return_type)) {
       expression.nominal_type = *identity;
     }
-    return match->method->return_type;
+    return return_type;
   }
 
   const auto selected = expression.text.rfind("::");
@@ -960,6 +991,8 @@ void Resolver::retain_task_profile(
             + (intrinsic.empty()
                    ? match->method->canonical_identity
                    : intrinsic);
+        expression.systemverilog_class_owner =
+            std::make_shared<const Type>(owner->type);
         retain_call_profile(expression, method, false);
         for (std::size_t index = 0;
              index < expression.operands.size(); ++index) {
@@ -980,6 +1013,11 @@ void Resolver::retain_task_profile(
     }
   }
 
+  // Outside a class an unqualified randomize call is the scope randomize
+  // function, `[std::] randomize` (IEEE 1800-2017 18.12).
+  if (scope.class_owner == nullptr && expression.text == "randomize") {
+    expression.text = "std::randomize";
+  }
   // An unqualified randomize call in a class method randomizes the object
   // itself (IEEE 1800-2017 18.6.1, 18.7); an unqualified get_randstate
   // reads the object's own generator state (18.13.4).
@@ -1012,6 +1050,7 @@ void Resolver::retain_task_profile(
       for (auto& operand : expression.operands) {
         resolve_expression(operand, scope);
       }
+      resolve_scope_inline_constraints(expression, scope);
       return std::nullopt;
     }
     const auto match = select_method(
@@ -1059,7 +1098,24 @@ void Resolver::retain_task_profile(
   for (auto& operand : expression.operands) {
     resolve_expression(operand, scope);
   }
+  resolve_scope_inline_constraints(expression, scope);
   return std::nullopt;
+}
+// The with-clause of a scope call (`std::randomize(x) with {...}`) names
+// the calling scope (IEEE 1800-2017 18.12).
+void Resolver::resolve_scope_inline_constraints(
+    Expression& expression, const Scope& scope) {
+  for (std::size_t index = 0;
+       index < expression.aggregate_choices.size()
+       && index < expression.aggregate_choice_expressions.size();
+       ++index) {
+    if (expression.aggregate_choices[index] != "@sv-inline-constraint") {
+      continue;
+    }
+    for (auto& choice : expression.aggregate_choice_expressions[index]) {
+      resolve_expression(choice, scope);
+    }
+  }
 }
 std::optional<Type> Resolver::resolve_expression(
     Expression& expression,
@@ -1162,9 +1218,12 @@ std::optional<Type> Resolver::resolve_expression(
     }
     constexpr std::string_view property_prefix{
         "@sv-container-property:"};
+    // `obj.v[i].m` keeps its member path (`index.m`): the elaborator
+    // walks it as a value path rooted at the property.
     if (expression.operands[0].kind != ExpressionKind::Call
         || !expression.operands[0].text.starts_with(property_prefix)
-        || expression.operands[0].operands.size() != 1U) {
+        || expression.operands[0].operands.size() != 1U
+        || expression.text != "index") {
       retain_result_type(expression, element);
       expression.nominal_type =
           element.systemverilog_class_declaration;
@@ -1793,11 +1852,20 @@ void Resolver::resolve_statement(
     const SystemVerilogScalarKind return_scalar) {
   // Only a statement that declares objects needs its own scope copy.
   std::optional<Scope> declared_scope;
-  if (!statement.declarations.empty()) {
+  if (!statement.type_aliases.empty()) {
     declared_scope = inherited_scope;
+    for (auto& alias : statement.type_aliases) {
+      if (auto scoped = resolve_class_scoped_type(alias.type, *declared_scope)) {
+        alias.type = std::move(*scoped);
+      }
+      declared_scope->aliases.insert_or_assign(alias.name, &alias.type);
+    }
+  }
+  if (!statement.declarations.empty()) {
+    if (!declared_scope) declared_scope = inherited_scope;
     for (auto& declaration : statement.declarations) {
       if (auto scoped = resolve_class_scoped_type(
-              declaration.type, inherited_scope)) {
+              declaration.type, *declared_scope)) {
         declaration.type = std::move(*scoped);
       }
       if (declaration.initializer) {

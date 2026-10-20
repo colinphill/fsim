@@ -616,6 +616,7 @@ void SystemVerilogClassHeap::reset_randc_cycle(
   state.randc_domain_signature = 0;
   state.randc_cycle = 0;
   state.randc_used_values.clear();
+  state.randc_position = 0;
 }
 
 void SystemVerilogClassHeap::reseed_random(
@@ -633,6 +634,7 @@ void SystemVerilogClassHeap::reseed_random(
     state->randc_domain_signature = 0;
     state->randc_cycle = 0;
     state->randc_used_values.clear();
+    state->randc_position = 0;
   }
   value.accounted_bytes -= released;
   storage_bytes_ -= released;

@@ -476,11 +476,6 @@ struct Simulation::Impl {
     bool package_static_startup_values_published { };
 
     runtime::SystemVerilogClassHeap class_heap;
-    // Value-container class properties (unpacked arrays, queues and
-    // associative arrays of values), by object and property identity.
-    std::map<std::pair<std::uint64_t, std::string>,
-        runtime::simir::ContainerValue>
-        class_value_containers;
     // The types class constraints give the properties they name, by
     // canonical property identity; built at the first class randomize.
     std::optional<std::map<std::string, semantic::sv::TypeReference,

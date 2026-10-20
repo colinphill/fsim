@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -378,13 +379,169 @@ namespace {
   return result;
 }
 
-}  // namespace
+// The values a profile represents.
+[[nodiscard]] SystemVerilogConstraintValueInterval profile_range(
+    const SystemVerilogConstraintVariableProfile& profile) {
+  const Wide one{1};
+  const auto width = profile.width;
+  return profile.signed_value
+      ? SystemVerilogConstraintValueInterval{
+            -(one << (width - 1U)), (one << (width - 1U)) - 1}
+      : SystemVerilogConstraintValueInterval{0, (one << width) - 1};
+}
 
-std::vector<SystemVerilogConstraintKeyRange>
-systemverilog_constraint_key_ranges(
+[[nodiscard]] bool within(const SystemVerilogConstraintValueInterval& inner,
+    const SystemVerilogConstraintValueInterval& outer) {
+  return outer.low <= inner.low && inner.high <= outer.high;
+}
+
+// The values an expression over constants and variables of known
+// intervals can take, when no step wraps (IEEE 1800-2017 11.4.3, 11.8.1).
+[[nodiscard]] std::optional<SystemVerilogConstraintValueInterval>
+node_interval(const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintExpressionId id,
+    const SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintValueIntervals& intervals,
+    const std::size_t depth) {
+  if (id >= expression.nodes.size() || depth > 32U) return std::nullopt;
+  const auto& node = expression.nodes[id];
+  const auto width = node.profile.width;
+  if (width == 0U || width > 64U) return std::nullopt;
+  const auto representable = profile_range(node.profile);
+  const auto operand = [&](const std::size_t position)
+      -> std::optional<SystemVerilogConstraintValueInterval> {
+    if (position >= node.operands.size()) return std::nullopt;
+    auto value = node_interval(expression, node.operands[position], variable,
+        intervals, depth + 1U);
+    // An operand is extended to the node's width keeping its value only
+    // when the node's profile represents every value it can take.
+    if (!value || !within(*value, representable)) return std::nullopt;
+    return value;
+  };
+  switch (node.operation) {
+  case Operator::Constant: {
+    const auto bits = constant_bits(node);
+    if (!bits) return std::nullopt;
+    auto value = static_cast<Wide>(*bits);
+    if (!node.profile.signed_value && width < 64U) {
+      value &= (Wide{1} << width) - 1;
+    } else if (node.profile.signed_value) {
+      value = static_cast<Wide>(static_cast<std::int64_t>(*bits));
+    }
+    return SystemVerilogConstraintValueInterval{value, value};
+  }
+  case Operator::Variable: {
+    if (node.variable == variable) return std::nullopt;
+    const auto found = intervals.find(node.variable);
+    if (found == intervals.end() || !within(found->second, representable)) {
+      return std::nullopt;
+    }
+    return found->second;
+  }
+  case Operator::UnaryPlus:
+    if (node.operands.size() != 1U) return std::nullopt;
+    return operand(0);
+  case Operator::Add:
+  case Operator::Subtract: {
+    if (node.operands.size() != 2U) return std::nullopt;
+    const auto left = operand(0);
+    const auto right = operand(1);
+    if (!left || !right) return std::nullopt;
+    const SystemVerilogConstraintValueInterval result
+        = node.operation == Operator::Add
+        ? SystemVerilogConstraintValueInterval{
+              left->low + right->low, left->high + right->high}
+        : SystemVerilogConstraintValueInterval{
+              left->low - right->high, left->high - right->low};
+    if (!within(result, representable)) return std::nullopt;
+    return result;
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
+// The keys `variable op e` allows for every value of an expression `e`
+// over variables of known intervals: a superset bounded by e's extreme
+// values (IEEE 1800-2017 18.5).
+[[nodiscard]] std::optional<Ranges> interval_comparison_ranges(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintExpressionNode& node,
+    const SystemVerilogConstraintVariableId variable,
+    const std::size_t width,
+    const SystemVerilogConstraintValueIntervals& intervals) {
+  if (node.operands.size() != 2U) return std::nullopt;
+  auto variable_side = node.operands[0];
+  auto other_side = node.operands[1];
+  auto operation = node.operation;
+  const auto is_variable = [&](const SystemVerilogConstraintExpressionId id) {
+    return id < expression.nodes.size()
+        && expression.nodes[id].operation == Operator::Variable
+        && expression.nodes[id].variable == variable;
+  };
+  if (!is_variable(variable_side)) {
+    if (!is_variable(other_side)) return std::nullopt;
+    std::swap(variable_side, other_side);
+    switch (operation) {
+    case Operator::Less: operation = Operator::Greater; break;
+    case Operator::LessEqual: operation = Operator::GreaterEqual; break;
+    case Operator::Greater: operation = Operator::Less; break;
+    case Operator::GreaterEqual: operation = Operator::LessEqual; break;
+    default: break;
+    }
+  }
+  const auto& variable_node = expression.nodes[variable_side];
+  const auto& other = expression.nodes[other_side];
+  const auto bound = node_interval(
+      expression, other_side, variable, intervals, 0U);
+  if (!bound || other.profile.width == 0U || other.profile.width > 64U) {
+    return std::nullopt;
+  }
+  // The comparison orders e's values monotonically only when it reads
+  // them in their own signedness.
+  const bool signed_context = variable_node.profile.signed_value
+      && other.profile.signed_value;
+  if (!signed_context && bound->low < 0) return std::nullopt;
+  const auto compare = [&](const Operator with, const Wide value) {
+    SystemVerilogConstraintExpression synthetic;
+    synthetic.nodes.push_back(variable_node);
+    SystemVerilogConstraintExpressionNode constant;
+    constant.operation = Operator::Constant;
+    constant.profile = other.profile;
+    constant.constant = constant_of_width(
+        static_cast<std::uint64_t>(value), other.profile.width);
+    synthetic.nodes.push_back(std::move(constant));
+    SystemVerilogConstraintExpressionNode comparison;
+    comparison.operation = with;
+    comparison.profile = node.profile;
+    comparison.operands = {0U, 1U};
+    synthetic.nodes.push_back(std::move(comparison));
+    synthetic.root = 2U;
+    return comparison_ranges(synthetic, synthetic.nodes[2], variable, width);
+  };
+  switch (operation) {
+  case Operator::Less: return compare(Operator::Less, bound->high);
+  case Operator::LessEqual: return compare(Operator::LessEqual, bound->high);
+  case Operator::Greater: return compare(Operator::Greater, bound->low);
+  case Operator::GreaterEqual:
+    return compare(Operator::GreaterEqual, bound->low);
+  case Operator::Equal:
+  case Operator::CaseEqual: {
+    const auto low = compare(Operator::GreaterEqual, bound->low);
+    const auto high = compare(Operator::LessEqual, bound->high);
+    if (!low || !high) return std::nullopt;
+    return intersected(*low, *high);
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
+[[nodiscard]] std::vector<SystemVerilogConstraintKeyRange> key_ranges(
     const SystemVerilogConstraintExpression& source_expression,
     const SystemVerilogConstraintVariableId variable,
-    const SystemVerilogConstraintVariableProfile& profile) {
+    const SystemVerilogConstraintVariableProfile& profile,
+    const SystemVerilogConstraintValueIntervals* intervals) {
   const auto expression = normalized_expression(source_expression, variable);
   const auto width = profile.width;
   if (width == 0U || width > 64U) {
@@ -513,6 +670,11 @@ systemverilog_constraint_key_ranges(
     case Operator::GreaterEqual:
       if (auto ranges = comparison_ranges(expression, node, variable, width)) {
         results[index] = Analysis{std::move(*ranges), true};
+      } else if (intervals != nullptr) {
+        if (auto bounded = interval_comparison_ranges(
+                expression, node, variable, width, *intervals)) {
+          results[index] = Analysis{std::move(*bounded), false};
+        }
       }
       break;
     default:
@@ -522,11 +684,12 @@ systemverilog_constraint_key_ranges(
   return operand(expression.root).ranges;
 }
 
-std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
+[[nodiscard]] std::vector<PackedLogic4> variable_domain(
     const std::span<const SystemVerilogConstraintClause> clauses,
     const SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintVariableProfile& profile,
-    const std::function<std::uint64_t()>& random) {
+    const std::function<std::uint64_t()>& random,
+    const SystemVerilogConstraintValueIntervals* intervals) {
   if (profile.width == 0U || profile.width > 64U || !random) {
     throw std::invalid_argument{
         "a bounded constraint domain requires a 1- to 64-bit variable"};
@@ -542,8 +705,8 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
   for (const auto& clause : clauses) {
     if (!clause.soft && depends(clause)) {
       hard = intersected(hard,
-          systemverilog_constraint_key_ranges(
-              *clause.expression, variable, profile));
+          key_ranges(
+              *clause.expression, variable, profile, intervals));
     }
   }
   if (hard.empty()) return {};
@@ -608,8 +771,8 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
   for (const auto& clause : clauses) {
     if (!clause.soft || !depends(clause)) continue;
     const auto preferred = intersected(hard,
-        systemverilog_constraint_key_ranges(
-            *clause.expression, variable, profile));
+        key_ranges(
+            *clause.expression, variable, profile, intervals));
     if (preferred.empty()) continue;
     const auto more = bounded_keys(preferred, random);
     keys.insert(keys.end(), more.begin(), more.end());
@@ -628,15 +791,208 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
   return result;
 }
 
+}  // namespace
+
+std::vector<SystemVerilogConstraintKeyRange>
+systemverilog_constraint_key_ranges(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile) {
+  return key_ranges(expression, variable, profile, nullptr);
+}
+
+std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
+    const std::span<const SystemVerilogConstraintClause> clauses,
+    const SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile,
+    const std::function<std::uint64_t()>& random) {
+  return variable_domain(clauses, variable, profile, random, nullptr);
+}
+
+std::vector<PackedLogic4> systemverilog_constraint_wide_variable_domain(
+    const std::span<const SystemVerilogConstraintClause> clauses,
+    const SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile,
+    const std::function<std::uint64_t()>& random) {
+  const auto width = profile.width;
+  if (width <= 64U || !random) {
+    throw std::invalid_argument{
+        "a wide constraint domain requires a variable wider than 64 bits"};
+  }
+  const auto words = (width + 63U) / 64U;
+  const auto widened = [&](const std::uint64_t low) {
+    std::vector<std::uint64_t> aval(words);
+    const std::vector<std::uint64_t> bval(words);
+    aval.front() = low;
+    return PackedLogic4::from_word_planes(width, aval, bval);
+  };
+  const auto depends = [&](const SystemVerilogConstraintClause& clause) {
+    return clause.expression
+        && std::ranges::find(clause.variables, variable)
+            != clause.variables.end();
+  };
+  // A constant whose bits above the low word are zero.
+  const auto low_constant = [](const SystemVerilogConstraintExpressionNode& node)
+      -> std::optional<std::uint64_t> {
+    if (node.operation != Operator::Constant || node.constant.is_logic9()) {
+      return std::nullopt;
+    }
+    const auto aval = node.constant.aval_words();
+    const auto bval = node.constant.bval_words();
+    if (aval.empty()
+        || std::ranges::any_of(bval, [](const auto word) { return word != 0U; })
+        || std::ranges::any_of(aval | std::views::drop(1),
+               [](const auto word) { return word != 0U; })
+        || (node.profile.signed_value && node.constant.width() <= 64U
+            && node.constant.width() > 0U
+            && ((aval.front() >> (node.constant.width() - 1U)) & 1U) != 0U)) {
+      return std::nullopt;
+    }
+    return aval.front();
+  };
+  if (!profile.signed_value) {
+    // The variable's comparisons with such constants read as 64-bit
+    // comparisons: below 2^64 they order values alike.
+    std::vector<SystemVerilogConstraintClause> narrowed;
+    narrowed.reserve(clauses.size());
+    for (const auto& clause : clauses) {
+      auto copy = clause;
+      if (depends(clause)) {
+        auto expression = *clause.expression;
+        const auto count = expression.nodes.size();
+        for (std::size_t index = 0; index < count; ++index) {
+          const auto operation = expression.nodes[index].operation;
+          if (operation < Operator::Equal || operation > Operator::GreaterEqual
+              || expression.nodes[index].operands.size() != 2U) {
+            continue;
+          }
+          for (std::size_t side = 0; side < 2U; ++side) {
+            const auto variable_id = expression.nodes[index].operands[side];
+            const auto constant_id
+                = expression.nodes[index].operands[1U - side];
+            const auto& subject = expression.nodes[variable_id];
+            const auto value = low_constant(expression.nodes[constant_id]);
+            if (subject.operation != Operator::Variable
+                || subject.variable != variable || !value) {
+              continue;
+            }
+            SystemVerilogConstraintExpressionNode constant;
+            constant.operation = Operator::Constant;
+            constant.profile = expression.nodes[constant_id].profile;
+            constant.profile.width = 64U;
+            constant.profile.signed_value = false;
+            constant.constant = PackedLogic4::from_aval_bval(64U, *value, 0U);
+            expression.nodes.push_back(std::move(constant));
+            expression.nodes[index].operands[1U - side]
+                = expression.nodes.size() - 1U;
+          }
+        }
+        copy.expression = std::make_shared<const SystemVerilogConstraintExpression>(
+            std::move(expression));
+      }
+      narrowed.push_back(std::move(copy));
+    }
+    auto proxy = profile;
+    proxy.width = 64U;
+    const auto bounded = variable_domain(narrowed, variable, proxy, random,
+        nullptr);
+    if (!bounded.empty()
+        && bounded.back().low_word().aval
+            != std::numeric_limits<std::uint64_t>::max()) {
+      std::vector<PackedLogic4> result;
+      result.reserve(bounded.size());
+      for (const auto& value : bounded) {
+        result.push_back(widened(value.low_word().aval));
+      }
+      return result;
+    }
+  }
+  // The constants the variable is compared equal to, and uniform samples.
+  std::vector<PackedLogic4> values;
+  for (const auto& clause : clauses) {
+    if (!depends(clause)) continue;
+    const auto& nodes = clause.expression->nodes;
+    for (const auto& node : nodes) {
+      if ((node.operation != Operator::Equal
+              && node.operation != Operator::CaseEqual)
+          || node.operands.size() != 2U) {
+        continue;
+      }
+      for (std::size_t side = 0; side < 2U; ++side) {
+        const auto& subject = nodes[node.operands[side]];
+        const auto& other = nodes[node.operands[1U - side]];
+        if (subject.operation != Operator::Variable
+            || subject.variable != variable
+            || other.operation != Operator::Constant
+            || other.constant.is_logic9() || other.constant.empty()) {
+          continue;
+        }
+        const auto& constant = other.constant;
+        const auto extension = other.profile.signed_value
+            ? constant.get(constant.width() - 1U) : Logic4::zero;
+        PackedLogic4 value(width, extension);
+        for (std::size_t bit = 0; bit < std::min(width, constant.width());
+             ++bit) {
+          value.set(bit, constant.get(bit));
+        }
+        values.push_back(std::move(value));
+      }
+    }
+  }
+  for (std::size_t sample = 0; sample < 16U; ++sample) {
+    std::vector<std::uint64_t> aval(words);
+    const std::vector<std::uint64_t> bval(words);
+    for (auto& word : aval) word = random();
+    values.push_back(PackedLogic4::from_word_planes(width, aval, bval));
+  }
+  std::vector<PackedLogic4> unique;
+  for (auto& value : values) {
+    if (std::ranges::find(unique, value) == unique.end()) {
+      unique.push_back(std::move(value));
+    }
+  }
+  return unique;
+}
+
+std::optional<SystemVerilogConstraintValueInterval>
+systemverilog_constraint_value_interval(
+    const std::span<const PackedLogic4> domain,
+    const SystemVerilogConstraintVariableProfile& profile) {
+  const auto width = profile.width;
+  if (domain.empty() || width == 0U || width > 64U) return std::nullopt;
+  std::optional<SystemVerilogConstraintValueInterval> result;
+  for (const auto& value : domain) {
+    if (value.width() != width || value.is_logic9()
+        || value.low_word().bval != 0U) {
+      return std::nullopt;
+    }
+    auto bits = value.low_word().aval;
+    Wide number{};
+    if (width < 64U) bits &= (std::uint64_t{1} << width) - 1U;
+    if (profile.signed_value && ((bits >> (width - 1U)) & 1U) != 0U) {
+      number = static_cast<Wide>(bits) - (Wide{1} << width);
+    } else {
+      number = static_cast<Wide>(bits);
+    }
+    if (!result) {
+      result = SystemVerilogConstraintValueInterval{number, number};
+    } else {
+      result->low = std::min(result->low, number);
+      result->high = std::max(result->high, number);
+    }
+  }
+  return result;
+}
+
 std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
     const std::span<const SystemVerilogConstraintClause> clauses,
     const SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintVariableProfile& profile,
     const std::function<std::uint64_t()>& random,
-    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed) {
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed,
+    const SystemVerilogConstraintValueIntervals* intervals) {
   if (fixed.empty()) {
-    return systemverilog_constraint_variable_domain(
-        clauses, variable, profile, random);
+    return variable_domain(clauses, variable, profile, random, intervals);
   }
   std::vector<SystemVerilogConstraintClause> substituted;
   substituted.reserve(clauses.size());
@@ -697,8 +1053,7 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
     }
     substituted.push_back(std::move(copy));
   }
-  return systemverilog_constraint_variable_domain(
-      substituted, variable, profile, random);
+  return variable_domain(substituted, variable, profile, random, intervals);
 }
 
 }  // namespace fsim::runtime

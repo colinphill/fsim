@@ -122,8 +122,28 @@ template <typename OperationType, typename ExactSignalWidth,
     } else if constexpr (std::is_same_v<OperationType, ScopeRandomize>) {
         record_definition(operation.destination, index);
         constrain_width(operation.destination, 32U, index);
-        if (operation.targets.empty())
+        if (operation.targets.empty() && operation.containers.empty())
             reject(process, index, "scope randomize requires a target");
+        for (const auto& container : operation.containers) {
+            if (container.container >= process.container_register_count
+                || container.container
+                    >= result.container_register_reference_counts.size()) {
+                reject(process, index,
+                    "scope randomize container register is out of range");
+                continue;
+            }
+            ++result.container_register_reference_counts[container.container];
+            if (container.canonical_identity.empty()
+                || container.element_width == 0
+                || container.nominal_type.empty())
+                reject(process, index, "scope randomize container is incomplete");
+            for (const auto& value : container.domain) {
+                if (value.width() != container.element_width
+                    || value.is_logic9())
+                    reject(process, index,
+                        "scope randomize container domain value is invalid");
+            }
+        }
         for (const auto& target : operation.targets) {
             record_use(target.target, index);
             record_definition(target.target, index);

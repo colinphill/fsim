@@ -7410,11 +7410,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return lower_hir_packed_copy_out(
                 *target, *lowered, packed_copy_out_mode);
         }
+        // `obj.v[i]` of a multidimensional array is a subarray, written
+        // through a value path below.
+        const auto multidimensional_property = [&](std::string_view text) {
+            const auto type = hir_class_value_container_type(text.substr(
+                std::string_view { "@sv-container-index:" }.size()));
+            return type && type->fixed && type->dimensions.size() > 1U;
+        };
         if (target_expression->systemverilog != nullptr
             && target_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
             && target_expression->systemverilog->text.starts_with(
-                "@sv-container-index:")) {
+                "@sv-container-index:")
+            && !multidimensional_property(
+                target_expression->systemverilog->text)) {
             const auto& access = *target_expression->systemverilog;
             if (signal_assignment || nonblocking
                 || access.operands.size() < 2U) {
@@ -7651,6 +7660,92 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 false,
             });
             return true;
+        }
+        // `h.p[i] = v` or `h.p[m:l] = v`: a constant select of a packed
+        // class property rewrites the whole property (IEEE 1800-2017 7.4.3,
+        // 8.4).
+        if (target_expression && target_expression->systemverilog != nullptr
+            && statement->systemverilog != nullptr
+            && (target_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::index
+                || (target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::slice
+                    && target_expression->systemverilog->text == ":"))
+            && target_expression->systemverilog->operands.size()
+                == (target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::index
+                    ? 2U : 3U)) {
+            const auto& select = *target_expression->systemverilog;
+            const auto& input = *statement->systemverilog;
+            const auto base = select.operands.front();
+            const auto property = hir_class_property_profile(base);
+            const auto range = property
+                ? hir_expression_range(base, hir_process_scope_)
+                : std::nullopt;
+            const auto first = range
+                ? hir_constant_integer(select.operands[1])
+                : std::nullopt;
+            const auto second = select.operands.size() == 3U
+                ? hir_constant_integer(select.operands[2])
+                : first;
+            if (property && !property->event && range && first && second
+                && input.update_kind == semantic::sv::UpdateKind::none) {
+                if (signal_assignment || nonblocking || !property->writable
+                    || input.assignment_control
+                        != semantic::sv::AssignmentControl::none
+                    || input.delay) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto offset = [&](const std::int64_t index) {
+                    return range->left >= range->right
+                        ? index - range->right
+                        : range->right - index;
+                };
+                const auto low = std::min(offset(*first), offset(*second));
+                const auto high = std::max(offset(*first), offset(*second));
+                if (low < 0
+                    || high >= static_cast<std::int64_t>(property->width)) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto width = static_cast<std::size_t>(high - low + 1);
+                std::optional<RegisterId> receiver;
+                if (!property->static_storage) {
+                    receiver = lower_hir_expression(*property->receiver, 64U);
+                    if (!receiver || register_width(*receiver) != 64U) {
+                        return assignment_rejected(__LINE__);
+                    }
+                }
+                auto lowered = lower_hir_expression(*value, width);
+                if (!lowered) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (register_width(*lowered) != width) {
+                    lowered = resize_register(*lowered, width,
+                        hir_expression_signed(*value));
+                }
+                const auto current = allocate_register(
+                    property->width, property->domain);
+                if (receiver) {
+                    process_.operations.emplace_back(ClassPropertyRead {
+                        current, *receiver, property->identity,
+                        static_cast<std::uint32_t>(property->width) });
+                } else {
+                    process_.operations.emplace_back(ClassStaticPropertyRead {
+                        current, property->identity,
+                        static_cast<std::uint32_t>(property->width) });
+                }
+                process_.operations.emplace_back(Insert {
+                    current, current, *lowered,
+                    static_cast<std::uint32_t>(low) });
+                if (receiver) {
+                    process_.operations.emplace_back(ClassPropertyWrite {
+                        *receiver, current, property->identity });
+                } else {
+                    process_.operations.emplace_back(ClassStaticPropertyWrite {
+                        current, property->identity });
+                }
+                return true;
+            }
         }
         if (hir_class_property_profile(*target, true)) {
             const auto& input = *statement->systemverilog;
@@ -7913,8 +8008,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
         }
         // A blocking write through unpacked arrays and structures
-        // (IEEE 1800-2017 7.2, 7.4, 10.4.1).
-        if (!declaration && !direct_binding
+        // (IEEE 1800-2017 7.2, 7.4, 10.4.1); a container property of
+        // `this` has a declaration but no runtime binding.
+        if (!direct_binding
             && statement->systemverilog != nullptr && !nonblocking
             && !signal_assignment
             && statement->systemverilog->assignment_kind
@@ -7922,7 +8018,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && statement->systemverilog->assignment_control
                 == semantic::sv::AssignmentControl::none
             && !statement->systemverilog->delay) {
-            if (const auto path = hir_sv_value_path(*target)) {
+            if (const auto path = hir_sv_value_path(*target);
+                path && (!declaration || path->class_root)) {
                 if (path->root.read_only) {
                     report(
                         "FSIM-ELAB-SVPORT-009",
@@ -12188,6 +12285,26 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             && self(self, *argument.actual);
                     });
             };
+            // A name bound by the active callable's frame (a class
+            // parameter of the running specialization, 8.25) has the frame's
+            // value, which the unit's constant evaluator does not see.
+            const auto frame_bound = [&](const auto& self,
+                                         const semantic::ExpressionId id)
+                -> bool {
+                if (hir_generic_actual(id)) {
+                    return true;
+                }
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->systemverilog == nullptr) {
+                    return false;
+                }
+                return std::ranges::any_of(
+                    expression->systemverilog->operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand);
+                    });
+            };
             const auto constant = [&]() -> std::optional<std::int64_t> {
                 if (!hir_systemverilog_constant_expression(
                         *specialized_hir_unit_, *condition)
@@ -12195,6 +12312,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     || arithmetic(arithmetic, *condition)
                     || user_call(user_call, *condition)) {
                     return std::nullopt;
+                }
+                if (!hir_generic_binding_frames_.empty()
+                    && frame_bound(frame_bound, *condition)) {
+                    return hir_constant_integer(*condition);
                 }
                 // Comparisons must retain operand widths and signedness:
                 // signed 8'hfe compares equal to unsigned 8'hfe, even though
@@ -17873,6 +17994,40 @@ bool Lowerer::lower_hir_statement_unsuspended(
         return true;
     };
     const auto lower_fork = [&](const semantic::sv::Statement& input) {
+        // The branches run as other processes: they reach `this`'s
+        // container properties through the object, not the caller's cache
+        // (stored before and reloaded after the fork).
+        struct CacheRestore {
+            Lowerer& lowerer;
+            std::vector<HirClassContainerCache> saved;
+            std::vector<std::pair<std::uint32_t,
+                std::pair<ContainerRegisterId, ContainerType>>> locals;
+            ~CacheRestore()
+            {
+                for (auto& [declaration, local] : locals) {
+                    lowerer.hir_local_container_registers_.insert_or_assign(
+                        declaration, local.first);
+                    lowerer.hir_local_container_types_.insert_or_assign(
+                        declaration, std::move(local.second));
+                }
+                lowerer.hir_class_container_caches_ = std::move(saved);
+            }
+        } restore_caches { *this,
+            std::exchange(hir_class_container_caches_, { }), { } };
+        for (const auto& cache : restore_caches.saved) {
+            const auto key = cache.declaration.value();
+            const auto local = hir_local_container_registers_.find(key);
+            const auto type = hir_local_container_types_.find(key);
+            if (local == hir_local_container_registers_.end()
+                || type == hir_local_container_types_.end()
+                || local->second != cache.value) {
+                continue;
+            }
+            restore_caches.locals.emplace_back(
+                key, std::pair { local->second, type->second });
+            hir_local_container_registers_.erase(local);
+            hir_local_container_types_.erase(type);
+        }
         const bool function = active_hir_callable_
             && hir_callable_frames_[*active_hir_callable_].function;
         // IEEE 1800-2009 13.4.4: background processes spawned by function
@@ -18332,6 +18487,29 @@ bool Lowerer::lower_hir_statement_unsuspended(
             } const allocation_target_reset { *this };
             if (input.target) {
                 hir_allocation_target_ = hir_target_declaration(*input.target);
+            }
+            // A class property target (`p = new` in a method) allocates the
+            // property's specialization (IEEE 1800-2017 8.25).
+            if (const auto target_expression = input.target
+                        && !hir_allocation_target_
+                    ? specialized_hir_unit_->find_expression(*input.target)
+                    : std::nullopt;
+                target_expression && target_expression->systemverilog
+                && !target_expression->systemverilog->class_member_identity
+                        .empty()
+                && (target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::class_property
+                    || target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::
+                            class_static_property)) {
+                const auto& access = *target_expression->systemverilog;
+                if (const auto* property
+                    = hir_resolver().resolve_systemverilog_class_property(
+                        access.class_member_identity,
+                        access.kind == semantic::sv::ExpressionKind::
+                                class_static_property).unique()) {
+                    hir_allocation_target_ = property->declaration;
+                }
             }
             const auto lowered = lower_assignment(
                 input.assignment_kind
@@ -20922,6 +21100,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         || discarded_expression->systemverilog->kind
                             == semantic::sv::ExpressionKind::class_cast)) {
                     return lower_hir_expression(discarded, 1U).has_value();
+                }
+                // `void'(std::randomize(...))` discards the success value
+                // (IEEE 1800-2017 18.12, 13.4.1).
+                if (discarded != *input.value && discarded_expression
+                    && discarded_expression->systemverilog != nullptr
+                    && discarded_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && discarded_expression->systemverilog->text
+                        == "std::randomize") {
+                    return lower_hir_expression(discarded, 32U).has_value();
                 }
                 // `void'(process::self())` (IEEE 1800-2017 9.7).
                 if (discarded != *input.value && discarded_expression

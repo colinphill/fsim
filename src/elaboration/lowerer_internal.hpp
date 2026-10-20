@@ -12,9 +12,37 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <vector>
 
+namespace fsim::semantic::sv {
+class ClassSpecializationIndex;
+}
+
 namespace fsim::elaboration {
+
+// Restores a container to its size at construction.
+template <typename Container>
+class SizeRestoreGuard final {
+public:
+    explicit SizeRestoreGuard(Container& container)
+        : container_ { container }
+        , size_ { container.size() }
+    {
+    }
+
+    SizeRestoreGuard(const SizeRestoreGuard&) = delete;
+    SizeRestoreGuard& operator=(const SizeRestoreGuard&) = delete;
+
+    ~SizeRestoreGuard() { container_.resize(size_); }
+
+private:
+    Container& container_;
+    std::size_t size_;
+};
+
+template <typename Container>
+SizeRestoreGuard(Container&) -> SizeRestoreGuard<Container>;
 
 // A `timescale or timeunit spelling such as "10ns" in femtoseconds.
 [[nodiscard]] std::optional<std::uint64_t>
@@ -582,23 +610,38 @@ private:
     [[nodiscard]] std::uint64_t hir_time_unit_femtoseconds() const;
     // A range bound (a VHDL range constraint or a SystemVerilog packed
     // range), folding a bound that is still an expression.
+    // Whether an expression names something a callable frame binds (a
+    // class parameter of the running specialization), whose value the
+    // unit's evaluator and the frontend's folded bounds do not see.
+    [[nodiscard]] bool hir_frame_bound_expression(
+        semantic::ExpressionId expression) const;
+    // A bound folded before specialization yields to its expression when
+    // that names a frame-bound parameter.
+    [[nodiscard]] std::optional<std::int64_t> hir_range_bound(
+        const std::optional<std::int64_t>& folded,
+        const std::optional<semantic::ExpressionId>& expression) const
+    {
+        if (expression && !hir_generic_binding_frames_.empty()
+            && hir_frame_bound_expression(*expression)) {
+            if (const auto value = hir_constant_integer(*expression)) {
+                return value;
+            }
+        }
+        return folded ? folded
+            : expression ? hir_constant_integer(*expression)
+            : std::nullopt;
+    }
     template <typename Range>
     [[nodiscard]] std::optional<std::int64_t> hir_range_left(
         const Range& range) const
     {
-        return range.left ? range.left
-            : range.left_expression
-            ? hir_constant_integer(*range.left_expression)
-            : std::nullopt;
+        return hir_range_bound(range.left, range.left_expression);
     }
     template <typename Range>
     [[nodiscard]] std::optional<std::int64_t> hir_range_right(
         const Range& range) const
     {
-        return range.right ? range.right
-            : range.right_expression
-            ? hir_constant_integer(*range.right_expression)
-            : std::nullopt;
+        return hir_range_bound(range.right, range.right_expression);
     }
     // Append a callable-cache key fragment for an actual's VHDL element
     // constraints: each constraint's path, folded bounds and direction.
@@ -950,6 +993,8 @@ private:
         // (`obj.vif.m`).
         std::optional<semantic::DeclarationId> object;
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
+        // A parameter of the interface (`vif.P`): each instance's value.
+        std::vector<std::pair<std::uint64_t, PackedLogic4>> parameters;
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
     };
@@ -991,13 +1036,21 @@ private:
     hir_systemverilog_parameter_member(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
         std::vector<std::pair<std::uint64_t, std::string>>>>
-    hir_virtual_interface_instances(std::string_view receiver) const;
+    hir_virtual_interface_instances(std::string_view receiver,
+        semantic::ScopeId scope = { }) const;
     // Tests a virtual interface `handle` against each instance of its
     // interface type (IEEE 1800-2017 25.9) and emits the matching
     // instance's call through `emit(path)`.
     [[nodiscard]] bool lower_hir_virtual_interface_dispatch(RegisterId handle,
         const std::vector<std::pair<std::uint64_t, std::string>>& instances,
         const std::function<bool(const std::string&)>& emit);
+    // The specialization whose property initializers an implicit constructor
+    // is lowering, and the callable that was active when they began.
+    struct HirInitializerContext {
+        std::optional<std::size_t> active_callable;
+        std::uint32_t specialization { };
+    };
+    std::optional<HirInitializerContext> hir_initializer_context_;
     // The instance an interface function call runs on, while a call through
     // a virtual interface handle is lowered once per instance.
     std::optional<std::string> hir_interface_receiver_override_;
@@ -2313,6 +2366,12 @@ private:
     [[nodiscard]] std::optional<HirContainerObjectBinding>
     hir_container_object_binding(
         semantic::ExpressionId expression) const;
+    // A static value-container class property
+    // (`@sv-static-container-property:`) is one container object per
+    // specialization (IEEE 1800-2017 8.9, 8.25), created at its first use
+    // and holding its constant initializer's value.
+    [[nodiscard]] std::optional<HirContainerObjectBinding>
+    hir_class_static_container_binding(semantic::ExpressionId access) const;
     [[nodiscard]] std::optional<HirContainerObjectBinding>
     hir_container_object_binding_for_declaration(
         semantic::DeclarationId declaration) const;
@@ -2494,6 +2553,16 @@ private:
             runtime::simir::ContainerType container;
         };
         HirContainerObjectBinding root;
+        // A value-container property of an object (`obj.v[i].m`): the root
+        // is read from, and written back to, the object (IEEE 1800-2017
+        // 8.4). `root.type` then points at `class_root_type`.
+        struct ClassRoot {
+            // None: a property of `this` named by its simple name.
+            std::optional<semantic::ExpressionId> receiver;
+            std::string identity;
+        };
+        std::optional<ClassRoot> class_root;
+        std::shared_ptr<const runtime::simir::ContainerType> class_root_type;
         std::vector<Step> steps;
         runtime::simir::ContainerType type;
         bool leaf { };
@@ -2517,11 +2586,19 @@ private:
         runtime::simir::ContainerRegisterId root { };
         runtime::simir::ContainerRegisterId container { };
         std::vector<Level> levels;
+        // The object a class-property root is written back to.
+        std::optional<RegisterId> class_receiver;
     };
+    // A packed element of an object's multidimensional array reached by
+    // indexing a subarray (`obj.m[1][2]`, IEEE 1800-2017 7.4.5).
+    [[nodiscard]] std::optional<HirSvValuePath> hir_class_subarray_element(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirSvValuePath> hir_sv_value_path(
         semantic::ExpressionId expression) const;
+    // `container` holds the value the step selects from (for `$`).
     [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_index(
-        const HirSvValuePath& path, const HirSvValuePath::Step& step);
+        const HirSvValuePath& path, const HirSvValuePath::Step& step,
+        std::optional<runtime::simir::ContainerRegisterId> container);
     [[nodiscard]] std::optional<HirSvValuePathCursor>
     lower_hir_sv_value_path_descend(const HirSvValuePath& path);
     void publish_hir_sv_value_path(
@@ -2701,6 +2778,12 @@ private:
         bool static_storage { };
         bool writable { };
         bool event { };
+        // The property's type in the accessed specialization.
+        semantic::sv::TypeReference type;
+        // A class parameter of a parameterized specialization (a localparam
+        // or enum literal) folds from its initializer there (8.25).
+        std::optional<semantic::ExpressionId> constant;
+        std::optional<std::uint32_t> constant_specialization;
     };
     [[nodiscard]] std::optional<HirClassPropertyProfile>
     hir_class_property_profile(
@@ -2753,6 +2836,8 @@ private:
         bool virtual_dispatch { true };
         // The method returns a string, carried in a hidden string actual.
         bool string_result { };
+        // The parameterized class specialization the call runs in.
+        std::optional<std::uint32_t> specialization;
     };
     [[nodiscard]] std::optional<std::vector<
         runtime::SystemVerilogConstraintTemplate>>
@@ -2764,6 +2849,8 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         std::vector<semantic::ExpressionId>* runtime_values
+        = nullptr,
+        std::vector<semantic::ExpressionId>* runtime_containers
         = nullptr) const;
     [[nodiscard]] std::optional<HirClassMethodProfile>
     hir_class_method_profile(
@@ -2786,6 +2873,8 @@ private:
         std::vector<HirClassMethodActual> actuals;
         bool static_method { };
         bool automatic { true };
+        // The parameterized class specialization the call runs in.
+        std::optional<std::uint32_t> specialization;
     };
     // Call actuals bound to a class method's formals by position or name,
     // with each unbound formal's default (13.5.3).
@@ -2837,10 +2926,12 @@ private:
     // frame-push sites recorded past `mark`, and unqueue frames created
     // since `frames`.
     void rollback_hir_lowering(std::size_t mark, std::size_t frames);
-    // A non-parameterized class outside the UVM library whose bases are
-    // too; its construction can be lowered (8.7).
+    // A class outside the UVM library whose construction can be lowered
+    // (8.7): its bases are too, and a parameterized class or base is
+    // constructed in `specialization` (8.25).
     [[nodiscard]] const semantic::sv::ClassDeclaration*
-    hir_lowerable_constructor_class(std::string_view identity) const;
+    hir_lowerable_constructor_class(std::string_view identity,
+        std::optional<std::uint32_t> specialization = std::nullopt) const;
     [[nodiscard]] bool hir_class_derives_from_uvm(
         std::string_view identity) const;
     // Run the constructor of `declaration` on `receiver` with the call
@@ -2850,7 +2941,12 @@ private:
         const semantic::sv::ClassDeclaration& declaration,
         RegisterId receiver,
         std::span<const semantic::sv::TaskAssociation> actuals,
-        semantic::SourceSpanId source);
+        semantic::SourceSpanId source,
+        std::optional<std::uint32_t> specialization = std::nullopt);
+    // The specialization of the base of the class whose constructor the
+    // active frame runs.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_constructor_base_specialization() const;
     // The property initializers of `declaration` other than literals, which
     // the object's descriptor holds (8.7).
     [[nodiscard]] bool lower_hir_class_property_initializers(
@@ -2910,6 +3006,8 @@ private:
     struct HirInterfaceFunctionProfile {
         semantic::DeclarationId declaration;
         std::string receiver;
+        // The lexical scope the receiver name is written in.
+        semantic::ScopeId scope;
     };
     [[nodiscard]] std::optional<HirInterfaceFunctionProfile>
     hir_interface_function_profile(
@@ -3165,6 +3263,49 @@ private:
     [[nodiscard]] std::optional<std::string>
     hir_allocation_target_specialization(
         std::string_view class_identity);
+    // The design's class specializations, computed on first use.
+    [[nodiscard]] semantic::sv::ClassSpecializationIndex&
+    class_specializations() const;
+    // The specialization of class `owner_identity` that code lowered in
+    // the active callable sees: the frame's own specialization or one of
+    // its bases (IEEE 1800-2017 8.25.1).
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_context_class_specialization(
+        std::string_view owner_identity) const;
+    // The parameterized specialization a method call runs in: the class a
+    // static selection names, the receiver's declared class type, or the
+    // calling method's own specialization; none when no class parameter
+    // is bound along the owner's chain.
+    // The class specialization a declaration's class-handle type selects:
+    // its constant actuals, or actuals bound in the active specialization.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_declaration_class_specialization(
+        semantic::DeclarationId declaration) const;
+    // The same for an access to class member `member`. `selected`, when
+    // given, receives the specialization the access selects before the
+    // member's declaring class is sought in its base chain.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_class_member_specialization(semantic::ExpressionId access,
+        semantic::DeclarationId member,
+        std::optional<semantic::ExpressionId> receiver,
+        std::optional<std::uint32_t>* selected = nullptr) const;
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_class_call_specialization(semantic::ExpressionId call,
+        const semantic::sv::ClassMethod& method,
+        std::optional<semantic::ExpressionId> receiver) const;
+    // `T::f(...)` and `T::Alias::f(...)`: a static method selected through
+    // a class type parameter or typedef (IEEE 1800-2017 8.25.1, 8.23).
+    struct HirScopedClassMethod {
+        const semantic::sv::ClassMethod* method { };
+        std::optional<std::uint32_t> specialization;
+    };
+    [[nodiscard]] std::optional<HirScopedClassMethod>
+    hir_scoped_class_method(const semantic::sv::Expression& call) const;
+    // The class specialization `T::...::m` selects member `m` of, with the
+    // leading name a class type parameter or typedef; `leaf` is `m`.
+    [[nodiscard]] std::optional<std::uint32_t> hir_scoped_class_owner(
+        std::string_view text, semantic::ScopeId scope,
+        semantic::SourceSpanId source, std::string_view& leaf) const;
     [[nodiscard]] bool hir_update_expression_pure(
         semantic::ExpressionId expression, std::size_t depth = 0U) const;
     // Evaluate the impure indices of an update target once; false when a
@@ -3457,6 +3598,9 @@ private:
         std::optional<ContainerRegisterId> container_result;
         std::optional<ContainerRegisterId> container_result_default;
         std::optional<RegisterId> class_receiver;
+        // The parameterized class specialization a class method body runs
+        // in; its parameters are bound in generic_bindings.
+        std::optional<std::uint32_t> class_specialization;
         std::optional<std::string> interface_receiver;
         // The private variables of the protected object a method frame
         // runs on; part of the frame key.

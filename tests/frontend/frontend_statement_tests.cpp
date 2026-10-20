@@ -875,7 +875,15 @@ endmodule
             && result.design.units.front().signals.front().name
                 == "result",
         "inline procedural loop indices must not become implicit nets");
-    const auto& statements = result.design.units.front().processes.front().statements;
+    // The block declares a typedef, so it stays a scope (IEEE 1800-2017 6.18).
+    const auto& process_statements
+        = result.design.units.front().processes.front().statements;
+    require(
+        process_statements.size() == 1
+            && process_statements.front().kind == StatementKind::Block
+            && process_statements.front().type_aliases.size() == 1,
+        "a procedural block with a typedef keeps its scope");
+    const auto& statements = process_statements.front().statements;
     require(
         statements.size() == 12
             && statements[1].kind == StatementKind::Loop

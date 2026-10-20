@@ -41,7 +41,8 @@ Process VerilogParser::parse_initial()
     if (body) {
         if (body->kind == StatementKind::Block
             && body->label.empty()
-            && body->systemverilog_imports.empty()) {
+            && body->systemverilog_imports.empty()
+            && body->type_aliases.empty()) {
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -81,7 +82,8 @@ Process VerilogParser::parse_final()
     if (body) {
         if (body->kind == StatementKind::Block
             && body->label.empty()
-            && body->systemverilog_imports.empty()) {
+            && body->systemverilog_imports.empty()
+            && body->type_aliases.empty()) {
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -387,7 +389,8 @@ VerilogParser::parse_if_statement(const Token& start)
         if (true_branch->kind == StatementKind::Block
             && true_branch->label.empty()
             && true_branch->declarations.empty()
-            && true_branch->systemverilog_imports.empty()) {
+            && true_branch->systemverilog_imports.empty()
+            && true_branch->type_aliases.empty()) {
             statement.statements = std::move(true_branch->statements);
         } else {
             statement.statements.push_back(std::move(*true_branch));
@@ -398,7 +401,8 @@ VerilogParser::parse_if_statement(const Token& start)
             if (false_branch->kind == StatementKind::Block
                 && false_branch->label.empty()
                 && false_branch->declarations.empty()
-                && false_branch->systemverilog_imports.empty()) {
+                && false_branch->systemverilog_imports.empty()
+                && false_branch->type_aliases.empty()) {
                 statement.else_statements = std::move(false_branch->statements);
             } else {
                 statement.else_statements.push_back(

@@ -495,7 +495,11 @@ bool VerilogParser::compilation_unit_class_method_definition_start() const {
   for (std::size_t lookahead{};
        !at(TokenKind::EndOfFile, lookahead); ++lookahead) {
     const bool top_level = parentheses == 0 && brackets == 0;
-    if (top_level
+    // A parameter value list (`C#(T)`) in the return type is not the
+    // formal list.
+    const bool parameter_list = lookahead > 0
+        && at(TokenKind::Hash, lookahead - 1U);
+    if (top_level && !parameter_list
         && (at(TokenKind::LeftParen, lookahead)
             || at(TokenKind::Semicolon, lookahead))) {
       break;

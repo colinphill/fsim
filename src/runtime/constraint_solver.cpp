@@ -3,11 +3,46 @@
 
 #include <algorithm>
 #include <numeric>
+#include <compare>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace fsim::runtime {
 
 namespace {
+
+// Whether a domain repeats a value: sorted by planes, O(n log n), so a
+// 16-bit randc domain is checked in milliseconds.
+[[nodiscard]] bool domain_has_duplicate(
+    const std::span<const PackedLogic4> domain) {
+  std::vector<std::size_t> order(domain.size());
+  std::iota(order.begin(), order.end(), std::size_t{});
+  const auto planes = [&](const std::size_t index) {
+    return std::pair{domain[index].aval_words(), domain[index].bval_words()};
+  };
+  const auto less = [&](const std::size_t left, const std::size_t right) {
+    const auto [left_aval, left_bval] = planes(left);
+    const auto [right_aval, right_bval] = planes(right);
+    if (domain[left].width() != domain[right].width()) {
+      return domain[left].width() < domain[right].width();
+    }
+    if (const auto order_aval = std::lexicographical_compare_three_way(
+            left_aval.begin(), left_aval.end(),
+            right_aval.begin(), right_aval.end());
+        order_aval != 0) {
+      return order_aval < 0;
+    }
+    return std::lexicographical_compare(left_bval.begin(), left_bval.end(),
+        right_bval.begin(), right_bval.end());
+  };
+  std::ranges::sort(order, less);
+  return std::ranges::adjacent_find(order,
+             [&](const std::size_t left, const std::size_t right) {
+               return domain[left] == domain[right];
+             })
+      != order.end();
+}
 
 [[nodiscard]] bool elapsed(
     const SystemVerilogConstraintSolverLimits& limits,
@@ -162,19 +197,15 @@ SystemVerilogConstraintSolver::add_variable(
     throw std::invalid_argument{
         "duplicate constraint variable '" + variable.canonical_identity + "'"};
   }
-  for (std::size_t index = 0; index < variable.domain.size(); ++index) {
-    if (variable.domain[index].width() != variable.profile.width
-        || variable.domain[index].is_logic9()) {
+  for (const auto& value : variable.domain) {
+    if (value.width() != variable.profile.width || value.is_logic9()) {
       throw std::invalid_argument{
           "constraint domain value does not match its exact profile"};
     }
-    if (std::ranges::find(
-            std::span{variable.domain}.first(index),
-            variable.domain[index])
-        != std::span{variable.domain}.first(index).end()) {
-      throw std::invalid_argument{
-          "constraint variable domain contains a duplicate value"};
-    }
+  }
+  if (domain_has_duplicate(variable.domain)) {
+    throw std::invalid_argument{
+        "constraint variable domain contains a duplicate value"};
   }
   if (variable.domain.size()
       > limits_.maximum_domain_values - domain_values_) {
@@ -203,15 +234,12 @@ void SystemVerilogConstraintSolver::replace_domain(
         "constraint domain cannot change after distribution registration"};
   }
   const auto& retained = variables_[variable];
-  for (std::size_t index = 0; index < domain.size(); ++index) {
-    if (domain[index].width() != retained.profile.width
-        || domain[index].is_logic9()
-        || std::ranges::find(
-               std::span{domain}.first(index), domain[index])
-            != std::span{domain}.first(index).end()) {
-      throw std::invalid_argument{
-          "replacement constraint domain does not match its exact profile"};
-    }
+  if (std::ranges::any_of(domain, [&](const PackedLogic4& value) {
+        return value.width() != retained.profile.width || value.is_logic9();
+      })
+      || domain_has_duplicate(domain)) {
+    throw std::invalid_argument{
+        "replacement constraint domain does not match its exact profile"};
   }
   const auto prior_size = retained.domain.size();
   if (domain.size() > prior_size

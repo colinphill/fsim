@@ -9730,6 +9730,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             return last;
         }
     }
+    // An element of an object's multidimensional array is read through
+    // its value path (IEEE 1800-2017 7.4.5).
+    if (language_ != frontend::Language::Vhdl2008) {
+        if (const auto element = hir_class_subarray_element(expression_id)) {
+            auto value = lower_hir_sv_value_path_value(*element);
+            if (value && expected_width != 0U
+                && register_width(*value) != expected_width) {
+                value = resize_register(*value, expected_width,
+                    element->packed_tail
+                        ? element->packed_tail->signed_value
+                        : element->type.signed_elements);
+            }
+            if (value) {
+                return value;
+            }
+        }
+    }
     const auto diagnostics_before = diagnostics_.size();
     auto result = lower_hir_expression_untraced(
         expression_id, expected_width, scalar_context, vhdl_array_context);
@@ -10672,7 +10689,14 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
     const HirVirtualInterfaceMember& member)
 {
     // The member of whichever interface instance the handle names (IEEE
-    // 1800-2017 25.9); an unbound handle reads X.
+    // 1800-2017 25.9); an unbound handle reads X. A parameter that every
+    // candidate instance shares is that constant.
+    if (!member.parameters.empty()
+        && std::ranges::all_of(member.parameters, [&](const auto& entry) {
+               return entry.second == member.parameters.front().second;
+           })) {
+        return load_constant(member.parameters.front().second, member.domain);
+    }
     const auto handle = lower_hir_virtual_interface_member_handle(member);
     if (!handle) {
         return std::nullopt;
@@ -10680,6 +10704,20 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
     auto result = allocate_register(member.width, member.domain);
     process_.operations.emplace_back(LoadConstant {
         result, PackedLogic4 { member.width, Logic4::x } });
+    // A parameter (`vif.P`) is the designated instance's value.
+    for (const auto& [identity, value] : member.parameters) {
+        const auto constant = load_constant(
+            unsigned_value(identity, 64U), frontend::ValueDomain::Bit2);
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, selected, *handle, constant });
+        const auto parameter = load_constant(value, member.domain);
+        const auto next = allocate_register(member.width, member.domain);
+        process_.operations.emplace_back(ConditionalSelect {
+            next, selected, parameter, result });
+        result = next;
+    }
     for (const auto& [identity, signal] : member.candidates) {
         const auto constant = load_constant(
             unsigned_value(identity, 64U), frontend::ValueDomain::Bit2);
@@ -11092,6 +11130,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 expected_width != 0U ? expected_width : 1U,
                 frontend::ValueDomain::Boolean);
         }
+    }
+    // `T::f(...)`: a static method selected through a class type
+    // parameter (IEEE 1800-2017 8.25.1).
+    if (const auto call = specialized_hir_unit_->find_expression(
+            expression_id);
+        call && call->systemverilog != nullptr
+        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && call->systemverilog->text.find("::") != std::string::npos
+        && hir_scoped_class_method(*call->systemverilog)) {
+        return lower_hir_class_method_call(expression_id, expected_width);
     }
     if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
         const auto destination = allocate_register(
@@ -12375,6 +12423,20 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (!declaration || declaration->systemverilog == nullptr
             || !declaration->systemverilog->callable
             || !declaration->systemverilog->callable->function) {
+            return false;
+        }
+        // A method of a parameterized class reads its specialization's
+        // parameters (IEEE 1800-2017 8.25), which the constant evaluator
+        // does not bind.
+        if (std::ranges::any_of(
+                specialized_hir_unit_->design().systemverilog_hir.classes(),
+                [&](const semantic::sv::ClassDeclaration& candidate) {
+                    return !candidate.parameters.empty()
+                        && std::ranges::any_of(candidate.methods,
+                            [&](const semantic::sv::ClassMethod& method) {
+                                return method.declaration == declaration_id;
+                            });
+                })) {
             return false;
         }
         // A variable that persists across calls (a static function's local
@@ -14540,16 +14602,47 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (allocation.class_identity.empty()) {
             return std::nullopt;
         }
+        auto class_identity = allocation.class_identity;
         // A target of a parameterized class type (`Box#(7) a = new;`)
         // allocates that specialization; its constructor and initializers
         // run on the runtime class interpreter, which reads the
         // specialization's parameter values.
-        const auto specialization
-            = hir_allocation_target_specialization(allocation.class_identity);
+        std::optional<std::string> specialization;
+        if (class_identity.find("::") == std::string::npos) {
+            // The object's type is a type parameter: `new` constructs the
+            // class the active specialization binds (IEEE 1800-2017 8.25).
+            semantic::sv::TypeReference named;
+            named.target.spelling = class_identity;
+            named.target.source = allocation.source;
+            const auto type = hir_resolver().effective_systemverilog_type(
+                named, allocation.scope);
+            if (!type || type->class_identity.empty()) {
+                return std::nullopt;
+            }
+            class_identity = type->class_identity;
+            auto& index = class_specializations();
+            const auto context = active_hir_callable_
+                    && *active_hir_callable_ < hir_callable_frames_.size()
+                ? hir_callable_frames_[*active_hir_callable_]
+                      .class_specialization
+                : std::nullopt;
+            if (const auto found = index.specialize(
+                    *type, context, allocation.source);
+                found && !index.at(*found).parameters.empty()) {
+                specialization = index.at(*found).specialization_identity;
+            }
+        } else {
+            specialization = hir_allocation_target_specialization(
+                class_identity);
+        }
         // The object is allocated with its property defaults and the
         // process runs the constructor chain itself when it can (8.7).
-        const auto* const lowerable = lower_class_functions_ && !specialization
-            ? hir_lowerable_constructor_class(allocation.class_identity)
+        const auto specialization_id = specialization
+            ? class_specializations().find(*specialization)
+            : std::nullopt;
+        const auto* const lowerable = lower_class_functions_
+                && specialization.has_value() == specialization_id.has_value()
+            ? hir_lowerable_constructor_class(class_identity, specialization_id)
             : nullptr;
         if (lowerable != nullptr) {
             const auto mark = process_.operations.size();
@@ -14578,14 +14671,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 64U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(ClassAllocate {
                 handle,
-                "@no-constructor:" + allocation.class_identity,
-                allocation.class_identity,
+                "@no-constructor:" + specialization.value_or(class_identity),
+                class_identity,
                 { },
                 { },
                 { },
             });
-            if (lower_hir_class_construction(
-                    *lowerable, handle, associations, allocation.source)) {
+            if (lower_hir_class_construction(*lowerable, handle,
+                    associations, allocation.source, specialization_id)) {
                 class_functions_lowered_ = true;
                 return handle;
             }
@@ -14625,8 +14718,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             64U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ClassAllocate {
             destination,
-            specialization.value_or(allocation.class_identity),
-            allocation.class_identity,
+            specialization.value_or(class_identity),
+            class_identity,
             std::move(actuals),
             std::move(actual_kinds),
             std::move(names),
@@ -14881,6 +14974,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // values held by an object.
         if (hir_class_value_container_type(identity)) {
             if (access.operands.size() != 2U) {
+                return std::nullopt;
+            }
+            // `obj.v[i]` of a multidimensional array is a subarray (a
+            // value path).
+            if (const auto type = hir_class_value_container_type(identity);
+                type->fixed && type->dimensions.size() > 1U) {
                 return std::nullopt;
             }
             const auto container = lower_hir_class_value_container(
@@ -15391,6 +15490,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 if (const auto signal
                     = hir_direct_signal(call.operands.front())) {
                     packed_bits = design_.signal_info_[*signal].width;
+                } else if (const auto property
+                    = hir_class_property_profile(call.operands.front());
+                    property && property->width != 0U) {
+                    // A class property has its type's width in the
+                    // accessed specialization (IEEE 1800-2017 8.25).
+                    packed_bits = property->width;
                 } else if (const auto member
                     = hir_hierarchical_signal_member(call.operands.front())) {
                     packed_bits = static_cast<std::size_t>(member->width);
@@ -15621,6 +15726,76 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         ? (left >= right ? 1 : -1)
                         : high - low + 1);
             }
+            // A queue or dynamic array of class handles held by an object
+            // (`obj.v`) is sized through the class heap; its indices run
+            // from 0 to size - 1 (IEEE 1800-2017 7.5, 7.10, 20.7).
+            constexpr std::string_view handle_container_prefix {
+                "@sv-container-property:"
+            };
+            if (!receiver_type && receiver_expression
+                && receiver_expression->systemverilog != nullptr
+                && receiver_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && receiver_expression->systemverilog->text.starts_with(
+                    handle_container_prefix)
+                && receiver_expression->systemverilog->operands.size() == 1U
+                && call.text != "$bits") {
+                const auto identity = std::string_view {
+                    receiver_expression->systemverilog->text
+                }.substr(handle_container_prefix.size());
+                const auto* property = hir_resolver()
+                    .resolve_systemverilog_class_property(
+                        std::string { identity }, false)
+                    .unique();
+                const bool sized = property != nullptr
+                    && property->type.container_form
+                    && (*property->type.container_form
+                            == semantic::sv::TypeForm::queue
+                        || *property->type.container_form
+                            == semantic::sv::TypeForm::dynamic_array)
+                    && !hir_class_value_container_type(identity);
+                if (sized) {
+                    if (call.text == "$left" || call.text == "$low") {
+                        return constant_answer(0);
+                    }
+                    if (call.text == "$increment") {
+                        return constant_answer(-1);
+                    }
+                    const auto receiver = lower_hir_expression(
+                        receiver_expression->systemverilog->operands.front(),
+                        64U);
+                    if (!receiver || register_width(*receiver) != 64U) {
+                        return std::nullopt;
+                    }
+                    auto length = allocate_register(
+                        32U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(ClassMethodCall {
+                        length,
+                        *receiver,
+                        "@container-size:" + std::string { identity },
+                        { },
+                        { },
+                        { },
+                        32U,
+                        false,
+                    });
+                    if (call.text != "$size") {
+                        const auto one = load_constant(
+                            unsigned_value(1U, 32U),
+                            frontend::ValueDomain::Integer);
+                        const auto last = allocate_register(
+                            32U, frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(IntegerBinary {
+                            IntegerBinaryOperator::subtract, last, length,
+                            one });
+                        length = last;
+                    }
+                    return expected_width != 0U && expected_width != 32U
+                        ? std::optional { resize_register(
+                              length, expected_width, true) }
+                        : std::optional { length };
+                }
+            }
             const auto container = lower_hir_static_container_value(
                 call.operands.front());
             if (!container || container->type.fixed) {
@@ -15709,6 +15884,25 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             : std::optional { destination };
     } else if (const auto property
         = hir_class_property_profile(expression_id)) {
+        // A class parameter folds in the specialization it belongs to
+        // (IEEE 1800-2017 8.25).
+        if (property->constant && property->constant_specialization) {
+            const SizeRestoreGuard frames { hir_generic_binding_frames_ };
+            hir_generic_binding_frames_.push_back(
+                class_specializations().binding_frame(
+                    *property->constant_specialization));
+            const auto mark = process_.operations.size();
+            const auto frames_mark = hir_callable_frames_.size();
+            if (const auto folded = lower_hir_expression(
+                    *property->constant, property->width)) {
+                return expected_width != 0U
+                        && expected_width != register_width(*folded)
+                    ? std::optional { resize_register(*folded,
+                          expected_width, property->signed_value) }
+                    : folded;
+            }
+            rollback_hir_lowering(mark, frames_mark);
+        }
         const auto destination = allocate_register(
             property->width, property->domain);
         if (property->static_storage) {
@@ -16311,7 +16505,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 operand, hir_process_scope_);
             const auto domain = hir_expression_domain(
                 operand, hir_process_scope_);
-            if (!width || *width == 0U || *width > 64U || !domain
+            if (!width || *width == 0U || !domain
                 || (*domain != frontend::ValueDomain::Bit2
                     && *domain != frontend::ValueDomain::Logic4
                     && *domain != frontend::ValueDomain::Integer)
@@ -16341,7 +16535,98 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             operation.targets.push_back(std::move(target));
             return true;
         };
+        // An array (an unpacked array, queue or associative array of packed
+        // elements) joins the call element by element (IEEE 1800-2017
+        // 18.12, 18.5.8.1).
+        const auto array_container = [&](const semantic::ExpressionId operand,
+                                         std::optional<HirSvValuePath>& path,
+                                         std::optional<ContainerObjectId>&
+                                             object)
+            -> std::optional<HirStaticContainerValue> {
+            const auto record = specialized_hir_unit_->find_expression(
+                operand);
+            if (!record || record->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& text = record->systemverilog->text;
+            std::optional<HirStaticContainerValue> held;
+            if ((record->systemverilog->kind
+                        == semantic::sv::ExpressionKind::name
+                    && hir_container_object_binding(operand))
+                || (record->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && text.starts_with("@sv-container-property:"))) {
+                held = lower_hir_static_container_value(operand);
+            } else if ((path = hir_sv_value_path(operand)) && !path->leaf
+                && !path->string_leaf && !path->packed_tail) {
+                held = lower_hir_sv_value_path_container_read(*path);
+            } else {
+                path.reset();
+                // A static array property (`C::q`) is one object per
+                // specialization.
+                if (record->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && text.starts_with("@sv-static-container-property:")) {
+                    if (const auto binding
+                        = hir_class_static_container_binding(operand);
+                        binding && binding->type != nullptr) {
+                        const auto value
+                            = allocate_container_register(*binding->type);
+                        process_.operations.emplace_back(ReadContainerObject {
+                            value, binding->object });
+                        held = HirStaticContainerValue {
+                            value, *binding->type };
+                        object = binding->object;
+                    }
+                }
+            }
+            if (!held || held->type.element_kind != ContainerElementKind::Packed
+                || held->type.aggregate_value
+                || held->type.element_width == 0U
+                || held->type.dimensions.size() > 1U) {
+                return std::nullopt;
+            }
+            return held;
+        };
+        const auto add_container = [&](const HirStaticContainerValue& held,
+                                       std::string identity,
+                                       const bool randomized) {
+            ScopeRandomizeContainer container;
+            container.container = held.value;
+            container.canonical_identity = std::move(identity);
+            container.element_width = held.type.element_width;
+            container.signed_value = held.type.signed_elements;
+            container.domain_kind = held.type.element_nominal_type == "int"
+                    || held.type.element_nominal_type == "integer"
+                ? ScopeRandomizeDomainKind::integer
+                : ScopeRandomizeDomainKind::bit_vector;
+            container.nominal_type = held.type.element_nominal_type.empty()
+                ? std::string { "$std-randomize-element" }
+                : held.type.element_nominal_type;
+            container.randomized = randomized;
+            operation.containers.push_back(std::move(container));
+        };
+        struct ArrayCopyOut {
+            semantic::ExpressionId operand;
+            ContainerRegisterId value { };
+            std::optional<HirSvValuePath> path;
+            std::optional<ContainerObjectId> object;
+        };
+        std::vector<ArrayCopyOut> array_copy_out;
         for (const auto operand : call.operands) {
+            {
+                std::optional<HirSvValuePath> path;
+                std::optional<ContainerObjectId> object;
+                if (const auto held = array_container(operand, path, object)) {
+                    auto identity = "@std-randomize-argument:"
+                        + std::to_string(arguments.size());
+                    arguments.emplace_back(operand, identity);
+                    add_container(*held, std::move(identity), true);
+                    array_copy_out.push_back({ operand, held->value,
+                        std::move(path), object });
+                    continue;
+                }
+            }
             const auto argument = specialized_hir_unit_->find_expression(
                 operand);
             const auto declaration_id = hir_referenced_declaration(operand);
@@ -16426,15 +16711,35 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             binding->width, ordinal, 0U));
                 }
             }
+            arguments.emplace_back(operand, target.canonical_identity);
             operation.targets.push_back(std::move(target));
         }
         hir_scope_randomize_arguments_ = std::move(arguments);
         std::vector<semantic::ExpressionId> runtime_values;
+        std::vector<semantic::ExpressionId> runtime_containers;
         auto inline_constraints = hir_inline_constraints(
-            expression_id, hir_process_scope_, &runtime_values);
+            expression_id, hir_process_scope_, &runtime_values,
+            &runtime_containers);
         hir_scope_randomize_arguments_.clear();
         if (!inline_constraints) {
             return std::nullopt;
+        }
+        // Arrays the with-clause reads keep their elements (18.7).
+        for (std::size_t slot { }; slot < runtime_containers.size(); ++slot) {
+            std::optional<HirSvValuePath> path;
+            std::optional<ContainerObjectId> object;
+            const auto held = array_container(
+                runtime_containers[slot], path, object);
+            if (!held) {
+                report(
+                    "FSIM-ELAB-SVRAND-009",
+                    "std::randomize with-clause array must hold packed "
+                    "elements",
+                    hir_source_span(call.source));
+                return invalid_integral_result();
+            }
+            add_container(*held,
+                "@std-randomize-container:" + std::to_string(slot), false);
         }
         // Calling-scope values in the with-clause are read when the call
         // executes (IEEE 1800-2017 18.7).
@@ -16474,6 +16779,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(std::move(operation));
         const auto write_back = [&](const semantic::ExpressionId operand,
                                     const RegisterId value) -> bool {
+            // An element or member of an unpacked value (`o.a[1]`,
+            // `s.b.d[0]`) is written through its value path.
+            if (const auto path = hir_sv_value_path(operand);
+                path && path->leaf && !path->string_leaf) {
+                return lower_hir_sv_value_path_write(
+                    *path, value, std::nullopt);
+            }
             const auto access = specialized_hir_unit_->find_expression(
                 operand);
             constexpr std::string_view element_prefix
@@ -16551,6 +16863,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         };
         for (const auto& [operand, temporary] : copy_out) {
             if (!write_back(operand, temporary)) {
+                report(
+                    "FSIM-ELAB-SVRAND-002",
+                    "std::randomize arguments must be writable",
+                    hir_source_span(call.source));
+                return invalid_integral_result();
+            }
+        }
+        for (const auto& array : array_copy_out) {
+            if (array.object) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    *array.object, array.value, std::nullopt });
+                continue;
+            }
+            const auto binding = hir_container_object_binding(array.operand);
+            if (binding && binding->local && *binding->local == array.value) {
+                continue;
+            }
+            const bool written = array.path
+                ? lower_hir_sv_value_path_write(
+                      *array.path, std::nullopt, array.value)
+                : lower_hir_container_copy_out(array.operand, array.value);
+            if (!written) {
                 report(
                     "FSIM-ELAB-SVRAND-002",
                     "std::randomize arguments must be writable",
@@ -24220,22 +24554,30 @@ std::optional<std::string> Lowerer::hir_allocation_target_specialization(
     if (!hir_allocation_target_ || specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    auto& cache = design_.class_declaration_specializations_;
-    if (!cache) {
-        cache.emplace();
-        auto result = semantic::sv::specialize_classes(
-            specialized_hir_unit_->design());
-        for (auto& [declaration, identity] :
-            result.declaration_specializations) {
-            cache->insert_or_assign(declaration.value(), std::move(identity));
-        }
+    // A declaration typed with constant actuals, or with actuals bound in
+    // the active specialization (`typedef C#(T) this_type`, 8.25).
+    auto& index = class_specializations();
+    auto found = index.for_declaration(*hir_allocation_target_);
+    if (!found) {
+        found = hir_declaration_class_specialization(*hir_allocation_target_);
     }
-    const auto found = cache->find(hir_allocation_target_->value());
-    if (found == cache->end()
-        || !found->second.starts_with(std::string { class_identity } + "<")) {
+    if (!found || index.at(*found).declaration_identity != class_identity
+        || index.at(*found).parameters.empty()) {
         return std::nullopt;
     }
-    return found->second;
+    return index.at(*found).specialization_identity;
+}
+
+semantic::sv::ClassSpecializationIndex&
+Lowerer::class_specializations() const
+{
+    auto& cache = design_.class_specializations_;
+    if (!cache) {
+        const auto& design = specialized_hir_unit_->design();
+        cache = std::make_shared<semantic::sv::ClassSpecializationIndex>(
+            design.semantics, design.systemverilog_hir);
+    }
+    return *cache;
 }
 
 std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(

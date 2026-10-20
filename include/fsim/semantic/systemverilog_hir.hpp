@@ -368,6 +368,9 @@ struct Expression {
     // The data type of a `type(data_type)` operator (IEEE 1800-2017 6.23); at
     // most one element. `type(expression)` keeps the expression as operand.
     std::vector<TypeReference> type_operand;
+    // The parameterized class a static member selection names
+    // (`C#(int)::f()`, IEEE 1800-2017 8.25.1); at most one element.
+    std::vector<TypeReference> class_owner;
 };
 
 /// The expression-sized cast introduced by the frontend stores its constant
@@ -631,6 +634,10 @@ struct TypeReference {
     // `type(expression)` used as a data type: the type of the expression
     // (IEEE 1800-2017 6.23), resolved in each specialization.
     std::optional<ExpressionId> type_of;
+    // The specialization a parameterized class-handle type denotes once its
+    // actuals are bound (IEEE 1800-2017 8.25); set by class specialization,
+    // empty in source HIR.
+    std::string class_specialization;
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;

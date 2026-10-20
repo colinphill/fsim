@@ -5525,6 +5525,36 @@ private:
         return real_value(result, kind);
     }
 
+    // A class's local parameter or enumeration literal (`C::E_A`) has its
+    // initializer's value (IEEE 1800-2017 8.25.1, 6.19); a parameter of a
+    // parameterized class has a value only in a specialization.
+    [[nodiscard]] std::optional<Value> evaluate_class_parameter(
+        const semantic::sv::Expression& record)
+    {
+        constexpr std::string_view prefix { "@sv-static-property:" };
+        const auto identity = !record.class_member_identity.empty()
+            ? std::string_view { record.class_member_identity }
+            : std::string_view { record.text }.starts_with(prefix)
+            ? std::string_view { record.text }.substr(prefix.size())
+            : std::string_view { };
+        for (const auto& declaration :
+            specialization_.design().systemverilog_hir.classes()) {
+            const auto property = std::ranges::find(declaration.properties,
+                identity, &semantic::sv::ClassProperty::canonical_identity);
+            if (property == declaration.properties.end()) {
+                continue;
+            }
+            if (!property->parameter || !property->initializer
+                || !declaration.parameters.empty()) {
+                break;
+            }
+            return evaluate(*property->initializer);
+        }
+        error_ = "class property '" + std::string { identity }
+            + "' is not a constant of a non-parameterized class";
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_impl(
         const semantic::ExpressionId expression)
     {
@@ -5595,6 +5625,9 @@ private:
         }
         if (record.kind == ExpressionKind::call) {
             return evaluate_call(record);
+        }
+        if (record.kind == ExpressionKind::class_static_property) {
+            return evaluate_class_parameter(record);
         }
         error_ = "expression form is not a supported SystemVerilog integral "
                  "constant expression";

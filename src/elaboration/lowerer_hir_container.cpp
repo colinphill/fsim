@@ -1222,6 +1222,18 @@ Lowerer::hir_systemverilog_value_type(
         }
         return element;
     }
+    // A class property, typed as the accessed specialization declares it
+    // (IEEE 1800-2017 8.25).
+    if ((source.kind == semantic::sv::ExpressionKind::class_property
+            || source.kind
+                == semantic::sv::ExpressionKind::class_static_property)
+        && trailing_segments == 0U) {
+        const auto profile = hir_class_property_profile(expression_id);
+        if (!profile || profile->event) {
+            return std::nullopt;
+        }
+        return profile->type;
+    }
     if (source.kind != semantic::sv::ExpressionKind::name) {
         return std::nullopt;
     }
@@ -1343,6 +1355,20 @@ Lowerer::hir_systemverilog_enumeration_method(
                 return hir_systemverilog_enumeration_type_profile(
                     std::move(result), *type, receiver->systemverilog->scope);
             }
+        }
+        // An enumeration class property (`h.e.name()`, IEEE 1800-2017
+        // 6.19.5, 8.5).
+        if (receiver && receiver->systemverilog != nullptr
+            && (receiver->systemverilog->kind
+                    == semantic::sv::ExpressionKind::class_property
+                || receiver->systemverilog->kind
+                    == semantic::sv::ExpressionKind::class_static_property)) {
+            if (const auto type = hir_systemverilog_value_type(
+                    source.operands.front())) {
+                return hir_systemverilog_enumeration_type_profile(
+                    std::move(result), *type, receiver->systemverilog->scope);
+            }
+            return std::nullopt;
         }
         // A chained call (`e.next(1).next(1)`) has the enumeration type of
         // the inner method's receiver.
@@ -1478,10 +1504,9 @@ Lowerer::hir_systemverilog_enumeration_type_profile(
     semantic::sv::TypeReference type,
     const semantic::ScopeId scope) const
 {
-    if (!type.target.target.valid()) {
-        type = hir_resolver().effective_systemverilog_type(type, scope)
-                   .value_or(type);
-    }
+    // A type parameter names the type its specialization binds (8.25).
+    type = hir_resolver().effective_systemverilog_type(type, scope)
+               .value_or(type);
     if (!type.target.target.valid()) {
         return std::nullopt;
     }

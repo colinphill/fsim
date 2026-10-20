@@ -26,4 +26,13 @@ systemverilog_container_type(
     const semantic::SpecializedHirUnit& working_specialization,
     const semantic::sv::TypeReference& reference);
 
+// The constant value of a container declaration's initializer (IEEE
+// 1800-2017 10.9, 10.10, 7.9.11); `element_type` is the declared element.
+[[nodiscard]] std::optional<runtime::simir::ContainerValue>
+systemverilog_constant_container_initializer(
+    const semantic::SpecializedHirUnit& specialization,
+    const runtime::simir::ContainerType& type,
+    semantic::ExpressionId initializer,
+    const semantic::sv::TypeReference* element_type);
+
 } // namespace fsim::elaboration::hierarchy_sv_type_layout_detail

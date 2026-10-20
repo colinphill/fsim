@@ -747,6 +747,11 @@ namespace {
                     *input.systemverilog_type_operand, input.span, scope,
                     parent));
             }
+            if (input.systemverilog_class_owner) {
+                output.class_owner.push_back(type_reference(
+                    *input.systemverilog_class_owner, input.span, scope,
+                    parent));
+            }
             output.decimal_literal
                 = systemverilog_hir_detail::systemverilog_decimal_literal(
                     input.systemverilog_decimal_literal);

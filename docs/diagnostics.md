@@ -1763,6 +1763,7 @@ scheduler.
 | `FSIM-ELAB-SVRAND-006` | error | An inline constraint uses a variable, constant, or operator that cannot be represented by the portable constraint graph. |
 | `FSIM-ELAB-SVRAND-007` | error | `$srandom` is outside SystemVerilog, has the wrong arity, or has a nonintegral seed. |
 | `FSIM-ELAB-SVRAND-008` | error | An IEEE random-distribution function has the wrong arity, a nonintegral argument, or a seed that is not a writable packed integer variable at least 32 bits wide. |
+| `FSIM-ELAB-SVRAND-009` | error | A `std::randomize` with-clause reads an array whose elements are not packed. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |

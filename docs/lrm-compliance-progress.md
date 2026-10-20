@@ -253,6 +253,77 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 76: class value paths, static containers, std::randomize arrays and wide variables, constraint intervals
+
+Full run on the frozen `b75w1` (Batch 75, b4dcbe8e), compared with Batch 74
+(`b74w1`):
+- New passes: ivtest 2, sv-tests 1, Verilator 32, vests 4, nvc 15.
+- Losses: Verilator t_constraint_dist timed out (70 s alone on `b75w1`, about
+  140 ms per randomize); it passes on Batch 76. t_udp_sequential moved out of
+  scope.
+
+| Suite | Batch74 passes / in scope | Batch75 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2545 / 2564 | 2547 / 2564 | 262 |
+| sv-tests | 1441 / 1497 | 1442 / 1497 | 0 |
+| verilator | 1738 / 2071 | 1768 / 2066 | 349 |
+| vests | 3614 / 3646 | 3618 / 3646 | 2 |
+| nvc | 987 / 1245 | 1002 / 1245 | 237 |
+| vhdl-compliance | 45 / 69 | 45 / 69 | 3 |
+
+Batch 76 starts the class-method SimIR lowering plan
+(`.local-artifacts/lrm-closure/ARCH-PLAN-b76.md`) and finishes the
+randomization gaps it exposed. It closes 54 Verilator tests by a targeted
+rerun of the `b75w1` failures. The full six-suite run on the frozen `b76w1`
+goes in the Batch 77 note.
+
+Class specializations and value paths (8.25, 7.12):
+- Static calls through specialized classes (`C#(..)::f()`, `T::f()`) carry
+  their specialization; nested class-handle types are specialized in the
+  binding environment, and method frames are keyed by specialization.
+- Value paths can start at class properties: `obj.v[i].m` and partial
+  subarrays such as `obj.m[1][2]` read and write the element.
+- Static container properties are ordinary containers (`C::q.size()`,
+  `C::q.push_back(x)` in static functions).
+- `foreach` and array queries work over another object's queue or dynamic
+  array of handles.
+- Method locals whose widths depend on class parameters use the
+  specialization's parameter values.
+
+Randomization (18.5, 18.11, 18.12):
+- `std::randomize` takes array arguments and with-clause arrays
+  (`ScopeRandomize.containers`, runtime schema 87), works from class
+  methods and static functions with with-clause names resolved in the calling
+  scope, reads other objects' properties as state variables, accepts
+  variables wider than 64 bits, and works under `void'(...)`. An unqualified
+  `randomize(...)` outside a class is `std::randomize`.
+- `obj.randomize(h)` with a handle `h` randomizes the members of the object
+  `h` refers to.
+- The bounds analysis propagates intervals through `+` and `-`, so
+  `x < a + 5` bounds `x` from `a`'s domain; variables wider than 64 bits use
+  one domain helper in both class and scope randomization.
+- `unique` constraints split into pairwise clauses (10 elements: 5.6 s to
+  0.14 s).
+- `randc` variables of 17 to 64 bits use a memoryless permutation walk.
+- Solver speedups: sorted duplicate-domain checks, word-sized fast paths in
+  constraint evaluation, and reductions of any width. t_constraint_dist runs
+  in time again.
+
+Diagnostics: `FSIM-ELAB-SVRAND-009` reports a `std::randomize` with-clause
+array whose elements are not packed (catalog 2968 production codes).
+
+Class handles spelled with actuals (`Base#(8)`) but without actual records
+are still rejected instead of falling back to the default specialization.
+A procedural block that declares a typedef stays a scope (6.18).
+
+Open leads: t_randomize_std_array_index (2-D containers and unpacked
+equality in constraints), t_package_dot, t_foreach_nested,
+t_class_param_pin_order, t_class_localparam_dotref and
+t_class_lparam_deferred (`C#(7)::b` folding), and the solver timeouts
+t_constraint_array_reduction_inherit and t_randomize_queue_constraints.
+
+Labelled ctest: 720 of 748 pass; the 28 failures are the known set from Batch 75.
+
 ### Batch 75: VHDL shaped values, event handles, SVA monitor, clocking drives, forward hierarchical references
 
 Full run on the frozen `b74w1` (Batch 74, 1bcd447b), compared with Batch 73

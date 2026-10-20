@@ -664,6 +664,10 @@ Type class_resolution_detail::specialize_selected_class_type(Type type,
   }
   type = specialize_type(std::move(type), environment, types);
   if (symbolic.empty()) return type;
+  // A symbolic local parameter (`localparam w = $clog2(c.n)`) is itself
+  // written in the formals; its replacement is substituted in turn, to a
+  // bounded depth.
+  std::size_t depth{};
   const auto substitute_expression = [&](const auto& self,
                                          Expression& expression) -> void {
     if (expression.kind == ExpressionKind::Identifier) {
@@ -672,6 +676,11 @@ Type class_resolution_detail::specialize_selected_class_type(Type type,
         const auto span = expression.span;
         expression = *found->second;
         expression.span = span;
+        if (depth < 8U) {
+          ++depth;
+          self(self, expression);
+          --depth;
+        }
         return;
       }
       // A member of a structure parameter (`Cfg.n`) through a named actual.

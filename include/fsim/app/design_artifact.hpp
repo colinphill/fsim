@@ -17,7 +17,7 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 86;
+inline constexpr std::uint32_t kRuntimeStateSchema = 87;
 inline constexpr std::uint32_t kSemanticStateSchema = 4;
 inline constexpr std::uint32_t kDesignIrStateSchema = 5;
 inline constexpr std::uint32_t kCompiledHirBundleSchema = 3;
@@ -25,8 +25,9 @@ inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 14;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
 inline constexpr std::uint32_t kVhdlHirStateSchema = 8;
+// A UVM testbench's compiled HIR decodes to about 270 MiB.
 inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
-    = 256U * 1024U * 1024U;
+    = 512U * 1024U * 1024U;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,

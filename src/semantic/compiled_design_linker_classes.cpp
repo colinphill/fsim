@@ -34,20 +34,49 @@ void append_reference(std::vector<CompiledReference>& references,
         std::string { identity }, source, std::nullopt });
 }
 
-void append_type_reference(std::vector<CompiledReference>& references,
+void append_type_reference(const CompiledDesign& design,
+    std::vector<CompiledReference>& references,
     const UnitId owner, const sv::TypeReference& type,
     const SourceSpanId fallback_source)
 {
     append_reference(references, owner, type.class_identity,
         type.target.source.valid() ? type.target.source : fallback_source);
+    const auto& expressions = design.systemverilog_hir.expressions();
     for (const auto& actual : type.interface_parameter_actuals) {
         if (actual.type) {
             append_type_reference(
-                references, owner, *actual.type, actual.source);
+                design, references, owner, *actual.type, actual.source);
+            continue;
+        }
+        // A class named as a type actual (`C#(Item)`).
+        const auto found = actual.expression
+            ? std::ranges::find(expressions, *actual.expression,
+                  &sv::Expression::id)
+            : expressions.end();
+        if (found == expressions.end()
+            || found->kind != sv::ExpressionKind::name
+            || found->text.find("::") != std::string::npos) {
+            continue;
+        }
+        const sv::ClassDeclaration* selected { };
+        for (const auto& candidate : design.systemverilog_hir.classes()) {
+            if (candidate.name != found->text
+                || candidate.forward_declaration) {
+                continue;
+            }
+            if (selected != nullptr) {
+                selected = nullptr;
+                break;
+            }
+            selected = &candidate;
+        }
+        if (selected != nullptr) {
+            append_reference(references, owner,
+                sv::class_declaration_identity(*selected), actual.source);
         }
     }
     for (const auto& element : type.container_element_types) {
-        append_type_reference(
+        append_type_reference(design,
             references, owner, element, fallback_source);
     }
 }
@@ -118,15 +147,15 @@ void append_declaration_references(const CompiledDesign& design,
     if (declaration == nullptr)
         return;
     if (declaration->type) {
-        append_type_reference(references, owner,
+        append_type_reference(design, references, owner,
             *declaration->type, declaration->source);
     }
     if (declaration->default_type) {
-        append_type_reference(references, owner,
+        append_type_reference(design, references, owner,
             *declaration->default_type, declaration->source);
     }
     if (declaration->callable) {
-        append_type_reference(references, owner,
+        append_type_reference(design, references, owner,
             declaration->callable->return_type, declaration->source);
         for (const auto formal : declaration->callable->formals) {
             append_declaration_references(
@@ -160,7 +189,7 @@ void append_scoped_class_references(const CompiledDesign& design,
                                  const sv::TypeReference& type,
                                  const SourceSpanId source) {
         if (const auto owner = owner_for(scope))
-            append_type_reference(references, *owner, type, source);
+            append_type_reference(design, references, *owner, type, source);
     };
     for (const auto& declaration : design.systemverilog_hir.declarations()) {
         if (declaration.type)
@@ -262,6 +291,26 @@ void append_compiled_class_references(
     std::vector<CompiledReference>& references)
 {
     append_scoped_class_references(design, references);
+    // The class a static selection names, with its actuals
+    // (`Qux#(Foo)::get()`), and `type(data_type)` operands.
+    const auto& scopes = design.semantics.scopes();
+    for (const auto& expression : design.systemverilog_hir.expressions()) {
+        if ((expression.class_owner.empty()
+                && expression.type_operand.empty())
+            || !expression.scope.valid()
+            || expression.scope.value() >= scopes.size()) {
+            continue;
+        }
+        const auto owner = scopes[expression.scope.value()].unit;
+        for (const auto& type : expression.class_owner) {
+            append_type_reference(design,
+                references, owner, type, expression.source);
+        }
+        for (const auto& type : expression.type_operand) {
+            append_type_reference(design,
+                references, owner, type, expression.source);
+        }
+    }
     for (const auto& declaration : design.systemverilog_hir.classes()) {
         const auto selected_owner = compiled_class_owner(
             design, declaration);
@@ -274,7 +323,7 @@ void append_compiled_class_references(
                 relation.declaration_identity, relation.source);
             for (const auto& actual : relation.actuals) {
                 if (actual.type) {
-                    append_type_reference(
+                    append_type_reference(design,
                         references, owner, *actual.type, actual.source);
                 }
             }
@@ -291,16 +340,16 @@ void append_compiled_class_references(
             append_relation(relation);
         for (const auto& parameter : declaration.parameters) {
             if (parameter.type) {
-                append_type_reference(
+                append_type_reference(design,
                     references, owner, *parameter.type, parameter.source);
             }
             if (parameter.default_type) {
-                append_type_reference(references, owner,
+                append_type_reference(design, references, owner,
                     *parameter.default_type, parameter.source);
             }
         }
         for (const auto& property : declaration.properties) {
-            append_type_reference(
+            append_type_reference(design,
                 references, owner, property.type, property.source);
         }
         for (const auto alias : declaration.type_aliases) {
@@ -309,10 +358,10 @@ void append_compiled_class_references(
                 &sv::TypeDefinition::declaration);
             if (type == design.systemverilog_hir.types().end())
                 continue;
-            append_type_reference(
+            append_type_reference(design,
                 references, owner, type->base, type->source);
             for (const auto& member : type->members) {
-                append_type_reference(
+                append_type_reference(design,
                     references, owner, member.type, member.source);
             }
         }

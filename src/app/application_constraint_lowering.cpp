@@ -22,6 +22,14 @@ using Operator = runtime::SystemVerilogConstraintExpressionOperator;
   return value;
 }
 
+// A value of `width` bits with only bit `bit` set.
+[[nodiscard]] runtime::PackedLogic4 bit_value(
+    const std::size_t width, const std::size_t bit) {
+  runtime::PackedLogic4 result(width, runtime::Logic4::zero);
+  result.set(bit, runtime::Logic4::one);
+  return result;
+}
+
 [[nodiscard]] runtime::PackedLogic4 low_value(
     const std::size_t width,
     const std::uint64_t value) {
@@ -390,8 +398,8 @@ class Lowerer final {
       const auto operand = lower(expression.operands.front());
       if (!operand) return std::nullopt;
       auto profile = builder_.profile(*operand);
-      if (profile.width == 0U || profile.width > 64U) {
-        error_ = "constraint reduction requires a 1- to 64-bit operand";
+      if (profile.width == 0U) {
+        error_ = "constraint reduction requires a sized operand";
         return std::nullopt;
       }
       profile.signed_value = false;
@@ -400,11 +408,12 @@ class Lowerer final {
       ExpressionId reduced{};
       if (expression.text == "|" || expression.text == "~|") {
         reduced = builder_.binary(Operator::NotEqual, value,
-            builder_.constant(low_value(width, 0), profile));
+            builder_.constant(
+                runtime::PackedLogic4(width, runtime::Logic4::zero), profile));
       } else if (expression.text == "&" || expression.text == "~&") {
         reduced = builder_.binary(Operator::Equal, value,
-            builder_.constant(low_value(width, width == 64U ? ~std::uint64_t{}
-                : (std::uint64_t{1} << width) - 1U), profile));
+            builder_.constant(
+                runtime::PackedLogic4(width, runtime::Logic4::one), profile));
       } else {
         const auto count = count_ones(value, profile);
         reduced = builder_.binary(Operator::NotEqual,
@@ -422,8 +431,8 @@ class Lowerer final {
       const auto operand = lower(expression.operands.front());
       if (!operand) return std::nullopt;
       auto profile = builder_.profile(*operand);
-      if (profile.width == 0U || profile.width > 64U) {
-        error_ = "constraint bit count requires a 1- to 64-bit operand";
+      if (profile.width == 0U) {
+        error_ = "constraint bit count requires a sized operand";
         return std::nullopt;
       }
       profile.signed_value = false;
@@ -1266,8 +1275,7 @@ class Lowerer final {
     for (std::size_t bit = 0; bit < profile.width; ++bit) {
       const auto set = builder_.binary(Operator::NotEqual,
           builder_.binary(Operator::BitwiseAnd, value,
-              builder_.constant(low_value(profile.width,
-                  std::uint64_t{1} << bit), profile)),
+              builder_.constant(bit_value(profile.width, bit), profile)),
           builder_.constant(low_value(profile.width, 0), profile));
       const auto counted = builder_.resize(set, index_profile());
       count = count ? builder_.binary(Operator::Add, *count, counted)

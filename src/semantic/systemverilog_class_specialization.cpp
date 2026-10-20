@@ -48,6 +48,9 @@ struct ValueBinding {
     std::optional<std::int64_t> integer;
     std::optional<bool> boolean;
     std::optional<ExpressionId> expression;
+    // The bindings `expression` reads that only the evaluating
+    // specialization provides: its parameters and localparams.
+    std::vector<std::pair<DeclarationId, ExpressionId>> context;
 };
 
 struct TypeBinding {
@@ -90,6 +93,15 @@ public:
     {
         for (const auto& declaration : hir_.classes()) {
             const auto identity = class_declaration_identity(declaration);
+            for (const auto& parameter : declaration.parameters) {
+                class_parameters_.insert(parameter.declaration);
+            }
+            for (const auto& property : declaration.properties) {
+                if (property.parameter && property.initializer) {
+                    parameter_properties_.emplace(
+                        property.declaration, *property.initializer);
+                }
+            }
             if (!classes_.emplace(identity, &declaration).second) {
                 report(ClassSpecializationErrorKind::duplicate_declaration,
                     identity, declaration.source,
@@ -125,8 +137,37 @@ public:
         }
     }
 
-    ClassSpecializationResult run(
-        const std::span<const ClassSpecializationRequest> requests)
+    ClassSpecializationResult& result() noexcept { return result_; }
+
+    // The specialization a class-handle type names when its actuals are
+    // evaluated in specialization `context`'s parameter environment (none:
+    // constant actuals only), materialized when new.
+    std::optional<std::string> demand(const TypeReference& type,
+        const std::string_view context, const SourceSpanId source)
+    {
+        if (!type.class_specialization.empty()) {
+            return type.class_specialization;
+        }
+        const auto* target = class_for(type.class_identity);
+        if (target == nullptr) {
+            return std::nullopt;
+        }
+        static const Environment empty;
+        const auto environment = environments_.find(context);
+        const auto owner = materialized_.find(context);
+        const auto errors = result_.errors.size();
+        auto identity = nested_specialization(*target, type,
+            environment == environments_.end() ? empty : environment->second,
+            owner == materialized_.end()
+                ? type.class_identity
+                : result_.specializations[owner->second]
+                      .declaration_identity,
+            source);
+        discard_errors(errors);
+        return identity;
+    }
+
+    void run(const std::span<const ClassSpecializationRequest> requests)
     {
         std::vector<const ClassDeclaration*> defaults;
         defaults.reserve(classes_.size());
@@ -145,37 +186,72 @@ public:
         }
 
         // An object or handle declared with a parameterized class type
-        // (`Box#(7) a;`) uses that specialization (IEEE 1800-2017 8.25). A
-        // type whose actuals are not constant here (a parameter of an
-        // enclosing specialization) is left to its owner's specialization.
-        for (const auto& declaration : hir_.declarations()) {
-            if (!declaration.type || declaration.type->class_identity.empty()
-                || declaration.type->interface_parameter_actuals.empty()) {
-                continue;
+        // (`Box#(7) a;`) uses that specialization (IEEE 1800-2017 8.25), as
+        // does a static member selection through one (`Box#(7)::f()`,
+        // 8.25.1). A type whose actuals are not constant here (a parameter
+        // of an enclosing specialization) is left to its owner's
+        // specialization.
+        const auto specialize_type = [&](const TypeReference& type,
+                                         const std::string& context,
+                                         const SourceSpanId source)
+            -> std::optional<std::string> {
+            if (type.class_identity.empty()
+                || type.interface_parameter_actuals.empty()) {
+                return std::nullopt;
             }
-            const auto found = classes_.find(declaration.type->class_identity);
+            const auto found = classes_.find(type.class_identity);
             if (found == classes_.end()
                 || found->second->parameters.empty()) {
-                continue;
+                return std::nullopt;
             }
             std::vector<ResolvedActual> actuals;
-            for (const auto& actual :
-                declaration.type->interface_parameter_actuals) {
+            for (const auto& actual : type.interface_parameter_actuals) {
                 actuals.push_back({ actual.formal, actual.kind,
                     actual.expression, actual.type, std::nullopt,
                     std::nullopt, actual.source });
                 normalize_type_actual(actuals.back(), *found->second,
-                    actuals.size() - 1U, declaration_identity(declaration.id));
+                    actuals.size() - 1U, context);
             }
+            // Nested specializations that succeeded stay materialized.
             const auto errors = result_.errors.size();
-            const auto specializations = result_.specializations.size();
-            if (auto identity
-                = specialize(*found->second, actuals, declaration.source)) {
+            auto identity = specialize(*found->second, actuals, source);
+            if (!identity) {
+                discard_errors(errors);
+            }
+            return identity;
+        };
+        for (const auto& declaration : hir_.declarations()) {
+            if (!declaration.type) {
+                continue;
+            }
+            if (auto identity = specialize_type(*declaration.type,
+                    declaration_identity(declaration.id),
+                    declaration.source)) {
                 result_.declaration_specializations.emplace_back(
                     declaration.id, std::move(*identity));
-            } else {
-                result_.errors.resize(errors);
-                result_.specializations.resize(specializations);
+            }
+        }
+        for (const auto& expression : hir_.expressions()) {
+            if (expression.class_owner.empty()) {
+                continue;
+            }
+            const auto& owner = expression.class_owner.front();
+            auto identity = specialize_type(
+                owner, owner.class_identity, expression.source);
+            // A class named without actuals denotes its default
+            // specialization.
+            if (const auto found = classes_.find(owner.class_identity);
+                !identity && owner.interface_parameter_actuals.empty()
+                && found != classes_.end()) {
+                const auto errors = result_.errors.size();
+                identity = specialize(*found->second, { }, expression.source);
+                if (!identity) {
+                    discard_errors(errors);
+                }
+            }
+            if (identity) {
+                result_.expression_specializations.emplace_back(
+                    expression.id, std::move(*identity));
             }
         }
 
@@ -225,10 +301,22 @@ public:
         result_.errors.erase(std::unique(
             result_.errors.begin(), result_.errors.end()),
             result_.errors.end());
-        return std::move(result_);
+        materialized_.clear();
+        for (std::size_t index { };
+            index < result_.specializations.size(); ++index) {
+            materialized_.emplace(
+                result_.specializations[index].specialization_identity,
+                index);
+        }
     }
 
 private:
+    // Drops the errors of a speculative specialization.
+    void discard_errors(const std::size_t size)
+    {
+        result_.errors.resize(size);
+    }
+
     void report(const ClassSpecializationErrorKind kind,
         std::string identity, const SourceSpanId source,
         std::string message)
@@ -243,9 +331,53 @@ private:
         return found == classes_.end() ? nullptr : found->second;
     }
 
-    const ClassDeclaration* relation_target(const ClassRelation& relation,
-        const ClassDeclaration& owner)
+    // The class a relation naming a type parameter of `owner` binds
+    // (`class C #(type B = Base) extends B`, IEEE 1800-2017 8.25), in
+    // `environment` or, without one, the parameter's default.
+    std::optional<TypeReference> relation_parameter(
+        const ClassRelation& relation, const ClassDeclaration& owner,
+        const Environment* environment) const
     {
+        if (!relation.declaration_identity.empty()
+            || !relation.actuals.empty()) {
+            return std::nullopt;
+        }
+        const auto parameter = std::ranges::find(
+            owner.parameters, relation.name, &ClassParameter::name);
+        if (parameter == owner.parameters.end()
+            || !parameter->type_parameter) {
+            return std::nullopt;
+        }
+        if (environment != nullptr) {
+            const auto* member = record_for(
+                declarations_, parameter->declaration);
+            if (member == nullptr || !member->declared_type) {
+                return std::nullopt;
+            }
+            const auto bound = environment->types.find(*member->declared_type);
+            if (bound == environment->types.end()
+                || bound->second.type.class_identity.empty()) {
+                return std::nullopt;
+            }
+            return bound->second.type;
+        }
+        if (parameter->default_type
+            && !parameter->default_type->class_identity.empty()) {
+            return parameter->default_type;
+        }
+        return std::nullopt;
+    }
+
+    const ClassDeclaration* relation_target(const ClassRelation& relation,
+        const ClassDeclaration& owner,
+        const Environment* environment = nullptr)
+    {
+        if (const auto bound = relation_parameter(
+                relation, owner, environment)) {
+            if (const auto* declaration = class_for(bound->class_identity)) {
+                return declaration;
+            }
+        }
         if (!relation.declaration_identity.empty()) {
             if (const auto* declaration = class_for(
                     relation.declaration_identity)) {
@@ -293,13 +425,39 @@ private:
             return std::nullopt;
         }
         const auto release = [&] { active.erase(id); };
+        // `C#(7)::b`: a parameter of another specialization has its value
+        // there (IEEE 1800-2017 8.25.1).
+        if (expression->kind == ExpressionKind::class_static_property
+            && !expression->class_owner.empty()) {
+            if (auto selected = owner_parameter_value(
+                    *expression, environment, owner, active)) {
+                release();
+                return selected;
+            }
+        }
         if (expression->referenced_name
             && expression->referenced_name->selected) {
             const auto replacement = environment.values.find(
                 *expression->referenced_name->selected);
             if (replacement != environment.values.end()) {
                 release();
-                return replacement->second;
+                auto bound = replacement->second;
+                if (bound.expression) {
+                    bound.context.emplace_back(
+                        *expression->referenced_name->selected,
+                        *bound.expression);
+                }
+                return bound;
+            }
+            // A class parameter has a value only in a specialization.
+            if (class_parameters_.contains(
+                    *expression->referenced_name->selected)) {
+                release();
+                report(ClassSpecializationErrorKind::unresolved_constant,
+                    std::string { owner }, expression->source,
+                    "class parameter '" + expression->text
+                        + "' is not bound here");
+                return std::nullopt;
             }
             const auto* declaration = record_for(
                 declarations_, *expression->referenced_name->selected);
@@ -309,6 +467,20 @@ private:
                         == DeclarationForm::local_parameter)) {
                 auto resolved = value(*declaration->initializer,
                     environment, owner, declaration->source, active);
+                release();
+                return resolved;
+            }
+            // A class localparam names its initializer's value in the
+            // specialization (IEEE 1800-2017 8.25).
+            if (const auto property = parameter_properties_.find(
+                    *expression->referenced_name->selected);
+                property != parameter_properties_.end()) {
+                auto resolved = value(property->second, environment, owner,
+                    expression->source, active);
+                if (resolved) {
+                    resolved->context.emplace_back(
+                        property->first, property->second);
+                }
                 release();
                 return resolved;
             }
@@ -366,6 +538,7 @@ private:
                 expression->operands.front(), environment, owner,
                 expression->source, active);
             if (operand && operand->integer) {
+                resolved.context = operand->context;
                 if (expression->text == "+") {
                     resolved.integer = *operand->integer;
                 } else if (expression->text == "-") {
@@ -388,6 +561,9 @@ private:
             const auto right = value(expression->operands[1], environment,
                 owner, expression->source, active);
             if (left && right && left->integer && right->integer) {
+                resolved.context = left->context;
+                resolved.context.insert(resolved.context.end(),
+                    right->context.begin(), right->context.end());
                 const auto lhs = *left->integer;
                 const auto rhs = *right->integer;
                 if (expression->text == "+")
@@ -419,6 +595,52 @@ private:
             std::string { owner }, expression->source,
             "class parameter actual was not folded to a literal");
         return std::nullopt;
+    }
+
+    std::optional<ValueBinding> owner_parameter_value(
+        const Expression& expression, const Environment& environment,
+        const std::string_view owner, std::set<ExpressionId>& active)
+    {
+        const auto& owner_type = expression.class_owner.front();
+        const auto* target = class_for(owner_type.class_identity);
+        if (target == nullptr) {
+            return std::nullopt;
+        }
+        constexpr std::string_view prefix { "@sv-static-property:" };
+        const auto member = !expression.class_member_identity.empty()
+            ? std::string_view { expression.class_member_identity }
+            : std::string_view { expression.text }.starts_with(prefix)
+            ? std::string_view { expression.text }.substr(prefix.size())
+            : std::string_view { };
+        const auto property = std::ranges::find(target->properties, member,
+            &ClassProperty::canonical_identity);
+        if (property == target->properties.end() || !property->parameter
+            || !property->initializer) {
+            return std::nullopt;
+        }
+        const auto errors = result_.errors.size();
+        const auto identity = nested_specialization(
+            *target, owner_type, environment, owner, expression.source);
+        const auto selected = identity
+            ? environments_.find(*identity)
+            : environments_.end();
+        if (selected == environments_.end()) {
+            discard_errors(errors);
+            return std::nullopt;
+        }
+        // A class value parameter is bound in that environment; a
+        // localparam folds from its initializer there.
+        if (const auto bound = selected->second.values.find(
+                property->declaration);
+            bound != selected->second.values.end()) {
+            return bound->second;
+        }
+        auto resolved = value(*property->initializer, selected->second,
+            *identity, expression.source, active);
+        if (!resolved) {
+            discard_errors(errors);
+        }
+        return resolved;
     }
 
     std::optional<ValueBinding> value(const ExpressionId id,
@@ -475,6 +697,12 @@ private:
             if (definition != nullptr) {
                 target_identity = declaration_identity(
                     definition->declaration);
+                // An anonymous structure or union type (`struct {int a;}
+                // s;`) is identified by its HIR type record.
+                if (target_identity.empty()) {
+                    target_identity = "@anonymous-type:"
+                        + std::to_string(type.target.target.value());
+                }
             }
         }
         // Built-in packed integral types are identified by their semantic
@@ -577,6 +805,87 @@ private:
         return range.left && range.right;
     }
 
+    // `owner` and the classes it derives from, nearest first.
+    std::vector<const ClassDeclaration*> class_chain(
+        const std::string_view owner)
+    {
+        std::vector<const ClassDeclaration*> chain;
+        const auto errors = result_.errors.size();
+        for (const auto* current = class_for(owner);
+            current != nullptr
+            && std::ranges::find(chain, current) == chain.end();
+            current = current->base
+                ? relation_target(*current->base, *current)
+                : nullptr) {
+            chain.push_back(current);
+        }
+        discard_errors(errors);
+        return chain;
+    }
+
+    // A typedef that a class inherits (`derived::item_t` declared in a
+    // base class, IEEE 1800-2017 8.23, 8.26).
+    std::optional<TypeId> inherited_typedef(
+        const std::string_view spelling, const std::string_view owner)
+    {
+        const auto separator = spelling.rfind("::");
+        const auto name = separator == std::string_view::npos
+            ? spelling
+            : spelling.substr(separator + 2U);
+        std::string named_class { owner };
+        if (separator != std::string_view::npos) {
+            const auto prefix = spelling.substr(0U, separator);
+            if (owner != prefix
+                && !owner.ends_with("::" + std::string { prefix })) {
+                const ClassDeclaration* unique { };
+                for (const auto& [identity, declaration] : classes_) {
+                    if (identity == prefix || identity.ends_with(
+                            "::" + std::string { prefix })) {
+                        if (unique != nullptr) {
+                            return std::nullopt;
+                        }
+                        unique = declaration;
+                    }
+                }
+                if (unique == nullptr) {
+                    return std::nullopt;
+                }
+                named_class = class_declaration_identity(*unique);
+            }
+        }
+        for (const auto* ancestor : class_chain(named_class)) {
+            for (const auto alias : ancestor->type_aliases) {
+                const auto* declaration = record_for(declarations_, alias);
+                if (declaration != nullptr && declaration->name == name
+                    && declaration->declared_type) {
+                    return declaration->declared_type;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The innermost typedef named `name` whose scope encloses `scope`.
+    const Declaration* enclosing_typedef(
+        const std::string_view name, const ScopeId scope) const
+    {
+        const Declaration* selected { };
+        for (const auto& [id, declaration] : declarations_) {
+            (void)id;
+            if (declaration->form != DeclarationForm::typedef_declaration
+                || declaration->name != name || !declaration->type
+                || !scope_within(semantics_, scope, declaration->scope)) {
+                continue;
+            }
+            if (selected == nullptr
+                || scope_within(
+                    semantics_, declaration->scope, selected->scope)) {
+                selected = declaration;
+            }
+        }
+        return selected;
+    }
+
     std::optional<TypeId> typedef_by_spelling(
         const std::string_view spelling, const std::string_view owner) const
     {
@@ -631,6 +940,40 @@ private:
             if (replacement != environment.types.end()) {
                 return replacement->second;
             }
+            // A typedef of a class type (`typedef C#(T) this_type`) denotes
+            // that class type, its actuals bound where the typedef is
+            // declared (IEEE 1800-2017 6.18, 8.25). Outside its class's
+            // environment its actuals must be constant.
+            const auto* definition = record_for(types_, input.target.target);
+            if (definition != nullptr && definition->members.empty()
+                && definition->base.value_form == TypeForm::class_handle
+                && !definition->base.class_identity.empty()
+                && input.class_identity.empty() && !input.container_form
+                && input.unpacked_dimensions.empty()) {
+                const auto declared = declaration_identity(
+                    definition->declaration);
+                const auto local = std::ranges::any_of(class_chain(owner),
+                    [&](const ClassDeclaration* ancestor) {
+                        return declared.starts_with(
+                            class_declaration_identity(*ancestor) + "::");
+                    });
+                const Environment unbound;
+                auto aliased = definition->base;
+                aliased.target.source = input.target.source;
+                auto resolved = type(std::move(aliased),
+                    local ? environment : unbound, owner, source);
+                if (resolved && !local
+                    && resolved->type.class_specialization.empty()
+                    && !definition->base.interface_parameter_actuals
+                            .empty()) {
+                    report(ClassSpecializationErrorKind::unresolved_member,
+                        std::string { owner }, source,
+                        "class typedef '" + definition->name
+                            + "' has actuals bound only in its class");
+                    return std::nullopt;
+                }
+                return resolved;
+            }
         }
         if (!input.target.target.valid() && !input.target.spelling.empty()
             && !input.executable_width && !input.packed_range
@@ -642,6 +985,9 @@ private:
             if (const auto linked = typedef_by_spelling(
                     input.target.spelling, owner)) {
                 input.target.target = *linked;
+            } else if (const auto inherited = inherited_typedef(
+                           input.target.spelling, owner)) {
+                input.target.target = *inherited;
             }
         }
         if (input.value_form == TypeForm::class_handle
@@ -654,6 +1000,21 @@ private:
                         + "' does not resolve to compiled HIR");
                 return std::nullopt;
             }
+            // A parameterized class type names the specialization its
+            // actuals select in this environment (IEEE 1800-2017 8.25).
+            // A spelling with actuals but no actual records does not fall
+            // back to the default specialization.
+            const bool recorded = !input.interface_parameter_actuals.empty()
+                || input.target.spelling.find('#') == std::string::npos;
+            if (!target->parameters.empty()
+                && input.class_specialization.empty() && recorded) {
+                const auto errors = result_.errors.size();
+                if (auto nested = nested_specialization(
+                        *target, input, environment, owner, source)) {
+                    input.class_specialization = std::move(*nested);
+                }
+                discard_errors(errors);
+            }
             // A parameterized class named without actuals is its default
             // specialization (IEEE 1800-2017 8.25) when every parameter
             // has a default.
@@ -665,7 +1026,8 @@ private:
                         ? parameter.default_type.has_value()
                         : parameter.default_value.has_value();
                 });
-            if (!target->parameters.empty() && !defaults) {
+            if (!target->parameters.empty() && !defaults
+                && input.class_specialization.empty()) {
                 report(ClassSpecializationErrorKind::
                         unsupported_parameterized_class_handle,
                     std::string { owner }, source,
@@ -679,7 +1041,9 @@ private:
             && record_for(types_, input.target.target) == nullptr) {
             report(ClassSpecializationErrorKind::unresolved_member,
                 std::string { owner }, source,
-                "class member type refers to a missing HIR type record");
+                "class member type refers to a missing HIR type record "
+                    + std::to_string(input.target.target.value()) + " "
+                    + input.target.spelling);
             return std::nullopt;
         }
         if (input.packed_range
@@ -693,12 +1057,13 @@ private:
             }
         }
         TypeBinding resolved { std::move(input), { } };
-        resolved.canonical = type_identity(resolved.type);
+        resolved.canonical = resolved.type.class_specialization.empty()
+            ? type_identity(resolved.type)
+            : "class{" + encoded(resolved.type.class_specialization) + "}";
         if (resolved.type.target.target.valid()) {
             const auto* definition = record_for(
                 types_, resolved.type.target.target);
-            if (definition == nullptr
-                || declaration_identity(definition->declaration).empty()) {
+            if (definition == nullptr) {
                 report(ClassSpecializationErrorKind::unresolved_member,
                     std::string { owner }, source,
                     "class member type has no canonical HIR identity");
@@ -943,6 +1308,7 @@ private:
                     return std::nullopt;
                 }
                 retained.expression = resolved->expression;
+                retained.context_bindings = resolved->context;
                 retained.display_identity = resolved->display;
                 retained.canonical_identity = "value{" + resolved->canonical
                     + "}";
@@ -1028,16 +1394,107 @@ private:
                         retained.kind = ActualKind::type;
                         retained.type = std::move(type_actual);
                         retained.expression.reset();
+                    } else if (const auto named_type = typedef_by_spelling(
+                                   expression->text, owner_identity)) {
+                        // A typedef named as a type actual (`C#(enum_t)`).
+                        TypeReference type_actual;
+                        type_actual.target.target = *named_type;
+                        type_actual.target.source = expression->source;
+                        type_actual.target.spelling = expression->text;
+                        retained.kind = ActualKind::type;
+                        retained.type = std::move(type_actual);
+                        retained.expression.reset();
+                    } else if (const auto* local = enclosing_typedef(
+                                   expression->text, expression->scope)) {
+                        // A typedef of an enclosing block or callable.
+                        TypeReference type_actual = *local->type;
+                        if (local->declared_type) {
+                            type_actual.target.target = *local->declared_type;
+                        }
+                        type_actual.target.source = expression->source;
+                        type_actual.target.spelling = expression->text;
+                        retained.kind = ActualKind::type;
+                        retained.type = std::move(type_actual);
+                        retained.expression.reset();
                     }
                 }
             }
+    }
+
+    // The specialization of `target` that a class-handle type's actuals
+    // select in `environment`. A specialization still being materialized
+    // (a class naming itself, `typedef C#(T) this_type`) is returned as is.
+    std::optional<std::string> nested_specialization(
+        const ClassDeclaration& target, const TypeReference& input,
+        const Environment& environment, const std::string_view owner,
+        const SourceSpanId source)
+    {
+        // A bounded depth stops specializations that grow without end
+        // (`C#(N)` naming `C#(N + 1)`).
+        constexpr std::size_t maximum_nesting = 32U;
+        if (nesting_ >= maximum_nesting) {
+            return std::nullopt;
+        }
+        std::vector<ResolvedActual> actuals;
+        actuals.reserve(input.interface_parameter_actuals.size());
+        for (std::size_t index = 0;
+            index < input.interface_parameter_actuals.size(); ++index) {
+            const auto& actual = input.interface_parameter_actuals[index];
+            ResolvedActual retained { actual.formal, actual.kind,
+                actual.expression, actual.type, std::nullopt,
+                std::nullopt, actual.source };
+            normalize_type_actual(retained, target, index, owner);
+            if (retained.kind == ActualKind::expression
+                && retained.expression) {
+                retained.resolved_value = value(*retained.expression,
+                    environment, owner, actual.source);
+                if (!retained.resolved_value) {
+                    return std::nullopt;
+                }
+            } else if (retained.kind == ActualKind::type && retained.type) {
+                retained.resolved_type = type(*retained.type, environment,
+                    owner, actual.source);
+                if (!retained.resolved_type) {
+                    return std::nullopt;
+                }
+            }
+            actuals.push_back(std::move(retained));
+        }
+        const auto bound = bind(target, actuals);
+        if (!bound) {
+            return std::nullopt;
+        }
+        if (materialized_.contains(bound->specialization_identity)
+            || active_.contains(bound->specialization_identity)) {
+            return bound->specialization_identity;
+        }
+        ++nesting_;
+        auto identity = specialize(target, actuals, source);
+        --nesting_;
+        return identity;
+    }
+
+    // Materialize the specializations a member type names, without
+    // failing the specialization that declares it.
+    void materialize_member_type(const DeclarationId member,
+        const Environment& environment, const std::string_view owner)
+    {
+        const auto* declaration = record_for(declarations_, member);
+        if (declaration == nullptr || !declaration->type
+            || declaration->type->class_identity.empty()) {
+            return;
+        }
+        const auto errors = result_.errors.size();
+        (void)type(*declaration->type, environment, owner,
+            declaration->source);
+        discard_errors(errors);
     }
 
     std::optional<std::string> specialize_relation(
         const ClassDeclaration& owner, const ClassRelation& relation,
         const RelationKind kind, const Environment& environment)
     {
-        const auto* target = relation_target(relation, owner);
+        const auto* target = relation_target(relation, owner, &environment);
         if (target == nullptr) {
             return std::nullopt;
         }
@@ -1052,6 +1509,13 @@ private:
                 "class relation '" + relation.name
                     + "' has an incompatible class/interface kind");
             return std::nullopt;
+        }
+        if (const auto bound = relation_parameter(
+                relation, owner, &environment)) {
+            if (!bound->class_specialization.empty()) {
+                return bound->class_specialization;
+            }
+            return specialize(*target, { }, relation.source);
         }
         std::vector<ResolvedActual> actuals;
         actuals.reserve(relation.actuals.size());
@@ -1126,6 +1590,17 @@ private:
                                 "@sv-dollar-cast:"))
                         && class_declaration_identity(declaration)
                             == expression->class_member_identity) {
+                        return true;
+                    }
+                    // `new` of an object whose type is a type parameter
+                    // constructs the class the specialization binds.
+                    if (expression->text.starts_with("@sv-new:")
+                        && std::ranges::any_of(declaration.parameters,
+                            [&](const ClassParameter& parameter) {
+                                return parameter.type_parameter
+                                    && parameter.name
+                                    == expression->class_member_identity;
+                            })) {
                         return true;
                     }
                     return std::ranges::any_of(
@@ -1328,6 +1803,9 @@ private:
             output.formal_types.push_back(resolved->type);
         }
         output.local_declarations = declaration->children;
+        for (const auto child : output.local_declarations) {
+            materialize_member_type(child, environment, identity);
+        }
         for (const auto child : output.local_declarations) {
             std::set<DeclarationId> declaration_active;
             std::set<StatementId> statement_active;
@@ -1574,6 +2052,8 @@ private:
         if (materialized_.contains(bound->specialization_identity)) {
             return bound->specialization_identity;
         }
+        environments_.try_emplace(
+            bound->specialization_identity, bound->environment);
         if (!active_.insert(bound->specialization_identity).second) {
             report(ClassSpecializationErrorKind::inheritance_cycle,
                 identity, reference_source,
@@ -1600,7 +2080,7 @@ private:
                 return std::nullopt;
             }
             const auto* base_declaration = relation_target(
-                *declaration.base, declaration);
+                *declaration.base, declaration, &bound->environment);
             output.base = SpecializedClassRelation {
                 class_declaration_identity(*base_declaration), *related,
                 declaration.base->source, declaration.base->origin
@@ -1611,6 +2091,20 @@ private:
                 return std::nullopt;
             }
             const auto& specialization = result_.specializations[base->second];
+            // Typedefs the base declares see the base's parameters
+            // (IEEE 1800-2017 8.25, 8.26).
+            if (const auto inherited = environments_.find(*related);
+                inherited != environments_.end()) {
+                const auto base_environment = inherited->second;
+                bound->environment.values.insert(
+                    base_environment.values.begin(),
+                    base_environment.values.end());
+                bound->environment.types.insert(
+                    base_environment.types.begin(),
+                    base_environment.types.end());
+                environments_[bound->specialization_identity]
+                    = bound->environment;
+            }
             output.instance_bit_width = specialization.instance_bit_width;
             for (const auto& property : specialization.properties) {
                 if (!property.static_storage) {
@@ -1675,6 +2169,9 @@ private:
             output.interfaces.push_back(relation);
         }
 
+        for (const auto alias : declaration.type_aliases) {
+            materialize_member_type(alias, bound->environment, identity);
+        }
         for (const auto& property : declaration.properties) {
             const auto* member = record_for(
                 declarations_, property.declaration);
@@ -1842,13 +2339,243 @@ private:
     std::map<UnitId, const Unit*> units_;
     std::map<std::string, std::size_t, std::less<>> materialized_;
     std::set<std::string, std::less<>> active_;
+    // Each specialization's parameter environment, for later demands.
+    std::map<std::string, Environment, std::less<>> environments_;
+    std::size_t nesting_ { };
     std::map<std::string, std::map<std::string, std::uint32_t>, std::less<>>
         slot_tables_;
     std::set<std::string, std::less<>> active_slot_tables_;
+    std::map<DeclarationId, ExpressionId> parameter_properties_;
+    std::set<DeclarationId> class_parameters_;
     ClassSpecializationResult result_;
 };
 
 } // namespace
+
+struct ClassSpecializationIndex::Live {
+    ClassSpecializer specializer;
+};
+
+ClassSpecializationIndex::ClassSpecializationIndex(
+    const Model& semantics, const Hir& hir)
+    : live_(std::make_unique<Live>(Live { { semantics, hir } }))
+{
+    live_->specializer.run({ });
+    index_from(0U);
+}
+
+ClassSpecializationIndex::ClassSpecializationIndex(
+    ClassSpecializationResult result)
+    : frozen_(std::move(result))
+{
+    index_from(0U);
+}
+
+ClassSpecializationIndex::~ClassSpecializationIndex() = default;
+
+const ClassSpecializationResult&
+ClassSpecializationIndex::result() const noexcept
+{
+    return live_ ? live_->specializer.result() : frozen_;
+}
+
+void ClassSpecializationIndex::index_from(const std::size_t first)
+{
+    const auto& specializations = result().specializations;
+    const auto count = specializations.size();
+    for (std::size_t index { first }; index < count; ++index) {
+        const auto& specialization = specializations[index];
+        const auto id = static_cast<ClassSpecializationId>(index);
+        by_identity_.emplace(specialization.specialization_identity, id);
+        if (specialization.default_specialization) {
+            defaults_.emplace(specialization.declaration_identity, id);
+        }
+    }
+    if (first == 0U) {
+        for (const auto& [declaration, identity] :
+            result().declaration_specializations) {
+            if (const auto id = find(identity)) {
+                declarations_.emplace(declaration, *id);
+            }
+        }
+        for (const auto& [expression, identity] :
+            result().expression_specializations) {
+            if (const auto id = find(identity)) {
+                expressions_.emplace(expression, *id);
+            }
+        }
+    }
+    bases_.resize(count);
+    derived_.resize(count);
+    for (std::size_t index { first }; index < count; ++index) {
+        const auto& relation = specializations[index].base;
+        if (relation) {
+            bases_[index] = find(relation->specialization_identity);
+        }
+        auto base = bases_[index];
+        for (std::size_t depth { }; base && depth < count; ++depth) {
+            derived_[*base].push_back(
+                static_cast<ClassSpecializationId>(index));
+            base = bases_[*base];
+        }
+    }
+}
+
+std::optional<ClassSpecializationId> ClassSpecializationIndex::specialize(
+    const TypeReference& type,
+    const std::optional<ClassSpecializationId> context,
+    const SourceSpanId source)
+{
+    if (!type.class_specialization.empty()) {
+        return find(type.class_specialization);
+    }
+    if (type.class_identity.empty()) {
+        return std::nullopt;
+    }
+    if (type.interface_parameter_actuals.empty()) {
+        if (const auto found = default_for(type.class_identity)) {
+            return found;
+        }
+    }
+    if (!live_) {
+        return std::nullopt;
+    }
+    const auto first = size();
+    const auto identity = live_->specializer.demand(type,
+        context && *context < first
+            ? std::string_view { at(*context).specialization_identity }
+            : std::string_view { },
+        source);
+    index_from(first);
+    return identity ? find(*identity) : std::nullopt;
+}
+
+std::optional<ClassSpecializationId> ClassSpecializationIndex::find(
+    const std::string_view specialization_identity) const
+{
+    const auto found = by_identity_.find(specialization_identity);
+    return found == by_identity_.end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+std::optional<ClassSpecializationId> ClassSpecializationIndex::default_for(
+    const std::string_view declaration_identity) const
+{
+    const auto found = defaults_.find(declaration_identity);
+    return found == defaults_.end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+std::optional<ClassSpecializationId>
+ClassSpecializationIndex::for_declaration(
+    const DeclarationId declaration) const
+{
+    const auto found = declarations_.find(declaration);
+    return found == declarations_.end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+std::optional<ClassSpecializationId>
+ClassSpecializationIndex::for_expression(const ExpressionId expression) const
+{
+    const auto found = expressions_.find(expression);
+    return found == expressions_.end()
+        ? std::nullopt
+        : std::optional { found->second };
+}
+
+std::optional<ClassSpecializationId> ClassSpecializationIndex::base(
+    const ClassSpecializationId id) const
+{
+    return id < bases_.size() ? bases_[id] : std::nullopt;
+}
+
+std::optional<ClassSpecializationId> ClassSpecializationIndex::ancestor(
+    const ClassSpecializationId id,
+    const std::string_view declaration_identity) const
+{
+    std::optional current { id };
+    for (std::size_t depth { }; current && depth <= size(); ++depth) {
+        if (at(*current).declaration_identity == declaration_identity) {
+            return current;
+        }
+        current = base(*current);
+    }
+    return std::nullopt;
+}
+
+std::span<const ClassSpecializationId> ClassSpecializationIndex::derived(
+    const ClassSpecializationId id) const
+{
+    if (id >= derived_.size()) {
+        return { };
+    }
+    return derived_[id];
+}
+
+const SpecializedClassMethod* ClassSpecializationIndex::method(
+    const ClassSpecializationId id, const DeclarationId declaration) const
+{
+    if (id >= size()) {
+        return nullptr;
+    }
+    const auto& methods = at(id).methods;
+    const auto found = std::ranges::find(
+        methods, declaration, &SpecializedClassMethod::declaration);
+    return found == methods.end() ? nullptr : &*found;
+}
+
+CompiledBindingFrame ClassSpecializationIndex::binding_frame(
+    const ClassSpecializationId id) const
+{
+    CompiledBindingFrame frame;
+    std::optional current { id };
+    for (std::size_t depth { }; current && depth <= size(); ++depth) {
+        for (const auto& parameter : at(*current).parameters) {
+            CompiledActualBinding binding;
+            binding.formal = parameter.declaration;
+            if (parameter.type_parameter) {
+                binding.systemverilog_type = parameter.type;
+            } else {
+                binding.expression = parameter.expression;
+            }
+            frame.push_back(std::move(binding));
+        }
+        // A localparam of a parameterized class depends on its parameters,
+        // so an actual naming it is evaluated through this frame (IEEE
+        // 1800-2017 8.25).
+        if (!at(*current).parameters.empty()) {
+            for (const auto& property : at(*current).properties) {
+                if (property.parameter && property.initializer) {
+                    CompiledActualBinding binding;
+                    binding.formal = property.declaration;
+                    binding.expression = property.initializer;
+                    frame.push_back(std::move(binding));
+                }
+            }
+        }
+        // An actual folded from the instantiating specialization's
+        // parameters reads them through this frame.
+        for (const auto& parameter : at(*current).parameters) {
+            for (const auto& [formal, expression] :
+                parameter.context_bindings) {
+                if (std::ranges::find(frame, formal,
+                        &CompiledActualBinding::formal) != frame.end()) {
+                    continue;
+                }
+                CompiledActualBinding binding;
+                binding.formal = formal;
+                binding.expression = expression;
+                frame.push_back(std::move(binding));
+            }
+        }
+        current = base(*current);
+    }
+    return frame;
+}
 
 ClassSpecializationResult specialize_classes(
     const CompiledDesign& design,
@@ -1863,7 +2590,9 @@ ClassSpecializationResult specialize_classes(
     const Hir& hir,
     const std::span<const ClassSpecializationRequest> requests)
 {
-    return ClassSpecializer { semantics, hir }.run(requests);
+    ClassSpecializer specializer { semantics, hir };
+    specializer.run(requests);
+    return std::move(specializer.result());
 }
 
 } // namespace fsim::semantic::sv

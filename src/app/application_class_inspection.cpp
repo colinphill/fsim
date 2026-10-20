@@ -219,7 +219,8 @@ Simulation::class_randomization_trace_states() const {
           random->stream_seed,
           random->randc_domain_signature,
           random->randc_cycle,
-          static_cast<std::uint64_t>(random->randc_used_values.size())});
+          static_cast<std::uint64_t>(random->randc_used_values.size())
+              + random->randc_position});
     }
     for (const auto& [identity, enabled] : object.constraint_modes) {
       result.push_back({

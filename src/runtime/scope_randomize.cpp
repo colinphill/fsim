@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/scope_randomize.hpp"
 
+#include "constraint_bounds_internal.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -128,8 +130,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
             std::vector<std::size_t> wide;
             for (std::size_t index = 0; index < request.variables.size(); ++index) {
                 const auto& input = request.variables[index];
-                if (input.domain.empty() && input.profile.width > 16U
-                    && input.profile.width <= 64U) {
+                if (input.domain.empty() && input.profile.width > 16U) {
                     wide.push_back(index);
                 }
             }
@@ -143,23 +144,95 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
                         probe_variables.emplace(input.canonical_identity, id);
                     }
                     request.inline_constraints(probe, probe_variables);
+                    // A calling-scope array's elements keep their values,
+                    // so `x inside {q}` bounds `x` (18.7).
+                    std::map<SystemVerilogConstraintVariableId, PackedLogic4>
+                        fixed;
+                    for (const auto& input : request.variables) {
+                        if (input.domain.size() == 1U) {
+                            fixed.emplace(
+                                probe_variables.at(input.canonical_identity),
+                                input.domain.front());
+                        }
+                    }
+                    // A variable with a listed domain spans its values; a
+                    // bounded wide variable's interval bounds the variables
+                    // compared with it in the next pass (`x < a + 5`).
+                    SystemVerilogConstraintValueIntervals intervals;
+                    for (const auto& input : request.variables) {
+                        if (const auto interval
+                            = systemverilog_constraint_value_interval(
+                                input.domain, input.profile)) {
+                            intervals.emplace(
+                                probe_variables.at(input.canonical_identity),
+                                *interval);
+                        }
+                    }
+                    std::set<SystemVerilogConstraintVariableId> wide_ids;
+                    for (const auto index : wide) {
+                        wide_ids.insert(probe_variables.at(
+                            request.variables[index].canonical_identity));
+                    }
+                    const bool coupled = std::ranges::any_of(
+                        probe.clauses(), [&](const auto& clause) {
+                            return std::ranges::count_if(clause.variables,
+                                       [&](const auto id) {
+                                           return wide_ids.contains(id);
+                                       })
+                                > 1;
+                        });
                     if (probe.distribution_count() == 0U) {
-                        for (const auto index : wide) {
-                            const auto& input = request.variables[index];
-                            const auto id = probe_variables.at(input.canonical_identity);
-                            const bool referenced = std::ranges::any_of(
-                                probe.clauses(), [&](const auto& clause) {
-                                    return std::ranges::find(clause.variables, id)
-                                        != clause.variables.end();
-                                });
-                            if (!referenced) {
-                                direct.insert(index);
-                                continue;
+                        const auto passes = std::min<std::size_t>(
+                            16U, wide.size() + 1U);
+                        for (std::size_t pass = 0; pass < passes; ++pass) {
+                            bool narrowed { };
+                            for (const auto index : wide) {
+                                const auto& input = request.variables[index];
+                                const auto id = probe_variables.at(
+                                    input.canonical_identity);
+                                const bool referenced = std::ranges::any_of(
+                                    probe.clauses(), [&](const auto& clause) {
+                                        return std::ranges::find(
+                                                   clause.variables, id)
+                                            != clause.variables.end();
+                                    });
+                                if (!referenced) {
+                                    direct.insert(index);
+                                    continue;
+                                }
+                                if (input.profile.width > 64U) {
+                                    bounded.insert_or_assign(index,
+                                        systemverilog_constraint_wide_variable_domain(
+                                            probe.clauses(), id, input.profile,
+                                            [&selection] {
+                                                return next_selection(selection);
+                                            }));
+                                    continue;
+                                }
+                                auto domain
+                                    = systemverilog_constraint_variable_domain_with_fixed(
+                                        probe.clauses(), id, input.profile,
+                                        [&selection] {
+                                            return next_selection(selection);
+                                        },
+                                        fixed, &intervals);
+                                if (const auto interval
+                                    = systemverilog_constraint_value_interval(
+                                        domain, input.profile)) {
+                                    const auto known = intervals.find(id);
+                                    if (known == intervals.end()
+                                        || !(known->second == *interval)) {
+                                        intervals.insert_or_assign(
+                                            id, *interval);
+                                        narrowed = true;
+                                    }
+                                }
+                                bounded.insert_or_assign(
+                                    index, std::move(domain));
                             }
-                            bounded.emplace(index,
-                                systemverilog_constraint_variable_domain(
-                                    probe.clauses(), id, input.profile,
-                                    [&selection] { return next_selection(selection); }));
+                            if (!coupled || !narrowed) {
+                                break;
+                            }
                         }
                     }
                 } catch (const std::exception&) {

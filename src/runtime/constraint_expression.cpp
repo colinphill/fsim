@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <charconv>
 #include <ranges>
 #include <set>
@@ -56,7 +57,38 @@ using Profile = SystemVerilogConstraintVariableProfile;
   return result;
 }
 
+// A value of at most 64 bits as its aval/bval words (0=00, 1=10, X=11,
+// Z=01), so the solver's hot evaluations run on machine words.
+struct Word {
+  std::uint64_t aval{};
+  std::uint64_t bval{};
+  std::uint64_t mask{};
+  [[nodiscard]] std::uint64_t ones() const noexcept {
+    return aval & ~bval & mask;
+  }
+  [[nodiscard]] bool known() const noexcept { return (bval & mask) == 0U; }
+};
+
+[[nodiscard]] std::optional<Word> word_of(const PackedLogic4& value) {
+  const auto width = value.width();
+  if (width == 0U || width > 64U || value.is_logic9()) return std::nullopt;
+  const auto aval = value.aval_words();
+  const auto bval = value.bval_words();
+  const auto mask = width == 64U
+      ? ~std::uint64_t{} : (std::uint64_t{1} << width) - 1U;
+  return Word{aval.empty() ? 0U : aval[0] & mask,
+      bval.empty() ? 0U : bval[0] & mask, mask};
+}
+
+[[nodiscard]] PackedLogic4 known_word(
+    const std::size_t width, const std::uint64_t value) {
+  const auto mask = width == 64U
+      ? ~std::uint64_t{} : (std::uint64_t{1} << width) - 1U;
+  return PackedLogic4::from_aval_bval(width, value & mask, 0U);
+}
+
 [[nodiscard]] bool has_unknown(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) return !word->known();
   for (std::size_t index = 0; index < value.width(); ++index) {
     const auto bit = value.get(index);
     if (bit == Logic4::x || bit == Logic4::z) return true;
@@ -72,6 +104,20 @@ using Profile = SystemVerilogConstraintVariableProfile;
     throw std::invalid_argument{
         "constraint expression width must not be zero"};
   }
+  if (const auto word = word_of(value); word && width <= 64U) {
+    const auto source_width = value.width();
+    const auto target_mask = width == 64U
+        ? ~std::uint64_t{} : (std::uint64_t{1} << width) - 1U;
+    auto aval = word->aval;
+    auto bval = word->bval;
+    if (width > source_width && sign_extend) {
+      const auto high = ~word->mask & target_mask;
+      if (((aval >> (source_width - 1U)) & 1U) != 0U) aval |= high;
+      if (((bval >> (source_width - 1U)) & 1U) != 0U) bval |= high;
+    }
+    return PackedLogic4::from_aval_bval(
+        width, aval & target_mask, bval & target_mask);
+  }
   const auto extension = sign_extend && !value.empty()
       ? value.get(value.width() - 1U)
       : Logic4::zero;
@@ -84,6 +130,9 @@ using Profile = SystemVerilogConstraintVariableProfile;
 }
 
 [[nodiscard]] PackedLogic4 negate_known(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) {
+    return known_word(value.width(), ~word->ones() + 1U);
+  }
   PackedLogic4 result(value.width(), Logic4::zero);
   bool carry = true;
   for (std::size_t index = 0; index < value.width(); ++index) {
@@ -97,6 +146,10 @@ using Profile = SystemVerilogConstraintVariableProfile;
 [[nodiscard]] PackedLogic4 add_known(
     const PackedLogic4& left,
     const PackedLogic4& right) {
+  if (const auto lhs = word_of(left), rhs = word_of(right);
+      lhs && rhs && left.width() == right.width()) {
+    return known_word(left.width(), lhs->ones() + rhs->ones());
+  }
   PackedLogic4 result(left.width(), Logic4::zero);
   bool carry = false;
   for (std::size_t index = 0; index < left.width(); ++index) {
@@ -112,6 +165,9 @@ using Profile = SystemVerilogConstraintVariableProfile;
 [[nodiscard]] PackedLogic4 multiply_known(
     const PackedLogic4& left,
     const PackedLogic4& right) {
+  if (const auto lhs = word_of(left), rhs = word_of(right); lhs && rhs) {
+    return known_word(left.width(), lhs->ones() * rhs->ones());
+  }
   PackedLogic4 result(left.width(), Logic4::zero);
   for (std::size_t rhs_bit = 0; rhs_bit < right.width(); ++rhs_bit) {
     if (right.get(rhs_bit) != Logic4::one) continue;
@@ -127,6 +183,11 @@ using Profile = SystemVerilogConstraintVariableProfile;
 [[nodiscard]] int compare_unsigned(
     const PackedLogic4& left,
     const PackedLogic4& right) {
+  if (const auto lhs = word_of(left), rhs = word_of(right);
+      lhs && rhs && lhs->known() && rhs->known()
+      && left.width() == right.width()) {
+    return lhs->aval == rhs->aval ? 0 : lhs->aval > rhs->aval ? 1 : -1;
+  }
   for (std::size_t offset = 0; offset < left.width(); ++offset) {
     const auto index = left.width() - offset - 1U;
     if (left.get(index) == right.get(index)) continue;
@@ -136,6 +197,7 @@ using Profile = SystemVerilogConstraintVariableProfile;
 }
 
 [[nodiscard]] bool is_zero(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) return word->ones() == 0U;
   for (std::size_t index = 0; index < value.width(); ++index) {
     if (value.get(index) == Logic4::one) return false;
   }
@@ -143,6 +205,9 @@ using Profile = SystemVerilogConstraintVariableProfile;
 }
 
 [[nodiscard]] bool is_one(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) {
+    return word->known() && word->aval == 1U;
+  }
   if (value.get(0) != Logic4::one) return false;
   for (std::size_t index = 1; index < value.width(); ++index) {
     if (value.get(index) != Logic4::zero) return false;
@@ -151,6 +216,7 @@ using Profile = SystemVerilogConstraintVariableProfile;
 }
 
 [[nodiscard]] bool is_all_ones(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) return word->ones() == word->mask;
   for (std::size_t index = 0; index < value.width(); ++index) {
     if (value.get(index) != Logic4::one) return false;
   }
@@ -198,6 +264,11 @@ using Profile = SystemVerilogConstraintVariableProfile;
   if (is_zero(divisor)) {
     throw std::invalid_argument{"constraint expression divides by zero"};
   }
+  if (const auto lhs = word_of(dividend), rhs = word_of(divisor);
+      lhs && rhs && dividend.width() == divisor.width()) {
+    return {known_word(dividend.width(), lhs->ones() / rhs->ones()),
+        known_word(dividend.width(), lhs->ones() % rhs->ones())};
+  }
   PackedLogic4 quotient(dividend.width(), Logic4::zero);
   PackedLogic4 remainder(dividend.width(), Logic4::zero);
   for (std::size_t offset = 0; offset < dividend.width(); ++offset) {
@@ -218,6 +289,10 @@ using Profile = SystemVerilogConstraintVariableProfile;
 enum class Truth : std::uint8_t { False, True, Unknown };
 
 [[nodiscard]] Truth truth(const PackedLogic4& value) {
+  if (const auto word = word_of(value)) {
+    return word->ones() != 0U ? Truth::True
+        : word->known() ? Truth::False : Truth::Unknown;
+  }
   bool unknown = false;
   for (std::size_t index = 0; index < value.width(); ++index) {
     if (value.get(index) == Logic4::one) return Truth::True;
@@ -241,6 +316,30 @@ enum class Truth : std::uint8_t { False, True, Unknown };
     const Operator operation,
     const PackedLogic4& left,
     const PackedLogic4& right) {
+  if (const auto lhs = word_of(left), rhs = word_of(right);
+      lhs && rhs && left.width() == right.width()) {
+    const auto mask = lhs->mask;
+    const auto left_one = lhs->ones();
+    const auto right_one = rhs->ones();
+    const auto left_zero = ~lhs->aval & ~lhs->bval & mask;
+    const auto right_zero = ~rhs->aval & ~rhs->bval & mask;
+    std::uint64_t one{};
+    std::uint64_t zero{};
+    if (operation == Operator::BitwiseAnd) {
+      one = left_one & right_one;
+      zero = left_zero | right_zero;
+    } else if (operation == Operator::BitwiseOr) {
+      one = left_one | right_one;
+      zero = left_zero & right_zero;
+    } else {
+      const auto known = (left_one | left_zero) & (right_one | right_zero);
+      one = known & (left_one ^ right_one);
+      zero = known & ~one;
+    }
+    const auto unknown = mask & ~(one | zero);
+    return PackedLogic4::from_aval_bval(
+        left.width(), one | unknown, unknown);
+  }
   PackedLogic4 result(left.width(), Logic4::x);
   for (std::size_t index = 0; index < left.width(); ++index) {
     const auto lhs = left.get(index);
@@ -1670,10 +1769,19 @@ namespace {
         [[nodiscard]] bool leaf(const Template& body,
             std::vector<Clause>& clauses, const bool soft)
         {
+            return leaf([&] { return lower(body); }, clauses, soft);
+        }
+
+        // One clause from the expression `body` builds, under the active
+        // guards.
+        template <typename Body>
+        [[nodiscard]] bool leaf(const Body& body,
+            std::vector<Clause>& clauses, const bool soft)
+        {
             builder_ = { };
             dependencies_.clear();
             deferred_ = false;
-            auto root = lower(body);
+            auto root = body();
             for (auto guard = guards_.rbegin(); root && guard != guards_.rend();
                  ++guard) {
                 auto condition = lower(*guard->condition);
@@ -1729,6 +1837,58 @@ namespace {
                     guards_.push_back({ &expression.operands[0], false });
                     split(expression.operands[2], clauses, soft);
                     guards_.pop_back();
+                }
+                return;
+            }
+            // Each pair of the unique items differs, one clause per pair
+            // (IEEE 1800-2017 18.5.5).
+            if (expression.kind == TemplateKind::Unique) {
+                struct Item {
+                    const Template* expression { };
+                    std::optional<SystemVerilogConstraintVariableId> element;
+                };
+                std::vector<Item> items;
+                for (const auto& item : expression.operands) {
+                    if (item.kind != TemplateKind::Name
+                        && item.kind != TemplateKind::Index) {
+                        throw std::invalid_argument {
+                            "inline unique constraint items must be named variables"
+                        };
+                    }
+                    if (const auto* elements = item.kind == TemplateKind::Name
+                            ? container(item.text) : nullptr) {
+                        for (const auto element : *elements) {
+                            items.push_back({ nullptr, element });
+                        }
+                        continue;
+                    }
+                    items.push_back({ &item, std::nullopt });
+                }
+                const auto value = [&](const Item& item)
+                    -> std::optional<SystemVerilogConstraintExpressionId> {
+                    if (item.element) {
+                        use(*item.element);
+                        return builder_.variable(*item.element,
+                            solver_.variables()[*item.element].profile);
+                    }
+                    return lower(*item.expression);
+                };
+                for (std::size_t left = 0; left < items.size(); ++left) {
+                    for (std::size_t right = left + 1U; right < items.size();
+                         ++right) {
+                        (void)leaf([&]()
+                                -> std::optional<
+                                    SystemVerilogConstraintExpressionId> {
+                            const auto first = value(items[left]);
+                            if (!first)
+                                return std::nullopt;
+                            const auto second = value(items[right]);
+                            if (!second)
+                                return std::nullopt;
+                            return builder_.binary(
+                                Operator::NotEqual, *first, *second);
+                        }, clauses, soft);
+                    }
                 }
                 return;
             }
