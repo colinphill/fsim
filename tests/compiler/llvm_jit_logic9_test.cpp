@@ -1236,6 +1236,7 @@ void test_rejections()
                             true,
                         },
                         { },
+                        { },
                     }),
                 no_signals);
         },

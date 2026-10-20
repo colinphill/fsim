@@ -1071,6 +1071,13 @@ private:
     std::unordered_map<
         std::string, runtime::simir::ContainerObjectId>
         container_by_name_;
+    // Construction draft: the packed dimensions (left and right bounds,
+    // outermost first) of a container object's packed elements, so a select
+    // within an element named hierarchically finds its bits (IEEE 1800-2017
+    // 7.4.5, 23.6).
+    std::unordered_map<runtime::simir::ContainerObjectId,
+        std::vector<std::pair<std::int64_t, std::int64_t>>>
+        container_element_packed_shape_;
     // Construction draft: per process, the writes through a virtual
     // interface handle to each candidate instance member; the instance
     // they reach is known only at run time (IEEE 1800-2017 25.9).

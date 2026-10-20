@@ -828,6 +828,11 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                         used = used
                             || value.dynamic_part->base == register_id;
                     }
+                    used = used
+                        || std::ranges::any_of(value.levels,
+                            [&](const auto& level) {
+                                return level.index == register_id;
+                            });
                 } else if constexpr (std::is_same_v<Type, WaitFor>) {
                     known = true;
                     used = value.source && *value.source == register_id;

@@ -11,6 +11,42 @@ namespace fsim::frontend {
 [[nodiscard]] std::optional<StandardRevision>
 verilog_system_service_standard(std::string_view name);
 
+namespace {
+
+// The spelling of a type actual in a `C#(...)` selection, with a class
+// specialization's own actuals (`R#(P#(T))`), so distinct selections keep
+// distinct spellings.
+[[nodiscard]] std::string class_actual_type_spelling(const Type& type)
+{
+    if (type.named_type.empty()) {
+        return type.spelling;
+    }
+    if (type.systemverilog_class_parameter_actuals.empty()
+        || type.named_type.find("::") != std::string::npos) {
+        return type.named_type;
+    }
+    auto spelling = type.named_type + "#(";
+    for (std::size_t index = 0;
+        index < type.systemverilog_class_parameter_actuals.size(); ++index) {
+        const auto& actual = type.systemverilog_class_parameter_actuals[index];
+        if (index != 0U) {
+            spelling += ",";
+        }
+        if (actual.name) {
+            spelling += "." + *actual.name + "(";
+        }
+        spelling += actual.type_actual
+            ? class_actual_type_spelling(*actual.type_actual)
+            : actual.value.text;
+        if (actual.name) {
+            spelling += ")";
+        }
+    }
+    return spelling + ")";
+}
+
+} // namespace
+
 DelayAlternative VerilogParser::parse_verilog_delay_alternative(
     const bool parenthesized)
 {
@@ -948,32 +984,47 @@ Expression VerilogParser::parse_primary_impl()
         std::string canonical = name.text;
         // `C#(args)` names a class specialization, also inside a scope
         // chain (`P::C#(args)::member`, IEEE 1800-2017 8.25.1).
+        // The parsed actuals of the last `#(...)` in the chain.
+        std::shared_ptr<const Type> selection;
         const auto append_specialization = [&] {
             if (!match(TokenKind::Hash)) {
                 return;
             }
             Instance actual_owner;
             parse_parameter_overrides(actual_owner, previous());
+            auto selected = std::make_shared<Type>();
+            selected->named_type = canonical;
             canonical += "#(";
             for (std::size_t index = 0;
                 index < actual_owner.parameter_overrides.size(); ++index) {
                 if (index != 0)
                     canonical += ",";
-                const auto& actual = actual_owner.parameter_overrides[index];
+                auto& actual = actual_owner.parameter_overrides[index];
                 if (actual.name) {
                     canonical += "." + *actual.name + "(";
                 }
                 if (actual.type_value) {
-                    canonical += actual.type_value->named_type.empty()
-                        ? actual.type_value->spelling
-                        : actual.type_value->named_type;
+                    canonical += class_actual_type_spelling(
+                        *actual.type_value);
                 } else {
                     canonical += actual.value.text;
                 }
                 if (actual.name)
                     canonical += ")";
+                SystemVerilogClassTypeActual retained;
+                retained.name = std::move(actual.name);
+                retained.value = std::move(actual.value);
+                if (actual.type_value) {
+                    retained.type_actual = std::make_shared<Type>(
+                        std::move(*actual.type_value));
+                }
+                retained.span = std::move(actual.span);
+                selected->systemverilog_class_parameter_actuals.push_back(
+                    std::move(retained));
             }
             canonical += ")";
+            selected->spelling = canonical;
+            selection = std::move(selected);
         };
         append_specialization();
         while (match(TokenKind::Scope)) {
@@ -1028,6 +1079,7 @@ Expression VerilogParser::parse_primary_impl()
                         "FSIM-SV-PARSE-391");
                     typed.span = cover(typed.span, previous().span);
                 }
+                typed.systemverilog_class_selection = selection;
                 return typed;
             }
             canonical += (standard_member
@@ -1100,6 +1152,7 @@ Expression VerilogParser::parse_primary_impl()
             { },
             cover(name.span, previous().span)
         };
+        expression.systemverilog_class_selection = std::move(selection);
         if (const auto required = verilog_system_service_standard(canonical)) {
             note_system_service_standard(canonical, *required, name);
         }
@@ -1295,10 +1348,14 @@ Expression VerilogParser::parse_primary_impl()
                     SystemVerilogAnnexConstruct::sampled_clock_argument,
                     name);
             }
+            auto class_selection
+                = std::move(expression.systemverilog_class_selection);
             expression = Expression { ExpressionKind::Call, canonical,
                 std::move(arguments),
                 cover(name.span, previous().span) };
             expression.call_argument_names = std::move(argument_names);
+            expression.systemverilog_class_selection
+                = std::move(class_selection);
             if (canonical == "new") {
                 if (require_standard(
                         "the predefined new operator",

@@ -3,6 +3,8 @@
 #include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <charconv>
 #include <functional>
 #include <limits>
@@ -117,6 +119,11 @@ public:
         }
         for (const auto& expression : hir_.expressions()) {
             expressions_.emplace(expression.id, &expression);
+            if (!expression.class_owner.empty()
+                && !expression.class_owner.front()
+                        .interface_parameter_actuals.empty()) {
+                owner_selections_.push_back(&expression);
+            }
         }
         for (const auto& statement : hir_.statements()) {
             statements_.emplace(statement.id, &statement);
@@ -496,7 +503,8 @@ private:
                 release();
                 report(ClassSpecializationErrorKind::unresolved_constant,
                     std::string { owner }, expression->source,
-                    "class integer actual is not a normalized plain literal");
+                    "class integer actual '" + expression->text
+                        + "' is not a normalized plain literal");
                 return std::nullopt;
             }
             resolved.canonical = "integer:" + std::to_string(
@@ -2256,6 +2264,29 @@ private:
             } else {
                 *inherited = std::move(*retained);
             }
+            // A static selection in the method body whose actuals name this
+            // class's parameters (`R#(W)::get()`) selects a specialization
+            // per specialization of this class (IEEE 1800-2017 8.25).
+            const auto* callable = record_for(
+                declarations_, input.declaration);
+            if (callable == nullptr || !callable->nested_scope) {
+                continue;
+            }
+            for (const auto* selection : owner_selections_) {
+                if (!scope_within(semantics_, selection->scope,
+                        *callable->nested_scope)) {
+                    continue;
+                }
+                const auto& owner = selection->class_owner.front();
+                const auto* target = class_for(owner.class_identity);
+                if (target == nullptr || target->parameters.empty()) {
+                    continue;
+                }
+                const auto errors = result_.errors.size();
+                (void)nested_specialization(*target, owner,
+                    bound->environment, identity, selection->source);
+                discard_errors(errors);
+            }
         }
 
         for (const auto& composed : declaration.composed_constraints) {
@@ -2335,6 +2366,8 @@ private:
     std::map<std::string, std::vector<const TypeDefinition*>, std::less<>>
         types_by_name_;
     std::map<ExpressionId, const Expression*> expressions_;
+    // Static selections through a parameterized class (`C#(N)::f()`).
+    std::vector<const Expression*> owner_selections_;
     std::map<StatementId, const Statement*> statements_;
     std::map<UnitId, const Unit*> units_;
     std::map<std::string, std::size_t, std::less<>> materialized_;
@@ -2447,6 +2480,18 @@ std::optional<ClassSpecializationId> ClassSpecializationIndex::specialize(
             : std::string_view { },
         source);
     index_from(first);
+    static const bool trace
+        = std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr;
+    if (trace) {
+        std::fprintf(stderr, "[fsim-sv-class-spec] demand %s actuals=%zu "
+                             "context=%s -> %s\n",
+            type.class_identity.c_str(),
+            type.interface_parameter_actuals.size(),
+            context && *context < first
+                ? at(*context).specialization_identity.c_str()
+                : "-",
+            identity ? identity->c_str() : "(failed)");
+    }
     return identity ? find(*identity) : std::nullopt;
 }
 

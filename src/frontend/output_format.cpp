@@ -99,15 +99,17 @@ parse_output_format(const std::string_view text) {
       result.valid = false;
       return result;
     }
-    if ((parsed.suppress_leading_zero || parsed.zero_pad)
-        && (conversion == 'c' || conversion == 'm' || conversion == 'l'
-            || conversion == 'v'
-            || conversion == 'u' || conversion == 'z')) {
+    // `%0c` or `%0m` keeps the value's own width (IEEE 1800-2017 21.2.1.3).
+    if ((parsed.zero_pad
+            && (conversion == 'c' || conversion == 'm' || conversion == 'l'
+                || conversion == 'v'))
+        || (parsed.zero_pad && (conversion == 'u' || conversion == 'z'))) {
       result.valid = false;
       return result;
     }
     if ((conversion == 'u' || conversion == 'z')
-        && (left_justify || !width_spelling.empty())) {
+        && (left_justify
+            || (!width_spelling.empty() && width_spelling != "0"))) {
       result.valid = false;
       return result;
     }

@@ -636,6 +636,17 @@ private:
         SignalMap& signals,
         ReadOnlySignalSet& read_only_signals,
         ContainerMap& container_objects);
+    // An INTEGER-valued expression (an index bound) folded, or else run at
+    // elaboration in a scratch signal of `width` bits.
+    std::optional<std::int64_t> evaluate_compiled_vhdl_integer(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression,
+        std::size_t width,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects,
+        frontend::ValueDomain domain = frontend::ValueDomain::Integer);
     // A composite VHDL constant whose elements are not single logic values,
     // materialized as a read-only signal named `name` holding its static
     // value; nullopt when the constant keeps the folding paths.
@@ -643,6 +654,37 @@ private:
         const semantic::SpecializedHirUnit& specialization,
         const semantic::vhdl::Declaration& declaration,
         const std::string& name);
+    // A scalar VHDL constant with a static value, materialized as a
+    // read-only signal found only by its hierarchy path `name`, for the
+    // external names of another block (IEEE 1076-2008 8.7); nullopt when
+    // the design has no external names or the value does not fold.
+    std::optional<SignalId> add_compiled_vhdl_external_constant_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& declaration,
+        const std::string& name);
+    // A composite constant of an architecture or block whose value does not
+    // fold, computed when its declaration is elaborated into a read-only
+    // signal whose subtype the value completes (IEEE 1076-2008 14.4.2.1,
+    // 5.3.2.2); nullopt keeps the run-time paths.
+    std::optional<SignalId> add_compiled_vhdl_evaluated_constant_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& declaration,
+        const std::string& name,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
+    // The declared subtype of an object completed by the shape of its
+    // initial value; nullopt when that shape is not known.
+    std::optional<semantic::vhdl::SubtypeIndication>
+    compiled_vhdl_initialized_object_subtype(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId initializer,
+        const semantic::vhdl::SubtypeIndication& declared,
+        semantic::ScopeId scope,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
     // A non-generic package constant materialized once for the design.
     std::optional<SignalId> compiled_vhdl_package_constant_signal(
         const semantic::SpecializedHirUnit& specialization,
@@ -833,11 +875,20 @@ private:
         const semantic::vhdl::ComponentConfiguration* selected_rule,
         const semantic::vhdl::Unit* target_entity);
 
+    // The enclosing region whose objects a generic actual may read when it
+    // is evaluated at elaboration (IEEE 1076-2008 14.4.2.1).
+    struct CompiledVhdlGenericEvaluationScope {
+        std::string_view path;
+        const SignalMap* signals { };
+        const ReadOnlySignalSet* read_only_signals { };
+        const ContainerMap* container_objects { };
+    };
     CompiledVhdlGenericActualResult
     materialize_compiled_vhdl_generic_actuals(
         const semantic::vhdl::Instance& record,
         const semantic::SpecializedHirAssociationResult& generic_bindings,
-        const semantic::SpecializedHirUnit& working_specialization);
+        const semantic::SpecializedHirUnit& working_specialization,
+        const CompiledVhdlGenericEvaluationScope* evaluation = nullptr);
 
     bool validate_compiled_vhdl_port_actual_compatibility(
         CompiledVhdlPortCompatibilityContext context);
@@ -1740,6 +1791,8 @@ private:
 
     semantic::ValidatedCompiledDesign validated_compiled_;
     const semantic::CompiledDesign* compiled_ { };
+    // Whether any VHDL expression is an external name; computed once.
+    std::optional<bool> compiled_vhdl_external_names_;
     ElaboratedDesign& design_;
     const CoverageHirContext* coverage_ { };
     std::vector<Diagnostic>& diagnostics_;

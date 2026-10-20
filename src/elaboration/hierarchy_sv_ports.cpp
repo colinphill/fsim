@@ -1832,6 +1832,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             std::nullopt,
                             std::nullopt,
                             { },
+                            { },
                         });
                     element_output.operations.emplace_back(
                         WaitSensitivity { });

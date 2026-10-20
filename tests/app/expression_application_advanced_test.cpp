@@ -623,13 +623,10 @@ endmodule
     sources.library = "work";
     sources.files.push_back(source);
     config.source_sets.push_back(std::move(sources));
+    // `$exit` outside a program is ignored (IEEE 1800-2017 24.7).
     fsim::diagnostic::Engine diagnostics;
     const auto project = fsim::app::build_project(config, diagnostics);
-    assert(!project && diagnostics.has_error());
-    assert(std::ranges::any_of(
-        diagnostics.diagnostics(), [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-ELAB-SVEXIT-001";
-        }));
+    assert(project && !diagnostics.has_error());
 }
 
 void test_invalid_systemverilog_sampled_value(

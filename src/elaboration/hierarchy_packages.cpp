@@ -5367,6 +5367,10 @@ namespace {
                 }
                 return result;
             }
+            // STRING's CHARACTER elements start at NUL.
+            if (compiled_vhdl_name_equal(name, "string") && width % 8U == 0U) {
+                return PackedLogic4 { width, Logic4::zero };
+            }
         }
         if (!scalar) {
             return std::nullopt;
@@ -10477,14 +10481,43 @@ namespace {
                             value.source);
                         valid = false;
                     } else {
+                        // A default that is not a value of an unpacked
+                        // structure member sets that member's own members
+                        // (IEEE 1800-2017 10.9.2).
+                        const auto validate_default = [&](const auto& self,
+                            const semantic::sv::TypeReference& member_type,
+                            const std::size_t depth) -> bool {
+                            const auto member_id = nominal_type_of(member_type);
+                            const auto member_definition = member_id
+                                ? compiled.find_type(*member_id)
+                                : std::optional<semantic::CompiledTypeView> { };
+                            const auto default_id
+                                = expression_nominal_type(*default_value);
+                            if (depth < 16U && member_definition
+                                && member_definition->systemverilog != nullptr
+                                && member_definition->systemverilog->form
+                                    == TypeForm::unpacked_structure
+                                && member_type.unpacked_dimensions.empty()
+                                && !(default_id && *default_id == *member_id)) {
+                                bool members_valid = true;
+                                for (const auto& nested :
+                                    member_definition->systemverilog->members) {
+                                    members_valid
+                                        = self(self, nested.type, depth + 1U)
+                                        && members_valid;
+                                }
+                                return members_valid;
+                            }
+                            return validate_nominal_value(member_type,
+                                *default_value, diagnostic, context);
+                        };
                         for (std::size_t member { };
                              member < definition.members.size(); ++member) {
                             if (bound[member]) {
                                 continue;
                             }
-                            valid = validate_nominal_value(
-                                        definition.members[member].type,
-                                        *default_value, diagnostic, context)
+                            valid = validate_default(validate_default,
+                                        definition.members[member].type, 0U)
                                 && valid;
                         }
                     }
@@ -18171,6 +18204,182 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
     return id;
 }
 
+std::optional<SignalId>
+HierarchyBuilder::add_compiled_vhdl_external_constant_signal(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::vhdl::Declaration& declaration,
+    const std::string& name)
+{
+    if (!compiled_vhdl_external_names_) {
+        compiled_vhdl_external_names_ = std::ranges::any_of(
+            compiled_->vhdl_hir.expressions(),
+            [](const semantic::vhdl::Expression& expression) {
+                return expression.kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && expression.text == "@vhdl-external";
+            });
+    }
+    if (!*compiled_vhdl_external_names_
+        || declaration.form != semantic::vhdl::DeclarationForm::constant
+        || !declaration.subtype || !declaration.initializer
+        || design_.signal_by_name_.contains(name)
+        || design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
+        return std::nullopt;
+    }
+    const auto type = compiled_vhdl_signal_type(
+        specialization, *declaration.subtype, declaration.scope);
+    const auto layout = compiled_vhdl_named_signal_layout(
+        specialization, *declaration.subtype, declaration.scope);
+    if (!type || type->vhdl_array || !type->packed_members.empty()
+        || !layout || layout->width == 0U || layout->width > 64U) {
+        return std::nullopt;
+    }
+    const auto domain = type->domain == frontend::ValueDomain::Unknown
+        ? layout->domain
+        : type->domain;
+    const auto value = compiled_vhdl_static_port_value(specialization,
+        *declaration.initializer, *declaration.subtype, declaration.scope,
+        domain, layout->width);
+    if (!value || value->width() != layout->width) {
+        return std::nullopt;
+    }
+    const auto id = static_cast<SignalId>(design_.signals_.size());
+    design_.signal_by_name_.emplace(name, id);
+    SignalInfo info;
+    info.id = id;
+    info.name = name;
+    info.width = layout->width;
+    info.type_name = type->spelling;
+    info.source_domain = domain;
+    info.is_signed = type->is_signed;
+    info.packed_range = type->packed_range;
+    info.integer_range = type->integer_range;
+    info.nominal_type = type->nominal_type;
+    info.direction = frontend::PortDirection::Input;
+    info.declaration_span = compiled_source_span(
+        *compiled_, declaration.source);
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(runtime::simir::Signal {
+        name,
+        *value,
+        ResolutionKind::none,
+        value_kind(domain),
+        std::nullopt,
+        { StrengthRank::pull, StrengthRank::pull },
+        std::nullopt,
+        std::nullopt,
+        frontend::SystemVerilogScalarKind::None,
+    });
+    return id;
+}
+
+std::optional<SignalId>
+HierarchyBuilder::add_compiled_vhdl_evaluated_constant_signal(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::vhdl::Declaration& declaration,
+    const std::string& name,
+    const std::string& path,
+    SignalMap& signals,
+    ReadOnlySignalSet& read_only_signals,
+    ContainerMap& container_objects)
+{
+    if (declaration.form != semantic::vhdl::DeclarationForm::constant
+        || !declaration.subtype || !declaration.initializer
+        || design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver { specialization };
+    auto subtype = resolver.effective_vhdl_subtype(
+        *declaration.subtype, declaration.scope);
+    // A folded value of a constrained subtype keeps the folding paths; an
+    // unconstrained one needs the shape its value gives. STRING values are
+    // string objects.
+    if (!subtype || subtype->domain == semantic::vhdl::ValueDomain::string
+        || (!subtype->unconstrained
+            && specialization.evaluate_vhdl_constant_expression(
+                *declaration.initializer))) {
+        return std::nullopt;
+    }
+    // Only composites: arrays (including the predefined vectors) and
+    // records.
+    if (const auto declared_type = compiled_vhdl_signal_type(
+            specialization, *subtype, declaration.scope);
+        !declared_type
+        || (!declared_type->vhdl_array
+            && declared_type->packed_members.empty())) {
+        return std::nullopt;
+    }
+    if (subtype->unconstrained
+        || !compiled_vhdl_named_signal_layout(
+            specialization, *subtype, declaration.scope)) {
+        subtype = compiled_vhdl_initialized_object_subtype(specialization,
+            *declaration.initializer, *subtype, declaration.scope, signals,
+            read_only_signals, container_objects);
+        if (!subtype) {
+            return std::nullopt;
+        }
+    }
+    const auto type = compiled_vhdl_signal_type(
+        specialization, *subtype, declaration.scope);
+    const auto layout = compiled_vhdl_named_signal_layout(
+        specialization, *subtype, declaration.scope);
+    if (!type || !layout || layout->width == 0U || subtype->unconstrained
+        || (type->vhdl_array && type->vhdl_array->unconstrained)
+        || !compiled_vhdl_scalar_domain(layout->domain)) {
+        return std::nullopt;
+    }
+    const auto id = static_cast<SignalId>(design_.signals_.size());
+    SignalInfo info;
+    info.id = id;
+    info.name = name;
+    info.width = layout->width;
+    info.type_name = type->spelling;
+    info.source_domain = type->domain == frontend::ValueDomain::Unknown
+        ? layout->domain
+        : type->domain;
+    info.is_signed = type->is_signed;
+    info.packed_range = type->packed_range;
+    info.vhdl_array = type->vhdl_array;
+    info.packed_members = type->packed_members;
+    info.integer_range = type->integer_range;
+    info.nominal_type = type->nominal_type;
+    info.direction = frontend::PortDirection::Input;
+    info.declaration_span = compiled_source_span(
+        *compiled_, declaration.source);
+    const auto runtime_domain = info.source_domain;
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(runtime::simir::Signal {
+        name,
+        PackedLogic4 { layout->width },
+        ResolutionKind::none,
+        value_kind(runtime_domain),
+        std::nullopt,
+        { StrengthRank::pull, StrengthRank::pull },
+        std::nullopt,
+        std::nullopt,
+        frontend::SystemVerilogScalarKind::None,
+    });
+    const auto value = evaluate_compiled_vhdl_value(specialization,
+        *declaration.initializer, id, subtype, path, signals,
+        read_only_signals, container_objects);
+    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        std::cerr << "[fsim-hir-lower] vhdl-elaborated-constant " << name
+                  << " width=" << layout->width << " value="
+                  << (value ? value->width() : 0U) << '\n';
+    }
+    if (!value || value->width() != layout->width
+        || design_.signals_.size() != id + 1U) {
+        if (design_.signals_.size() == id + 1U) {
+            design_.signals_.pop_back();
+            design_.signal_info_.pop_back();
+        }
+        return std::nullopt;
+    }
+    design_.signals_[id].initial_value = *value;
+    design_.signal_by_name_.emplace(name, id);
+    return id;
+}
+
 std::optional<SignalId> HierarchyBuilder::compiled_vhdl_package_constant_signal(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::DeclarationId declaration_id)
@@ -19964,8 +20173,30 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             return true;
         }
         const auto constant_name = working_path + "." + declaration.name;
-        const auto id = add_compiled_vhdl_constant_signal(
-            working_specialization, declaration, constant_name);
+        // A constant whose subtype is unconstrained takes the shape of its
+        // value (IEEE 1076-2008 6.4.2.2); others keep their static value.
+        const auto declared = declaration.subtype
+            ? semantic::CompiledDesignResolver { working_specialization }
+                  .effective_vhdl_subtype(
+                      *declaration.subtype, declaration.scope)
+            : std::nullopt;
+        const bool unconstrained = declared && declared->unconstrained;
+        auto id = unconstrained
+            ? add_compiled_vhdl_evaluated_constant_signal(
+                  working_specialization, declaration, constant_name,
+                  working_path, working_signals, working_read_only_signals,
+                  container_objects)
+            : std::nullopt;
+        if (!id) {
+            id = add_compiled_vhdl_constant_signal(
+                working_specialization, declaration, constant_name);
+        }
+        if (!id && !unconstrained) {
+            id = add_compiled_vhdl_evaluated_constant_signal(
+                working_specialization, declaration, constant_name,
+                working_path, working_signals, working_read_only_signals,
+                container_objects);
+        }
         if (id) {
             working_declared_signal_names.insert(declaration.name);
             working_signals.insert_or_assign(declaration.name, *id);
@@ -19973,6 +20204,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             register_root_relative_signal(
                 working_path, declaration.name, *id);
             working_read_only_signals.insert(*id);
+        } else if (const auto external
+                   = add_compiled_vhdl_external_constant_signal(
+                       working_specialization, declaration, constant_name)) {
+            // Reads inside this block keep folding the constant.
+            working_read_only_signals.insert(*external);
         }
         return true;
     }
@@ -20690,6 +20926,75 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         || !executable_width
         || !compiled_vhdl_scalar_domain(domain)
         || (!declaration.subtype && alias_info == nullptr);
+    if ((unsupported_subtype
+            || (alias_info == nullptr && !subtype_executable))
+        && declaration.form == Form::signal && alias_info == nullptr
+        && declaration.subtype) {
+        // Index bounds that do not fold, such as an element of a constant
+        // given by a function, are evaluated when the declaration is
+        // elaborated (IEEE 1076-2008 14.4.2.1).
+        auto evaluated = declaration;
+        bool changed { };
+        bool complete = true;
+        for (auto& range : evaluated.subtype->constraints) {
+            if (range.kind != semantic::vhdl::RangeKind::array_index
+                || range.direction_from_bounds) {
+                continue;
+            }
+            const auto bound = [&](std::optional<std::int64_t>& value,
+                                   std::optional<semantic::ExpressionId>&
+                                       expression) {
+                if (value || !expression) {
+                    return;
+                }
+                value = evaluate_compiled_vhdl_integer(
+                    working_specialization, *expression,
+                    compiled_vhdl_integer_width(working_specialization),
+                    working_path, working_signals, working_read_only_signals,
+                    container_objects);
+                if (!value) {
+                    complete = false;
+                    return;
+                }
+                expression.reset();
+                changed = true;
+            };
+            bound(range.left, range.left_expression);
+            bound(range.right, range.right_expression);
+            if (range.left && range.right) {
+                range.null = range.descending ? *range.left < *range.right
+                                              : *range.left > *range.right;
+            }
+        }
+        // A VHDL-2019 signal of an unconstrained subtype takes the shape of
+        // its initial value (IEEE 1076-2019 6.4.2.3).
+        if (!changed && standard == "2019" && declaration.initializer) {
+            const auto declared = semantic::CompiledDesignResolver {
+                working_specialization
+            }.effective_vhdl_subtype(*declaration.subtype, declaration.scope);
+            if (declared && declared->unconstrained) {
+                auto signals = working_signals;
+                auto read_only = working_read_only_signals;
+                auto containers = container_objects;
+                if (auto completed = compiled_vhdl_initialized_object_subtype(
+                        working_specialization, *declaration.initializer,
+                        *declared, declaration.scope, signals, read_only,
+                        containers);
+                    completed && !completed->unconstrained) {
+                    evaluated.subtype = std::move(*completed);
+                    changed = true;
+                }
+            }
+        }
+        if (changed && complete) {
+            return materialize_compiled_vhdl_declaration(
+                working_specialization, working_path, root_path,
+                working_signals, working_read_only_signals,
+                working_declared_signal_names, container_objects,
+                vhdl_port_shape_identities, standard,
+                declaring_unit_compatibility_profile, evaluated);
+        }
+    }
     if (unsupported_subtype
         || (alias_info == nullptr && !subtype_executable)) {
         report(
@@ -22368,8 +22673,44 @@ HierarchyBuilder::CompiledVhdlGenericActualResult
 HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
     const semantic::vhdl::Instance& record,
     const semantic::SpecializedHirAssociationResult& generic_bindings,
-    const semantic::SpecializedHirUnit& working_specialization)
+    const semantic::SpecializedHirUnit& working_specialization,
+    const CompiledVhdlGenericEvaluationScope* evaluation)
 {
+    // A scalar INTEGER or BOOLEAN actual that is globally but not locally
+    // static (an elaborated constant, an impure or library function) is
+    // evaluated once the enclosing region is elaborated (IEEE 1076-2008
+    // 14.4.2.1, 14.4.2.4).
+    const auto elaborated_scalar = [&](const auto& binding,
+                                       const auto& formal)
+        -> std::optional<std::int64_t> {
+        if (evaluation == nullptr || evaluation->signals == nullptr
+            || !formal || formal->vhdl == nullptr
+            || formal->vhdl->form
+                != semantic::vhdl::DeclarationForm::generic_constant
+            || !formal->vhdl->subtype || !binding.expression) {
+            return std::nullopt;
+        }
+        const auto layout = compiled_vhdl_named_signal_layout(
+            working_specialization, *formal->vhdl->subtype,
+            formal->vhdl->scope);
+        if (!layout || layout->width == 0U || layout->width > 64U
+            || (layout->domain != frontend::ValueDomain::Integer
+                && layout->domain != frontend::ValueDomain::Boolean)) {
+            return std::nullopt;
+        }
+        auto signals = *evaluation->signals;
+        auto read_only = evaluation->read_only_signals != nullptr
+            ? *evaluation->read_only_signals
+            : ReadOnlySignalSet { };
+        auto containers = evaluation->container_objects != nullptr
+            ? *evaluation->container_objects
+            : ContainerMap { };
+        const auto value = evaluate_compiled_vhdl_integer(
+            working_specialization, *binding.expression, layout->width,
+            std::string { evaluation->path }, signals, read_only,
+            containers, layout->domain);
+        return value;
+    };
     std::vector<semantic::SpecializedHirActualIdentity>
         child_actuals;
     bool child_actuals_valid { true };
@@ -22553,6 +22894,13 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
         }
         auto actual = compiled_vhdl_specialization_actual(
             *compiled_, working_specialization, binding);
+        std::optional<std::int64_t> elaborated;
+        if (actual.requires_static_value
+            && (elaborated = elaborated_scalar(binding, formal))) {
+            actual.actual.identity = compiled_vhdl_integral_identity(
+                *formal->vhdl, *elaborated);
+            actual.requires_static_value = false;
+        }
         if (actual.requires_static_value) {
             report(
                 "FSIM-ELAB-GENERIC-004",
@@ -22572,9 +22920,18 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 working_specialization,
                 *formal->vhdl->subtype,
                 formal->vhdl->scope);
-            const auto value = working_specialization
-                                   .evaluate_integral_expression(
-                                       *binding.expression);
+            auto value = working_specialization
+                             .evaluate_integral_expression(
+                                 *binding.expression);
+            if (!value && !elaborated) {
+                if ((elaborated = elaborated_scalar(binding, formal))) {
+                    actual.actual.identity = compiled_vhdl_integral_identity(
+                        *formal->vhdl, *elaborated);
+                }
+            }
+            if (!value) {
+                value = elaborated;
+            }
             auto static_value = layout && layout->width != 0U
                 ? compiled_vhdl_static_composite_value(
                       working_specialization,
@@ -27721,9 +28078,14 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
                 std::move(diagnostic.code), std::move(diagnostic.message),
                 compiled_source_span(*compiled_, diagnostic.source));
         }
+        const CompiledVhdlGenericEvaluationScope generic_evaluation {
+            working_path, &working_signals, &working_read_only_signals,
+            &container_objects,
+        };
         auto child_actual_result
             = materialize_compiled_vhdl_generic_actuals(
-                record, generic_bindings, generic_actual_specialization);
+                record, generic_bindings, generic_actual_specialization,
+                &generic_evaluation);
         if (child_actual_result.status
             == CompiledVhdlGenericActualResult::Status::fatal) {
             return false;

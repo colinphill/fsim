@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "hierarchy_builder_internal.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
@@ -1741,6 +1742,63 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 compiled_port_direction(declaration),
                 std::nullopt,
             });
+        // The packed dimensions of the elements, for selects within an
+        // element named from another scope (IEEE 1800-2017 7.4.5, 23.6).
+        if (declaration.type
+            && (type->element_kind == ContainerElementKind::Packed
+                || type->element_kind == ContainerElementKind::Scalar)) {
+            const semantic::CompiledDesignResolver type_resolver {
+                working_specialization
+            };
+            auto element_type = *declaration.type;
+            element_type.unpacked_dimensions.clear();
+            element_type.container_form.reset();
+            element_type.container_element_types.clear();
+            if (const auto element
+                = type_resolver.underlying_systemverilog_type(
+                    element_type, declaration.scope)) {
+                std::vector<std::pair<std::int64_t, std::int64_t>> shape;
+                bool resolved = true;
+                std::uint64_t width = 1U;
+                const auto append = [&](const semantic::sv::PackedRange&
+                                            range) {
+                    // Bounds can name parameters of this scope.
+                    const auto bound
+                        = [&](const std::optional<std::int64_t> value,
+                              const std::optional<semantic::ExpressionId>
+                                  expression) {
+                              return value ? value
+                                  : expression
+                                  ? working_specialization
+                                        .evaluate_integral_expression(
+                                            *expression)
+                                  : std::nullopt;
+                          };
+                    const auto left
+                        = bound(range.left, range.left_expression);
+                    const auto right
+                        = bound(range.right, range.right_expression);
+                    if (!left || !right) {
+                        resolved = false;
+                        return;
+                    }
+                    shape.emplace_back(*left, *right);
+                    width *= support::index_distance(*left, *right) + 1U;
+                };
+                if (!element->packed_dimensions.empty()) {
+                    for (const auto& range : element->packed_dimensions) {
+                        append(range);
+                    }
+                } else if (element->packed_range) {
+                    append(*element->packed_range);
+                }
+                if (resolved && !shape.empty()
+                    && width == type->element_width) {
+                    design_.container_element_packed_shape_.emplace(
+                        id, std::move(shape));
+                }
+            }
+        }
         // Members of an unpacked structure take their declared defaults
         // (IEEE 1800-2017 7.2.2).
         if (!initial_container && declaration.type

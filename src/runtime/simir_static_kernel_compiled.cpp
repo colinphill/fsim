@@ -1962,7 +1962,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
                 if (op.object >= container_of_object_.size()
                     || container_of_object_[op.object] == no_container
-                    || op.transaction_signal) {
+                    || op.transaction_signal || !op.levels.empty()) {
                     throw reject("container_write");
                 }
                 inst.op = KOp::mem_write;

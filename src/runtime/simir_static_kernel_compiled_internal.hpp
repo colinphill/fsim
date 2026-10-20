@@ -158,6 +158,9 @@ inline void operation_registers(const Operation& operation,
             if (op.dynamic_part) {
                 reads.push_back(op.dynamic_part->base);
             }
+            for (const auto& level : op.levels) {
+                reads.push_back(level.index);
+            }
         }
     }, operation);
 }

@@ -794,7 +794,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-273` | error | A VHDL case-expression choice list is missing `=>`. |
 | `FSIM-VHDL-PARSE-274` | error | A VHDL case expression repeats `others` or places it before another alternative. |
 | `FSIM-VHDL-PARSE-275` | error | A bounded VHDL case expression lacks `others` and does not contain exhaustive Boolean choices. |
-| `FSIM-VHDL-PARSE-276` | error | A bounded VHDL external name uses an object class other than `signal`. |
+| `FSIM-VHDL-PARSE-276` | error | A bounded VHDL external name uses an object class other than `signal` or `constant`. |
 | `FSIM-VHDL-PARSE-277` | error | A bounded VHDL external signal name is not a local or absolute dot-separated path. |
 | `FSIM-VHDL-PARSE-278` | error | A VHDL external signal name is missing the colon before its subtype indication. |
 | `FSIM-VHDL-PARSE-279` | error | A VHDL external signal name is missing its closing `>>`. |
@@ -820,7 +820,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-299` | error | The base of a VHDL based literal is outside 2 to 16 (IEEE 1076-2008 15.5.3). |
 | `FSIM-VHDL-PARSE-300` | error | A function call whose name is an operator symbol, such as `"and"(a, b)`, has a number of actuals that the operator does not take (IEEE 1076-2008 4.5.2). |
 | `FSIM-VHDL-PARSE-301` | error | A VHDL expression mixes logical operators or repeats NAND or NOR without parentheses, or chains relational or shift operators (IEEE 1076-2008 9.1). |
-| `FSIM-VHDL-PARSE-302` | error | A VHDL port clause or process sensitivity list is empty, or an entity header has a second generic clause (IEEE 1076-2008 6.5.6, 11.3). |
+| `FSIM-VHDL-PARSE-302` | error | A VHDL port clause or process sensitivity list is empty, or an entity header or component declaration repeats its generic or port clause (IEEE 1076-2008 6.5.6, 6.8, 11.3). |
 | `FSIM-VHDL-PARSE-303` | error | Empty parentheses follow a VHDL name; a call without actuals has no parentheses (IEEE 1076-2008 9.3.4). |
 
 ### Embedded VHDL PSL parsing and ownership
@@ -952,7 +952,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-113` | error | A VHDL-2019 predefined attribute is used with an illegal result context or argument count. |
 | `FSIM-VHDL-SEM-114` | error | A VHDL declarative region repeats a converse mode-view alias name. |
 | `FSIM-VHDL-SEM-115` | error | An entity statement part contains a signal assignment, instance or generate statement; entity statements must be passive (IEEE 1076-2008 3.2.4). |
-| `FSIM-VHDL-SEM-117` | error | An entity's generic clause follows its port clause (IEEE 1076-2008 6.5.6.1). |
+| `FSIM-VHDL-SEM-117` | error | An entity's or component's generic clause follows its port clause (IEEE 1076-2008 6.5.6.1, 6.8). |
 | `FSIM-VHDL-SEM-118` | error | An attribute specification for an entity, architecture, package or configuration appears outside that design unit's own declarative part (IEEE 1076-2008 7.2). |
 | `FSIM-VHDL-SEM-119` | error | An array type definition mixes unbounded (`<>`) and constrained index ranges (IEEE 1076-2008 5.3.2.1). |
 | `FSIM-VHDL-SEM-120` | error | An aggregate assignment target names the same object more than once (IEEE 1076-2008 10.5.2.1, 10.6.2.1). |
@@ -2559,7 +2559,6 @@ scheduler.
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
 | `FSIM-ELAB-SVCONST-002` | note, warning, or error | A SystemVerilog severity system task executed during constant evaluation. Notes and warnings preserve successful elaboration; errors and fatal reports reject the design. |
 | `FSIM-ELAB-SVCONST-003` | error | A parameter value reads a variable, net or port of its own unit outside a type query such as `$bits`, so it is not a constant expression (IEEE 1800-2017 6.20.2). |
-| `FSIM-ELAB-SVEXIT-001` | error | `$exit` is used outside a SystemVerilog program block. |
 | `FSIM-ELAB-SVPROGRAM-001` | error | A SystemVerilog-2023 program elaboration-severity task has a nonconstant or invalid format/value argument. |
 | `FSIM-ELAB-SVPROGRAM-002` | note, warning, error, or fatal | A SystemVerilog-2023 program severity system task executed during elaboration; notes and warnings preserve the design while errors and fatal reports reject it. |
 | `FSIM-ELAB-SVSAMPLE-001` | error | A sampled/global-clock value function has an invalid direct packed signal, explicit scalar clock, scalar gate, or governed positive constant history depth. |

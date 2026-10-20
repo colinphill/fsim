@@ -4240,10 +4240,10 @@ void check_bound_container_accesses()
         ReadContainerObject { 0U, 0U },
         WriteContainerObject { 0U, 0U, std::nullopt },
         WriteContainerObjectElement {
-            1U, 0U, 2U, true, false, false, 7U, std::nullopt, { }
+            1U, 0U, 2U, true, false, false, 7U, std::nullopt, { }, { }
         },
         WriteContainerObjectElement {
-            2U, 0U, 2U, true, false, false, std::nullopt, std::nullopt, { }
+            2U, 0U, 2U, true, false, false, std::nullopt, std::nullopt, { }, { }
         },
         Halt { },
     };
@@ -4292,7 +4292,7 @@ void check_bound_container_accesses()
         LoadConstant { 0U, PackedLogic4 { 32U, Logic4::zero } },
         LoadConstant { 1U, PackedLogic4 { 8U, Logic4::zero } },
         WriteContainerObjectElement {
-            1U, 0U, 1U, true, false, false, std::nullopt, std::nullopt, { }
+            1U, 0U, 1U, true, false, false, std::nullopt, std::nullopt, { }, { }
         },
         Halt { },
     };
@@ -4336,7 +4336,7 @@ void check_bound_container_accesses()
         LoadConstant { 0U, PackedLogic4 { 32U, Logic4::zero } },
         LoadConstant { 1U, PackedLogic4 { 8U, Logic4::zero } },
         WriteContainerObjectElement {
-            5U, 0U, 1U, true, false, false, 8U, std::nullopt, { }
+            5U, 0U, 1U, true, false, false, 8U, std::nullopt, { }, { }
         },
         Halt { },
     };

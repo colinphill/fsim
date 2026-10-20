@@ -151,8 +151,11 @@ class Resolver final {
   [[nodiscard]] std::optional<Expression> class_specialization_parameter_value(
       const SystemVerilogClassDeclaration& owner, std::string_view spelling,
       std::string_view member) const;
+  // `parsed` carries the selection's actuals as the parser read them; it
+  // applies when its spelling is `spelling`.
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
-      std::string_view spelling, const Scope& scope) const;
+      std::string_view spelling, const Scope& scope,
+      const Type* parsed = nullptr) const;
   [[nodiscard]] static Type specialize_selected_type(
       Type type, const ClassSelection& selection);
   [[nodiscard]] Type canonicalize_selected_type(
@@ -166,8 +169,10 @@ class Resolver final {
       const Type& receiver, const Scope& scope) const;
   [[nodiscard]] std::optional<Type> resolve_class_scoped_type(
       const Type& type, const Scope& scope) const;
-  void normalize_selection_actuals(
-      ClassSelection& selection, const Scope& scope) const;
+  // `parsed`: the actuals are as the parser read them, so built-in type
+  // keywords still need their predefined types.
+  void normalize_selection_actuals(ClassSelection& selection,
+      const Scope& scope, bool parsed = false) const;
   // A class typedef as specialization `selection` sees it (8.25.1).
   [[nodiscard]] Type specialize_class_alias(const Type& type,
       const Scope& scope, ClassSelection selection,

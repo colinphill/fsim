@@ -1002,6 +1002,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     return range.kind == vh::RangeKind::array_index;
                 });
             std::size_t dimensions { };
+            const vh::TypeDefinition* object_array { };
             auto type_id = result.type_mark.target;
             std::unordered_set<std::uint32_t> visited;
             while (type_id.valid() && visited.insert(type_id.value()).second) {
@@ -1013,6 +1014,7 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     break;
                 }
                 if (definition->form == vh::TypeForm::array) {
+                    object_array = &*definition;
                     if (std::ranges::all_of(definition->array_dimensions,
                             [](const vh::ArrayDimension& dimension) {
                                 return !dimension.constraint;
@@ -1075,6 +1077,161 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 }
                 result.unconstrained = false;
                 result.executable_width.reset();
+            }
+            // A record object's unconstrained array elements take their
+            // index ranges from the object's elements (`obj.e'range`).
+            const auto find_definition = [&](const semantic::TypeId id)
+                -> const vh::TypeDefinition* {
+                const auto found = std::ranges::find_if(hir_.types(),
+                    [&](const vh::TypeDefinition& candidate) {
+                        return candidate.id == id;
+                    });
+                return found == hir_.types().end() ? nullptr : &*found;
+            };
+            // The index ranges an unconstrained array subtype leaves open
+            // (none for a constrained or non-array subtype).
+            const auto open_dimensions
+                = [&](const vh::SubtypeIndication& subtype) -> std::size_t {
+                const vh::TypeDefinition* array { };
+                std::unordered_set<std::uint32_t> element_visited;
+                for (auto id = subtype.type_mark.target;
+                    id.valid() && element_visited.insert(id.value()).second;) {
+                    const auto* definition = find_definition(id);
+                    if (definition == nullptr
+                        || std::ranges::any_of(definition->base.constraints,
+                            [](const vh::RangeConstraint& range) {
+                                return range.kind
+                                    == vh::RangeKind::array_index;
+                            })) {
+                        break;
+                    }
+                    if (definition->form == vh::TypeForm::array) {
+                        array = definition;
+                        break;
+                    }
+                    id = definition->base.type_mark.target;
+                }
+                if (std::ranges::any_of(subtype.constraints,
+                        [](const vh::RangeConstraint& range) {
+                            return range.kind == vh::RangeKind::array_index;
+                        })) {
+                    return 0U;
+                }
+                if (array != nullptr) {
+                    return std::ranges::all_of(array->array_dimensions,
+                               [](const vh::ArrayDimension& dimension) {
+                                   return !dimension.constraint;
+                               })
+                        ? array->array_dimensions.size()
+                        : 0U;
+                }
+                return subtype.unconstrained
+                        && subtype.builtin_type
+                            != vh::BuiltinTypeIdentity::none
+                    ? 1U
+                    : 0U;
+            };
+            const auto range_constraints = [&](const frontend::Expression& prefix,
+                const std::size_t count) {
+                std::vector<vh::RangeConstraint> ranges;
+                for (std::size_t dimension = 1U; dimension <= count;
+                    ++dimension) {
+                    std::vector<frontend::Expression> operands { prefix };
+                    if (count > 1U) {
+                        operands.push_back(frontend::Expression {
+                            frontend::ExpressionKind::IntegerLiteral,
+                            std::to_string(dimension), { }, prefix.span });
+                    }
+                    frontend::DiscreteRangeExpression range {
+                        frontend::Expression {
+                            frontend::ExpressionKind::Call, "'left",
+                            operands, prefix.span },
+                        frontend::Expression {
+                            frontend::ExpressionKind::Call, "'right",
+                            operands, prefix.span },
+                        prefix.span,
+                        true,
+                    };
+                    range.direction_from_bounds = true;
+                    ranges.push_back(expression_range(
+                        range, vh::RangeKind::array_index, scope, parent));
+                }
+                return ranges;
+            };
+            // An array object's unconstrained elements take their index
+            // ranges from `obj'element` (IEEE 1076-2008 5.3.2.2).
+            if (object_array != nullptr && object_array->element_subtype
+                && std::ranges::none_of(result.element_constraints,
+                    [](const vh::ElementConstraint& existing) {
+                        return existing.path.size() == 1U
+                            && existing.path.front().empty();
+                    })) {
+                if (const auto count
+                    = open_dimensions(*object_array->element_subtype);
+                    count != 0U) {
+                    const auto span = type.named_type_span.source_name.empty()
+                        ? fallback
+                        : type.named_type_span;
+                    const frontend::Expression element {
+                        frontend::ExpressionKind::Call, "'element",
+                        { frontend::Expression {
+                            frontend::ExpressionKind::Identifier,
+                            type.vhdl_object_subtype, { }, span } },
+                        span };
+                    vh::ElementConstraint constraint;
+                    constraint.path.emplace_back();
+                    constraint.constraints = range_constraints(element, count);
+                    result.element_constraints.push_back(
+                        std::move(constraint));
+                }
+            }
+            const vh::TypeDefinition* record { };
+            visited.clear();
+            for (auto id = result.type_mark.target;
+                id.valid() && visited.insert(id.value()).second;) {
+                const auto* definition = find_definition(id);
+                if (definition == nullptr) {
+                    break;
+                }
+                if (definition->form == vh::TypeForm::record) {
+                    record = definition;
+                    break;
+                }
+                id = definition->base.type_mark.target;
+            }
+            if (record != nullptr) {
+                const auto span = type.named_type_span.source_name.empty()
+                    ? fallback
+                    : type.named_type_span;
+                for (const auto& element : record->record_elements) {
+                    if (std::ranges::any_of(element.subtype.constraints,
+                            [](const vh::RangeConstraint& range) {
+                                return range.kind
+                                    == vh::RangeKind::array_index;
+                            })
+                        || std::ranges::any_of(result.element_constraints,
+                            [&](const vh::ElementConstraint& existing) {
+                                return !existing.path.empty()
+                                    && existing.path.front() == element.name;
+                            })) {
+                        continue;
+                    }
+                    const auto element_dimensions
+                        = open_dimensions(element.subtype);
+                    if (element_dimensions == 0U) {
+                        continue;
+                    }
+                    const frontend::Expression prefix {
+                        frontend::ExpressionKind::Identifier,
+                        type.vhdl_object_subtype + "." + element.name, { },
+                        span };
+                    vh::ElementConstraint constraint;
+                    constraint.path.push_back(element.name);
+                    constraint.constraints
+                        = range_constraints(prefix, element_dimensions);
+                    result.element_constraints.push_back(
+                        std::move(constraint));
+                }
             }
             return result;
         }

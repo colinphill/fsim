@@ -2139,9 +2139,14 @@ private:
             result && dot != std::string::npos) {
             const auto declaration = specialization_.find_declaration(
                 *selected);
+            // A package-qualified prefix (`pkg::P.m`) names P.
+            auto prefix = std::string_view { record.text }.substr(0U, dot);
+            if (const auto scope = prefix.rfind("::");
+                scope != std::string_view::npos) {
+                prefix.remove_prefix(scope + 2U);
+            }
             if (declaration && declaration->systemverilog != nullptr
-                && declaration->systemverilog->name
-                    == std::string_view { record.text }.substr(0U, dot)) {
+                && declaration->systemverilog->name == prefix) {
                 const auto slice = declaration->systemverilog->type
                     ? packed_member_slice(*declaration->systemverilog->type,
                           std::string_view { record.text }.substr(dot + 1U))
@@ -4372,6 +4377,17 @@ private:
         return result;
     }
 
+    /// A type of this specialization or, for a typedef from another unit
+    /// such as a package, of the design.
+    [[nodiscard]] std::optional<semantic::CompiledTypeView>
+    find_design_type(const semantic::TypeId type) const
+    {
+        if (auto found = specialization_.find_type(type)) {
+            return found;
+        }
+        return specialization_.design().find_type(type);
+    }
+
     /// The members of a packed structure or union type, or null.
     [[nodiscard]] const std::vector<semantic::sv::PackedMember>*
     packed_members(semantic::sv::TypeReference type) const
@@ -4383,7 +4399,7 @@ private:
             type = *effective;
         }
         auto definition = type.target.target.valid()
-            ? specialization_.find_type(type.target.target)
+            ? find_design_type(type.target.target)
             : std::nullopt;
         // A typedef of a package type (`typedef pkg::S t;`) names that type
         // in the typedef's own scope.
@@ -4404,7 +4420,7 @@ private:
                 base = *effective;
             }
             definition = base.target.target.valid()
-                ? specialization_.find_type(base.target.target)
+                ? find_design_type(base.target.target)
                 : std::nullopt;
         }
         if (!definition || definition->systemverilog == nullptr
@@ -4583,9 +4599,31 @@ private:
                           type, specialization_.scope())) {
                 type = *effective;
             }
-            const auto definition = type.target.target.valid()
-                ? specialization_.find_type(type.target.target)
+            auto definition = type.target.target.valid()
+                ? find_design_type(type.target.target)
                 : std::nullopt;
+            // A typedef of a package type (`typedef pkg::S t;`) names that
+            // type in the typedef's own scope.
+            for (std::size_t depth { }; depth < 8U && definition
+                 && definition->systemverilog != nullptr
+                 && definition->systemverilog->form
+                     == semantic::sv::TypeForm::alias;
+                 ++depth) {
+                const auto alias = specialization_.find_declaration(
+                    definition->systemverilog->declaration);
+                auto base = definition->systemverilog->base;
+                if (const auto effective
+                    = semantic::CompiledDesignResolver { specialization_ }
+                          .effective_systemverilog_type(base,
+                              alias && alias->systemverilog != nullptr
+                                  ? alias->systemverilog->scope
+                                  : specialization_.scope())) {
+                    base = *effective;
+                }
+                definition = base.target.target.valid()
+                    ? find_design_type(base.target.target)
+                    : std::nullopt;
+            }
             if (!definition || definition->systemverilog == nullptr
                 || (definition->systemverilog->form
                         != semantic::sv::TypeForm::packed_structure

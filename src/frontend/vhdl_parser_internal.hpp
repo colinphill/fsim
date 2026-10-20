@@ -335,6 +335,22 @@ private:
 
   std::optional<Statement> parse_vhdl_procedure_call();
 
+  // A formal designator naming a subelement of a formal (`p(1)`, `p.f`,
+  // `p(1)(2)`, `p(1, 2)`, `p(3 downto 0)`) followed by `=>` associates that
+  // subelement individually (IEEE 1076-2008 6.5.7.1).
+  struct VhdlIndividualPart {
+    std::vector<Expression> path;
+    Expression value;
+  };
+  [[nodiscard]] bool vhdl_individual_formal_ahead() const;
+  // Parses `formal selectors => actual`; returns the formal's simple name.
+  std::string parse_vhdl_individual_part(VhdlIndividualPart &part);
+  // The named aggregate actual that the individual associations of one
+  // formal make together.
+  [[nodiscard]] Expression build_vhdl_individual_aggregate(
+      const std::vector<VhdlIndividualPart> &parts,
+      const SourceSpan &span) const;
+
   Statement parse_vhdl_assertion(const Token &start);
 
   void validate_opening_loop_label(const std::string_view label,

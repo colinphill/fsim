@@ -1007,11 +1007,34 @@ std::optional<Type> Resolver::packed_member_type(
   const auto found = std::ranges::find(
       structure->packed_members, member, &PackedMember::name);
   if (found == structure->packed_members.end()) return std::nullopt;
+  // A nested structure member keeps its own members, so a further member
+  // can be selected (`c.s.inner.id`, IEEE 1800-2017 7.2).
+  if (found->nested_types.size() == 1U
+      && !found->nested_types.front().packed_members.empty()) {
+    return found->nested_types.front();
+  }
   Type result;
   result.domain = found->domain;
   result.spelling = found->spelling;
   result.packed_range = found->packed_range;
   result.is_signed = found->is_signed;
+  // A member of a named structure type (`inner_t inner`).
+  if (!found->spelling.empty()
+      && std::ranges::all_of(found->spelling, [](const char character) {
+           return std::isalnum(static_cast<unsigned char>(character)) != 0
+               || character == '_' || character == '$';
+         })) {
+    std::size_t matches{};
+    for (const auto& [key, alias] : class_aliases_) {
+      if (key.ends_with("::" + found->spelling)
+          && !alias->packed_members.empty()) {
+        ++matches;
+      }
+    }
+    if (matches == 1U) {
+      result.named_type = found->spelling;
+    }
+  }
   return result;
 }
 [[nodiscard]] std::string_view Resolver::trim_type_spelling(
@@ -1349,7 +1372,8 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   return substitute(substitute, selected->default_value, 0U);
 }
 [[nodiscard]] std::optional<ClassSelection> Resolver::resolve_class_selection(
-    const std::string_view spelling, const Scope& scope) const {
+    const std::string_view spelling, const Scope& scope,
+    const Type* parsed) const {
   const auto declarations = resolve_class_name(spelling, scope);
   if (declarations.size() != 1U) return std::nullopt;
   ClassSelection selection{
@@ -1401,44 +1425,53 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     const auto identity = class_identity(*alias_type);
     if (identity && *identity == selection.declaration->canonical_identity) {
       selection.type = std::move(*alias_type);
-      for (std::size_t index = 0;
-           index < selection.type.systemverilog_class_parameter_actuals.size();
-           ++index) {
-        auto& actual =
-            selection.type.systemverilog_class_parameter_actuals[index];
-        std::size_t formal_index = index;
-        if (actual.name) {
-          const auto formal = std::ranges::find(
-              selection.declaration->parameters,
-              *actual.name,
-              &ParameterDeclaration::name);
-          if (formal == selection.declaration->parameters.end()) {
-            continue;
-          }
-          formal_index = static_cast<std::size_t>(std::distance(
-              selection.declaration->parameters.begin(), formal));
-        }
-        if (formal_index >= selection.declaration->parameters.size()) {
-          continue;
-        }
-        const auto& formal = selection.declaration->parameters[formal_index];
-        if (formal.kind == ParameterKind::Type
-            && !actual.type_actual
-            && actual.value.valid()) {
-          actual.type_actual = std::make_shared<Type>(
-              selected_type_actual(actual.value.text, scope));
-        } else if (
-            actual.type_actual
-            && actual.type_actual->systemverilog_class_declaration.empty()
-            && !actual.type_actual->named_type.empty()) {
-          *actual.type_actual = selected_type_actual(
-              actual.type_actual->named_type, scope);
-        }
-      }
+      normalize_selection_actuals(selection, scope);
       return selection;
     }
   }
 
+  // Actuals the parser kept as expressions and types bind as such, also
+  // when they name enclosing parameters (`R#(logic [W-1:0])`, `R#(P#(T))`,
+  // IEEE 1800-2017 8.25.1).
+  if (parsed != nullptr && parsed->spelling == spelling
+      && !parsed->systemverilog_class_parameter_actuals.empty()) {
+    std::size_t next_positional{};
+    for (const auto& actual : parsed->systemverilog_class_parameter_actuals) {
+      std::size_t formal_index = next_positional++;
+      if (actual.name) {
+        const auto formal = std::ranges::find(
+            selection.declaration->parameters, *actual.name,
+            &ParameterDeclaration::name);
+        if (formal == selection.declaration->parameters.end()) continue;
+        formal_index = static_cast<std::size_t>(std::distance(
+            selection.declaration->parameters.begin(), formal));
+      }
+      if (formal_index >= selection.declaration->parameters.size()) continue;
+      const auto& formal = selection.declaration->parameters[formal_index];
+      SystemVerilogClassTypeActual retained = actual;
+      if (retained.type_actual
+          && retained.type_actual->packed_range_expression) {
+        // The range binds in the specialization that evaluates it
+        // (`R#(logic [W-1:0])` in a class body, IEEE 1800-2017 8.25).
+        auto unfolded = *retained.type_actual;
+        unfolded.packed_range.reset();
+        retained.type_actual = std::make_shared<Type>(std::move(unfolded));
+      }
+      if (formal.kind != ParameterKind::Type && retained.type_actual) {
+        // A name read as a type is a value here.
+        retained.value = Expression{ExpressionKind::Identifier,
+            retained.type_actual->named_type, {}, actual.span};
+        retained.type_actual.reset();
+      }
+      if (formal.kind != ParameterKind::Type && !retained.value.valid()) {
+        return std::nullopt;
+      }
+      selection.type.systemverilog_class_parameter_actuals.push_back(
+          std::move(retained));
+    }
+    normalize_selection_actuals(selection, scope, true);
+    return selection;
+  }
   const auto actuals = selected_parameter_actuals(spelling);
   for (std::size_t index = 0;
        index < actuals.size()
@@ -1471,10 +1504,20 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       retained.type_actual = std::make_shared<Type>(
           selected_type_actual(source, scope));
     } else {
+      // An actual naming a parameter (`C#(W)` in a class body) stays a
+      // name, so it binds in the specialization that evaluates it
+      // (IEEE 1800-2017 8.25).
+      const bool name_actual = !source.empty()
+          && (std::isalpha(static_cast<unsigned char>(source.front())) != 0
+              || source.front() == '_')
+          && std::ranges::all_of(source, [](const char character) {
+               return std::isalnum(static_cast<unsigned char>(character)) != 0
+                   || character == '_' || character == '$';
+             });
       retained.value = Expression{
-          source.starts_with('"')
-              ? ExpressionKind::StringLiteral
-              : ExpressionKind::IntegerLiteral,
+          source.starts_with('"') ? ExpressionKind::StringLiteral
+              : name_actual       ? ExpressionKind::Identifier
+                                  : ExpressionKind::IntegerLiteral,
           std::string{source}, {}, formal.span};
     }
     retained.span = formal.span;
@@ -1660,7 +1703,7 @@ void Resolver::resolve_class_scoped_members(
 // A type parameter's actual named as an expression (`C#(D)`) denotes the
 // named type (IEEE 1800-2017 8.25).
 void Resolver::normalize_selection_actuals(
-    ClassSelection& selection, const Scope& scope) const {
+    ClassSelection& selection, const Scope& scope, const bool parsed) const {
   std::size_t next_positional{};
   for (auto& actual : selection.type.systemverilog_class_parameter_actuals) {
     std::size_t formal_index = next_positional++;
@@ -1678,11 +1721,42 @@ void Resolver::normalize_selection_actuals(
         && actual.value.valid()) {
       actual.type_actual = std::make_shared<Type>(
           selected_type_actual(actual.value.text, scope));
-    } else if (actual.type_actual
-        && actual.type_actual->systemverilog_class_declaration.empty()
-        && !actual.type_actual->named_type.empty()) {
-      *actual.type_actual = selected_type_actual(
-          actual.type_actual->named_type, scope);
+    } else if (actual.type_actual) {
+      auto resolved = *actual.type_actual;
+      if (resolved.systemverilog_class_declaration.empty()
+          && !resolved.named_type.empty()) {
+        resolved = selected_type_actual(actual.type_actual->named_type, scope);
+      } else if (parsed && resolved.named_type.empty()
+          && !resolved.packed_range_expression
+          && resolved.systemverilog_packed_dimensions.empty()
+          && !resolved.systemverilog_container
+          && (resolved.spelling == "string"
+              || (systemverilog_integral_type_descriptor(resolved.spelling)
+                  && resolved.is_signed
+                      == systemverilog_integral_type_descriptor(
+                             resolved.spelling)->default_signed
+                  && (!resolved.packed_range
+                      || systemverilog_integral_type_descriptor(
+                             resolved.spelling)->fixed_width)))) {
+        // A built-in type keyword names its predefined type.
+        resolved = selected_type_actual(resolved.spelling, scope);
+      }
+      // A class specialization as the actual (`R#(P#(T))`) keeps its own
+      // actuals, normalized in turn (IEEE 1800-2017 8.25).
+      if (const auto* nested = resolved.systemverilog_class_declaration
+                  .empty()
+              ? nullptr
+              : find_class(resolved.systemverilog_class_declaration);
+          nested != nullptr
+          && !actual.type_actual->systemverilog_class_parameter_actuals
+                  .empty()) {
+        ClassSelection inner{nested, std::move(resolved)};
+        inner.type.systemverilog_class_parameter_actuals =
+            actual.type_actual->systemverilog_class_parameter_actuals;
+        normalize_selection_actuals(inner, scope, parsed);
+        resolved = std::move(inner.type);
+      }
+      actual.type_actual = std::make_shared<Type>(std::move(resolved));
     }
   }
 }
@@ -2652,7 +2726,8 @@ void Resolver::retain_result_type(
             + match.owner->canonical_identity + "::" + member;
         // The selected specialization owns the storage (IEEE 1800-2017
         // 8.25.1).
-        if (const auto selection = resolve_class_selection(owner_name, scope);
+        if (const auto selection = resolve_class_selection(owner_name, scope,
+                expression.systemverilog_class_selection.get());
             selection
             && !selection->type.systemverilog_class_parameter_actuals.empty()) {
           expression.systemverilog_class_owner =

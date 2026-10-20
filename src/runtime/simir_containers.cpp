@@ -2531,6 +2531,17 @@ void Interpreter::Impl::write_container_object_element_value(
         const auto offset = signal.width()
             - (selected + 1U) * target.type.element_width;
         commit_slice(alias->signal, value, offset, origin);
+        // Forced bits keep their forced value (IEEE 1800-2017 10.6.2): the
+        // stored element mirrors the bridge's effective value.
+        if (forced_values[alias->signal]) {
+            auto& stored = get_container_object(id).initial_value;
+            stored.elements[selected] = extract_value(
+                get_signal(alias->signal).initial_value, offset,
+                stored.type.element_width);
+            if (stable_signal_backing) {
+                synchronize_container_value_references_from_object(id);
+            }
+        }
         if (materialized_revision == signal_revision) {
             container_materialized_revisions[id]
                 = signal_value_revisions.at(alias->signal);
@@ -3320,7 +3331,38 @@ void Interpreter::Impl::execute_container(
         && operation.nonblocking) {
         origin.phase = SchedulerPhase::update;
     }
-    if (operation.nonblocking) {
+    if (!operation.levels.empty()) {
+        // A nested element: capture every level's index now and rebuild the
+        // object value when the write is published.
+        std::vector<PackedLogic4> level_indices;
+        level_indices.reserve(operation.levels.size());
+        for (const auto& level : operation.levels) {
+            level_indices.push_back(get_register(process, level.index));
+        }
+        auto write = [this, object = operation.object,
+                levels = operation.levels,
+                level_indices = std::move(level_indices), index,
+                signed_index = operation.signed_index,
+                linear_index = operation.linear_index, value, base,
+                dynamic_part = operation.dynamic_part,
+                members = operation.members, driver = process.id,
+                instruction = process.pc, origin](Scheduler&) {
+                write_container_object_path_value(object, levels,
+                    level_indices, index, signed_index, linear_index,
+                    members, value, base ? &*base : nullptr,
+                    dynamic_part ? &*dynamic_part : nullptr, driver,
+                    instruction, origin);
+            };
+        if (!operation.nonblocking) {
+            write(scheduler);
+        } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_systemverilog(
+                origin.phase, process.id, std::move(write));
+        } else {
+            scheduler.schedule(
+                SchedulerPhase::update, process.id, std::move(write));
+        }
+    } else if (operation.nonblocking) {
         const auto publish = [this, object = operation.object, index,
                 signed_index = operation.signed_index,
                 linear_index = operation.linear_index, value,

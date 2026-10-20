@@ -461,9 +461,34 @@ void VhdlParser::parse_vhdl_generic_associations(
     }
     return keyword("range", lookahead, true);
   };
+  // Individually associated subelements of one generic become one named
+  // aggregate actual (IEEE 1076-2008 6.5.7.1, 6.5.7.2).
+  std::vector<std::pair<std::string, std::vector<VhdlIndividualPart>>>
+      individual;
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto association_start = current();
     ParameterOverride actual;
+    if (vhdl_individual_formal_ahead()) {
+      saw_named = true;
+      VhdlIndividualPart part;
+      auto formal = parse_vhdl_individual_part(part);
+      auto group = std::ranges::find(individual, formal,
+          &std::pair<std::string, std::vector<VhdlIndividualPart>>::first);
+      if (group == individual.end()) {
+        individual.emplace_back(formal, std::vector<VhdlIndividualPart> { });
+        group = std::prev(individual.end());
+        actual.name = std::move(formal);
+        actual.value = Expression { ExpressionKind::Aggregate, "", { },
+            association_start.span };
+        actual.span = cover(association_start.span, previous().span);
+        associations.push_back(std::move(actual));
+      }
+      group->second.push_back(std::move(part));
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+      continue;
+    }
     // A generic function formal may be an operator symbol (`"=" => eq`,
     // IEEE 1076-2008 6.5.7.2).
     if ((at(TokenKind::Identifier) || at(TokenKind::StringLiteral))
@@ -504,6 +529,18 @@ void VhdlParser::parse_vhdl_generic_associations(
     associations.push_back(std::move(actual));
     if (!match(TokenKind::Comma)) {
       break;
+    }
+  }
+  for (const auto& [formal, parts] : individual) {
+    const auto target = std::ranges::find_if(associations,
+        [&](const ParameterOverride& candidate) {
+          return candidate.name == formal
+              && candidate.value.kind == ExpressionKind::Aggregate
+              && candidate.value.operands.empty();
+        });
+    if (target != associations.end()) {
+      target->value = build_vhdl_individual_aggregate(
+          parts, target->value.span);
     }
   }
 }

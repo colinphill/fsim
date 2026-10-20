@@ -1439,7 +1439,7 @@ void Simulation::Impl::setup_execution(
                     continue;
                 }
                 if (write->nonblocking || write->dynamic_part
-                    || write->transaction_signal
+                    || write->transaction_signal || !write->levels.empty()
                     || write->index >= process.register_count
                     || !is_logic4_register(write->source)
                     || fixed_packed_container_object_type(write->object)

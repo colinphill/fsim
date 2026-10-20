@@ -1029,6 +1029,7 @@ src/elaboration/lowerer_hir_value_path.cpp
 src/elaboration/lowerer_hir_vhdl_access.cpp
 src/elaboration/lowerer_hir_vhdl_fixed.cpp
 src/elaboration/lowerer_hir_vhdl_float.cpp
+src/elaboration/lowerer_hir_vhdl_shape.cpp
 src/elaboration/lowerer_hir_vhdl_shaped.cpp
 src/elaboration/lowerer_hir_vhdl_special.cpp
 src/elaboration/lowerer_hir_vhdl_vital.cpp

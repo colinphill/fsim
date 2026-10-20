@@ -1735,6 +1735,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         && key_equal(source.keys[at], sought)) {
                         selected = &source.nested_elements[at];
                     }
+                } else if (source.type.fixed && element_read->linear_index) {
+                    const auto at = container_index(
+                        element_read->index, input0_aval, input0_bval,
+                        false, "container index");
+                    if (at < source.nested_elements.size()) {
+                        selected = &source.nested_elements[at];
+                    }
                 } else if (!read_index_misses(
                                source, input0_aval, input0_bval, true)) {
                     const auto at = source.type.fixed
@@ -1823,6 +1830,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                             runtime::simir::default_container_value(
                                 *element_type));
                     }
+                } else if (target.type.fixed && element_write->linear_index) {
+                    // A position in a multidimensional fixed array; one
+                    // outside it writes nothing (IEEE 1800-2017 7.4.6).
+                    at = container_index(
+                        element_write->index, input0_aval, input0_bval,
+                        false, "container index");
+                    skipped = at >= target.nested_elements.size();
                 } else if (target.type.fixed
                     && read_index_misses(
                         target, input0_aval, input0_bval, true)) {

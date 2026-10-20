@@ -213,6 +213,13 @@ void Interpreter::Impl::execute_container(
                 && key_equal(source.keys[at], key)) {
                 selected = &source.nested_elements[at];
             }
+        } else if (source.type.fixed && operation.linear_index) {
+            const auto at = known_index(
+                process.id, process.pc, index, true,
+                "multidimensional linear index");
+            if (at < source.nested_elements.size()) {
+                selected = &source.nested_elements[at];
+            }
         } else if (source.type.fixed
                 ? fixed_index_in_range(source.type, index)
                 : std::ranges::none_of(index.bval_words(),
@@ -245,84 +252,104 @@ void Interpreter::Impl::execute_container(
     ++process.pc;
 }
 
+ContainerValue* Interpreter::Impl::select_container_element_for_write(
+    ContainerValue& target,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const ProcessId process,
+    const InstructionIndex instruction)
+{
+    if (aggregate_box(target.type)) {
+        return &target;
+    }
+    const auto element_type = nested_element_container_type(target.type);
+    if (!element_type) {
+        container_error(
+            process, instruction, "nested element write profile mismatch");
+    }
+    std::size_t at { };
+    if (target.type.associative) {
+        const auto key = associative_key(
+            process, instruction, target.type, index);
+        at = lower_key(target, key);
+        if (at >= target.keys.size() || !key_equal(target.keys[at], key)) {
+            if (target.keys.size()
+                >= maximum_container_elements(target.type)) {
+                container_error(
+                    process, instruction,
+                    "associative nested container exceeds its owning-storage budget");
+            }
+            target.keys.insert(iterator_at(target.keys, at), key);
+            target.nested_elements.insert(
+                iterator_at(target.nested_elements, at),
+                default_container_value(*element_type));
+        }
+    } else if (target.type.fixed && linear_index) {
+        at = known_index(
+            process, instruction, index, true,
+            "multidimensional linear index");
+        if (at >= target.nested_elements.size()) {
+            container_error(
+                process, instruction,
+                "multidimensional linear index is out of range");
+        }
+    } else if (target.type.fixed
+        && !fixed_index_in_range(target.type, index)) {
+        // A write through an unknown or out-of-range index writes nothing
+        // (IEEE 1800-2017 7.4.6).
+        return nullptr;
+    } else if (!target.type.fixed) {
+        // A queue or dynamic array ignores a write through an unknown,
+        // negative or out-of-range index; a queue write one past its last
+        // element appends (IEEE 1800-2017 7.4.6, 7.10.1).
+        std::optional<std::int64_t> requested;
+        if (signed_index) {
+            requested = index.known_signed_value();
+        } else if (const auto value = index.known_unsigned_value();
+                   value
+                   && *value <= static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int64_t>::max())) {
+            requested = static_cast<std::int64_t>(*value);
+        }
+        const auto size = target.nested_elements.size();
+        if (!requested || *requested < 0
+            || static_cast<std::uint64_t>(*requested) > size
+            || (static_cast<std::uint64_t>(*requested) == size
+                && (!target.type.queue
+                    || (target.type.maximum_elements
+                        && size >= *target.type.maximum_elements)))) {
+            return nullptr;
+        }
+        if (static_cast<std::uint64_t>(*requested) == size) {
+            target.nested_elements.push_back(
+                default_container_value(*element_type));
+        }
+        at = static_cast<std::size_t>(*requested);
+    } else {
+        at = fixed_offset(process, instruction, target.type, index);
+        if (at >= target.nested_elements.size()) {
+            container_error(
+                process, instruction,
+                "nested container index is out of range");
+        }
+    }
+    return &target.nested_elements[at];
+}
+
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerElementWrite& operation)
 {
     auto& target = get_container_register(process, operation.target);
     const auto& source = read_container_register(process, operation.source);
-    ContainerValue* selected = nullptr;
-    if (aggregate_box(target.type)) {
-        selected = &target;
-    } else {
-        const auto element_type = nested_element_container_type(target.type);
-        if (!element_type) {
-            container_error(
-                process.id, process.pc,
-                "nested element write profile mismatch");
-        }
-        const auto& index = get_register(process, operation.index);
-        std::size_t at { };
-        if (target.type.associative) {
-            const auto key = associative_key(
-                process.id, process.pc, target.type, index);
-            at = lower_key(target, key);
-            if (at >= target.keys.size()
-                || !key_equal(target.keys[at], key)) {
-                if (target.keys.size()
-                    >= maximum_container_elements(target.type)) {
-                    container_error(
-                        process.id, process.pc,
-                        "associative nested container exceeds its owning-storage budget");
-                }
-                target.keys.insert(iterator_at(target.keys, at), key);
-                target.nested_elements.insert(
-                    iterator_at(target.nested_elements, at),
-                    default_container_value(*element_type));
-            }
-        } else if (target.type.fixed
-            && !fixed_index_in_range(target.type, index)) {
-            // A write through an unknown or out-of-range index writes
-            // nothing (IEEE 1800-2017 7.4.6).
-            ++process.pc;
-            return;
-        } else if (!target.type.fixed) {
-            // A queue or dynamic array ignores a write through an unknown,
-            // negative or out-of-range index; a queue write one past its
-            // last element appends (IEEE 1800-2017 7.4.6, 7.10.1).
-            std::optional<std::int64_t> requested;
-            if (operation.signed_index) {
-                requested = index.known_signed_value();
-            } else if (const auto value = index.known_unsigned_value();
-                       value
-                       && *value <= static_cast<std::uint64_t>(
-                              std::numeric_limits<std::int64_t>::max())) {
-                requested = static_cast<std::int64_t>(*value);
-            }
-            const auto size = target.nested_elements.size();
-            if (!requested || *requested < 0
-                || static_cast<std::uint64_t>(*requested) > size
-                || (static_cast<std::uint64_t>(*requested) == size
-                    && (!target.type.queue
-                        || (target.type.maximum_elements
-                            && size >= *target.type.maximum_elements)))) {
-                ++process.pc;
-                return;
-            }
-            if (static_cast<std::uint64_t>(*requested) == size) {
-                target.nested_elements.push_back(
-                    default_container_value(*element_type));
-            }
-            at = static_cast<std::size_t>(*requested);
-        } else {
-            at = fixed_offset(process.id, process.pc, target.type, index);
-            if (at >= target.nested_elements.size()) {
-                container_error(
-                    process.id, process.pc,
-                    "nested container index is out of range");
-            }
-        }
-        selected = &target.nested_elements[at];
+    auto* selected = select_container_element_for_write(
+        target, get_register(process, operation.index),
+        operation.signed_index, operation.linear_index, process.id,
+        process.pc);
+    if (selected == nullptr) {
+        ++process.pc;
+        return;
     }
     selected = follow_container_members(
         process.id, process.pc, selected, operation.members);
@@ -438,6 +465,134 @@ void Interpreter::Impl::write_container_object_member_value(
     auto replacement = read_container_object_value(id);
     apply_container_aggregate_member(replacement, index, signed_index,
         linear_index, members, value, process, instruction);
+    write_container_object_value(id, replacement, process, origin);
+}
+
+void Interpreter::Impl::write_container_object_path_value(
+    const ContainerObjectId id,
+    const std::span<const ContainerPathLevel> levels,
+    const std::span<const PackedLogic4> level_indices,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const std::span<const std::uint32_t> members,
+    const PackedLogic4& value,
+    const PackedLogic4* base,
+    const DynamicPartIndex* selection,
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const SignalChangeOrigin origin)
+{
+    if (levels.size() != level_indices.size()
+        || (selection != nullptr && base == nullptr)) {
+        container_error(
+            process, instruction, "container path write is malformed");
+    }
+    auto replacement = read_container_object_value(id);
+    ContainerValue* selected = &replacement;
+    for (std::size_t level { }; level < levels.size(); ++level) {
+        selected = select_container_element_for_write(*selected,
+            level_indices[level], levels[level].signed_index,
+            levels[level].linear_index, process, instruction);
+        if (selected == nullptr) {
+            return;
+        }
+        selected = follow_container_members(
+            process, instruction, selected, levels[level].members);
+    }
+    if (!members.empty()) {
+        apply_container_aggregate_member(*selected, index, signed_index,
+            linear_index, members, value, process, instruction);
+        write_container_object_value(id, replacement, process, origin);
+        return;
+    }
+    auto& target = *selected;
+    if (target.type.element_kind != ContainerElementKind::Packed
+        && target.type.element_kind != ContainerElementKind::Scalar) {
+        container_error(
+            process, instruction, "container element write type mismatch");
+    }
+    std::size_t at { };
+    if (target.type.associative) {
+        if (target.type.string_indices) {
+            container_error(
+                process, instruction,
+                "container path writes require an integral key");
+        }
+        const auto key = associative_key(
+            process, instruction, target.type, index);
+        at = lower_key(target, key);
+        if (at >= target.keys.size() || !key_equal(target.keys[at], key)) {
+            if (target.elements.size()
+                >= maximum_container_elements(target.type)) {
+                container_error(
+                    process, instruction,
+                    "associative array exceeds the per-container "
+                    "owning-storage budget");
+            }
+            target.keys.insert(iterator_at(target.keys, at), key);
+            target.elements.insert(iterator_at(target.elements, at),
+                initial_packed_element(target.type));
+        }
+    } else if (target.type.fixed) {
+        // An unknown or out-of-range index writes nothing (7.4.6).
+        if (!linear_index && !fixed_index_in_range(target.type, index)) {
+            return;
+        }
+        at = linear_index
+            ? known_index(
+                  process, instruction, index, true,
+                  "multidimensional linear index")
+            : fixed_offset(process, instruction, target.type, index);
+        if (at >= target.elements.size()) {
+            container_error(
+                process, instruction, "container index is out of range");
+        }
+    } else {
+        // A queue or dynamic array ignores a write through an unknown,
+        // negative or out-of-range index; a queue write one past its last
+        // element appends (IEEE 1800-2017 7.4.6, 7.10.1).
+        std::optional<std::int64_t> requested;
+        if (signed_index) {
+            requested = index.known_signed_value();
+        } else if (const auto known = index.known_unsigned_value();
+                   known
+                   && *known <= static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int64_t>::max())) {
+            requested = static_cast<std::int64_t>(*known);
+        }
+        const auto size = target.elements.size();
+        if (!requested || *requested < 0
+            || static_cast<std::uint64_t>(*requested) > size
+            || (static_cast<std::uint64_t>(*requested) == size
+                && (!target.type.queue
+                    || (target.type.maximum_elements
+                        && size >= *target.type.maximum_elements)))) {
+            return;
+        }
+        if (static_cast<std::uint64_t>(*requested) == size) {
+            target.elements.push_back(initial_packed_element(target.type));
+        }
+        at = static_cast<std::size_t>(*requested);
+    }
+    auto element = value;
+    if (selection != nullptr) {
+        try {
+            element = dynamic_part_insert_value(
+                target.elements[at], value, *base, *selection);
+        } catch (const std::invalid_argument&) {
+            container_error(
+                process, instruction,
+                "invalid dynamic part-select container element write");
+        }
+    }
+    if (element.width() != target.type.element_width
+        || element.is_logic9()
+        || (target.type.two_state && has_unknown(element))) {
+        container_error(
+            process, instruction, "container element write type mismatch");
+    }
+    target.elements[at] = std::move(element);
     write_container_object_value(id, replacement, process, origin);
 }
 

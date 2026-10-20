@@ -4518,7 +4518,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 if (null_array) {
                     continue;
                 }
-                if (!effective || !effective->executable_width
+                // An element left unconstrained has no layout of its own
+                // (5.3.3); its nominal width is not its size.
+                const bool open_element = effective
+                    && effective->unconstrained
+                    && std::ranges::none_of(effective->constraints,
+                        [](const vhdl::RangeConstraint& range) {
+                            return range.kind == vhdl::RangeKind::array_index;
+                        });
+                if (!effective || open_element || !effective->executable_width
                     || *effective->executable_width == 0U
                     || width > std::numeric_limits<std::uint64_t>::max()
                             - *effective->executable_width) {
@@ -4526,9 +4534,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     break;
                 }
                 width += *effective->executable_width;
+                // A record is a composite of its elements' bits, never a
+                // string value itself, even when its only element is one.
+                const auto element_domain
+                    = effective->domain == vhdl::ValueDomain::string
+                    ? vhdl::ValueDomain::bit2
+                    : effective->domain;
                 if (domain == vhdl::ValueDomain::unknown) {
-                    domain = effective->domain;
-                } else if (domain != effective->domain) {
+                    domain = element_domain;
+                } else if (domain != element_domain) {
                     const auto rank = [](const vhdl::ValueDomain value) {
                         return value == vhdl::ValueDomain::logic9 ? 3
                             : value == vhdl::ValueDomain::logic4 ? 2
@@ -4538,7 +4552,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                             : 1;
                     };
                     const auto merged = std::max(
-                        rank(domain), rank(effective->domain));
+                        rank(domain), rank(element_domain));
                     domain = merged == 3 ? vhdl::ValueDomain::logic9
                         : merged == 2 ? vhdl::ValueDomain::logic4
                         : merged == 1 ? vhdl::ValueDomain::bit2

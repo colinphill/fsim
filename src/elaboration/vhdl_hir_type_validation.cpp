@@ -2662,6 +2662,14 @@ private:
             && declaration.initializer) {
             return;
         }
+        // So do a VHDL-2019 signal and variable (6.4.2.3, 6.4.2.4).
+        if ((declaration.form == semantic::vhdl::DeclarationForm::signal
+                || declaration.form
+                    == semantic::vhdl::DeclarationForm::variable)
+            && declaration.initializer
+            && architecture_.standard == "2019") {
+            return;
+        }
         const auto unconstrained = object.dimensions.empty()
             || std::ranges::any_of(
                 object.dimensions,
@@ -11212,6 +11220,14 @@ private:
                         != semantic::vhdl::DeclarationForm::signal)) {
                 return false;
             }
+            // A VHDL-2019 signal or variable with an initial value has that
+            // value's bounds (IEEE 1076-2019 6.4.2.3, 6.4.2.4).
+            if (object->vhdl->initializer
+                && object->vhdl->form
+                    != semantic::vhdl::DeclarationForm::constant
+                && architecture_.standard == "2019") {
+                return true;
+            }
             auto current = *object->vhdl->subtype;
             for (std::size_t depth { }; depth < 16U; ++depth) {
                 const auto constraints = std::ranges::count_if(
@@ -12977,6 +12993,35 @@ private:
         // A linkage port is read or updated only as an actual of a port
         // association; its signal attributes are checked separately (IEEE
         // 1076-1993 4.3.2).
+        // The selections in the prefix of an array attribute name only its
+        // subtype; their indices are not evaluated (IEEE 1076-2008 16.2.3),
+        // so an index outside the range there is no error.
+        std::unordered_set<std::uint32_t> attribute_prefix_selections;
+        for (const auto& stored : specialization_.design().vhdl_hir.expressions()) {
+            if (stored.kind != semantic::vhdl::ExpressionKind::call
+                || stored.operands.empty()
+                || !(semantic::vhdl::is_scalar_bound_attribute(stored.text)
+                    || stored.text == "'length" || stored.text == "'range"
+                    || stored.text == "'reverse_range"
+                    || stored.text == "'ascending"
+                    || stored.text == "'element"
+                    || stored.text == "'subtype")) {
+                continue;
+            }
+            auto prefix_id = stored.operands.front();
+            for (auto prefix = specialization_.find_expression(prefix_id);
+                prefix && prefix->vhdl != nullptr
+                && (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::index
+                    || (prefix->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::call
+                        && prefix->vhdl->text.starts_with("@vhdl-member:")))
+                && !prefix->vhdl->operands.empty()
+                && attribute_prefix_selections.insert(prefix_id.value())
+                       .second;
+                prefix = specialization_.find_expression(prefix_id)) {
+                prefix_id = prefix->vhdl->operands.front();
+            }
+        }
         std::unordered_set<std::uint32_t> linkage_uses;
         for (const auto& instance : specialization_.design().vhdl_hir.instances()) {
             for (const auto& association : instance.port_map) {
@@ -13068,6 +13113,8 @@ private:
                 || expression.kind
                     == semantic::vhdl::ExpressionKind::slice) {
                 if (!generate_condition_expressions.contains(
+                        expression.id.value())
+                    && !attribute_prefix_selections.contains(
                         expression.id.value())
                     && !inactive_generate_scope(expression.scope)) {
                     validate_selection(expression.id);

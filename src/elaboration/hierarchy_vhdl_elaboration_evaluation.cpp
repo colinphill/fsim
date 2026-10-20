@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <exception>
+#include <stdexcept>
 #include <iostream>
 #include <string_view>
 
@@ -100,4 +101,106 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     }
 }
 
+std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression,
+    const std::size_t width,
+    const std::string& path,
+    SignalMap& signals,
+    ReadOnlySignalSet& read_only_signals,
+    ContainerMap& container_objects,
+    const frontend::ValueDomain domain)
+{
+    if (const auto folded
+        = specialization.evaluate_integral_expression(expression)) {
+        return folded;
+    }
+    const bool boolean = domain == frontend::ValueDomain::Boolean;
+    if (width == 0U || width > 64U) {
+        return std::nullopt;
+    }
+    // The value runs into a scratch INTEGER signal that is removed again;
+    // nothing else refers to it.
+    const auto scratch = static_cast<SignalId>(design_.signals_.size());
+    SignalInfo info;
+    info.id = scratch;
+    info.name = path + ".@elaboration-integer";
+    info.width = width;
+    info.type_name = boolean ? "boolean" : "integer";
+    info.source_domain = domain;
+    info.is_signed = !boolean;
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(runtime::simir::Signal {
+        path + ".@elaboration-integer",
+        PackedLogic4 { width },
+        ResolutionKind::none,
+        value_kind(domain),
+        std::nullopt,
+        { StrengthRank::pull, StrengthRank::pull },
+        std::nullopt,
+        std::nullopt,
+        frontend::SystemVerilogScalarKind::None,
+    });
+    const auto value = evaluate_compiled_vhdl_value(specialization,
+        expression, scratch, std::nullopt, path, signals, read_only_signals,
+        container_objects);
+    if (design_.signals_.size() != scratch + 1U
+        || design_.signal_info_.size() != scratch + 1U) {
+        throw std::logic_error(
+            "VHDL elaboration-time evaluation created signals");
+    }
+    design_.signals_.pop_back();
+    design_.signal_info_.pop_back();
+    if (!value || value->width() != width) {
+        return std::nullopt;
+    }
+    const auto bits = boolean ? value->known_unsigned_value()
+                              : std::optional<std::uint64_t> { };
+    const auto result = !boolean ? value->known_signed_value()
+        : bits ? std::optional { static_cast<std::int64_t>(*bits) }
+               : std::nullopt;
+    if (!result) {
+        trace_evaluation("run", "integer value has unknown bits");
+    }
+    return result;
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+HierarchyBuilder::compiled_vhdl_initialized_object_subtype(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId initializer,
+    const semantic::vhdl::SubtypeIndication& declared,
+    const semantic::ScopeId scope,
+    SignalMap& signals,
+    ReadOnlySignalSet& read_only_signals,
+    ContainerMap& container_objects)
+{
+    const auto diagnostics_before = diagnostics_.size();
+    StringMap strings;
+    ReadOnlyStringSet read_only_strings;
+    ReadOnlyContainerSet read_only_containers;
+    Lowerer lowerer {
+        design_,
+        signals,
+        read_only_signals,
+        strings,
+        read_only_strings,
+        container_objects,
+        read_only_containers,
+        diagnostics_,
+    };
+    lowerer.set_specialized_hir_unit(&specialization);
+    lowerer.set_package_constant_signal(
+        [&](const semantic::DeclarationId constant) {
+            return compiled_vhdl_package_constant_signal(
+                specialization, constant);
+        });
+    auto subtype = lowerer.hir_vhdl_initialized_object_subtype(
+        initializer, declared, scope);
+    diagnostics_.resize(diagnostics_before);
+    if (!subtype) {
+        trace_evaluation("shape", "initial value has no known shape");
+    }
+    return subtype;
+}
 } // namespace fsim::elaboration

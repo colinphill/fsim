@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include <algorithm>
+#include <array>
 #include <bit>
+#include <cctype>
 #include <charconv>
+#include <cmath>
 #include <limits>
 
 namespace fsim::elaboration {
@@ -192,6 +196,190 @@ const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
             && owner->systemverilog->kind == semantic::sv::UnitKind::package
         ? owner->systemverilog
         : fallback;
+}
+
+std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->operands.empty()
+        || expression->vhdl->operands.size() > 2U
+        || expression->vhdl->text.starts_with('@')
+        || expression->vhdl->text.starts_with('\'')) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->vhdl;
+    std::string name = source.text;
+    if (const auto separator = name.find_last_of('.');
+        separator != std::string::npos) {
+        name.erase(0U, separator + 1U);
+    }
+    std::ranges::transform(name, name.begin(), [](const char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    static constexpr std::array<std::string_view, 20> unary {
+        "ceil", "floor", "sqrt", "exp", "log", "log2", "log10", "sin", "cos",
+        "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
+        "arcsinh", "arccosh", "arctanh", "cbrt"
+    };
+    if (std::ranges::find(unary, name) == unary.end()
+        || (source.operands.size() == 2U && name != "log"
+            && name != "arctan")) {
+        return std::nullopt;
+    }
+    // A user function of that name hides nothing in IEEE.MATH_REAL unless
+    // it is that package's own declaration.
+    if (source.referenced_name) {
+        std::vector<semantic::DeclarationId> candidates
+            = source.referenced_name->overloads;
+        if (source.referenced_name->selected) {
+            candidates.push_back(*source.referenced_name->selected);
+        }
+        for (const auto candidate : candidates) {
+            const auto declaration
+                = specialized_hir_unit_->find_declaration(candidate);
+            if (!declaration || declaration->vhdl == nullptr
+                || !specialized_hir_unit_->design().vhdl_scope_in_package(
+                    declaration->vhdl->scope, "ieee", "math_real")) {
+                return std::nullopt;
+            }
+        }
+    }
+    if (!std::ranges::all_of(source.operands,
+            [&](const semantic::ExpressionId operand) {
+                return hir_vhdl_expression_is_real(operand);
+            })) {
+        return std::nullopt;
+    }
+    return name;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
+    const semantic::ExpressionId expression_id)
+{
+    const auto name = hir_vhdl_math_real_function(expression_id);
+    if (!name) {
+        return std::nullopt;
+    }
+    using Function = runtime::SystemVerilogMathFunction;
+    using ScalarKind = frontend::SystemVerilogScalarKind;
+    const auto& operands
+        = specialized_hir_unit_->find_expression(expression_id)->vhdl->operands;
+    std::vector<RegisterId> values;
+    for (const auto operand : operands) {
+        const auto value = lower_hir_expression(operand, 64U, ScalarKind::Real);
+        if (!value) {
+            return std::nullopt;
+        }
+        values.push_back(*value);
+    }
+    const auto math = [&](const Function function, const RegisterId first,
+                          const std::optional<RegisterId> second
+                          = std::nullopt) {
+        const auto destination = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogMath {
+            function, destination, first, second.value_or(0U), 64U,
+            second ? 64U : 0U, ScalarKind::Real,
+            second ? ScalarKind::Real : ScalarKind::None, false, false });
+        return destination;
+    };
+    const auto binary = [&](const runtime::SystemVerilogScalarBinaryOperator
+                                operation,
+                            const RegisterId left, const RegisterId right,
+                            const ScalarKind result = ScalarKind::Real) {
+        const auto destination = allocate_register(
+            result == ScalarKind::Real ? 64U : 1U,
+            result == ScalarKind::Real ? frontend::ValueDomain::Bit2
+                                       : frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            operation, destination, left, right, ScalarKind::Real,
+            ScalarKind::Real, result });
+        return destination;
+    };
+    const auto real = [&](const double value) {
+        return load_constant(
+            unsigned_value(std::bit_cast<std::uint64_t>(value), 64U),
+            frontend::ValueDomain::Bit2);
+    };
+    static constexpr std::array<std::pair<std::string_view, Function>, 17>
+        direct {
+            std::pair { std::string_view { "ceil" }, Function::Ceil },
+            std::pair { std::string_view { "floor" }, Function::Floor },
+            std::pair { std::string_view { "sqrt" }, Function::Sqrt },
+            std::pair { std::string_view { "exp" }, Function::Exp },
+            std::pair { std::string_view { "log" }, Function::Ln },
+            std::pair { std::string_view { "log10" }, Function::Log10 },
+            std::pair { std::string_view { "sin" }, Function::Sin },
+            std::pair { std::string_view { "cos" }, Function::Cos },
+            std::pair { std::string_view { "tan" }, Function::Tan },
+            std::pair { std::string_view { "arcsin" }, Function::Asin },
+            std::pair { std::string_view { "arccos" }, Function::Acos },
+            std::pair { std::string_view { "arctan" }, Function::Atan },
+            std::pair { std::string_view { "sinh" }, Function::Sinh },
+            std::pair { std::string_view { "cosh" }, Function::Cosh },
+            std::pair { std::string_view { "tanh" }, Function::Tanh },
+            std::pair { std::string_view { "arcsinh" }, Function::Asinh },
+            std::pair { std::string_view { "arccosh" }, Function::Acosh },
+        };
+    using Operator = runtime::SystemVerilogScalarBinaryOperator;
+    if (*name == "arctanh") {
+        return math(Function::Atanh, values.front());
+    }
+    // ARCTAN(Y, X) is the angle of the point (X, Y).
+    if (*name == "arctan" && values.size() == 2U) {
+        return math(Function::Atan2, values[0], values[1]);
+    }
+    // LOG(X, BASE) is LOG(X) / LOG(BASE).
+    if (*name == "log" && values.size() == 2U) {
+        return binary(Operator::Divide, math(Function::Ln, values[0]),
+            math(Function::Ln, values[1]));
+    }
+    // CBRT(X) is X ** (1/3), keeping the sign of X.
+    if (*name == "cbrt") {
+        const auto zero = real(0.0);
+        const auto negative = binary(
+            Operator::Less, values.front(), zero, ScalarKind::None);
+        const auto negated = binary(Operator::Subtract, zero, values.front());
+        const auto magnitude = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConditionalSelect {
+            magnitude, negative, negated, values.front() });
+        const auto root = math(Function::Pow, magnitude, real(1.0 / 3.0));
+        const auto negative_root = binary(Operator::Subtract, zero, root);
+        const auto result = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConditionalSelect {
+            result, negative, negative_root, root });
+        return result;
+    }
+    // LOG2(X) is LN(X) / LN(2), exact at the powers of two.
+    if (*name == "log2") {
+        const auto ratio = binary(Operator::Divide,
+            math(Function::Ln, values.front()), real(std::log(2.0)));
+        const auto nearest = math(
+            Function::Floor, binary(Operator::Add, ratio, real(0.5)));
+        const auto exact = binary(Operator::Equal,
+            math(Function::Pow, real(2.0), nearest), values.front(),
+            ScalarKind::None);
+        const auto result = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConditionalSelect {
+            result, exact, nearest, ratio });
+        return result;
+    }
+    const auto function = std::ranges::find(
+        direct, *name, &std::pair<std::string_view, Function>::first);
+    if (function == direct.end()) {
+        return std::nullopt;
+    }
+    return math(function->second, values.front());
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(

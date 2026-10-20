@@ -347,8 +347,20 @@ VhdlParser::parse_vhdl_component_declaration(
   result.declaration_order = declaration_order;
   (void)match_keyword("is", true);
 
+  bool generics_seen = false;
+  bool ports_seen = false;
   while (!at_end() && !keyword("end", 0, true)) {
     if (match_keyword("generic", true)) {
+      // The local generic clause precedes the local port clause (IEEE
+      // 1076-2008 6.8).
+      if (ports_seen) {
+        error(previous(), "FSIM-VHDL-SEM-117",
+            "a generic clause must precede the port clause");
+      } else if (generics_seen) {
+        error(previous(), "FSIM-VHDL-PARSE-302",
+            "a component declaration has at most one generic clause");
+      }
+      generics_seen = true;
       DesignUnit profile;
       profile.kind = UnitKind::VhdlEntity;
       profile.language = Language::Vhdl2008;
@@ -369,6 +381,11 @@ VhdlParser::parse_vhdl_component_declaration(
         result.generics.push_back(generic);
       }
     } else if (match_keyword("port", true)) {
+      if (ports_seen) {
+        error(previous(), "FSIM-VHDL-PARSE-302",
+            "a component declaration has at most one port clause");
+      }
+      ports_seen = true;
       parse_vhdl_component_ports(result, previous());
     } else {
       const auto unsupported = advance();

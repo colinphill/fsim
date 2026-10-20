@@ -1012,7 +1012,7 @@ namespace {
             process.operations = {
                 WriteContainerObjectElement {
                     object, 0U, 0U, true, false, false,
-                    std::nullopt, std::nullopt, { } },
+                    std::nullopt, std::nullopt, { }, { } },
                 Halt { },
             };
             require_invalid_argument(

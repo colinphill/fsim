@@ -460,6 +460,19 @@ inline auto archive_fields(DynamicPartIndex& selection)
 
 /// Update one packed/scalar element of a container object without
 /// materializing the complete object in a temporary container register.
+/// A container level a write descends through before its element: the
+/// nested element `index` selects, then `members` within it (an array of
+/// arrays `m[i][j]`, or `s.q[i]`, IEEE 1800-2017 7.4.5).
+struct ContainerPathLevel {
+    RegisterId index { };
+    bool signed_index { true };
+    bool linear_index { };
+    std::vector<std::uint32_t> members;
+
+    friend bool operator==(
+        const ContainerPathLevel&, const ContainerPathLevel&) = default;
+};
+
 struct WriteContainerObjectElement {
     ContainerObjectId object { };
     RegisterId index { };
@@ -476,6 +489,10 @@ struct WriteContainerObjectElement {
     /// A member path inside an unpacked aggregate element: the element's
     /// member is updated when the write is published.
     std::vector<std::uint32_t> members;
+    /// The container levels between the object and the element's
+    /// container; empty when the object holds the element directly. Their
+    /// indices are captured with the element's.
+    std::vector<ContainerPathLevel> levels;
 };
 
 struct ContainerStringRead {
@@ -517,6 +534,9 @@ struct ContainerElementRead {
     RegisterId index { };
     bool signed_index { true };
     std::vector<std::uint32_t> members;
+    // `index` is the element's position in a multidimensional fixed array,
+    // leftmost element first, as for ContainerRead.
+    bool linear_index { };
 };
 
 /// Replace the value selected as for ContainerElementRead.
@@ -526,6 +546,9 @@ struct ContainerElementWrite {
     ContainerRegisterId source { };
     bool signed_index { true };
     std::vector<std::uint32_t> members;
+    // `index` is the element's position in a multidimensional fixed array,
+    // leftmost element first, as for ContainerWrite.
+    bool linear_index { };
 };
 
 /// Bit-stream packing and unpacking through a queue of single-bit elements

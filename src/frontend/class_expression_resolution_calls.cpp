@@ -974,7 +974,8 @@ void Resolver::retain_task_profile(
   const auto selected = expression.text.rfind("::");
   if (selected != std::string::npos) {
     const auto owner = resolve_class_selection(
-        expression.text.substr(0, selected), scope);
+        expression.text.substr(0, selected), scope,
+        expression.systemverilog_class_selection.get());
     if (owner) {
       const auto name = expression.text.substr(selected + 2U);
       const auto match = select_method(

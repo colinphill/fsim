@@ -2874,6 +2874,10 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                     fail(member_index, pc,
                         "static kernel container is not kernel-owned");
                 }
+                if (!op.levels.empty()) {
+                    fail(member_index, pc,
+                        "static kernel cannot write nested container elements");
+                }
                 Pending pending;
                 pending.kind = op.dynamic_part ? PendingKind::element_part
                                                : PendingKind::element;

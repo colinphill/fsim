@@ -963,6 +963,9 @@ void validate_prefix_operation(
                     (void)operation.object;
                     record_use(operation.index, index);
                     record_use(operation.source, index);
+                    for (const auto& level : operation.levels) {
+                        record_use(level.index, index);
+                    }
                     if (operation.dynamic_part) {
                         if (const auto error
                             = validate_dynamic_part_index_metadata(

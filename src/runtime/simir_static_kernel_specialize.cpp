@@ -256,6 +256,9 @@ void map_reads(Operation& operation, F&& f)
             if (op.dynamic_part) {
                 op.dynamic_part->base = f(op.dynamic_part->base);
             }
+            for (auto& level : op.levels) {
+                level.index = f(level.index);
+            }
         }
     }, operation);
 }

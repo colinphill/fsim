@@ -1487,6 +1487,15 @@ using namespace runtime::simir;
             record_unsupported(
                 index, "bit-stream container operations are interpreter-only");
         }
+        // An element write through nested container levels runs in the
+        // interpreter.
+        if (const auto* write = fsim::runtime::simir::operation_get_if<
+                runtime::simir::WriteContainerObjectElement>(
+                &process.operations[index]);
+            write != nullptr && !write->levels.empty()) {
+            record_unsupported(index,
+                "nested container element writes are interpreter-only");
+        }
         // VHDL arrays with run-time bounds run in the interpreter.
         if (fsim::runtime::simir::operation_get_if<
                 runtime::simir::VhdlShaped>(

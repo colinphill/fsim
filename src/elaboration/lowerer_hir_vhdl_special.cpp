@@ -736,6 +736,14 @@ std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_lazy_global_constant(
             *declaration->initializer)) {
         return std::nullopt;
     }
+    // Neither does a constant elaborated into a read-only signal (IEEE
+    // 1076-2008 14.4.2.1).
+    if (const auto binding = hir_runtime_binding(
+            declaration_id, hir_process_scope_, false);
+        binding && binding->signal && !binding->signal_selection
+        && read_only_signals_.contains(*binding->signal)) {
+        return std::nullopt;
+    }
     // Only declarations outside processes and subprograms; their locals
     // are initialized where they are declared.
     if (!hir_vhdl_design_level_declaration(*declaration)) {

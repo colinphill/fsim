@@ -7,6 +7,9 @@
 // structures uses one mechanism.
 #include "lowerer_internal.hpp"
 
+#include <cstdlib>
+#include <iostream>
+
 namespace fsim::elaboration {
 namespace {
 
@@ -89,13 +92,25 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_class_subarray_element(
 std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     const semantic::ExpressionId expression_id) const
 {
-    if (specialized_hir_unit_ == nullptr) {
+    // FSIM_SV_VALUE_PATH_TRACE names the line that rejected a path.
+    const auto rejected = [&](const int line)
+        -> std::optional<HirSvValuePath> {
+        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+            std::cerr << "[fsim-sv-value-path] expression="
+                      << expression_id.value() << " rejected line=" << line
+                      << '\n';
+        }
         return std::nullopt;
+    };
+    if (specialized_hir_unit_ == nullptr) {
+        return rejected(__LINE__);
     }
     // Collect the syntactic steps from the expression, innermost last.
     struct PendingStep {
         std::optional<std::string_view> member;
         std::vector<semantic::ExpressionId> indices;
+        // A part-select of a packed leaf (`m[i][3:0]`).
+        std::optional<semantic::ExpressionId> select { };
     };
     std::vector<PendingStep> pending;
     std::optional<HirContainerObjectBinding> root;
@@ -106,7 +121,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         const auto expression = specialized_hir_unit_->find_expression(
             current);
         if (!expression || expression->systemverilog == nullptr) {
-            return std::nullopt;
+            return rejected(__LINE__);
         }
         const auto& source = *expression->systemverilog;
         constexpr auto select_prefix = std::string_view { "@sv-select:" };
@@ -117,6 +132,12 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                 std::string_view { source.text }.substr(
                     select_prefix.size()),
                 { } });
+            current = source.operands.front();
+            continue;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::slice
+            && source.operands.size() == 3U) {
+            pending.push_back(PendingStep { std::nullopt, { }, current });
             current = source.operands.front();
             continue;
         }
@@ -155,7 +176,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                     : property_prefix.size());
             auto type = hir_class_value_container_type(identity);
             if (!type) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             if (element) {
                 pending.push_back(PendingStep { std::nullopt,
@@ -165,7 +186,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                 .resolve_systemverilog_class_property(identity, false)
                 .unique();
             if (property == nullptr) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             class_root = HirSvValuePath::ClassRoot {
                 source.operands.front(), std::move(identity) };
@@ -219,7 +240,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                 // `s.a.b` names an unpacked structure and its members.
                 const auto names = dotted_names(source.text);
                 if (names.size() < 2U) {
-                    return std::nullopt;
+                    return rejected(__LINE__);
                 }
                 const semantic::CompiledDeclarationPredicate object
                     = [](const semantic::CompiledDeclarationView& candidate) {
@@ -237,7 +258,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                               object, false)
                           .unique();
                 if (!declaration) {
-                    return std::nullopt;
+                    return rejected(__LINE__);
                 }
                 root = hir_container_object_binding_for_declaration(
                     *declaration);
@@ -248,16 +269,55 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             }
             break;
         }
-        return std::nullopt;
+        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+            std::cerr << "[fsim-sv-value-path] unknown step kind="
+                      << static_cast<int>(source.kind) << " text="
+                      << source.text << " operands="
+                      << source.operands.size() << '\n';
+        }
+        return rejected(__LINE__);
     }
     if (!root || root->type == nullptr || pending.empty()) {
-        return std::nullopt;
+        return rejected(__LINE__);
     }
     std::ranges::reverse(pending);
+    // An index of an unpacked slice (`m[1][2:4][2]`) selects the array's
+    // own element: a slice keeps the indices of the array it selects from
+    // (IEEE 1800-2017 7.4.5, 7.4.6).
+    for (std::size_t ordinal { }; ordinal + 1U < pending.size();) {
+        auto& slice_step = pending[ordinal];
+        const auto& index_step = pending[ordinal + 1U];
+        if (!slice_step.select || index_step.member || index_step.select
+            || index_step.indices.size() != 1U) {
+            ++ordinal;
+            continue;
+        }
+        const auto selection
+            = specialized_hir_unit_->find_expression(*slice_step.select);
+        const auto& slice = *selection->systemverilog;
+        const auto first = hir_constant_integer(slice.operands[1]);
+        const auto second = hir_constant_integer(slice.operands[2]);
+        const auto index = hir_constant_integer(index_step.indices.front());
+        if (first && second && index) {
+            const auto low = slice.text == "+:" ? *first
+                : slice.text == "-:"            ? *first - (*second - 1)
+                                                : std::min(*first, *second);
+            const auto high = slice.text == "+:" ? *first + (*second - 1)
+                : slice.text == "-:"             ? *first
+                                                 : std::max(*first, *second);
+            if (*index < low || *index > high) {
+                return rejected(__LINE__);
+            }
+        }
+        slice_step = PendingStep { std::nullopt, index_step.indices };
+        pending.erase(pending.begin()
+            + static_cast<std::ptrdiff_t>(ordinal + 1U));
+    }
     // `obj.v[i][j]` of a multidimensional array arrives as nested selects:
     // one step takes an index per fixed dimension.
     while (pending.size() >= 2U && root->type->fixed
         && !pending[0].member && !pending[1].member
+        && !pending[0].select && !pending[1].select
         && pending[0].indices.size()
             < std::max<std::size_t>(root->type->dimensions.size(), 1U)) {
         auto& indices = pending[0].indices;
@@ -271,18 +331,187 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     path.class_root = std::move(class_root);
     path.class_root_type = std::move(class_root_type);
     path.type = *root->type;
+    const auto root_scope = [&]() {
+        const auto root_expression
+            = specialized_hir_unit_->find_expression(expression_id);
+        return root_expression->systemverilog->scope;
+    };
+    // The packed dimensions a select of the leaf has not yet consumed.
+    std::optional<std::vector<HirPackedRange>> leaf_dimensions;
+    bool part_selected { };
     for (std::size_t ordinal { }; ordinal < pending.size(); ++ordinal) {
         const auto& step = pending[ordinal];
+        if (step.select && !path.leaf) {
+            // A constant slice of a one-dimensional fixed array ends the
+            // path (IEEE 1800-2017 7.4.6). A slice of a declared array of
+            // packed elements is that array's packed slice instead.
+            if (ordinal + 1U != pending.size() || !path.type.fixed
+                || path.type.dimensions.size() != 1U
+                || aggregate_value_type(path.type)
+                || (path.steps.empty()
+                    && (path.type.element_kind == ContainerElementKind::Packed
+                        || path.type.element_kind
+                            == ContainerElementKind::Scalar))) {
+                return rejected(__LINE__);
+            }
+            const auto selection
+                = specialized_hir_unit_->find_expression(*step.select);
+            const auto& slice = *selection->systemverilog;
+            const auto first = hir_constant_integer(slice.operands[1]);
+            const auto second = hir_constant_integer(slice.operands[2]);
+            if (!first || !second) {
+                return rejected(__LINE__);
+            }
+            const auto declared_left = static_cast<std::int64_t>(
+                path.type.dimensions.front().first);
+            const auto declared_right = static_cast<std::int64_t>(
+                path.type.dimensions.front().second);
+            const bool descending = declared_left >= declared_right;
+            std::int64_t left { *first };
+            std::int64_t right { *second };
+            if (slice.text == "+:" || slice.text == "-:") {
+                if (*second <= 0) {
+                    return rejected(__LINE__);
+                }
+                const auto low = slice.text == "+:"
+                    ? *first : *first - (*second - 1);
+                const auto high = low + (*second - 1);
+                left = descending ? high : low;
+                right = descending ? low : high;
+            } else if (left != right && (left > right) != descending) {
+                return rejected(__LINE__);
+            }
+            if (std::min(left, right) < std::min(declared_left, declared_right)
+                || std::max(left, right)
+                    > std::max(declared_left, declared_right)) {
+                return rejected(__LINE__);
+            }
+            HirSvValuePath::Slice selected { left, right, path.type };
+            path.type.dimensions.front() = {
+                static_cast<std::int32_t>(left),
+                static_cast<std::int32_t>(right) };
+            path.type.index_left = static_cast<std::int32_t>(left);
+            path.type.index_right = static_cast<std::int32_t>(right);
+            path.slice = std::move(selected);
+            continue;
+        }
+        if (path.leaf && !step.member) {
+            // A bit-, element- or part-select of the packed leaf (IEEE
+            // 1800-2017 7.4.5, 11.5.1).
+            if (path.string_leaf || part_selected
+                || (path.packed_tail && !leaf_dimensions)
+                || (!step.select && step.indices.size() != 1U)) {
+                return rejected(__LINE__);
+            }
+            if (!leaf_dimensions) {
+                leaf_dimensions
+                    = hir_sv_value_path_leaf_shape(path, root_scope());
+                if (leaf_dimensions->empty()) {
+                    return rejected(__LINE__);
+                }
+                path.packed_tail = HirSvValuePath::PackedTail {
+                    0U, path.type.element_width, false, { } };
+            }
+            if (leaf_dimensions->empty()) {
+                return rejected(__LINE__);
+            }
+            auto& tail = *path.packed_tail;
+            const auto dimension = leaf_dimensions->front();
+            leaf_dimensions->erase(leaf_dimensions->begin());
+            const auto elements
+                = index_distance(dimension.left, dimension.right) + 1U;
+            if (elements == 0U || tail.width % elements != 0U) {
+                return rejected(__LINE__);
+            }
+            const auto stride = tail.width / elements;
+            // The element's distance from the dimension's right bound.
+            const auto ordinal_of = [&](const std::int64_t index)
+                -> std::optional<std::size_t> {
+                if (index < std::min(dimension.left, dimension.right)
+                    || index > std::max(dimension.left, dimension.right)) {
+                    return std::nullopt;
+                }
+                return static_cast<std::size_t>(dimension.descending
+                        ? index - dimension.right
+                        : dimension.right - index);
+            };
+            if (!step.select) {
+                if (const auto constant
+                    = hir_constant_integer(step.indices.front())) {
+                    const auto position = ordinal_of(*constant);
+                    if (!position) {
+                        return rejected(__LINE__);
+                    }
+                    tail.offset += *position * stride;
+                } else {
+                    tail.selects.push_back(HirSvValuePath::PackedSelect {
+                        HirSvValuePath::PackedSelect::Kind::index,
+                        step.indices.front(), dimension, stride, 1U });
+                }
+                tail.width = stride;
+                continue;
+            }
+            const auto selection
+                = specialized_hir_unit_->find_expression(*step.select);
+            const auto& slice = *selection->systemverilog;
+            part_selected = true;
+            leaf_dimensions->clear();
+            const auto first = hir_constant_integer(slice.operands[1]);
+            const auto second = hir_constant_integer(slice.operands[2]);
+            if (slice.text != "+:" && slice.text != "-:") {
+                // `[a:b]` has constant bounds (IEEE 1800-2017 11.5.1).
+                const auto left = first ? ordinal_of(*first) : std::nullopt;
+                const auto right = second ? ordinal_of(*second)
+                                          : std::nullopt;
+                if (!left || !right
+                    || (dimension.left != dimension.right
+                        && (*first > *second) != dimension.descending)) {
+                    return rejected(__LINE__);
+                }
+                tail.offset += std::min(*left, *right) * stride;
+                tail.width = (std::max(*left, *right)
+                                 - std::min(*left, *right) + 1U)
+                    * stride;
+                continue;
+            }
+            if (!second || *second <= 0
+                || static_cast<std::uint64_t>(*second) > elements) {
+                return rejected(__LINE__);
+            }
+            const auto count = static_cast<std::size_t>(*second);
+            // `b +: n` spans b upward and `b -: n` downward; the lowest
+            // bit is at the element nearest the right bound.
+            const bool up = slice.text == "+:";
+            if (first) {
+                const auto low = up == dimension.descending
+                    ? *first
+                    : up ? *first + (*second - 1) : *first - (*second - 1);
+                const auto high = up ? *first + (*second - 1)
+                                     : *first - (*second - 1);
+                const auto low_position = ordinal_of(low);
+                if (!low_position || !ordinal_of(high)) {
+                    return rejected(__LINE__);
+                }
+                tail.offset += *low_position * stride;
+            } else {
+                tail.selects.push_back(HirSvValuePath::PackedSelect {
+                    up ? HirSvValuePath::PackedSelect::Kind::up
+                       : HirSvValuePath::PackedSelect::Kind::down,
+                    slice.operands[1], dimension, stride, count });
+            }
+            tail.width = count * stride;
+            continue;
+        }
         if (path.leaf) {
             // Members of a packed structure leaf select its bits (7.2.1).
             if (path.string_leaf || path.packed_tail || !step.member
                 || path.type.element_nominal_type.empty()) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             std::string members;
             for (auto rest = ordinal; rest < pending.size(); ++rest) {
                 if (!pending[rest].member) {
-                    return std::nullopt;
+                    return rejected(__LINE__);
                 }
                 if (!members.empty()) {
                     members += '.';
@@ -292,7 +521,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             const auto nominal = semantic::sv::nominal_identity_type(
                 path.type.element_nominal_type);
             if (!nominal) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             semantic::sv::TypeReference reference;
             reference.target.target = *nominal;
@@ -304,36 +533,39 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             if (!selected || selected->width == 0U
                 || selected->offset + selected->width
                     > path.type.element_width) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             path.packed_tail = HirSvValuePath::PackedTail {
-                selected->offset, selected->width, selected->signed_value };
+                selected->offset, selected->width, selected->signed_value,
+                { } };
             break;
         }
         if (step.member) {
             if (!aggregate_value_type(path.type)
                 || path.type.member_names.size()
                     != path.type.element_types.size()) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             const auto found = std::ranges::find(
                 path.type.member_names, *step.member);
             if (found == path.type.member_names.end()) {
-                return std::nullopt;
+                return rejected(__LINE__);
             }
             const auto member = static_cast<std::uint32_t>(
                 std::distance(path.type.member_names.begin(), found));
             HirSvValuePath::Step selected;
             selected.member = member;
+            selected.member_name = std::string { *step.member };
             path.steps.push_back(std::move(selected));
             auto member_type = path.type.element_types[member];
             // A string member is a string value, not a container.
             path.string_leaf = member_type.element_kind
                     == ContainerElementKind::String
                 && singleton_member_type(member_type);
-            // A queue or associative-array member is a container (7.10).
-            path.leaf = (packed_leaf_type(member_type) && !member_type.queue
-                            && !member_type.associative)
+            // An array, queue or associative-array member is a container
+            // (7.4, 7.10); a packed or scalar member holds one value.
+            path.leaf = (packed_leaf_type(member_type) && member_type.fixed
+                            && singleton_member_type(member_type))
                 || path.string_leaf;
             path.type = std::move(member_type);
             continue;
@@ -342,16 +574,26 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         // associative array: one index per fixed dimension.
         // A structure value is not indexed.
         if (aggregate_value_type(path.type)) {
-            return std::nullopt;
+            return rejected(__LINE__);
         }
         const auto expected = path.type.fixed
             ? std::max<std::size_t>(path.type.dimensions.size(), 1U)
             : std::size_t { 1U };
-        if (step.indices.size() != expected) {
-            return std::nullopt;
+        // `s.m[i][j]` of a multidimensional member arrives as nested
+        // selects: the step takes an index per fixed dimension.
+        auto indices = step.indices;
+        while (indices.size() < expected && ordinal + 1U < pending.size()
+            && !pending[ordinal + 1U].member
+            && !pending[ordinal + 1U].select) {
+            ++ordinal;
+            indices.insert(indices.end(), pending[ordinal].indices.begin(),
+                pending[ordinal].indices.end());
+        }
+        if (indices.size() != expected) {
+            return rejected(__LINE__);
         }
         HirSvValuePath::Step selected;
-        selected.indices = step.indices;
+        selected.indices = std::move(indices);
         selected.container = path.type;
         path.steps.push_back(std::move(selected));
         if (path.type.element_kind == ContainerElementKind::Packed
@@ -368,11 +610,120 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         }
         const auto element = nested_element_container_type(path.type);
         if (!element) {
-            return std::nullopt;
+            return rejected(__LINE__);
         }
         path.type = *element;
     }
     return path;
+}
+
+std::optional<Lowerer::HirPlaceSignalImage> Lowerer::hir_place_signal_image(
+    const semantic::ExpressionId expression) const
+{
+    const auto path = hir_sv_value_path(expression);
+    if (!path || path->class_root || path->string_leaf || path->slice
+        || path->root.type == nullptr || path->root.local
+        || path->steps.empty()
+        || (path->packed_tail && !path->packed_tail->selects.empty())) {
+        return std::nullopt;
+    }
+    const runtime::simir::ContainerSignalAlias* alias { };
+    for (const auto& candidate : design_.container_signal_aliases_) {
+        if (candidate.object != path->root.object) {
+            continue;
+        }
+        if (alias != nullptr) {
+            return std::nullopt;
+        }
+        alias = &candidate;
+    }
+    const auto total = container_signal_bridge_width(*path->root.type);
+    if (alias == nullptr || !total
+        || static_cast<std::size_t>(alias->signal)
+            >= design_.signal_info_.size()
+        || design_.signal_info_[static_cast<std::size_t>(alias->signal)].width
+            != *total) {
+        return std::nullopt;
+    }
+    // Walk the steps, counting bits from the most significant end.
+    std::size_t above { };
+    std::size_t width = *total;
+    ContainerType current = *path->root.type;
+    for (const auto& step : path->steps) {
+        if (step.member) {
+            if (*step.member >= current.element_types.size()) {
+                return std::nullopt;
+            }
+            for (std::uint32_t member { }; member < *step.member; ++member) {
+                const auto preceding = container_signal_bridge_width(
+                    current.element_types[member]);
+                if (!preceding) {
+                    return std::nullopt;
+                }
+                above += *preceding;
+            }
+            auto selected = current.element_types[*step.member];
+            current = std::move(selected);
+            const auto member_width = container_signal_bridge_width(current);
+            if (!member_width) {
+                return std::nullopt;
+            }
+            width = *member_width;
+            continue;
+        }
+        const auto& container = step.container;
+        const auto element_width = container_packed_element_width(container);
+        if (!container.fixed || !element_width
+            || step.indices.size() != container.dimensions.size()) {
+            return std::nullopt;
+        }
+        std::size_t position { };
+        for (std::size_t dimension { }; dimension < step.indices.size();
+            ++dimension) {
+            const auto left = static_cast<std::int64_t>(
+                container.dimensions[dimension].first);
+            const auto right = static_cast<std::int64_t>(
+                container.dimensions[dimension].second);
+            const auto chosen = hir_constant_integer(step.indices[dimension]);
+            if (!chosen || *chosen < std::min(left, right)
+                || *chosen > std::max(left, right)) {
+                return std::nullopt;
+            }
+            const auto extent = static_cast<std::size_t>(
+                std::max(left, right) - std::min(left, right)) + 1U;
+            position = position * extent
+                + static_cast<std::size_t>(
+                    left <= right ? *chosen - left : left - *chosen);
+        }
+        above += position * *element_width;
+        width = *element_width;
+        if (container.element_kind == ContainerElementKind::Packed
+            || container.element_kind == ContainerElementKind::Scalar) {
+            current = ContainerType { };
+            continue;
+        }
+        const auto element = nested_element_container_type(container);
+        if (!element) {
+            return std::nullopt;
+        }
+        current = *element;
+    }
+    if (above + width > *total) {
+        return std::nullopt;
+    }
+    HirConstantSelection selection {
+        *total - above - width,
+        width,
+    };
+    if (path->packed_tail) {
+        if (path->packed_tail->offset + path->packed_tail->width > width) {
+            return std::nullopt;
+        }
+        selection.offset += path->packed_tail->offset;
+        selection.width = path->packed_tail->width;
+    }
+    return HirPlaceSignalImage {
+        alias->signal, selection, path->root.declaration };
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_index(
@@ -433,8 +784,9 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
                 unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
             level.members = { *step.member };
         } else {
-            // Nested element access has no linearized form.
-            if (step.indices.size() != 1U) {
+            // An element of a multidimensional fixed array is selected by
+            // its linear position.
+            if (step.indices.size() != 1U && !step.container.fixed) {
                 return std::nullopt;
             }
             const auto lowered = lower_hir_sv_value_path_index(
@@ -443,7 +795,9 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
                 return std::nullopt;
             }
             level.index = *lowered;
-            level.signed_index = step.container.signed_indices;
+            level.linear_index = step.indices.size() > 1U;
+            level.signed_index = level.linear_index
+                || step.container.signed_indices;
         }
         // The value type after this step.
         const auto type = [&]() -> std::optional<ContainerType> {
@@ -462,9 +816,11 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
         }
         level.type = *type;
         const auto child = allocate_container_register(*type);
-        process_.operations.emplace_back(ContainerElementRead {
+        ContainerElementRead read {
             child, level.container, level.index, level.signed_index,
-            level.members });
+            level.members };
+        read.linear_index = level.linear_index;
+        process_.operations.emplace_back(std::move(read));
         cursor.container = child;
         cursor.levels.push_back(std::move(level));
     }
@@ -478,9 +834,11 @@ void Lowerer::publish_hir_sv_value_path(
     auto child = cursor.container;
     for (auto level = cursor.levels.rbegin(); level != cursor.levels.rend();
         ++level) {
-        process_.operations.emplace_back(ContainerElementWrite {
+        ContainerElementWrite write {
             level->container, level->index, child, level->signed_index,
-            level->members });
+            level->members };
+        write.linear_index = level->linear_index;
+        process_.operations.emplace_back(std::move(write));
         child = level->container;
     }
     if (path.class_root) {
@@ -529,6 +887,125 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_read(
     return destination;
 }
 
+std::vector<Lowerer::HirPackedRange> Lowerer::hir_sv_value_path_leaf_shape(
+    const HirSvValuePath& path, const semantic::ScopeId scope) const
+{
+    std::vector<HirPackedRange> shape;
+    std::string members;
+    for (const auto& step : path.steps) {
+        if (step.member) {
+            if (!members.empty()) {
+                members += '.';
+            }
+            members += step.member_name;
+        }
+    }
+    // The recorded shape of an elaborated object's elements: its bounds
+    // can name parameters of the object's own scope (IEEE 1800-2017 23.6).
+    const auto recorded = members.empty() && !path.root.local
+            && !path.class_root
+        ? design_.container_element_packed_shape_.find(path.root.object)
+        : design_.container_element_packed_shape_.end();
+    const auto declaration = path.root.declaration.valid()
+        ? specialized_hir_unit_->find_declaration(path.root.declaration)
+        : std::nullopt;
+    if (recorded != design_.container_element_packed_shape_.end()) {
+        for (const auto& [left, right] : recorded->second) {
+            shape.push_back(HirPackedRange { left, right, left >= right });
+        }
+    } else if (declaration && declaration->systemverilog != nullptr
+        && declaration->systemverilog->type) {
+        // The leaf's type is the declared element type, or a member of it.
+        auto element = *declaration->systemverilog->type;
+        element.unpacked_dimensions.clear();
+        element.container_form.reset();
+        if (!members.empty()) {
+            const auto member = hir_systemverilog_type_member_path(
+                element, scope, path.root.declaration, members, true);
+            if (member && !member->shape.empty()) {
+                shape = member->shape;
+            } else if (member && member->range) {
+                shape.push_back(*member->range);
+            }
+        } else if (const auto resolved
+                   = hir_resolver().underlying_systemverilog_type(
+                       element, scope)) {
+            const auto append = [&](const semantic::sv::PackedRange& range) {
+                if (range.left && range.right) {
+                    shape.push_back(HirPackedRange { *range.left,
+                        *range.right, *range.left >= *range.right });
+                } else {
+                    shape.clear();
+                }
+            };
+            if (!resolved->packed_dimensions.empty()) {
+                for (const auto& range : resolved->packed_dimensions) {
+                    append(range);
+                    if (shape.empty()) {
+                        break;
+                    }
+                }
+            } else if (resolved->packed_range) {
+                append(*resolved->packed_range);
+            }
+        }
+    }
+    std::uint64_t width = 1U;
+    for (const auto& dimension : shape) {
+        width *= index_distance(dimension.left, dimension.right) + 1U;
+    }
+    if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+        std::cerr << "[fsim-sv-value-path] leaf-shape members=" << members
+                  << " object=" << path.root.object << " recorded="
+                  << (recorded != design_.container_element_packed_shape_.end())
+                  << " declaration=" << declaration.has_value()
+                  << " dimensions=" << shape.size() << " width=" << width
+                  << " element_width=" << path.type.element_width << '\n';
+    }
+    // The innermost elements can be wider than one bit (`packet_t [1:0]`
+    // of a packed structure type, IEEE 1800-2017 7.4.1).
+    if (shape.empty() || path.type.element_width % width != 0U) {
+        return { };
+    }
+    return shape;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_tail_offset(
+    const HirSvValuePath& path)
+{
+    if (!path.packed_tail) {
+        return std::nullopt;
+    }
+    const auto domain = frontend::ValueDomain::Logic4;
+    auto offset = load_integer(
+        static_cast<std::int64_t>(path.packed_tail->offset), 32U, domain);
+    for (const auto& select : path.packed_tail->selects) {
+        auto position = lower_hir_systemverilog_element_offset(
+            select.index, select.dimension, select.stride);
+        if (!position) {
+            return std::nullopt;
+        }
+        // An indexed part-select's lowest bit is at its element nearest
+        // the right bound (IEEE 1800-2017 11.5.1).
+        using Kind = HirSvValuePath::PackedSelect::Kind;
+        if (select.kind != Kind::index
+            && (select.kind == Kind::up) != select.dimension.descending) {
+            const auto adjusted = allocate_register(32U, domain);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::subtract_signed, adjusted, *position,
+                load_integer(static_cast<std::int64_t>(
+                                 (select.count - 1U) * select.stride),
+                    32U, domain) });
+            position = adjusted;
+        }
+        const auto sum = allocate_register(32U, domain);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_signed, sum, offset, *position });
+        offset = sum;
+    }
+    return offset;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_value(
     const HirSvValuePath& path)
 {
@@ -538,6 +1015,20 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_value(
     }
     const auto selected = allocate_register(
         path.packed_tail->width, register_domain(*leaf));
+    if (!path.packed_tail->selects.empty()) {
+        // Out-of-range bits read as X, or 0 for a two-state leaf (IEEE
+        // 1800-2017 11.5.1).
+        const auto offset = lower_hir_sv_value_path_tail_offset(path);
+        if (!offset) {
+            return std::nullopt;
+        }
+        process_.operations.emplace_back(DynamicPartSelect {
+            selected, *leaf, *offset,
+            static_cast<std::int64_t>(register_width(*leaf)) - 1, 0,
+            static_cast<std::uint32_t>(path.packed_tail->width), true, true,
+            path.type.two_state, 0U });
+        return selected;
+    }
     process_.operations.emplace_back(Extract {
         selected, *leaf, static_cast<std::uint32_t>(path.packed_tail->offset),
         static_cast<std::uint32_t>(path.packed_tail->width) });
@@ -547,6 +1038,28 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_value(
 std::optional<Lowerer::HirStaticContainerValue>
 Lowerer::lower_hir_sv_value_path_container_read(const HirSvValuePath& path)
 {
+    if (path.slice) {
+        // The whole array, then the slice's elements (7.4.6).
+        auto base = path;
+        base.slice.reset();
+        base.type = path.slice->base;
+        std::optional<ContainerRegisterId> whole;
+        if (base.steps.empty()) {
+            if (const auto cursor = lower_hir_sv_value_path_descend(base)) {
+                whole = cursor->container;
+            }
+        } else if (const auto read
+            = lower_hir_sv_value_path_container_read(base)) {
+            whole = read->value;
+        }
+        const auto destination = allocate_container_register(path.type);
+        if (!whole
+            || !lower_hir_container_element_copy(*whole, destination,
+                path.type, path.slice->left, path.slice->right)) {
+            return std::nullopt;
+        }
+        return HirStaticContainerValue { destination, path.type };
+    }
     if (path.leaf || path.steps.empty()) {
         return std::nullopt;
     }
@@ -560,7 +1073,7 @@ Lowerer::lower_hir_sv_value_path_container_read(const HirSvValuePath& path)
         index = load_constant(
             unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
     } else {
-        if (step.indices.size() != 1U) {
+        if (step.indices.size() != 1U && !step.container.fixed) {
             return std::nullopt;
         }
         index = lower_hir_sv_value_path_index(
@@ -569,13 +1082,76 @@ Lowerer::lower_hir_sv_value_path_container_read(const HirSvValuePath& path)
     if (!index) {
         return std::nullopt;
     }
+    const bool linear = !step.member && step.indices.size() > 1U;
     const auto destination = allocate_container_register(path.type);
-    process_.operations.emplace_back(ContainerElementRead {
+    ContainerElementRead read {
         destination, cursor->container, *index,
-        step.member ? true : step.container.signed_indices,
+        step.member || linear ? true : step.container.signed_indices,
         step.member ? std::vector<std::uint32_t> { *step.member }
-                    : std::vector<std::uint32_t> { } });
+                    : std::vector<std::uint32_t> { } };
+    read.linear_index = linear;
+    process_.operations.emplace_back(std::move(read));
     return HirStaticContainerValue { destination, path.type };
+}
+
+bool Lowerer::lower_hir_container_element_copy(
+    const ContainerRegisterId source,
+    const ContainerRegisterId target,
+    const ContainerType& type,
+    const std::int64_t left,
+    const std::int64_t right,
+    const bool source_positional)
+{
+    constexpr std::int64_t maximum_elements { 4096 };
+    if (!type.fixed || type.dimensions.size() != 1U
+        || std::max(left, right) - std::min(left, right) >= maximum_elements) {
+        return false;
+    }
+    const auto element = nested_element_container_type(type);
+    const auto count = std::max(left, right) - std::min(left, right) + 1;
+    for (std::int64_t position { }; position < count; ++position) {
+        // Elements in order from the left bound (IEEE 1800-2017 7.6).
+        const auto at = left >= right ? left - position : left + position;
+        const auto index = load_integer(at, 32U, frontend::ValueDomain::Integer);
+        const auto from = source_positional
+            ? load_integer(position, 32U, frontend::ValueDomain::Integer)
+            : index;
+        switch (type.element_kind) {
+        case ContainerElementKind::Packed:
+        case ContainerElementKind::Scalar: {
+            const auto value = allocate_register(type.element_width,
+                type.two_state ? frontend::ValueDomain::Bit2
+                               : frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ContainerRead {
+                value, source, from, true, source_positional, false });
+            process_.operations.emplace_back(ContainerWrite {
+                target, index, value, true, false, false });
+            break;
+        }
+        case ContainerElementKind::String: {
+            const auto value = allocate_string_register();
+            process_.operations.emplace_back(ContainerStringRead {
+                value, source, from, true, source_positional, false, { } });
+            process_.operations.emplace_back(ContainerStringWrite {
+                target, index, value, true, false, false, { } });
+            break;
+        }
+        case ContainerElementKind::Aggregate:
+        case ContainerElementKind::Container: {
+            if (!element) {
+                return false;
+            }
+            const auto value = allocate_container_register(*element);
+            ContainerElementRead read { value, source, from, true, { } };
+            read.linear_index = source_positional;
+            process_.operations.emplace_back(std::move(read));
+            process_.operations.emplace_back(ContainerElementWrite {
+                target, index, value, true, { } });
+            break;
+        }
+        }
+    }
+    return true;
 }
 
 bool Lowerer::lower_hir_sv_value_path_write(
@@ -583,14 +1159,49 @@ bool Lowerer::lower_hir_sv_value_path_write(
     const std::optional<RegisterId> packed_value,
     const std::optional<ContainerRegisterId> container_value)
 {
+    const auto write_rejected = [](const int line) {
+        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+            std::cerr << "[fsim-sv-value-path] write rejected line=" << line
+                      << '\n';
+        }
+        return false;
+    };
+    if (path.slice) {
+        // Replace the slice's elements of the whole array (7.4.6, 7.6).
+        if (path.leaf || !container_value || path.root.read_only) {
+            return write_rejected(__LINE__);
+        }
+        auto base = path;
+        base.slice.reset();
+        base.type = path.slice->base;
+        if (base.steps.empty()) {
+            const auto cursor = lower_hir_sv_value_path_descend(base);
+            if (!cursor
+                || !lower_hir_container_element_copy(*container_value,
+                    cursor->container, path.type, path.slice->left,
+                    path.slice->right, true)) {
+                return write_rejected(__LINE__);
+            }
+            publish_hir_sv_value_path(base, *cursor);
+            return true;
+        }
+        const auto whole = lower_hir_sv_value_path_container_read(base);
+        if (!whole
+            || !lower_hir_container_element_copy(*container_value,
+                whole->value, path.type, path.slice->left,
+                path.slice->right, true)) {
+            return write_rejected(__LINE__);
+        }
+        return lower_hir_sv_value_path_write(base, std::nullopt, whole->value);
+    }
     if (path.steps.empty() || path.root.read_only || path.string_leaf
         || (path.leaf != packed_value.has_value())
         || (!path.leaf && !container_value)) {
-        return false;
+        return write_rejected(__LINE__);
     }
     const auto cursor = lower_hir_sv_value_path_descend(path);
     if (!cursor) {
-        return false;
+        return write_rejected(__LINE__);
     }
     const auto& step = path.steps.back();
     std::optional<RegisterId> index;
@@ -602,7 +1213,7 @@ bool Lowerer::lower_hir_sv_value_path_write(
             path, step, cursor->container);
     }
     if (!index) {
-        return false;
+        return write_rejected(__LINE__);
     }
     if (path.leaf) {
         auto value = *packed_value;
@@ -610,19 +1221,43 @@ bool Lowerer::lower_hir_sv_value_path_write(
             // Replace the selected bits of the current leaf value.
             const auto current = lower_hir_sv_value_path_read(path);
             if (!current) {
-                return false;
+                return write_rejected(__LINE__);
             }
             if (register_width(value) != path.packed_tail->width) {
                 value = resize_register(
                     value, path.packed_tail->width, false);
             }
+            if (register_domain(value) != register_domain(*current)) {
+                const auto converted = allocate_register(
+                    register_width(value), register_domain(*current));
+                process_.operations.emplace_back(CopyRegister {
+                    converted, value });
+                value = converted;
+            }
             const auto updated = allocate_register(
                 register_width(*current), register_domain(*current));
-            process_.operations.emplace_back(CopyRegister {
-                updated, *current });
-            process_.operations.emplace_back(Insert {
-                updated, updated, value,
-                static_cast<std::uint32_t>(path.packed_tail->offset) });
+            if (!path.packed_tail->selects.empty()) {
+                // A wholly out-of-range select writes nothing (IEEE
+                // 1800-2017 11.5.1).
+                const auto offset = lower_hir_sv_value_path_tail_offset(path);
+                if (!offset) {
+                    return write_rejected(__LINE__);
+                }
+                process_.operations.emplace_back(DynamicPartInsert {
+                    updated, *current, value,
+                    DynamicPartIndex { *offset,
+                        static_cast<std::int64_t>(register_width(*current))
+                            - 1,
+                        0, 0U,
+                        static_cast<std::uint32_t>(path.packed_tail->width),
+                        true, true } });
+            } else {
+                process_.operations.emplace_back(CopyRegister {
+                    updated, *current });
+                process_.operations.emplace_back(Insert {
+                    updated, updated, value,
+                    static_cast<std::uint32_t>(path.packed_tail->offset) });
+            }
             value = updated;
         }
         if (register_width(value) != path.type.element_width) {
@@ -639,14 +1274,18 @@ bool Lowerer::lower_hir_sv_value_path_write(
                 step.indices.size() > 1U, step.container.string_indices });
         }
     } else {
-        if (!step.member && step.indices.size() != 1U) {
-            return false;
+        if (!step.member && step.indices.size() != 1U
+            && !step.container.fixed) {
+            return write_rejected(__LINE__);
         }
-        process_.operations.emplace_back(ContainerElementWrite {
+        const bool linear = !step.member && step.indices.size() > 1U;
+        ContainerElementWrite write {
             cursor->container, *index, *container_value,
-            step.member ? true : step.container.signed_indices,
+            step.member || linear ? true : step.container.signed_indices,
             step.member ? std::vector<std::uint32_t> { *step.member }
-                        : std::vector<std::uint32_t> { } });
+                        : std::vector<std::uint32_t> { } };
+        write.linear_index = linear;
+        process_.operations.emplace_back(std::move(write));
     }
     publish_hir_sv_value_path(path, *cursor);
     return true;
@@ -777,67 +1416,136 @@ namespace fsim::elaboration {
 // or of an array of them (IEEE 1800-2017 10.4.2): the member is published
 // in the NBA region.
 bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
-    const HirSvValuePath& path, const RegisterId value)
+    const HirSvValuePath& path, const RegisterId value,
+    const std::function<bool()>& before_write)
 {
+    const auto write_rejected = [](const int line) {
+        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+            std::cerr << "[fsim-sv-value-path] nonblocking-write rejected line=" << line
+                      << '\n';
+        }
+        return false;
+    };
     if (!path.leaf || path.string_leaf || path.root.local || path.class_root
         || path.root.read_only || path.steps.empty()) {
-        return false;
+        return write_rejected(__LINE__);
     }
-    std::size_t first_member { };
     std::optional<RegisterId> index;
     bool signed_index = true;
-    if (!path.steps.front().member) {
-        const auto& step = path.steps.front();
-        if (step.indices.size() != 1U) {
-            return false;
-        }
-        index = lower_hir_sv_value_path_index(path, step, std::nullopt);
-        signed_index = step.container.signed_indices;
-        first_member = 1U;
-    } else {
-        index = load_constant(
-            unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
-    }
-    if (!index || first_member >= path.steps.size()) {
-        return false;
-    }
+    bool linear_index { };
     std::vector<std::uint32_t> members;
-    for (auto step = path.steps.begin()
-            + static_cast<std::ptrdiff_t>(first_member);
-        step != path.steps.end(); ++step) {
-        if (!step->member) {
-            return false;
+    std::vector<ContainerPathLevel> levels;
+    const auto lower_leaf_index = [&](const HirSvValuePath::Step& step,
+                                      const std::optional<ContainerRegisterId>
+                                          container) {
+        if (step.indices.empty() || step.container.string_indices) {
+            return write_rejected(__LINE__);
         }
-        members.push_back(*step->member);
+        index = lower_hir_sv_value_path_index(path, step, container);
+        linear_index = step.indices.size() > 1U;
+        signed_index = linear_index || step.container.signed_indices;
+        return index.has_value();
+    };
+    if (std::any_of(path.steps.begin() + 1, path.steps.end(),
+            [](const auto& step) { return !step.member; })) {
+        // An element of a nested container (`m[i][j]` of a queue of
+        // queues, `a[i].q[j]`): the indices of every level are evaluated
+        // now and the object is rebuilt when the write is published.
+        const auto cursor = lower_hir_sv_value_path_descend(path);
+        if (!cursor) {
+            return write_rejected(__LINE__);
+        }
+        for (const auto& level : cursor->levels) {
+            levels.push_back(ContainerPathLevel {
+                level.index, level.signed_index, false, level.members });
+        }
+        const auto& leaf = path.steps.back();
+        if (leaf.member) {
+            index = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+            members.push_back(*leaf.member);
+        } else if (!lower_leaf_index(leaf, cursor->container)) {
+            return write_rejected(__LINE__);
+        }
+    } else {
+        std::size_t first_member { };
+        if (!path.steps.front().member) {
+            if (!lower_leaf_index(path.steps.front(), std::nullopt)) {
+                return write_rejected(__LINE__);
+            }
+            first_member = 1U;
+        } else {
+            index = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+        }
+        if (first_member >= path.steps.size() && !path.packed_tail) {
+            return write_rejected(__LINE__);
+        }
+        for (auto step = path.steps.begin()
+                + static_cast<std::ptrdiff_t>(first_member);
+            step != path.steps.end(); ++step) {
+            members.push_back(*step->member);
+        }
     }
     auto source = value;
+    std::optional<DynamicPartIndex> part;
     if (path.packed_tail) {
-        // The rest of the packed member keeps its current value.
-        const auto current = lower_hir_sv_value_path_read(path);
-        if (!current) {
-            return false;
-        }
         if (register_width(source) != path.packed_tail->width) {
             source = resize_register(source, path.packed_tail->width, false);
         }
-        const auto updated = allocate_register(
-            register_width(*current), register_domain(*current));
-        process_.operations.emplace_back(CopyRegister { updated, *current });
-        process_.operations.emplace_back(Insert {
-            updated, updated, source,
-            static_cast<std::uint32_t>(path.packed_tail->offset) });
-        source = updated;
+        const auto offset = path.packed_tail->selects.empty()
+            ? load_integer(
+                  static_cast<std::int64_t>(path.packed_tail->offset), 32U,
+                  frontend::ValueDomain::Logic4)
+            : lower_hir_sv_value_path_tail_offset(path);
+        if (!offset) {
+            return write_rejected(__LINE__);
+        }
+        const DynamicPartIndex selection { *offset,
+            static_cast<std::int64_t>(path.type.element_width) - 1, 0, 0U,
+            static_cast<std::uint32_t>(path.packed_tail->width), true, true };
+        if (members.empty()) {
+            // The selected bits are replaced when the update is published,
+            // so other updates of the element in the slot keep theirs.
+            part = selection;
+        } else {
+            // The rest of the packed member keeps its current value.
+            const auto current = lower_hir_sv_value_path_read(path);
+            if (!current) {
+                return write_rejected(__LINE__);
+            }
+            const auto updated = allocate_register(
+                register_width(*current), register_domain(*current));
+            process_.operations.emplace_back(DynamicPartInsert {
+                updated, *current, source, selection });
+            source = updated;
+        }
     }
-    if (register_width(source) != path.type.element_width) {
-        source = resize_register(source, path.type.element_width, false);
+    const auto element_width = part ? path.packed_tail->width
+                                    : path.type.element_width;
+    if (register_width(source) != element_width) {
+        source = resize_register(source, element_width, false);
+    }
+    const auto domain = path.type.two_state ? frontend::ValueDomain::Bit2
+                                            : frontend::ValueDomain::Logic4;
+    if (register_domain(source) != domain) {
+        const auto converted = allocate_register(element_width, domain);
+        process_.operations.emplace_back(CopyRegister { converted, source });
+        source = converted;
+    }
+    if (before_write && !before_write()) {
+        return write_rejected(__LINE__);
     }
     WriteContainerObjectElement write;
     write.object = path.root.object;
     write.index = *index;
     write.source = source;
     write.signed_index = signed_index;
+    write.linear_index = linear_index;
     write.nonblocking = true;
+    write.dynamic_part = part;
     write.members = std::move(members);
+    write.levels = std::move(levels);
     process_.operations.emplace_back(std::move(write));
     return true;
 }

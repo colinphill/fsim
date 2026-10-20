@@ -191,8 +191,17 @@ bool Lowerer::lower_hir_vhdl_vital_state_table_call(
         }
         data_width = *width;
         if (data_width != 0U) {
-            data_register = lower_hir_expression(
-                *data_expression, data_width);
+            // DataIn is a STD_LOGIC_VECTOR formal; an aggregate actual takes
+            // that type (IEEE 1076-2008 9.3.3.1, IEEE 1076.4 7.3.3).
+            semantic::vhdl::SubtypeIndication data_type;
+            data_type.type_mark.spelling = "std_logic_vector";
+            data_type.builtin_type = semantic::vhdl::BuiltinTypeIdentity::
+                ieee_std_logic_1164_std_logic_vector;
+            data_type.domain = semantic::vhdl::ValueDomain::logic9;
+            data_type.unconstrained = true;
+            data_type.executable_width = data_width;
+            data_register = lower_hir_expression(*data_expression, data_width,
+                frontend::SystemVerilogScalarKind::None, &data_type);
             if (!data_register
                 || register_domain(*data_register)
                     != frontend::ValueDomain::Logic9) {

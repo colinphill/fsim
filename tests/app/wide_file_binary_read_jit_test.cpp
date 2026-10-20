@@ -172,10 +172,10 @@ Capture run_packed_target(
         LoadConstant { 5U, PackedLogic4(32U, Logic4::zero) },
         WriteContainerObjectElement {
             data_object, 5U, 4U, false, false, false,
-            std::nullopt, std::nullopt, { } },
+            std::nullopt, std::nullopt, { }, { } },
         WriteContainerObjectElement {
             count_object, 5U, 2U, false, false, false,
-            std::nullopt, std::nullopt, { } },
+            std::nullopt, std::nullopt, { }, { } },
         FileClose { 0U },
         Halt { },
     };
@@ -259,7 +259,7 @@ FixedMemoryCapture run_fixed_memory_target(
         LoadConstant { 4U, PackedLogic4(32U, Logic4::zero) },
         WriteContainerObjectElement {
             count_object, 4U, 1U, false, false, false,
-            std::nullopt, std::nullopt, { } },
+            std::nullopt, std::nullopt, { }, { } },
         FileClose { 0U },
         Halt { },
     };
@@ -609,14 +609,14 @@ ContainerSnapshotCapture run_container_object_snapshot(
         LoadConstant { 9U, PackedLogic4::from_aval_bval(16U, 0x3344U, 0U) },
         ReadContainerObject { 0U, object },
         WriteContainerObjectElement {
-            object, 0U, 1U, false, false, false, std::nullopt, std::nullopt, { } },
+            object, 0U, 1U, false, false, false, std::nullopt, std::nullopt, { }, { } },
         ContainerRead { 2U, 0U, 0U, false, false, false },
         ReadContainerObject { 1U, object },
         ContainerRead { 3U, 1U, 0U, false, false, false },
         ReadContainerObject { 2U, object },
         WriteContainerObjectElement {
             object, 4U, 6U, false, false, false, std::nullopt,
-            DynamicPartIndex { 5U, 0, 0, 0U, 1U, true, true }, { } },
+            DynamicPartIndex { 5U, 0, 0, 0U, 1U, true, true }, { }, { } },
         ContainerRead { 7U, 2U, 4U, false, false, false },
         ReadContainerObject { 3U, object },
         ContainerRead { 8U, 3U, 4U, false, false, false },

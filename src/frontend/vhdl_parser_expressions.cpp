@@ -951,9 +951,14 @@ Expression VhdlParser::parse_primary()
         require_vhdl_standard(
             start, VhdlStandard::Vhdl2008, "an external name",
             "select VHDL-2008 or pass the object through an ordinary interface");
-        if (!match_keyword("signal", true)) {
+        // A signal or constant of another design entity or block (IEEE
+        // 1076-2008 8.7); an elaborated constant is read through its static
+        // value.
+        if (!match_keyword("signal", true)
+            && !match_keyword("constant", true)) {
             error(current(), "FSIM-VHDL-PARSE-276",
-                "bounded external names require the signal object class");
+                "bounded external names require the signal or constant "
+                "object class");
             if (at(TokenKind::Identifier)) {
                 advance();
             }
@@ -1007,13 +1012,20 @@ Expression VhdlParser::parse_primary()
         subtype.call_result_domain = external_type.domain;
         subtype.call_result_signed = external_type.is_signed;
         subtype.nominal_type = external_type.nominal_type;
-        return Expression {
+        Expression external {
             ExpressionKind::Call,
             "@vhdl-external",
             { Expression { ExpressionKind::Identifier, target, { }, first.span },
                 std::move(subtype) },
             cover(start.span, previous().span)
         };
+        // An external name is a name; an element or record element of the
+        // object it denotes is selected by suffix (IEEE 1076-2008 8.3, 8.7).
+        if ((at(TokenKind::Dot) && at(TokenKind::Identifier, 1))
+            || at(TokenKind::LeftParen)) {
+            return parse_vhdl_name_suffixes(std::move(external), start.span);
+        }
+        return external;
     }
     if (match_keyword("case", true)) {
         const auto start = previous();
@@ -1542,9 +1554,33 @@ Expression VhdlParser::parse_primary()
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
             bool saw_named = false;
+            // Individually associated subelements of one formal become one
+            // named aggregate actual (IEEE 1076-2008 6.5.7.1).
+            std::vector<std::pair<std::string,
+                std::vector<VhdlIndividualPart>>> individual;
             if (!at(TokenKind::RightParen)) {
                 do {
                     std::string argument_name;
+                    if (vhdl_individual_formal_ahead()) {
+                        saw_named = true;
+                        const auto part_span = current().span;
+                        VhdlIndividualPart part;
+                        auto formal = parse_vhdl_individual_part(part);
+                        auto group = std::ranges::find(individual, formal,
+                            &std::pair<std::string,
+                                std::vector<VhdlIndividualPart>>::first);
+                        if (group == individual.end()) {
+                            individual.emplace_back(formal,
+                                std::vector<VhdlIndividualPart> { });
+                            group = std::prev(individual.end());
+                            arguments.push_back(Expression {
+                                ExpressionKind::Aggregate, "", { },
+                                part_span });
+                            argument_names.push_back(std::move(formal));
+                        }
+                        group->second.push_back(std::move(part));
+                        continue;
+                    }
                     if (at(TokenKind::Identifier) && at(TokenKind::Arrow, 1)) {
                         saw_named = true;
                         argument_name = vhdl_name(advance().text);
@@ -1589,6 +1625,17 @@ Expression VhdlParser::parse_primary()
             }
             expect(TokenKind::RightParen, "')' after arguments",
                 "FSIM-VHDL-PARSE-033");
+            for (const auto& [formal, parts] : individual) {
+                for (std::size_t index { }; index < arguments.size(); ++index) {
+                    if (argument_names[index] == formal
+                        && arguments[index].kind == ExpressionKind::Aggregate
+                        && arguments[index].operands.empty()) {
+                        arguments[index] = build_vhdl_individual_aggregate(
+                            parts, arguments[index].span);
+                        break;
+                    }
+                }
+            }
             Expression call { ExpressionKind::Call, std::move(canonical),
                 std::move(arguments), cover(name.span, previous().span) };
             attach_selected_spelling(call);

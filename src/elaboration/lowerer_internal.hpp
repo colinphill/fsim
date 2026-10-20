@@ -402,6 +402,14 @@ public:
 
     [[nodiscard]] std::vector<Process> take_generated_processes();
 
+    // The subtype of an object whose declared subtype leaves index ranges
+    // open, completed from the shape of its initial value (IEEE 1076-2008
+    // 5.3.2.2, 6.4.2.2); nullopt when that shape is not known.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_initialized_object_subtype(semantic::ExpressionId initializer,
+        const semantic::vhdl::SubtypeIndication& declared,
+        semantic::ScopeId scope) const;
+
     void set_systemverilog_program_owner(
         std::optional<std::uint32_t> owner) noexcept;
 
@@ -885,6 +893,20 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         std::optional<semantic::DeclarationId> selected_body = std::nullopt) const;
+    // The body patterns hir_vhdl_function_result_shape proves first.
+    // An integer element of a constant elaborated into a read-only signal.
+    [[nodiscard]] std::optional<std::int64_t>
+    hir_vhdl_elaborated_constant_element(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
+    hir_vhdl_function_result_proof(semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        std::optional<semantic::DeclarationId> selected_body) const;
+    // The one static shape every return value of the called function has.
+    [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
+    hir_vhdl_returned_result_shape(semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        std::optional<semantic::DeclarationId> selected_body) const;
     [[nodiscard]] std::optional<bool> hir_vhdl_range_direction(
         const semantic::vhdl::RangeConstraint& range,
         semantic::ScopeId process_scope) const;
@@ -899,10 +921,59 @@ private:
     [[nodiscard]] const std::vector<semantic::vhdl::ElementConstraint>*
     hir_vhdl_callable_formal_element_constraints(
         semantic::DeclarationId declaration) const;
+    // The shape of a VHDL composite value (IEEE 1076-2008 5.3.2.2, 5.3.3):
+    // the index range of each dimension, outermost first (empty for a
+    // scalar or record; an unknown range is empty), and the static
+    // constraints of the elements and record elements below.
+    struct HirVhdlShape {
+        std::vector<std::optional<HirPackedRange>> ranges;
+        std::vector<semantic::vhdl::ElementConstraint> element_constraints;
+        [[nodiscard]] bool complete() const noexcept;
+    };
+    // The shape a subtype gives its objects.
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_subtype_shape(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId scope) const;
+    // What an object supplies beyond its declared subtype: a formal's
+    // actual, a signal's elaborated layout.
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_object_facts(
+        semantic::DeclarationId declaration, std::size_t dimensions) const;
+    // The shape of an object: its declared subtype completed by its facts.
+    // The shape of `expression` where `context` is its expected type: a
+    // literal or aggregate with an open range takes its bounds from itself
+    // (IEEE 1076-2008 9.3.2, 9.3.3.3).
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_contextual_shape(
+        semantic::ExpressionId expression,
+        const semantic::vhdl::SubtypeIndication& context,
+        semantic::ScopeId scope) const;
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_object_shape(
+        semantic::DeclarationId declaration, semantic::ScopeId scope) const;
+    // Two composite operands whose static shapes have a level of different
+    // lengths (never equal, 9.2.3).
+    [[nodiscard]] bool hir_vhdl_shapes_differ(semantic::ExpressionId left,
+        semantic::ExpressionId right) const;
+    // A record subtype with an element whose bounds are still open
+    // (IEEE 1076-2008 5.3.3).
+    [[nodiscard]] bool hir_vhdl_partially_constrained_record(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // Fill the open ranges and element constraints of `subtype` from
+    // `shape`.
+    void apply_hir_vhdl_shape(semantic::vhdl::SubtypeIndication& subtype,
+        const HirVhdlShape& shape, semantic::ScopeId scope) const;
+    // The shape of the value an expression denotes: its subtype's, completed
+    // from the object it names (the actual of a formal or port, an alias's
+    // object) through its index, slice and member selections.
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_shape(
+        semantic::ExpressionId expression) const;
+    mutable std::size_t hir_vhdl_shape_depth_ { };
     struct HirConstantSelection {
         std::size_t offset { };
         std::size_t width { };
     };
+    // A static slice of a prefix value whose position is not static, as
+    // bits of that value.
+    [[nodiscard]] std::optional<HirConstantSelection> hir_vhdl_value_slice(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirConstantSelection>
     hir_constant_selection(
         semantic::ExpressionId expression,
@@ -947,6 +1018,10 @@ private:
     [[nodiscard]] std::optional<semantic::TypeId>
     hir_vhdl_loop_parameter_enumeration(
         semantic::ExpressionId value) const;
+    // The width of a VHDL slice whose bounds differ by a constant.
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_static_slice_width(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::size_t> hir_dynamic_part_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
@@ -1405,6 +1480,10 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_systemverilog_size_cast_operand_is_integral(
         semantic::ExpressionId expression) const;
+    // The underlying type of the type name `name` visible in `scope`.
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_systemverilog_named_type(
+        std::string_view name, semantic::ScopeId scope) const;
     // The type of `T'(x)`; with `containers`, also an unpacked array or
     // queue type (a bit-stream cast, 6.24.3).
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
@@ -1923,6 +2002,12 @@ private:
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_math_call(
         semantic::ExpressionId expression);
+    // The IEEE.MATH_REAL function (IEEE 1076.2) a VHDL call names, by its
+    // lower-case simple name, when every operand is REAL.
+    [[nodiscard]] std::optional<std::string> hir_vhdl_math_real_function(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_math_real_call(
+        semantic::ExpressionId expression);
     // The unit whose timescale governs a SystemVerilog scope: a package or
     // $unit subroutine keeps its declaring unit's time unit (IEEE 1800-2017
     // 3.14.2), anything else uses the unit being lowered.
@@ -2232,6 +2317,12 @@ private:
     // significant first, with no display-format NUL substitution.
     [[nodiscard]] StringRegisterId lower_hir_packed_characters_to_string(
         RegisterId packed, std::size_t width);
+    // The text of one element of a predefined STRING concatenation or
+    // positional aggregate: a STRING operand, or one CHARACTER (IEEE
+    // 1076-2008 9.2.5, 9.3.3.3).
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_vhdl_string_piece(semantic::ExpressionId operand,
+        const semantic::vhdl::SubtypeIndication* string_context);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_expression(
         semantic::ExpressionId expression,
@@ -2429,6 +2520,10 @@ private:
     hir_container_element_member(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirPackedRange>
     hir_container_element_member_range(semantic::ExpressionId expression) const;
+    // The packed type of the elements a container element binding selects.
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_container_element_packed_type(
+        const HirContainerElementBinding& element) const;
     [[nodiscard]] std::optional<HirStaticContainerSignalExtract>
     hir_static_element_signal_extract(
         const HirContainerElementBinding& element) const;
@@ -2538,6 +2633,11 @@ private:
     [[nodiscard]] std::optional<runtime::simir::ContainerType>
     hir_systemverilog_container_type(
         const semantic::sv::TypeReference& type) const;
+    // The container type T of a typed assignment pattern `T'{...}` with
+    // scalar or packed elements (IEEE 1800-2017 10.9).
+    [[nodiscard]] std::optional<runtime::simir::ContainerType>
+    hir_typed_pattern_container_type(
+        const semantic::sv::Expression& source) const;
     struct HirStaticContainerValue {
         runtime::simir::ContainerRegisterId value { };
         runtime::simir::ContainerType type;
@@ -2548,6 +2648,7 @@ private:
     struct HirSvValuePath {
         struct Step {
             std::optional<std::uint32_t> member;
+            std::string member_name;
             std::vector<semantic::ExpressionId> indices;
             // The container an index step selects from.
             runtime::simir::ContainerType container;
@@ -2567,11 +2668,36 @@ private:
         runtime::simir::ContainerType type;
         bool leaf { };
         bool string_leaf { };
-        // A member of a packed leaf (`s.pt.b`): bits of the leaf value.
+        // A constant slice of the selected one-dimensional fixed array
+        // (`s.arr[3:1]`, `a[1:0]`, IEEE 1800-2017 7.4.6) ends the path:
+        // `type` is the slice and `base` the array it selects from.
+        struct Slice {
+            std::int64_t left { };
+            std::int64_t right { };
+            runtime::simir::ContainerType base;
+        };
+        std::optional<Slice> slice;
+        // A select within a packed leaf whose position is known only at run
+        // time (`m[i][j]`, `m[i][b +: 4]`, IEEE 1800-2017 7.4.5, 11.5.1).
+        struct PackedSelect {
+            enum class Kind : std::uint8_t { index, up, down };
+            Kind kind { Kind::index };
+            // The index, or the base of an indexed part-select.
+            semantic::ExpressionId index;
+            HirPackedRange dimension;
+            // Bits per element of the selected dimension.
+            std::size_t stride { };
+            // Elements an indexed part-select spans.
+            std::size_t count { 1U };
+        };
+        // Bits of the leaf value: a member of a packed leaf (`s.pt.b`), or
+        // a bit-, part- or element-select of it. The selected bits start at
+        // `offset` plus the run-time offsets of `selects`.
         struct PackedTail {
             std::size_t offset { };
             std::size_t width { };
             bool signed_value { };
+            std::vector<PackedSelect> selects;
         };
         std::optional<PackedTail> packed_tail;
     };
@@ -2580,6 +2706,8 @@ private:
             runtime::simir::ContainerRegisterId container { };
             RegisterId index { };
             bool signed_index { true };
+            // A position in a multidimensional fixed array.
+            bool linear_index { };
             std::vector<std::uint32_t> members;
             runtime::simir::ContainerType type;
         };
@@ -2595,6 +2723,24 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirSvValuePath> hir_sv_value_path(
         semantic::ExpressionId expression) const;
+    // The bits of a fixed container's packed signal bridge that a place with
+    // constant selects occupies, leftmost element and first member most
+    // significant (IEEE 1800-2017 10.6.2: force targets on that image).
+    struct HirPlaceSignalImage {
+        SignalId signal { };
+        HirConstantSelection selection;
+        // The variable the place belongs to.
+        semantic::DeclarationId declaration;
+    };
+    [[nodiscard]] std::optional<HirPlaceSignalImage> hir_place_signal_image(
+        semantic::ExpressionId expression) const;
+    // The packed dimensions of a value path's packed leaf, outermost first;
+    // empty when they are not known.
+    [[nodiscard]] std::vector<HirPackedRange> hir_sv_value_path_leaf_shape(
+        const HirSvValuePath& path, semantic::ScopeId scope) const;
+    // The run-time low bit of a packed tail with run-time selects.
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_sv_value_path_tail_offset(const HirSvValuePath& path);
     // `container` holds the value the step selects from (for `$`).
     [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_index(
         const HirSvValuePath& path, const HirSvValuePath::Step& step,
@@ -2610,6 +2756,14 @@ private:
         const HirSvValuePath& path);
     [[nodiscard]] std::optional<HirStaticContainerValue>
     lower_hir_sv_value_path_container_read(const HirSvValuePath& path);
+    // Copy elements `left`..`right` (declared indices) into a fixed array
+    // that has those indices, from the same indices of `source` or, with
+    // `source_positional`, from its elements in order.
+    [[nodiscard]] bool lower_hir_container_element_copy(
+        runtime::simir::ContainerRegisterId source,
+        runtime::simir::ContainerRegisterId target,
+        const runtime::simir::ContainerType& type, std::int64_t left,
+        std::int64_t right, bool source_positional = false);
     struct HirAggregateLeaf {
         std::vector<std::uint32_t> members;
         std::size_t width { };
@@ -2638,8 +2792,11 @@ private:
     [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
     lower_hir_sv_bitstream_container(semantic::ExpressionId expression,
         const runtime::simir::ContainerType& type);
+    // `before_write` runs once the indices and value are captured, just
+    // before the update is scheduled (an intra-assignment control).
     [[nodiscard]] bool lower_hir_sv_value_path_nonblocking_write(
-        const HirSvValuePath& path, RegisterId value);
+        const HirSvValuePath& path, RegisterId value,
+        const std::function<bool()>& before_write = { });
     struct HirStaticContainerSelection {
         HirContainerObjectBinding base;
         runtime::simir::ContainerType selected_type;
@@ -3641,6 +3798,8 @@ private:
         // The registers of the body's formals and locals once lowered,
         // visible to subprograms declared inside it.
         std::unordered_map<std::uint32_t, RegisterId> body_registers;
+        std::unordered_map<std::uint32_t, StringRegisterId>
+            body_string_registers;
         // Scalar subtype bounds evaluated while this callable activation's
         // declarative part is elaborated, keyed by the source range.
         std::vector<HirVhdlCapturedScalarRange> body_vhdl_scalar_ranges;

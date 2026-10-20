@@ -485,6 +485,27 @@ private:
             && definition->form == vhdl::TypeForm::access;
     }
 
+    /// The type of record element `name` of a record type (8.3).
+    [[nodiscard]] TypeKey member_key(const TypeKey& key,
+        const std::string_view name)
+    {
+        const auto* definition = record_class(key) ? type(key.id) : nullptr;
+        const auto* owner = definition != nullptr
+            ? declaration(definition->declaration)
+            : nullptr;
+        if (owner == nullptr) {
+            return { };
+        }
+        const auto wanted = lowered(name);
+        const auto found = std::ranges::find_if(definition->record_elements,
+            [&](const vhdl::RecordElement& element) {
+                return lowered(element.name) == wanted;
+            });
+        return found != definition->record_elements.end()
+            ? subtype_key(found->subtype, owner->scope)
+            : TypeKey { };
+    }
+
     [[nodiscard]] TypeKey element_key(const TypeKey& key)
     {
         if (!key.builtin.empty()) {
@@ -952,6 +973,50 @@ private:
         return candidates(record.operands.front());
     }
 
+    /// The types of a name: its declarations' types, or for `obj.m1.m2`
+    /// the type of the selected record element (8.3); the dots before the
+    /// object name a library or package.
+    [[nodiscard]] std::vector<TypeKey> name_types(const vhdl::Expression& record)
+    {
+        auto result = declaration_types(*record.referenced_name);
+        const auto text = std::string_view { record.text };
+        const auto* lookup = resolver(record.scope);
+        if (text.find('.') == std::string_view::npos || lookup == nullptr
+            || result.size() > 1U) {
+            return result;
+        }
+        // The longest prefix naming an object is the object; the rest
+        // selects its elements.
+        for (auto dot = text.rfind('.'); dot != std::string_view::npos;
+             dot = dot == 0U ? std::string_view::npos
+                             : text.rfind('.', dot - 1U)) {
+            vhdl::Name prefix;
+            prefix.spelling = std::string { text.substr(0U, dot) };
+            const auto object = lookup->resolve_vhdl(prefix, record.scope)
+                                    .unique();
+            const auto* declared = object ? declaration(*object) : nullptr;
+            if (declared == nullptr) {
+                continue;
+            }
+            if (!object_form(declared->form) || !declared->subtype) {
+                return result;
+            }
+            auto key = subtype_key(*declared->subtype, declared->scope);
+            for (auto rest = text.substr(dot + 1U); key.known();) {
+                const auto separator = rest.find('.');
+                key = member_key(key, rest.substr(0U, separator));
+                if (separator == std::string_view::npos) {
+                    break;
+                }
+                rest.remove_prefix(separator + 1U);
+            }
+            // An access dereference or an unmodelled selection keeps the
+            // name's own candidates.
+            return key.known() ? std::vector { key } : result;
+        }
+        return result;
+    }
+
     [[nodiscard]] std::vector<TypeKey> compute_candidates(
         const ExpressionId id)
     {
@@ -984,13 +1049,15 @@ private:
             }
             return result;
         }
-        case ExpressionKind::name:
+        case ExpressionKind::name: {
             if (record->text == "@vhdl-null") {
                 return { builtin(null_type) };
             }
-            return record->referenced_name
-                ? declaration_types(*record->referenced_name)
-                : result;
+            if (!record->referenced_name) {
+                return result;
+            }
+            return name_types(*record);
+        }
         case ExpressionKind::call: {
             constexpr std::string_view physical { "@vhdl-physical:" };
             constexpr std::string_view qualified { "@vhdl-qualified:" };
@@ -1030,6 +1097,17 @@ private:
             if (record->text.starts_with("'")) {
                 return attribute_types(*record);
             }
+            // A record element selected from an indexed or called prefix.
+            if (constexpr std::string_view member { "@vhdl-member:" };
+                record->text.starts_with(member)
+                && record->operands.size() == 1U) {
+                const auto name
+                    = std::string_view { record->text }.substr(member.size());
+                for (const auto& prefix : candidates(record->operands.front())) {
+                    add(result, member_key(prefix, name));
+                }
+                return result;
+            }
             if (!function_call(*record)) {
                 return result;
             }
@@ -1047,8 +1125,7 @@ private:
             if (visible.empty()) {
                 // An object name with an actual part is an indexed name, or
                 // a slice when its argument is a range (8.4, 8.5).
-                const auto prefix
-                    = declaration_types(*record->referenced_name);
+                const auto prefix = name_types(*record);
                 const bool range_argument = record->operands.size() == 1U
                     && [&] {
                            const auto* argument
@@ -1431,9 +1508,9 @@ private:
     void resolve_aggregate(const vhdl::Expression& record,
         const std::optional<TypeKey>& expected)
     {
-        // An aggregate takes the composite type of its context (9.3.3.1).
-        if (expected && expected->id.valid()
-            && (array_class(*expected) || record_class(*expected))) {
+        // An aggregate takes the composite type of its context (9.3.3.1),
+        // a declared or a predefined array type.
+        if (expected && (array_class(*expected) || record_class(*expected))) {
             annotate_type(record.id, *expected);
         }
         std::optional<TypeKey> element;
@@ -1620,6 +1697,17 @@ private:
             const auto target = statement.target
                 ? target_type(*statement.target)
                 : std::nullopt;
+            if (trace_ && statement.target && !target) {
+                const auto* unresolved = expression(*statement.target);
+                std::fprintf(stderr,
+                    "FSIM_VHDL_RESOLVE untyped-target=%u kind=%u text=%s "
+                    "candidates=%zu\n",
+                    statement.target->value(),
+                    unresolved != nullptr
+                        ? static_cast<unsigned>(unresolved->kind) : 0U,
+                    unresolved != nullptr ? unresolved->text.c_str() : "",
+                    candidates(*statement.target).size());
+            }
             if (statement.target) {
                 resolve(*statement.target, std::nullopt);
             }

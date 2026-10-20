@@ -128,6 +128,10 @@ struct Expression {
     // The parameterized class a static member selection names
     // (`C#(int)::f()`, IEEE 1800-2017 8.25.1), with its actuals.
     std::shared_ptr<const Type> systemverilog_class_owner;
+    // The actuals of a `C#(...)` selection as parsed, so they bind as
+    // expressions and types rather than text (IEEE 1800-2017 8.25.1). The
+    // type's spelling is the selection prefix of `text` they belong to.
+    std::shared_ptr<const Type> systemverilog_class_selection;
     Expression() = default;
 
     Expression(

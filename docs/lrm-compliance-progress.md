@@ -253,6 +253,122 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 77: structured class selections, value paths and places, VHDL shape service, run-time math_real
+
+Full run on the frozen `b76w1` (Batch 76, 3870c0cb), compared with Batch 75
+(`b75w1`):
+- New passes: Verilator 54 (the Batch 76 targeted set).
+- Loss: Verilator t_paramgraph_cloned_refdtype (type actuals spelled as text
+  collapsed two specializations of `P#(T)`); it passes on Batch 77.
+
+| Suite | Batch75 passes / in scope | Batch76 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2547 / 2564 | 2547 / 2564 | 262 |
+| sv-tests | 1442 / 1497 | 1442 / 1497 | 0 |
+| verilator | 1768 / 2066 | 1821 / 2066 | 349 |
+| vests | 3618 / 3646 | 3618 / 3646 | 2 |
+| nvc | 1002 / 1245 | 1002 / 1245 | 237 |
+| vhdl-compliance | 45 / 69 | 45 / 69 | 3 |
+
+Batch 77 follows `.local-artifacts/lrm-closure/ARCH-PLAN-b77.md`: references
+and places reach the lowerer as structure instead of text, and VHDL
+composite shapes come from one service. Against `b76w1` it closes 53 corpus
+tests: nvc 31, Verilator 17, vests 3 and sv-tests 2. These counts come from
+full runs on the frozen `b77w1` (SystemVerilog suites) and `b77w2` (VHDL
+suites, after the late VHDL fixes below). The `b77w1` run lost sv-tests
+9.7 process_cls_kill and process_cls_suspend_resume; they are fixed before
+the commit. vests tc987/tc988 and Verilator t_constraint_array_sum_with
+timed out under load; alone they take 46-51 s on both `b76w1` and `b77w2`.
+The Batch 77 table goes in the Batch 78 note.
+
+Structured class selections (8.25): the parser keeps `C#(...)` actuals as
+parsed expressions and types, and the resolver binds them directly.
+Normalization recurses into nested class actuals (`R#(P#(T))`), canonicalizes
+built-in keywords and unfolds `logic [W-1:0]` ranges, so specializations no
+longer collapse. Static selections in method bodies are materialized per
+class specialization.
+
+SystemVerilog value paths and places (7.2, 7.4, 10.9, 10.4):
+- Nested-path nonblocking writes, intra-assignment delays and event controls
+  on value-path writes, continuous delayed element assigns, and concatenation
+  copy-out pieces all go through value paths (runtime schema 88).
+- A value path can end in a slice (`s.arr[3:1]`): reads copy the elements and
+  writes splice them by position. Element reads and writes carry a linear
+  index, so multi-index fixed steps need one operation.
+- `d[i][j].m` works for nested and typedef'd element arrays; fixed arrays of
+  fixed typedef arrays flatten into one multi-dimensional container (6.22.2).
+- `force`/`release` of struct members and array elements go through the
+  place's signal image (`hir_place_signal_image`, 10.6.2).
+- Unpacked aggregate patterns: type keys and `default:` re-apply to unmatched
+  substructures (`'{shortint: 10, default: 0}`, 10.9.2), while member keys
+  apply at the top level only. `'{default: row}` fills a multi-dimensional
+  array by rows. Fully keyed static-array patterns need no default.
+- Packed patterns accept type keys, typedef aliases and package types spelled
+  across units. An assignment pattern compared with a typed container takes
+  that container's type (11.4.5).
+- Copies between struct members (`y.arr = x.arr`) are container copies.
+- Constant member selects of package parameters (`pkg::P.m`) follow typedef
+  aliases and find types anywhere in the design.
+- `job[i].status` and `job[i].completed` on an array of process handles
+  query that element's process (9.7).
+- `$exit` outside a program's initial procedure is ignored (24.7), and
+  `%0c`/`%0v`/`%0m` are accepted (21.2.1.3). A part-select with an x or z
+  bound writes nothing.
+
+VHDL shape service (5.3.2, 9.3.3, 6.4.2):
+- One service (`lowerer_hir_vhdl_shape.cpp`) gives object, subtype and
+  function-result shapes. A function result's shape comes from every return
+  value under the call's actual frames; a returned string literal or
+  aggregate uses the result subtype as its context (9.3.2).
+- At elaboration, the evaluator materializes unconstrained composite
+  constants, evaluates open signal bounds, folds elements of elaborated
+  constants, and evaluates non-static INTEGER and BOOLEAN generic actuals.
+- VHDL-2019 signals and variables of unconstrained subtypes take their
+  constraints from the initial value (6.4.2.3, 6.4.2.4).
+- Positional STRING aggregates whose length is not static lower to string
+  concatenation. Nested subprograms inherit the enclosing frame's strings.
+- External names of constants are accepted (8.7).
+- Generic-package formals resolve through the package instance's generic
+  bindings (6.5.5).
+- `ieee.math_real` functions run at run time (sqrt, exp, log, log2, log10,
+  trigonometric, hyperbolic and inverse functions, cbrt, two-argument `log`
+  and `arctan`), and selected use clauses of `math_real` resolve.
+- A severity clause resolves `failure`, `error`, `warning` and `note` as
+  SEVERITY_LEVEL literals when a package declares an overloaded homograph;
+  a non-overloadable homograph such as a component named `error` still
+  hides the literal (12.3).
+- A component declaration's generic clause must precede its port clause,
+  and each appears at most once (6.8).
+- A constant elaborated into a read-only signal is indexed through that
+  signal instead of being re-evaluated by its first reader.
+- VITAL `DataIn` vectors and individual association in calls and generic maps
+  are handled.
+
+Diagnostics: `FSIM-ELAB-SVEXIT-001` is retired (catalog 2967 production
+codes). `FSIM-VHDL-SEM-117` and `FSIM-VHDL-PARSE-302` now also cover
+component declarations.
+
+Open leads:
+- typedef'd unpacked-array declarations and parameters (t_param_array_sparse,
+  R2-SV TypeDescriptor);
+- associative `default:` (t_assoc, 7.9.11) and non-literal replication counts;
+- t_package_dot and t_param_type_struct_member;
+- port-expression actuals and conversions (conv14/17/18/19, issue60,
+  issue613);
+- null arrays (ieee12, ieee14, issue1137);
+- composite configuration generics (tc742, tc743, tc1010);
+- overload resolution of `approx(sqrt(r), ...)` (ieee4) and ieee5;
+- the solver timeouts t_constraint_array_reduction_inherit and
+  t_randomize_queue_constraints;
+- compile and elaborate time of UVM cases: each sv-tests chapter-18 UVM case
+  spends about 22 s compiling and 24 s elaborating, almost all of it loading
+  the UVM library. Source relocation takes about 30%, structural
+  re-validation of compiled HIR about 25%, and relinking about 20%
+  (`.local-artifacts/lrm-closure/perf-ch18-2026-10-20.md`);
+- vests tc987 and tc988 take about 46 s and 3.4 GB to compile.
+
+Labelled ctest: 720 of 748 pass; the 28 failures are the known set from Batch 76.
+
 ### Batch 76: class value paths, static containers, std::randomize arrays and wide variables, constraint intervals
 
 Full run on the frozen `b75w1` (Batch 75, b4dcbe8e), compared with Batch 74

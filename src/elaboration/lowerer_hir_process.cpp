@@ -1773,6 +1773,62 @@ bool Lowerer::initialize_hir_declarations(
                 binding = std::move(contextual);
             }
         }
+        // A constant whose subtype leaves index ranges open has the shape
+        // of its initial value (IEEE 1076-2008 6.4.2.2). A computed vector
+        // of one-bit elements is held whole; literals, aggregates and other
+        // composites keep their composite storage.
+        const auto initial_value = declaration->vhdl != nullptr
+                && declaration->vhdl->initializer
+            ? specialized_hir_unit_->find_expression(
+                  *declaration->vhdl->initializer)
+            : std::nullopt;
+        if ((!binding || binding->kind != HirRuntimeBindingKind::local)
+            && declaration->vhdl != nullptr
+            && declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::constant
+            && declaration->vhdl->subtype && initial_value
+            && initial_value->vhdl != nullptr
+            && initial_value->vhdl->kind
+                != semantic::vhdl::ExpressionKind::aggregate
+            && initial_value->vhdl->kind
+                != semantic::vhdl::ExpressionKind::string_literal) {
+            const auto shape = hir_vhdl_object_shape(
+                declaration_id, declaration->vhdl->scope);
+            auto completed = hir_effective_vhdl_subtype(
+                *declaration->vhdl->subtype);
+            const auto* range = shape && shape->ranges.size() == 1U
+                    && shape->ranges.front()
+                ? &*shape->ranges.front()
+                : nullptr;
+            const auto length = range != nullptr
+                    && (range->descending ? range->left >= range->right
+                                          : range->left <= range->right)
+                ? support::index_distance(range->left, range->right) + 1U
+                : 0U;
+            if (shape && length != 0U && shape->complete()
+                && completed && completed->unconstrained) {
+                apply_hir_vhdl_shape(
+                    *completed, *shape, declaration->vhdl->scope);
+                auto width = vhdl_subtype_width(*completed);
+                if (width && *width != length) {
+                    width.reset();
+                }
+                const auto domain = hir_expression_domain(
+                    *declaration->vhdl->initializer, hir_process_scope_);
+                if (width && *width != 0U && domain
+                    && *domain != frontend::ValueDomain::Unknown) {
+                    HirRuntimeBinding local;
+                    local.declaration = declaration_id;
+                    local.kind = HirRuntimeBindingKind::local;
+                    local.name = declaration->vhdl->name;
+                    local.width = *width;
+                    local.domain = *domain;
+                    local.signed_value = hir_expression_signed(
+                        *declaration->vhdl->initializer);
+                    binding = std::move(local);
+                }
+            }
+        }
         // A global constant computed at run time is elaborated as a local
         // of its first reader (materialize_hir_vhdl_global_constant).
         if (materializing_hir_vhdl_global_constant_

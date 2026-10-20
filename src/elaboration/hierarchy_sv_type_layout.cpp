@@ -414,6 +414,21 @@ std::optional<ContainerType> systemverilog_container_type(
                   *expression)
             : value;
     };
+    // A reference to a named packed type with its own packed dimensions
+    // (`packet_t [1:0]`, IEEE 1800-2017 7.4.1) is resolved to its whole
+    // width; the named type gives the width of one element.
+    const auto named_packed_width
+        = [](const semantic::sv::TypeReference& candidate,
+              const std::uint64_t element_width)
+        -> std::optional<std::uint64_t> {
+        if (!candidate.executable_width || element_width == 0U) {
+            return element_width;
+        }
+        if (*candidate.executable_width % element_width != 0U) {
+            return std::nullopt;
+        }
+        return std::max(*candidate.executable_width, element_width);
+    };
     std::unordered_set<std::uint32_t> visiting;
     const auto profile = [&](const auto& self,
                              const semantic::sv::TypeReference& candidate,
@@ -504,7 +519,20 @@ std::optional<ContainerType> systemverilog_container_type(
             // dynamic array into its leaf element profile.
             const auto nested_container
                 = leaf.container_form.has_value();
-            if (nested_container) {
+            // A fixed array of a fixed array type (`row_t m[2]` with
+            // `typedef logic [6:0] row_t[3:1]`) is one multi-dimensional
+            // array, equivalent to `logic [6:0] m[2][3:1]` (IEEE 1800-2017
+            // 6.22.2, 7.4.5).
+            std::vector<ContainerDimension> inner_dimensions;
+            if (nested_container
+                && form == semantic::sv::TypeForm::static_array
+                && element->fixed && !element->queue
+                && !element->associative && !element->aggregate_value
+                && !element->dimensions.empty()
+                && element->element_kind != ContainerElementKind::Container) {
+                inner_dimensions = element->dimensions;
+            }
+            if (nested_container && inner_dimensions.empty()) {
                 result.element_kind = ContainerElementKind::Container;
                 result.element_width = 0U;
                 result.element_types.push_back(std::move(*element));
@@ -643,6 +671,8 @@ std::optional<ContainerType> systemverilog_container_type(
             if (result.dimensions.empty()) {
                 return std::nullopt;
             }
+            result.dimensions.insert(result.dimensions.end(),
+                inner_dimensions.begin(), inner_dimensions.end());
             result.index_left = result.dimensions.front().first;
             result.index_right = result.dimensions.front().second;
             return result;
@@ -731,11 +761,13 @@ std::optional<ContainerType> systemverilog_container_type(
                         && member_type->two_state;
                 }
                 visiting.erase(candidate.target.target.value());
-                if (width == 0U
-                    || width
+                const auto whole = named_packed_width(candidate, width);
+                if (!whole || *whole == 0U
+                    || *whole
                         > std::numeric_limits<std::uint32_t>::max()) {
                     return std::nullopt;
                 }
+                width = *whole;
                 result.element_kind = ContainerElementKind::Packed;
                 result.element_width
                     = static_cast<std::uint32_t>(width);
@@ -753,6 +785,27 @@ std::optional<ContainerType> systemverilog_container_type(
             visiting.erase(candidate.target.target.value());
             if (!base) {
                 return std::nullopt;
+            }
+            // Packed dimensions on a typedef of a packed type widen it.
+            const bool boxed = base->fixed && box_leaf
+                && base->dimensions.size() == 1U
+                && base->dimensions.front()
+                    == std::pair<std::int32_t, std::int32_t> { 0, 0 };
+            if ((!base->fixed || boxed) && !base->queue && !base->associative
+                && (base->element_kind == ContainerElementKind::Packed
+                    || base->element_kind == ContainerElementKind::Scalar)) {
+                const auto whole
+                    = named_packed_width(candidate, base->element_width);
+                if (!whole
+                    || *whole > std::numeric_limits<std::uint32_t>::max()) {
+                    return std::nullopt;
+                }
+                if (*whole != base->element_width) {
+                    base->element_width = static_cast<std::uint32_t>(*whole);
+                    base->element_kind = ContainerElementKind::Packed;
+                    base->scalar_kind
+                        = frontend::SystemVerilogScalarKind::None;
+                }
             }
             if (!result.element_nominal_type.empty()) {
                 base->element_nominal_type

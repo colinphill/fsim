@@ -997,6 +997,21 @@ end package vital_memory;
                     "find_rightmost", "minimum", "maximum",
                 };
             } else if (unit.primary_name.empty()
+                && package == "math_real") {
+                unit.standard_package_declarations = {
+                    "copyrightnotice", "math_e", "math_1_over_e", "math_pi",
+                    "math_2_pi", "math_1_over_pi", "math_pi_over_2",
+                    "math_pi_over_3", "math_pi_over_4", "math_3_pi_over_2",
+                    "math_log_of_2", "math_log_of_10", "math_log2_of_e",
+                    "math_log10_of_e", "math_sqrt_2", "math_1_over_sqrt_2",
+                    "math_sqrt_pi", "math_deg_to_rad", "math_rad_to_deg",
+                    "sign", "ceil", "floor", "round", "trunc", "mod",
+                    "realmax", "realmin", "uniform", "sqrt", "cbrt", "**",
+                    "exp", "log", "log2", "log10", "sin", "cos", "tan",
+                    "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
+                    "arcsinh", "arccosh", "arctanh",
+                };
+            } else if (unit.primary_name.empty()
                 && package == "math_complex") {
                 unit.standard_package_declarations = {
                     "complex", "complex_polar", "positive_real",

@@ -4320,6 +4320,31 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         InstructionIndex instruction,
         SignalChangeOrigin origin = { });
+    // Write the element reached through nested container levels (their
+    // indices captured in `level_indices`) by rebuilding the object value.
+    void write_container_object_path_value(
+        ContainerObjectId id,
+        std::span<const ContainerPathLevel> levels,
+        std::span<const PackedLogic4> level_indices,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        std::span<const std::uint32_t> members,
+        const PackedLogic4& value,
+        const PackedLogic4* base,
+        const DynamicPartIndex* selection,
+        ProcessId process,
+        InstructionIndex instruction,
+        SignalChangeOrigin origin = { });
+    // The nested element of `target` a write selects (adding an associative
+    // or appended queue element); null when the write is ignored.
+    [[nodiscard]] ContainerValue* select_container_element_for_write(
+        ContainerValue& target,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        ProcessId process,
+        InstructionIndex instruction);
     void write_container_object_dynamic_part_element_value(
         ContainerObjectId id,
         const PackedLogic4& index,
