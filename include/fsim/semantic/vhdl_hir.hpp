@@ -760,6 +760,13 @@ struct ModeViewInterfaceProfile {
     };
 };
 
+// The signature of a subprogram alias (IEEE 1076-2008 4.5.3, 6.6.3): the
+// type marks that select the aliased overloads.
+struct AliasSignature {
+    std::vector<SubtypeIndication> parameters;
+    std::optional<SubtypeIndication> result;
+};
+
 struct Declaration {
     DeclarationId id;
     ScopeId scope;
@@ -782,6 +789,8 @@ struct Declaration {
     // Present for an alias declaration. Protected method aliases are untyped,
     // so the target is retained independently from the optional subtype.
     std::optional<Name> alias_target;
+    // Present for an alias of a subprogram.
+    std::optional<AliasSignature> alias_signature;
     std::optional<ScopeId> nested_scope;
     std::optional<CallableProfile> callable;
     std::optional<ComponentProfile> component;

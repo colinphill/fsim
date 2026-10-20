@@ -38,6 +38,11 @@ struct ReadSignal {
 struct SignalSelection {
     std::uint32_t offset { };
     std::uint32_t width { };
+    // An element read of a whole composite signal's 'LAST_VALUE: an event on
+    // the signal updates the element's last value whenever the element is
+    // assigned, changed or not (IEEE 1076-2008 16.2.4). A selected prefix
+    // (`s(i)'LAST_VALUE`) counts only events on that element.
+    bool composite_element { };
 
     friend bool operator==(const SignalSelection&, const SignalSelection&)
         = default;

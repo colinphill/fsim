@@ -335,6 +335,20 @@ namespace {
                 return end_of_run_ ? VhdlPslAttemptOutcome::pass
                                    : VhdlPslAttemptOutcome::pending;
             }
+            // `never s` fails at every cycle where s matches (IEEE 1850-2010
+            // 6.2.1.6.2); a Boolean is a sequence of one cycle.
+            if (first == "never") {
+                const auto operand = tokens.subspan(1U);
+                for (std::size_t sample = start; sample < samples_.size();
+                    ++sample) {
+                    if (!sequence(operand, sample, depth + 1U)
+                            .matches.empty()) {
+                        return VhdlPslAttemptOutcome::failure;
+                    }
+                }
+                return end_of_run_ ? VhdlPslAttemptOutcome::pass
+                                   : VhdlPslAttemptOutcome::pending;
+            }
             if (const auto until = top_level_word(tokens, "until")) {
                 for (std::size_t sample = start; sample < samples_.size();
                     ++sample) {

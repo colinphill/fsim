@@ -198,6 +198,73 @@ const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
         : fallback;
 }
 
+std::optional<double> Lowerer::hir_vhdl_math_real_constant(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->vhdl;
+    std::string name;
+    for (const auto character : source.text.substr(
+             source.text.find_last_of('.') == std::string::npos
+                 ? 0U
+                 : source.text.find_last_of('.') + 1U)) {
+        name.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(character))));
+    }
+    static constexpr std::array<std::pair<std::string_view, double>, 18>
+        constants {
+            std::pair { std::string_view { "math_e" }, 2.71828182845904523536 },
+            std::pair { std::string_view { "math_1_over_e" }, 0.36787944117144233402 },
+            std::pair { std::string_view { "math_pi" }, 3.14159265358979323846 },
+            std::pair { std::string_view { "math_2_pi" }, 6.28318530717958647693 },
+            std::pair { std::string_view { "math_1_over_pi" }, 0.31830988618379067154 },
+            std::pair { std::string_view { "math_pi_over_2" }, 1.57079632679489661923 },
+            std::pair { std::string_view { "math_pi_over_3" }, 1.04719755119659774615 },
+            std::pair { std::string_view { "math_pi_over_4" }, 0.78539816339744830962 },
+            std::pair { std::string_view { "math_3_pi_over_2" }, 4.71238898038468985769 },
+            std::pair { std::string_view { "math_log_of_2" }, 0.69314718055994530942 },
+            std::pair { std::string_view { "math_log_of_10" }, 2.30258509299404568402 },
+            std::pair { std::string_view { "math_log2_of_e" }, 1.44269504088896340736 },
+            std::pair { std::string_view { "math_log10_of_e" }, 0.43429448190325182765 },
+            std::pair { std::string_view { "math_sqrt_2" }, 1.41421356237309504880 },
+            std::pair { std::string_view { "math_1_over_sqrt_2" }, 0.70710678118654752440 },
+            std::pair { std::string_view { "math_sqrt_pi" }, 1.77245385090551602730 },
+            std::pair { std::string_view { "math_deg_to_rad" }, 0.01745329251994329577 },
+            std::pair { std::string_view { "math_rad_to_deg" }, 57.29577951308232087680 },
+        };
+    const auto found = std::ranges::find(constants, name,
+        &std::pair<std::string_view, double>::first);
+    if (found == constants.end()) {
+        return std::nullopt;
+    }
+    // A user constant of that name hides the package's.
+    if (source.referenced_name) {
+        std::vector<semantic::DeclarationId> candidates
+            = source.referenced_name->overloads;
+        if (source.referenced_name->selected) {
+            candidates.push_back(*source.referenced_name->selected);
+        }
+        for (const auto candidate : candidates) {
+            const auto declaration
+                = specialized_hir_unit_->find_declaration(candidate);
+            if (!declaration || declaration->vhdl == nullptr
+                || !specialized_hir_unit_->design().vhdl_scope_in_package(
+                    declaration->vhdl->scope, "ieee", "math_real")) {
+                return std::nullopt;
+            }
+        }
+    }
+    return found->second;
+}
+
 std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
     const semantic::ExpressionId expression_id) const
 {
@@ -223,14 +290,18 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
     std::ranges::transform(name, name.begin(), [](const char c) {
         return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     });
-    static constexpr std::array<std::string_view, 20> unary {
+    static constexpr std::array<std::string_view, 25> functions {
         "ceil", "floor", "sqrt", "exp", "log", "log2", "log10", "sin", "cos",
         "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
-        "arcsinh", "arccosh", "arctanh", "cbrt"
+        "arcsinh", "arccosh", "arctanh", "cbrt", "sign", "round", "trunc",
+        "realmax", "realmin"
     };
-    if (std::ranges::find(unary, name) == unary.end()
-        || (source.operands.size() == 2U && name != "log"
-            && name != "arctan")) {
+    const auto binary = name == "log" || name == "arctan"
+        || name == "realmax" || name == "realmin";
+    if (std::ranges::find(functions, name) == functions.end()
+        || (source.operands.size() == 2U && !binary)
+        || (source.operands.size() == 1U
+            && (name == "realmax" || name == "realmin"))) {
         return std::nullopt;
     }
     // A user function of that name hides nothing in IEEE.MATH_REAL unless
@@ -358,6 +429,43 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_math_real_call(
         process_.operations.emplace_back(ConditionalSelect {
             result, negative, negative_root, root });
         return result;
+    }
+    const auto select = [&](const RegisterId condition,
+                            const RegisterId when_true,
+                            const RegisterId when_false) {
+        const auto result = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConditionalSelect {
+            result, condition, when_true, when_false });
+        return result;
+    };
+    // REALMAX and REALMIN select the larger or smaller operand.
+    if (*name == "realmax" || *name == "realmin") {
+        const auto less = binary(
+            Operator::Less, values[0], values[1], ScalarKind::None);
+        return *name == "realmax" ? select(less, values[1], values[0])
+                                  : select(less, values[0], values[1]);
+    }
+    // SIGN(X) is -1.0, 0.0 or 1.0.
+    if (*name == "sign") {
+        const auto zero = real(0.0);
+        return select(
+            binary(Operator::Less, values.front(), zero, ScalarKind::None),
+            real(-1.0),
+            select(binary(Operator::Greater, values.front(), zero,
+                       ScalarKind::None),
+                real(1.0), zero));
+    }
+    // ROUND(X) rounds halves away from zero; TRUNC(X) rounds toward zero.
+    if (*name == "round" || *name == "trunc") {
+        const auto negative = binary(
+            Operator::Less, values.front(), real(0.0), ScalarKind::None);
+        const auto half = real(*name == "round" ? 0.5 : 0.0);
+        return select(negative,
+            math(Function::Ceil,
+                binary(Operator::Subtract, values.front(), half)),
+            math(Function::Floor,
+                binary(Operator::Add, values.front(), half)));
     }
     // LOG2(X) is LN(X) / LN(2), exact at the powers of two.
     if (*name == "log2") {
@@ -733,6 +841,130 @@ std::optional<RegisterId> Lowerer::lower_hir_scalar_converted_value(
                             : resize_register(integral, width, true);
     }
     return lower_hir_expression(value, width, target);
+}
+
+
+std::optional<bool> Lowerer::lower_hir_vhdl_math_real_uniform(
+    const semantic::StatementId statement_id)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto statement = specialized_hir_unit_->find_statement(statement_id);
+    if (!statement || statement->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const auto& procedure = statement->vhdl->procedure;
+    auto name = std::string { procedure.text() };
+    if (const auto separator = name.find_last_of('.');
+        separator != std::string::npos) {
+        name.erase(0U, separator + 1U);
+    }
+    if (!same_hir_identifier(name, "uniform", true)
+        || statement->vhdl->procedure_arguments.size() != 3U) {
+        return std::nullopt;
+    }
+    // A user procedure UNIFORM is lowered as written.
+    std::vector<semantic::DeclarationId> candidates = procedure.overloads;
+    if (procedure.selected) {
+        candidates.push_back(*procedure.selected);
+    }
+    for (const auto candidate : candidates) {
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(candidate);
+        if (!declaration || declaration->vhdl == nullptr
+            || !specialized_hir_unit_->design().vhdl_scope_in_package(
+                declaration->vhdl->scope, "ieee", "math_real")) {
+            return std::nullopt;
+        }
+    }
+    const auto& arguments = statement->vhdl->procedure_arguments;
+    if (std::ranges::any_of(arguments, [](const auto& argument) {
+            return argument.formal.has_value();
+        })) {
+        return std::nullopt;
+    }
+    // SEED1, SEED2 : inout POSITIVE; X : out REAL.
+    std::array<RegisterId, 3U> targets { };
+    std::array<std::size_t, 3U> widths { };
+    for (std::size_t index { }; index < arguments.size(); ++index) {
+        const auto declaration = hir_target_declaration(
+            arguments[index].actual);
+        const auto binding = declaration
+            ? hir_runtime_binding(*declaration, hir_process_scope_, true)
+            : std::nullopt;
+        if (!binding || !binding->local || binding->width == 0U
+            || binding->width > 64U
+            || (index == 2U && binding->width != 64U)) {
+            return std::nullopt;
+        }
+        targets[index] = *binding->local;
+        widths[index] = binding->width;
+    }
+    const auto constant = [&](const std::uint64_t value) {
+        return load_constant(unsigned_value(value, 64U),
+            frontend::ValueDomain::Integer);
+    };
+    const auto binary = [&](const BinaryOperator operation,
+                            const RegisterId lhs, const RegisterId rhs) {
+        const auto destination
+            = allocate_register(64U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(
+            Binary { operation, destination, lhs, rhs });
+        return destination;
+    };
+    // `value + modulus` when `value < bound`.
+    const auto wrap = [&](const RegisterId value, const std::uint64_t bound,
+                          const std::uint64_t modulus) {
+        const auto below = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary { BinaryOperator::less_signed,
+            below, value, constant(bound) });
+        return binary(BinaryOperator::add_signed, value,
+            binary(BinaryOperator::multiply_signed,
+                resize_register(below, 64U, false), constant(modulus)));
+    };
+    // L'Ecuyer's combined generator, as IEEE 1076.2 defines it.
+    const auto step = [&](const RegisterId seed, const std::uint64_t q,
+                          const std::uint64_t a, const std::uint64_t r,
+                          const std::uint64_t m) {
+        const auto k = binary(BinaryOperator::divide_signed, seed,
+            constant(q));
+        const auto product = binary(BinaryOperator::multiply_signed,
+            constant(a),
+            binary(BinaryOperator::subtract_signed, seed,
+                binary(BinaryOperator::multiply_signed, k, constant(q))));
+        return wrap(binary(BinaryOperator::subtract_signed, product,
+                        binary(BinaryOperator::multiply_signed, k,
+                            constant(r))),
+            0U, m);
+    };
+    const auto seed1 = step(resize_register(targets[0], 64U, true), 53668U,
+        40014U, 12211U, 2147483563U);
+    const auto seed2 = step(resize_register(targets[1], 64U, true), 52774U,
+        40692U, 3791U, 2147483399U);
+    const auto z = wrap(
+        binary(BinaryOperator::subtract_signed, seed1, seed2), 1U,
+        2147483562U);
+    process_.operations.emplace_back(CopyRegister { targets[0],
+        resize_register(seed1, widths[0], true) });
+    process_.operations.emplace_back(CopyRegister { targets[1],
+        resize_register(seed2, widths[1], true) });
+    const auto real = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogMath {
+        .function = runtime::SystemVerilogMathFunction::Itor,
+        .destination = real,
+        .first = z,
+        .first_width = 64U,
+        .first_signed = true,
+    });
+    const auto scale = load_constant(
+        unsigned_value(std::bit_cast<std::uint64_t>(4.656613e-10), 64U),
+        frontend::ValueDomain::Bit2);
+    using ScalarKind = frontend::SystemVerilogScalarKind;
+    process_.operations.emplace_back(SystemVerilogScalarBinary {
+        runtime::SystemVerilogScalarBinaryOperator::Multiply, targets[2],
+        real, scale, ScalarKind::Real, ScalarKind::Real, ScalarKind::Real });
+    return true;
 }
 
 } // namespace fsim::elaboration

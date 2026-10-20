@@ -1286,6 +1286,63 @@ void Lowerer::patch_hir_jumps(const std::span<const InstructionIndex> jumps,
     }
 }
 
+bool Lowerer::emit_hir_vhdl_call_length_check(
+    semantic::ExpressionId value,
+    const std::size_t target_width,
+    const frontend::SourceSpan& span)
+{
+    if (specialized_hir_unit_ == nullptr || target_width == 0U) {
+        return false;
+    }
+    for (;;) {
+        const auto expression = specialized_hir_unit_->find_expression(value);
+        if (!expression || expression->vhdl == nullptr) {
+            return false;
+        }
+        const auto& source = *expression->vhdl;
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.operands.size() == 1U
+            && (source.text == "@vhdl-inertial"
+                || source.text.starts_with(
+                    semantic::vhdl::qualified_expression_prefix))) {
+            value = source.operands.front();
+            continue;
+        }
+        if (source.kind != semantic::vhdl::ExpressionKind::call
+            && source.kind != semantic::vhdl::ExpressionKind::name) {
+            return false;
+        }
+        break;
+    }
+    auto width = std::optional<std::size_t> { };
+    if (const auto shape = hir_vhdl_function_result_shape(
+            value, hir_process_scope_)) {
+        width = shape->width;
+    } else if (const auto source = specialized_hir_unit_->find_expression(
+                   value);
+        source && source->vhdl != nullptr
+        && source->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && hir_vhdl_standard_function_profile(value)) {
+        // A standard function such as TO_SIGNED(x, 17) has the static
+        // length its arguments give it (IEEE 1076-2008 G.2).
+        if (const auto value_shape = hir_vhdl_shape(value);
+            value_shape && value_shape->complete() && !value_shape->null()
+            && value_shape->ranges.size() == 1U) {
+            width = hir_expression_width(value, hir_process_scope_);
+        }
+    }
+    if (!width || *width == 0U || *width == target_width) {
+        return false;
+    }
+    process_.operations.emplace_back(Report {
+        "VHDL value length does not match the length of its target",
+        runtime::simir::AssertionSeverity::failure,
+        runtime_source_location(span),
+    });
+    process_.operations.emplace_back(Halt { false });
+    return true;
+}
+
 void Lowerer::emit_hir_vhdl_string_length_check(
     const StringRegisterId target,
     const StringRegisterId value,
@@ -10048,6 +10105,65 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
+        // A null array target has no storage: a null value assigns nothing
+        // and a value with elements fails the length check (IEEE 1076-2008
+        // 10.5.2.1, 10.6.2.1).
+        const auto null_candidate = [&] {
+            if (!binding || (value && hir_vhdl_null_value(*value))) {
+                return true;
+            }
+            const auto subtype = hir_vhdl_expression_subtype(*target);
+            return subtype && !subtype->unconstrained
+                && vhdl_subtype_width(*subtype)
+                    == std::optional<std::size_t> { 0U };
+        };
+        if (statement->vhdl != nullptr && null_candidate()) {
+            const auto target_shape = hir_vhdl_shape(*target);
+            if (target_shape && target_shape->null()) {
+                const auto value_shape = hir_vhdl_shape(*value);
+                const auto value_width = hir_expression_width(
+                    *value, hir_process_scope_);
+                // An aggregate with OTHERS takes the target's null bounds
+                // (9.3.3.3).
+                const auto value_expression
+                    = specialized_hir_unit_->find_expression(*value);
+                const bool others_aggregate = value_expression
+                    && value_expression->vhdl != nullptr
+                    && value_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::aggregate
+                    && std::ranges::any_of(
+                        value_expression->vhdl->associations,
+                        [&](const semantic::vhdl::AggregateAssociation& item) {
+                            return std::ranges::any_of(item.choices,
+                                [&](const semantic::ExpressionId choice) {
+                                    const auto node = specialized_hir_unit_
+                                        ->find_expression(choice);
+                                    return node && node->vhdl != nullptr
+                                        && node->vhdl->kind
+                                            == semantic::vhdl::
+                                                ExpressionKind::name
+                                        && support::same_vhdl_identifier(
+                                            node->vhdl->text, "others");
+                                });
+                        });
+                if (others_aggregate || hir_vhdl_null_value(*value)
+                    || (value_shape && value_shape->null())
+                    || (value_width && *value_width == 0U)) {
+                    return true;
+                }
+                if (value_shape && value_shape->complete()
+                    && value_shape->ranges.size() == 1U) {
+                    process_.operations.emplace_back(Report {
+                        "VHDL value length does not match the length of "
+                        "its target",
+                        runtime::simir::AssertionSeverity::failure,
+                        runtime_source_location(span),
+                    });
+                    process_.operations.emplace_back(Halt { false });
+                    return true;
+                }
+            }
+        }
         if (!binding) {
             trace_generated("runtime-binding");
             trace_assignment_failure("runtime-binding");
@@ -10576,6 +10692,58 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (vhdl_dynamic_slice && !vhdl_dynamic_slice_width) {
             vhdl_dynamic_slice_width
                 = hir_expression_width(*value, hir_process_scope_);
+        }
+        // A variable slice and a slice value whose lengths are both known
+        // only at run time (`v1(i to j) := v4(i to j)`) copy element by
+        // element after a length check (IEEE 1076-2008 8.5, 10.6.2.1).
+        if (vhdl_dynamic_slice && !vhdl_dynamic_slice_width && value
+            && binding->local && !binding->signal && !member_offset
+            && !dynamic_vhdl_selection
+            && hir_expression_width(target_operands[0], hir_process_scope_)
+                == std::optional { binding->width }) {
+            const auto source = specialized_hir_unit_->find_expression(*value);
+            const auto prefix = source && source->vhdl != nullptr
+                    && source->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::slice
+                    && source->vhdl->operands.size() == 3U
+                ? std::optional { source->vhdl->operands.front() }
+                : std::nullopt;
+            const auto prefix_width = prefix
+                ? hir_expression_width(*prefix, hir_process_scope_)
+                : std::nullopt;
+            const auto prefix_value = prefix_width && *prefix_width != 0U
+                ? lower_hir_expression(*prefix, *prefix_width)
+                : std::nullopt;
+            const auto value_slice = prefix_value
+                ? lower_hir_vhdl_runtime_slice(*value, *prefix_width)
+                : std::nullopt;
+            const auto target_slice = value_slice && binding->width != 0U
+                ? lower_hir_vhdl_runtime_slice(*target, binding->width)
+                : std::nullopt;
+            const auto local = *binding->local;
+            const auto local_width = binding->width;
+            if (target_slice
+                && lower_hir_vhdl_runtime_slice_copy(*target_slice,
+                    *value_slice, *prefix_value, *prefix_width, span,
+                    [&](const RegisterId offset, const RegisterId element) {
+                        process_.operations.emplace_back(DynamicPartInsert {
+                            local,
+                            local,
+                            element,
+                            DynamicPartIndex {
+                                offset,
+                                static_cast<std::int64_t>(local_width - 1U),
+                                0,
+                                0U,
+                                static_cast<std::uint32_t>(
+                                    register_width(element)),
+                                true,
+                                true,
+                            },
+                        });
+                    })) {
+                return true;
+            }
         }
         if (!dynamic_vhdl_selection && vhdl_dynamic_slice_width) {
             if (*vhdl_dynamic_slice_width == 0U

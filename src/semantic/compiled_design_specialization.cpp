@@ -452,6 +452,9 @@ bool vhdl_predefined_operator_selected(const Expression& expression)
 
 const bool semantic_profile_diagnostics_enabled
     = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+// Traces record-generic element reads of the specialization evaluator.
+const bool vhdl_generic_trace_enabled
+    = std::getenv("FSIM_VHDL_GENERIC_TRACE") != nullptr;
 
 std::optional<std::string> parse_systemverilog_string_identity(
     const std::string_view identity)
@@ -1095,6 +1098,29 @@ std::vector<InstanceId> collect_instance_ids(const CompiledDesign& design,
     canonicalize(result);
     return result;
 }
+
+// IEEE.MATH_REAL constants (IEEE 1076.2), keyed by normalized spelling.
+constexpr std::array<std::pair<std::string_view, double>, 18>
+    math_real_constants {
+        std::pair { std::string_view { "mathe" }, 2.71828182845904523536 },
+        std::pair { std::string_view { "math1overe" }, 0.36787944117144233402 },
+        std::pair { std::string_view { "mathpi" }, 3.14159265358979323846 },
+        std::pair { std::string_view { "math2pi" }, 6.28318530717958647693 },
+        std::pair { std::string_view { "math1overpi" }, 0.31830988618379067154 },
+        std::pair { std::string_view { "mathpiover2" }, 1.57079632679489661923 },
+        std::pair { std::string_view { "mathpiover3" }, 1.04719755119659774615 },
+        std::pair { std::string_view { "mathpiover4" }, 0.78539816339744830962 },
+        std::pair { std::string_view { "math3piover2" }, 4.71238898038468985769 },
+        std::pair { std::string_view { "mathlogof2" }, 0.69314718055994530942 },
+        std::pair { std::string_view { "mathlogof10" }, 2.30258509299404568402 },
+        std::pair { std::string_view { "mathlog2ofe" }, 1.44269504088896340736 },
+        std::pair { std::string_view { "mathlog10ofe" }, 0.43429448190325182765 },
+        std::pair { std::string_view { "mathsqrt2" }, 1.41421356237309504880 },
+        std::pair { std::string_view { "math1oversqrt2" }, 0.70710678118654752440 },
+        std::pair { std::string_view { "mathsqrtpi" }, 1.77245385090551602730 },
+        std::pair { std::string_view { "mathdegtorad" }, 0.01745329251994329577 },
+        std::pair { std::string_view { "mathradtodeg" }, 57.29577951308232087680 },
+    };
 
 std::string normalized_token(const std::string_view input)
 {
@@ -2151,6 +2177,51 @@ public:
             if (!result) {
                 result = evaluate_expression(*view->vhdl);
             }
+            // A parameterless or user function call whose result is an
+            // integer or enumeration value (IEEE 1076-2008 9.4.2, 9.4.3).
+            // A name here must denote a function: generics and constants
+            // keep their bound values through the paths above.
+            const auto names_function = [&] {
+                if (view->vhdl->kind != vhdl::ExpressionKind::name) {
+                    return true;
+                }
+                if (!view->vhdl->referenced_name) {
+                    return false;
+                }
+                const auto& name = *view->vhdl->referenced_name;
+                auto candidates = name.overloads;
+                if (name.selected) {
+                    candidates.push_back(*name.selected);
+                }
+                if (candidates.empty()) {
+                    vhdl::Name unresolved;
+                    unresolved.spelling = view->vhdl->text;
+                    candidates = CompiledDesignResolver { unit_ }
+                                     .resolve_vhdl(unresolved,
+                                         view->vhdl->scope)
+                                     .candidates;
+                }
+                return !candidates.empty()
+                    && std::ranges::all_of(candidates,
+                        [&](const DeclarationId candidate) {
+                            const auto declaration
+                                = unit_.find_declaration(candidate);
+                            return declaration
+                                && declaration->vhdl != nullptr
+                                && declaration->vhdl->callable
+                                && declaration->vhdl->callable->function;
+                        });
+            };
+            if (!result
+                && (view->vhdl->kind == vhdl::ExpressionKind::name
+                    || view->vhdl->kind == vhdl::ExpressionKind::call)
+                && !view->vhdl->text.starts_with('\'')
+                && names_function()) {
+                if (const auto value = evaluate_vhdl_value(expression);
+                    value && value->kind == VhdlConstantValue::Kind::integer) {
+                    result = value->integer;
+                }
+            }
         }
         active_expressions_.erase(active_key);
         if (call_frames_.empty()) {
@@ -2250,6 +2321,24 @@ public:
             return SpecializedHirVhdlConstantValue { value->packed };
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<SpecializedHirVhdlRecordValue>
+    evaluate_vhdl_record_expression(const ExpressionId expression)
+    {
+        const auto value = evaluate_vhdl_value(expression);
+        if (!value || value->kind != VhdlConstantValue::Kind::record) {
+            return std::nullopt;
+        }
+        SpecializedHirVhdlRecordValue result;
+        result.record_type = value->record_type;
+        for (const auto& element : value->elements) {
+            if (element.kind != VhdlConstantValue::Kind::integer) {
+                return std::nullopt;
+            }
+            result.elements.push_back(element.integer);
+        }
+        return result;
     }
 
     [[nodiscard]] std::optional<SpecializedHirVhdlPackedArrayValue>
@@ -2725,8 +2814,11 @@ private:
     vhdl_coerce_callable_return(VhdlConstantValue value,
         const vhdl::SubtypeIndication& subtype)
     {
+        // A BOOLEAN result is its position number (IEEE 1076-2008 5.2.2.1).
         if (value.kind == VhdlConstantValue::Kind::integer) {
             return subtype.domain == vhdl::ValueDomain::integer
+                    || (subtype.domain == vhdl::ValueDomain::boolean
+                        && (value.integer == 0 || value.integer == 1))
                 ? std::optional { std::move(value) }
                 : std::nullopt;
         }
@@ -3949,6 +4041,36 @@ private:
                 continue;
             }
             auto value = evaluate_vhdl_declaration(*declaration);
+            if (vhdl_generic_trace_enabled) {
+                const auto& actuals = unit_.specialization().actual_identities;
+                const auto actual = std::ranges::find(actuals, *declaration,
+                    &SpecializedHirActualIdentity::declaration);
+                std::fprintf(stderr,
+                    "[fsim-vhdl-generic] selected=%s declaration=%u "
+                    "value=%d actual=%d actual_declaration=%d mapped=%s\n",
+                    std::string { text }.c_str(), declaration->value(),
+                    value ? 1 : 0, actual != actuals.end() ? 1 : 0,
+                    actual != actuals.end() && actual->actual_declaration
+                        ? static_cast<int>(actual->actual_declaration->value())
+                        : -1,
+                    actual != actuals.end() && actual->actual_declaration
+                            && unit_.find_declaration(
+                                *actual->actual_declaration)
+                        ? "found"
+                        : "missing");
+                std::string formals;
+                for (const auto& identity : actuals) {
+                    formals += ' ' + std::to_string(identity.declaration.value())
+                        + '=' + identity.identity;
+                }
+                std::fprintf(stderr,
+                    "[fsim-vhdl-generic]   unit=%u actuals:%s\n",
+                    unit_.specialization().unit.value(), formals.c_str());
+            }
+            const auto prefix_kind = value ? static_cast<int>(value->kind) : -1;
+            const auto prefix_elements = value ? value->elements.size() : 0U;
+            const auto prefix_record_type
+                = value ? value->record_type.value() : 0U;
             auto remaining = text.substr(dot + 1U);
             while (value && !remaining.empty()) {
                 const auto separator = remaining.find('.');
@@ -3957,6 +4079,14 @@ private:
                 remaining = separator == std::string_view::npos
                     ? std::string_view { }
                     : remaining.substr(separator + 1U);
+            }
+            if (vhdl_generic_trace_enabled) {
+                std::fprintf(stderr,
+                    "[fsim-vhdl-generic]   prefix_kind=%d elements=%zu "
+                    "record_type=%u projected=%d kind=%d\n",
+                    prefix_kind, prefix_elements, prefix_record_type,
+                    value ? 1 : 0,
+                    value ? static_cast<int>(value->kind) : -1);
             }
             return value;
         }
@@ -4252,6 +4382,24 @@ private:
             }
         }
         ensure_actual(declaration);
+        // A record actual keeps its elements; its integral identity is
+        // only a cache key (IEEE 1076-2008 6.5.6.2).
+        if (const auto actual = actual_vhdl_record_values_.find(declaration);
+            actual != actual_vhdl_record_values_.end()) {
+            const auto type = unit_.find_type(actual->second.record_type);
+            if (!type || type->vhdl == nullptr
+                || type->vhdl->record_elements.size()
+                    != actual->second.elements.size()) {
+                return std::nullopt;
+            }
+            VhdlConstantValue value;
+            value.kind = VhdlConstantValue::Kind::record;
+            value.record_type = actual->second.record_type;
+            for (const auto element : actual->second.elements) {
+                value.elements.push_back(vhdl_integer_value(element));
+            }
+            return value;
+        }
         if (const auto actual = actuals_.find(declaration);
             actual != actuals_.end() && actual->second) {
             return vhdl_integer_value(*actual->second);
@@ -6347,11 +6495,16 @@ private:
                 return std::nullopt;
             }
             if (source.text == "**") {
-                const auto exponent = vhdl_integer_expression(
-                    source.operands[1]);
-                return exponent ? std::optional { std::pow(
-                                      *left, static_cast<double>(*exponent)) }
-                                : std::nullopt;
+                if (const auto exponent = vhdl_integer_expression(
+                        source.operands[1])) {
+                    return std::pow(*left, static_cast<double>(*exponent));
+                }
+                // IEEE.MATH_REAL "**" with a REAL exponent (1076.2).
+                const auto exponent = vhdl_real_expression(
+                    source.operands[1], depth + 1U);
+                return exponent && *left > 0.0
+                    ? std::optional { std::pow(*left, *exponent) }
+                    : std::nullopt;
             }
             const auto right = vhdl_real_expression(
                 source.operands[1], depth + 1U);
@@ -6369,6 +6522,11 @@ private:
             }
             if (source.text == "/" && *right != 0.0) {
                 return *left / *right;
+            }
+            // IEEE.MATH_REAL "mod" has the sign of the divisor (1076.2).
+            if (support::equal_ignoring_ascii_case(source.text, "mod")
+                && *right != 0.0) {
+                return *left - *right * std::floor(*left / *right);
             }
             return std::nullopt;
         }
@@ -6446,16 +6604,20 @@ private:
                     std::string_view { "log10" },
                     std::string_view { "realmax" },
                     std::string_view { "realmin" }, std::string_view { "sign" },
-                    std::string_view { "mathe" }, std::string_view { "mathpi" },
-                    std::string_view { "math2pi" },
-                    std::string_view { "mathpiover2" },
-                    std::string_view { "mathsqrt2" },
-                    std::string_view { "mathlog2ofe" },
-                    std::string_view { "mathlog10ofe" },
-                    std::string_view { "mathloge2" },
-                    std::string_view { "mathloge10" },
+                    std::string_view { "cbrt" }, std::string_view { "sin" },
+                    std::string_view { "cos" }, std::string_view { "tan" },
+                    std::string_view { "arcsin" },
+                    std::string_view { "arccos" },
+                    std::string_view { "arctan" }, std::string_view { "sinh" },
+                    std::string_view { "cosh" }, std::string_view { "tanh" },
+                    std::string_view { "arcsinh" },
+                    std::string_view { "arccosh" },
+                    std::string_view { "arctanh" },
                 };
-                return std::ranges::find(members, name) != members.end();
+                return std::ranges::find(members, name) != members.end()
+                    || std::ranges::find(math_real_constants, name,
+                           &std::pair<std::string_view, double>::first)
+                    != math_real_constants.end();
             }
             return std::ranges::all_of(candidates,
                     [&](const DeclarationId candidate) {
@@ -6471,20 +6633,9 @@ private:
             return std::nullopt;
         }
         if (source.operands.empty()) {
-            static constexpr std::array constants {
-                std::pair { std::string_view { "mathe" }, 2.71828182845904523536 },
-                std::pair { std::string_view { "mathpi" }, 3.14159265358979323846 },
-                std::pair { std::string_view { "math2pi" }, 6.28318530717958647693 },
-                std::pair { std::string_view { "mathpiover2" }, 1.57079632679489661923 },
-                std::pair { std::string_view { "mathsqrt2" }, 1.41421356237309504880 },
-                std::pair { std::string_view { "mathlog2ofe" }, 1.44269504088896340736 },
-                std::pair { std::string_view { "mathlog10ofe" }, 0.43429448190325182765 },
-                std::pair { std::string_view { "mathloge2" }, 0.69314718055994530942 },
-                std::pair { std::string_view { "mathloge10" }, 2.30258509299404568402 },
-            };
-            const auto found = std::ranges::find(constants, name,
+            const auto found = std::ranges::find(math_real_constants, name,
                 &std::pair<std::string_view, double>::first);
-            if (found != constants.end()) {
+            if (found != math_real_constants.end()) {
                 return found->second;
             }
         }
@@ -6549,6 +6700,47 @@ private:
             return arguments.front() > 0.0 ? 1.0
                 : arguments.front() < 0.0 ? -1.0
                                           : 0.0;
+        }
+        if (name == "cbrt") {
+            return unary(std::cbrt);
+        }
+        if (name == "arctan" && arguments.size() == 2U) {
+            return std::atan2(arguments[0], arguments[1]);
+        }
+        static constexpr std::array<std::pair<std::string_view,
+                                        double (*)(double)>,
+            12>
+            trigonometric {
+                std::pair { std::string_view { "sin" },
+                    static_cast<double (*)(double)>(std::sin) },
+                std::pair { std::string_view { "cos" },
+                    static_cast<double (*)(double)>(std::cos) },
+                std::pair { std::string_view { "tan" },
+                    static_cast<double (*)(double)>(std::tan) },
+                std::pair { std::string_view { "arcsin" },
+                    static_cast<double (*)(double)>(std::asin) },
+                std::pair { std::string_view { "arccos" },
+                    static_cast<double (*)(double)>(std::acos) },
+                std::pair { std::string_view { "arctan" },
+                    static_cast<double (*)(double)>(std::atan) },
+                std::pair { std::string_view { "sinh" },
+                    static_cast<double (*)(double)>(std::sinh) },
+                std::pair { std::string_view { "cosh" },
+                    static_cast<double (*)(double)>(std::cosh) },
+                std::pair { std::string_view { "tanh" },
+                    static_cast<double (*)(double)>(std::tanh) },
+                std::pair { std::string_view { "arcsinh" },
+                    static_cast<double (*)(double)>(std::asinh) },
+                std::pair { std::string_view { "arccosh" },
+                    static_cast<double (*)(double)>(std::acosh) },
+                std::pair { std::string_view { "arctanh" },
+                    static_cast<double (*)(double)>(std::atanh) },
+            };
+        if (const auto function = std::ranges::find(trigonometric, name,
+                &std::pair<std::string_view, double (*)(double)>::first);
+            function != trigonometric.end()) {
+            const auto value = unary(function->second);
+            return value && std::isfinite(*value) ? value : std::nullopt;
         }
         return std::nullopt;
     }
@@ -13336,6 +13528,10 @@ private:
                 actual->declaration,
                 *actual->vhdl_boolean_array_value);
         }
+        if (actual->vhdl_record_value) {
+            actual_vhdl_record_values_.emplace(
+                actual->declaration, *actual->vhdl_record_value);
+        }
         if (actual->actual_declaration
             && *actual->actual_declaration != actual->declaration) {
             actual_declarations_.emplace(
@@ -13395,6 +13591,8 @@ private:
         actual_vhdl_packed_values_;
     std::map<DeclarationId, SpecializedHirVhdlBooleanArrayValue>
         actual_vhdl_boolean_array_values_;
+    std::map<DeclarationId, SpecializedHirVhdlRecordValue>
+        actual_vhdl_record_values_;
     std::map<std::string, std::optional<std::int64_t>>
         hierarchy_identities_;
     std::map<DeclarationId, std::optional<std::int64_t>> declarations_;
@@ -13745,12 +13943,30 @@ const vhdl::GenerateRegion* vhdl_alternative_generate(
     const vhdl::GenerateRegion& generate,
     const vhdl::GenerateRegion::Alternative& alternative)
 {
-    const auto label = alternative.label.empty()
-        ? generate.label + ".alternative"
-        : alternative.label;
-    const auto found = std::ranges::find(
-        generate.nested, label, &vhdl::GenerateRegion::label);
-    return found == generate.nested.end() ? nullptr : &*found;
+    const auto label_of
+        = [&](const vhdl::GenerateRegion::Alternative& candidate) {
+              return candidate.label.empty()
+                  ? generate.label + ".alternative"
+                  : candidate.label;
+          };
+    const auto label = label_of(alternative);
+    // Unlabeled alternatives share a label; the n-th of them is the n-th
+    // nested region with it.
+    std::size_t occurrence { };
+    for (const auto& candidate : generate.alternatives) {
+        if (&candidate == &alternative) {
+            break;
+        }
+        if (label_of(candidate) == label) {
+            ++occurrence;
+        }
+    }
+    for (const auto& candidate : generate.nested) {
+        if (candidate.label == label && occurrence-- == 0U) {
+            return &candidate;
+        }
+    }
+    return nullptr;
 }
 
 void select_vhdl_generate(const vhdl::GenerateRegion& generate,
@@ -16418,6 +16634,43 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
             }
             const auto formal_declaration = design.find_declaration(
                 formal.declaration);
+            // A record generic whose actual names a constant or generic has
+            // that object's value (IEEE 1076-2008 6.5.6.2); the instance's
+            // evaluator reads its elements (`params.scale`) through it.
+            if (!binding.actual_declaration && formal_declaration
+                && formal_declaration->vhdl != nullptr
+                && formal_declaration->vhdl->form
+                    == vhdl::DeclarationForm::generic_constant
+                && formal_declaration->vhdl->subtype) {
+                bool record { };
+                std::set<TypeId> visited;
+                for (auto type_id
+                     = formal_declaration->vhdl->subtype->type_mark.target;
+                     type_id.valid() && visited.insert(type_id).second;) {
+                    const auto type = design.find_type(type_id);
+                    if (!type || type->vhdl == nullptr) {
+                        break;
+                    }
+                    if (type->vhdl->form == vhdl::TypeForm::record) {
+                        record = true;
+                        break;
+                    }
+                    type_id = type->vhdl->base.type_mark.target;
+                }
+                const auto named = record
+                    ? expression_declaration(
+                          design, *actual.expression, parent)
+                    : std::nullopt;
+                const auto object = named
+                    ? design.find_declaration(*named)
+                    : std::nullopt;
+                if (object && object->vhdl != nullptr
+                    && (object->vhdl->form == vhdl::DeclarationForm::constant
+                        || object->vhdl->form
+                            == vhdl::DeclarationForm::generic_constant)) {
+                    binding.actual_declaration = *named;
+                }
+            }
             if (formal_declaration
                 && formal_declaration->vhdl != nullptr
                 && formal_declaration->vhdl->subtype
@@ -16978,6 +17231,20 @@ SpecializedHirUnit::evaluate_vhdl_constant_expression(
         nullptr, initializer_memo_context_
     };
     return evaluator.evaluate_vhdl_constant(expression);
+}
+
+std::optional<SpecializedHirVhdlRecordValue>
+SpecializedHirUnit::evaluate_vhdl_record_expression(
+    const ExpressionId expression) const
+{
+    if (language() != Language::vhdl) {
+        return std::nullopt;
+    }
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
+    return evaluator.evaluate_vhdl_record_expression(expression);
 }
 
 std::optional<SpecializedHirVhdlPackedArrayValue>

@@ -443,7 +443,12 @@ bool Lowerer::lower_hir_vhdl_shaped_declaration(
         }
         bounds.push_back(*left);
         bounds.push_back(*right);
-        directions.push_back(constraint.descending ? 1U : 0U);
+        // `X'range` takes X's direction (IEEE 1076-2008 5.3.2.2).
+        const bool descending = constraint.direction_from_bounds
+            ? hir_vhdl_range_direction(constraint, hir_process_scope_)
+                  .value_or(constraint.descending)
+            : constraint.descending;
+        directions.push_back(descending ? 1U : 0U);
     }
     const auto fill = load_constant(profile->element_default,
         profile->element_domain);
@@ -1649,8 +1654,7 @@ const Lowerer::HirVhdlShapedLocal* Lowerer::hir_vhdl_shaped_heap_view(
     const auto& source = *expression->vhdl;
     std::optional<semantic::ExpressionId> handle;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && (source.text == "@vhdl-dereference"
-            || source.text == "@vhdl-member:all")
+        && source.text == "@vhdl-dereference"
         && source.operands.size() == 1U) {
         handle = source.operands.front();
     } else if (prefix && source.kind == semantic::vhdl::ExpressionKind::name) {

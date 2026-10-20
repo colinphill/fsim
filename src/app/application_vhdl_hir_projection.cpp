@@ -1187,7 +1187,33 @@ void VhdlHirBuilder::add_disconnection_specifications(
             }
             const vh::TypeDefinition* record { };
             visited.clear();
-            for (auto id = result.type_mark.target;
+            auto record_root = result.type_mark.target;
+            // A type made visible by a use clause is resolved by name after
+            // projection; a uniquely named record type still supplies its
+            // elements here.
+            if (!record_root.valid() && !result.type_mark.spelling.empty()) {
+                const auto mark = support::canonical_vhdl_spelling(
+                    result.type_mark.spelling.substr(
+                        result.type_mark.spelling.find_last_of('.') + 1U));
+                const vh::TypeDefinition* named { };
+                bool unique = true;
+                for (const auto& candidate : hir_.types()) {
+                    if (support::canonical_vhdl_spelling(candidate.name)
+                        != mark) {
+                        continue;
+                    }
+                    unique = named == nullptr;
+                    named = &candidate;
+                    if (!unique) {
+                        break;
+                    }
+                }
+                if (unique && named != nullptr
+                    && named->form == vh::TypeForm::record) {
+                    record_root = named->id;
+                }
+            }
+            for (auto id = record_root;
                 id.valid() && visited.insert(id.value()).second;) {
                 const auto* definition = find_definition(id);
                 if (definition == nullptr) {

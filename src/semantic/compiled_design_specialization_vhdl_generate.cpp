@@ -90,6 +90,18 @@ private:
             expression);
     }
 
+    [[nodiscard]] std::optional<SpecializedHirVhdlPackedValue>
+    evaluate_packed(const ExpressionId expression,
+        const std::span<const SpecializedHirNamedIdentity> identities) const
+    {
+        const auto value = working_unit(identities)
+                               .evaluate_vhdl_constant_expression(expression);
+        const auto* packed = value
+            ? std::get_if<SpecializedHirVhdlPackedValue>(&*value)
+            : nullptr;
+        return packed != nullptr ? std::optional { *packed } : std::nullopt;
+    }
+
     [[nodiscard]] bool reject(
         std::string code, std::string message, const SourceSpanId source)
     {
@@ -146,15 +158,32 @@ private:
         const vhdl::GenerateRegion& region,
         const vhdl::GenerateRegion::Alternative& alternative) const
     {
-        const auto label = alternative.label.empty()
-            ? region.label + ".alternative"
-            : alternative.label;
-        const auto found = std::ranges::find_if(
-            region.nested, [&](const vhdl::GenerateRegion& candidate) {
-                return support::equal_ignoring_ascii_case(
-                    candidate.label, label);
-            });
-        return found == region.nested.end() ? nullptr : &*found;
+        const auto label_of = [&](const vhdl::GenerateRegion::Alternative&
+                                      candidate) {
+            return candidate.label.empty()
+                ? region.label + ".alternative"
+                : candidate.label;
+        };
+        const auto label = label_of(alternative);
+        // Unlabeled alternatives share a label; the n-th of them is the
+        // n-th nested region with it.
+        std::size_t occurrence { };
+        for (const auto& candidate : region.alternatives) {
+            if (&candidate == &alternative) {
+                break;
+            }
+            if (support::equal_ignoring_ascii_case(
+                    label_of(candidate), label)) {
+                ++occurrence;
+            }
+        }
+        for (const auto& candidate : region.nested) {
+            if (support::equal_ignoring_ascii_case(candidate.label, label)
+                && occurrence-- == 0U) {
+                return &candidate;
+            }
+        }
+        return nullptr;
     }
 
     [[nodiscard]] std::optional<bool> choice_matches(
@@ -385,6 +414,11 @@ private:
         }
         const auto selector = evaluate(*region.condition, identities);
         if (!selector) {
+            if (const auto packed = evaluate_packed(
+                    *region.condition, identities)) {
+                return specialize_array_selection(
+                    region, parent_path, identities, *packed);
+            }
             return reject("FSIM-ELAB-GEN-001",
                 "cannot evaluate compiled VHDL selection-generate "
                 "selector",
@@ -446,6 +480,59 @@ private:
                     intervals.push_back(*interval);
                 }
                 if (*matches) {
+                    selected = &alternative;
+                }
+            }
+        }
+        selected = selected != nullptr ? selected : fallback;
+        if (selected == nullptr) {
+            return true;
+        }
+        const auto* nested = alternative_region(region, *selected);
+        if (nested == nullptr) {
+            return reject("FSIM-ELAB-GEN-001",
+                "compiled VHDL selection-generate has no retained body "
+                "for alternative '" + selected->label + "'",
+                selected->source);
+        }
+        return specialize(*nested, parent_path, identities);
+    }
+
+    // A one-dimensional character-array selector (IEEE 1076-2008 11.8,
+    // 10.9): each choice is a value of the same length, and the matching
+    // alternative is the one whose choice equals the selector element by
+    // element.
+    [[nodiscard]] bool specialize_array_selection(
+        const vhdl::GenerateRegion& region,
+        const std::string_view parent_path,
+        const std::span<const SpecializedHirNamedIdentity> identities,
+        const SpecializedHirVhdlPackedValue& selector)
+    {
+        const vhdl::GenerateRegion::Alternative* selected = nullptr;
+        const vhdl::GenerateRegion::Alternative* fallback = nullptr;
+        std::set<std::string> seen;
+        for (const auto& alternative : region.alternatives) {
+            if (alternative.is_default) {
+                fallback = &alternative;
+                continue;
+            }
+            for (const auto& choice : alternative.choices) {
+                const auto value = choice.right
+                    ? std::nullopt
+                    : evaluate_packed(choice.left, identities);
+                if (!value || value->bits.size() != selector.bits.size()) {
+                    return reject("FSIM-ELAB-GEN-009",
+                        "cannot evaluate compiled VHDL "
+                        "selection-generate choice",
+                        choice.source);
+                }
+                if (!seen.insert(value->bits).second) {
+                    return reject("FSIM-ELAB-GEN-010",
+                        "compiled VHDL selection-generate choices "
+                        "overlap",
+                        choice.source);
+                }
+                if (value->bits == selector.bits) {
                     selected = &alternative;
                 }
             }

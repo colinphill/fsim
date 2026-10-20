@@ -743,6 +743,24 @@ namespace {
         return result;
     }
 
+    // Calls resolved through different generic actuals (a formal subprogram,
+    // an instance's generics) run different bodies or environments, so their
+    // frames must not be shared (IEEE 1076-2008 4.2.1, 6.5.6.2).
+    void append_hir_generic_binding_key(std::string& key,
+        const semantic::CompiledBindingFrame& bindings)
+    {
+        for (const auto& binding : bindings) {
+            key += "|generic:" + std::to_string(binding.formal.value()) + ":"
+                + (binding.expression
+                        ? std::to_string(binding.expression->value())
+                        : std::string { "-" })
+                + ":"
+                + (binding.actual_declaration
+                        ? std::to_string(binding.actual_declaration->value())
+                        : std::string { "-" });
+        }
+    }
+
 } // namespace
 
 std::optional<ContainerType> Lowerer::hir_typed_pattern_container_type(
@@ -12124,11 +12142,19 @@ Lowerer::hir_vhdl_returned_result_shape(
         result.ranges.push_back(*range);
         return result;
     };
+    // Any other returned value, an aggregate included, has the result type
+    // with its index range open as its context (9.3.3.3).
+    auto open_return = *return_subtype;
+    std::erase_if(open_return.constraints,
+        [](const semantic::vhdl::RangeConstraint& range) {
+            return range.kind == semantic::vhdl::RangeKind::array_index;
+        });
     std::optional<HirVhdlShape> shape;
     for (const auto value : returned) {
         auto candidate = literal_shape(value);
         if (!candidate) {
-            candidate = hir_vhdl_shape(value);
+            candidate = hir_vhdl_contextual_shape(
+                value, open_return, declaration->vhdl->scope);
         }
         if (!candidate || candidate->ranges.size() != 1U
             || !candidate->complete()) {
@@ -13374,6 +13400,39 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         }
     }
     return true;
+}
+
+bool Lowerer::hir_vhdl_overload_profile_applies(
+    const semantic::ExpressionId expression_id,
+    const semantic::DeclarationId callable) const
+{
+    const auto resolution = hir_callable_resolution(callable);
+    if (!resolution) {
+        return true;
+    }
+    hir_generic_binding_frames_.push_back(resolution->generic_bindings);
+    const PopBackGuard generic_scope { hir_generic_binding_frames_ };
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        resolution->body);
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->callable
+        || !declaration->vhdl->nested_scope) {
+        return true;
+    }
+    const auto actuals = bind_hir_function_actuals(
+        expression_id, resolution->body);
+    const auto& formals = declaration->vhdl->callable->formals;
+    if (!actuals || actuals->size() != formals.size()) {
+        return false;
+    }
+    HirVhdlOverloadInference inference;
+    return std::ranges::all_of(
+        hir_vhdl_actual_match_order(*specialized_hir_unit_, *actuals),
+        [&](const std::size_t index) {
+            return hir_vhdl_actual_matches_formal(*resolution,
+                formals[index], *declaration->vhdl->nested_scope,
+                (*actuals)[index], hir_process_scope_, inference);
+        });
 }
 
 std::optional<Lowerer::HirCallableResolution>
@@ -15515,17 +15574,8 @@ Lowerer::lower_hir_function_call_value(
         callable_key += "|instance:"
             + std::to_string(resolution->package_instance->value());
     }
-    for (const auto& binding : resolution->generic_bindings) {
-        callable_key += "|generic:" + std::to_string(binding.formal.value())
-            + ":"
-            + (binding.expression
-                    ? std::to_string(binding.expression->value())
-                    : std::string { "-" })
-            + ":"
-            + (binding.actual_declaration
-                    ? std::to_string(binding.actual_declaration->value())
-                    : std::string { "-" });
-    }
+    append_hir_generic_binding_key(
+        callable_key, resolution->generic_bindings);
     if (lexical_parent) {
         callable_key += "|lexical-parent:"
             + std::to_string(*lexical_parent);
@@ -17016,6 +17066,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
     auto callable_key_text = std::to_string(callable_key)
         + (interface_callable ? "|receiver:" + interface_callable->receiver : "");
+    append_hir_generic_binding_key(
+        callable_key_text, resolution->generic_bindings);
     if (lexical_parent) {
         callable_key_text += "|lexical-parent:"
             + std::to_string(*lexical_parent);
@@ -17534,6 +17586,9 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     }
     if (is_hir_vhdl_assert_statement(statement_id)) {
         return lower_hir_vhdl_assert_statement(statement_id);
+    }
+    if (const auto lowered = lower_hir_vhdl_math_real_uniform(statement_id)) {
+        return *lowered;
     }
     const auto procedure_spelling = hir_vhdl_std_env_procedure_spelling(
         statement->vhdl->procedure, statement->vhdl->scope);
@@ -18369,6 +18424,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             callable_key_text += std::to_string(member.storage) + ",";
         }
     }
+    append_hir_generic_binding_key(
+        callable_key_text, resolution->generic_bindings);
     if (lexical_parent) {
         callable_key_text += "|lexical-parent:"
             + std::to_string(*lexical_parent);
@@ -19803,8 +19860,16 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             for (auto id = container_begin;
                 id < next_container_register_; ++id) {
                 // A cached container property is reloaded after each call,
-                // so a nested invocation need not preserve it.
-                if (std::ranges::none_of(hir_class_container_caches_,
+                // so a nested invocation need not preserve it. A designated
+                // object heap belongs to the process even when a subprogram
+                // first allocates into it (IEEE 1076-2008 9.3.7).
+                const bool access_heap = std::ranges::any_of(
+                    hir_vhdl_access_heaps_, [&](const auto& entry) {
+                        return entry.second.objects == id
+                            || entry.second.issued_handles == id;
+                    });
+                if (!access_heap
+                    && std::ranges::none_of(hir_class_container_caches_,
                         [&](const HirClassContainerCache& cache) {
                             return cache.value == id;
                         })) {

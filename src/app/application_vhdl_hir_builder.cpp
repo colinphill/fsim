@@ -233,6 +233,19 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     }
     output.direction = vhdl_direction(input.direction);
     output.alias_target = name(input.actual, input.span, scope);
+    if (input.signature) {
+        const auto origin = output.origin;
+        vh::AliasSignature signature;
+        for (const auto& parameter : input.signature->parameters) {
+            signature.parameters.push_back(
+                subtype(parameter, input.span, scope, origin));
+        }
+        if (input.signature->result) {
+            signature.result = subtype(
+                *input.signature->result, input.span, scope, origin);
+        }
+        declaration(id).alias_signature = std::move(signature);
+    }
     if (input.actual_expression) {
         // An element or slice target is kept as the alias's expression.
         const auto target = expression(

@@ -701,12 +701,29 @@ private:
     [[nodiscard]] std::optional<HirVhdlConstantArrayShape>
     hir_vhdl_constant_array_shape(
         semantic::DeclarationId declaration) const;
+    // The bits of a positional array aggregate of `context`'s type whose
+    // element count its associations fix (IEEE 1076-2008 9.3.3.3).
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_positional_aggregate_bits(
+        semantic::ExpressionId aggregate,
+        const semantic::vhdl::SubtypeIndication& context,
+        semantic::ScopeId scope) const;
+    // Whether `expression` is a value with a known null index range: a
+    // null array or "" (IEEE 1076-2008 5.3.2.2).
+    [[nodiscard]] bool hir_vhdl_null_value(
+        semantic::ExpressionId expression) const;
+    // The unconstrained array subtype the predefined "&" of two array
+    // operands of one type yields (IEEE 1076-2008 9.2.5), or nullopt.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_concatenation_subtype(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_unconstrained_constant_range(
         const semantic::vhdl::Declaration& declaration, std::size_t width,
         semantic::ScopeId process_scope,
         std::size_t* proven_width = nullptr) const;
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<HirPackedRange> hir_expression_direct_range(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
     // The smallest and largest choices of a named array aggregate without
@@ -898,6 +915,10 @@ private:
     [[nodiscard]] std::optional<std::int64_t>
     hir_vhdl_elaborated_constant_element(
         semantic::ExpressionId expression) const;
+    // `c(l to r)(i)`: the element of a static slice of such a constant.
+    [[nodiscard]] std::optional<std::int64_t>
+    hir_vhdl_elaborated_slice_constant_element(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
     hir_vhdl_function_result_proof(semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -929,6 +950,9 @@ private:
         std::vector<std::optional<HirPackedRange>> ranges;
         std::vector<semantic::vhdl::ElementConstraint> element_constraints;
         [[nodiscard]] bool complete() const noexcept;
+        // A known null range in some dimension: the value has no elements
+        // (IEEE 1076-2008 5.3.2.2).
+        [[nodiscard]] bool null() const noexcept;
     };
     // The shape a subtype gives its objects.
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_subtype_shape(
@@ -966,6 +990,10 @@ private:
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_shape(
         semantic::ExpressionId expression) const;
     mutable std::size_t hir_vhdl_shape_depth_ { };
+    // Expressions whose range is being taken from the shape service.
+    mutable std::unordered_set<std::uint32_t> hir_vhdl_range_shapes_;
+    // User attribute values whose open subtype is being completed.
+    mutable std::unordered_set<std::uint32_t> hir_vhdl_attribute_values_;
     struct HirConstantSelection {
         std::size_t offset { };
         std::size_t width { };
@@ -1048,6 +1076,35 @@ private:
         std::size_t source_width,
         std::size_t selected_width,
         std::uint32_t base_offset = 0U);
+    /// A one-dimensional slice whose length is known only at run time: the
+    /// bit offset of its right element and its element count, zero for a
+    /// null slice (IEEE 1076-2008 8.5).
+    struct HirVhdlRuntimeSlice {
+        RegisterId base { };
+        RegisterId length { };
+        std::size_t element_width { };
+    };
+    [[nodiscard]] std::optional<HirVhdlRuntimeSlice>
+    lower_hir_vhdl_runtime_slice(
+        semantic::ExpressionId expression,
+        std::size_t source_width);
+    /// `target_slice := value_slice` of two run-time-length slices, one
+    /// element at a time after a length check (10.6.2.1). `write` stores
+    /// one element given its bit offset within the target object.
+    [[nodiscard]] bool lower_hir_vhdl_runtime_slice_copy(
+        const HirVhdlRuntimeSlice& target,
+        const HirVhdlRuntimeSlice& value,
+        RegisterId value_source,
+        std::size_t value_source_width,
+        const frontend::SourceSpan& span,
+        const std::function<void(RegisterId offset, RegisterId element)>&
+            write);
+    /// Predefined `=` of two one-dimensional run-time-length slices
+    /// (9.2.3); the result is one bit.
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_runtime_slice_equality(
+        semantic::ExpressionId left,
+        semantic::ExpressionId right);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_array_offset(
         const HirVhdlArraySelection& selection);
@@ -1093,6 +1150,11 @@ private:
     [[nodiscard]] std::optional<RegisterId> lower_hir_string_to_packed(
         semantic::ExpressionId operand, std::size_t width,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    // A VHDL function call whose result has a static shape assigned to a
+    // target of another length fails (IEEE 1076-2008 10.6.2.1, 14.7.3.4):
+    // emits the run-time failure and returns true.
+    bool emit_hir_vhdl_call_length_check(semantic::ExpressionId value,
+        std::size_t target_width, const frontend::SourceSpan& span);
     void emit_hir_vhdl_string_length_check(
         StringRegisterId target, StringRegisterId value,
         const frontend::SourceSpan& span);
@@ -2008,6 +2070,21 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_math_real_call(
         semantic::ExpressionId expression);
+    // `T(x)` for array types whose elements are integer and floating: each
+    // element converts in place (IEEE 1076-2008 9.3.6).
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_numeric_array_conversion(semantic::ExpressionId operand,
+        const semantic::vhdl::SubtypeIndication& target_element,
+        const semantic::vhdl::SubtypeIndication& operand_element,
+        std::size_t target_width);
+    // The value of the IEEE.MATH_REAL constant (MATH_PI, ...) a VHDL name
+    // denotes.
+    [[nodiscard]] std::optional<double> hir_vhdl_math_real_constant(
+        semantic::ExpressionId expression) const;
+    // IEEE.MATH_REAL.UNIFORM (IEEE 1076.2-1996): the procedure call's
+    // outcome when it names that procedure, nullopt otherwise.
+    [[nodiscard]] std::optional<bool> lower_hir_vhdl_math_real_uniform(
+        semantic::StatementId statement);
     // The unit whose timescale governs a SystemVerilog scope: a package or
     // $unit subroutine keeps its declaring unit's time unit (IEEE 1800-2017
     // 3.14.2), anything else uses the unit being lowered.
@@ -3222,6 +3299,12 @@ private:
         semantic::ExpressionId actual,
         semantic::ScopeId process_scope,
         HirVhdlOverloadInference& inference) const;
+    // Whether the call's actuals match the parameter profile of `callable`
+    // (IEEE 1076-2008 4.5.3); an implicitly declared operation of the same
+    // designator remains visible beside a user overload (12.3).
+    [[nodiscard]] bool hir_vhdl_overload_profile_applies(
+        semantic::ExpressionId expression,
+        semantic::DeclarationId callable) const;
     [[nodiscard]] std::optional<std::vector<semantic::ExpressionId>>
     bind_hir_function_actuals(
         semantic::ExpressionId expression,
@@ -3502,6 +3585,13 @@ private:
     // against the name's subtype; a mismatch is reported.
     [[nodiscard]] std::optional<SignalId> hir_vhdl_external_signal(
         semantic::ExpressionId expression);
+    // The signal an external name's path reaches, unchecked.
+    [[nodiscard]] std::optional<SignalId> hir_vhdl_external_signal_lookup(
+        semantic::ExpressionId expression) const;
+    // The subtype of the object an external name denotes: its declared
+    // subtype, completed from the object (IEEE 1076-2008 8.7).
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_external_subtype(semantic::ExpressionId expression) const;
     // A member of a packed structure signal named hierarchically.
     struct HirHierarchicalSignalMember {
         SignalId signal { };

@@ -2988,14 +2988,22 @@ void Interpreter::Impl::update_selected_signal_value_history(
     }
     const auto& previous = logical_signal_last_value(signal);
     const auto& current = logical_signal_value(signal);
+    const auto stamp = std::pair { scheduler.now(), generic_delta };
     for (auto& history : signal_selection_histories[signal]) {
         const auto before = previous.extract_bits(
             history.selection.offset, history.selection.width);
         const auto after = current.extract_bits(
             history.selection.offset, history.selection.width);
-        if (before != after) {
+        // An event on S updates the last value of each subelement that S's
+        // update assigns, changed or not (IEEE 1076-2008 16.2.4).
+        const bool updated = history.selection.composite_element
+            && (history.transaction_pending
+                || history.last_transaction == std::optional { stamp });
+        if (before != after || updated) {
             history.last_value = before;
-            history.last_event = std::pair { scheduler.now(), generic_delta };
+        }
+        if (before != after) {
+            history.last_event = stamp;
         }
     }
 }
@@ -4407,6 +4415,18 @@ void Interpreter::Impl::note_signal_transaction(
         }
     }
     scheduler.note_signal_transaction(signal_id);
+    // A port conversion of an active source is itself active in the same
+    // cycle, even without an event (IEEE 1076-2008 14.7.3.3).
+    if (!vhdl_conversion_dependents.empty()) {
+        if (const auto found = vhdl_conversion_dependents.find(signal_id);
+            found != vhdl_conversion_dependents.end()) {
+            for (const auto target : found->second) {
+                if (pending_vhdl_resolution_set.insert(target).second) {
+                    pending_vhdl_resolutions.push_back(target);
+                }
+            }
+        }
+    }
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
     note_selected_signal_transaction(signal_id);

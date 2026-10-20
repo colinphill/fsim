@@ -1055,6 +1055,13 @@ struct ProcedureArgument {
 
 // A lexical VHDL block-port alias created during generate expansion. The
 // alias name is scope-qualified while `actual` names the enclosing signal.
+// The signature of a subprogram alias, `[t1, t2 return r]` (IEEE
+// 1076-2008 4.5.3): the type marks of the parameters and of the result.
+struct VhdlAliasSignature {
+    std::vector<Type> parameters;
+    std::optional<Type> result;
+};
+
 struct SignalAliasDeclaration {
     std::string name;
     std::string actual;
@@ -1064,6 +1071,8 @@ struct SignalAliasDeclaration {
     // The whole target when it is an indexed or slice name (`s(1 to 4)`);
     // `actual` then names its prefix.
     std::optional<Expression> actual_expression;
+    // Present for a nonobject alias of a subprogram (6.6.3).
+    std::optional<VhdlAliasSignature> signature;
 };
 
 // An IEEE 1800 alias statement joins already-declared lvalues. Unlike a VHDL

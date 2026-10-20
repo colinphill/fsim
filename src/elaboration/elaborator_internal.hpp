@@ -152,6 +152,28 @@ vhdl_character_control_literal_code(const std::string_view name)
     return std::nullopt;
 }
 
+// The storage width of a VHDL subtype as a record or array element: its
+// executable width, or zero for a null array that occupies no bits (IEEE
+// 1076-2008 5.3.2.2).
+[[nodiscard]] inline std::optional<std::size_t> vhdl_subtype_storage_width(
+    const semantic::vhdl::SubtypeIndication& subtype)
+{
+    if (const auto width = vhdl_subtype_width(subtype)) {
+        return width;
+    }
+    for (const auto& range : subtype.constraints) {
+        if (range.kind == semantic::vhdl::RangeKind::array_index
+            && (range.null
+                || (!range.direction_from_bounds && range.left
+                    && range.right
+                    && (range.descending ? *range.left < *range.right
+                                         : *range.left > *range.right)))) {
+            return 0U;
+        }
+    }
+    return std::nullopt;
+}
+
 // The last segment of an expanded or scoped name: `lib.pkg.item` and
 // `pkg::item` give `item`.
 [[nodiscard]] constexpr std::string_view simple_name_of(

@@ -31,6 +31,15 @@ void VhdlParser::note_vhdl_access_object(
 }
 namespace {
 
+// The suffix `.all` of any prefix denotes the designated object (IEEE
+// 1076-2008 8.3); any other suffix selects a record element.
+std::string vhdl_selection_suffix(const std::string_view spelling)
+{
+    auto name = vhdl_name(spelling);
+    return name == "all" ? std::string { "@vhdl-dereference" }
+                         : "@vhdl-member:" + name;
+}
+
 // A based real literal (IEEE 1076-2008 15.5.3): base # digits . digits #
 // with an exponent of the base, as a decimal spelling.
 std::optional<std::string> vhdl_based_real_decimal(const std::string_view spelling)
@@ -467,7 +476,7 @@ Expression VhdlParser::parse_vhdl_name_suffixes(
             advance();
             const auto member = advance();
             prefix = Expression { ExpressionKind::Call,
-                "@vhdl-member:" + vhdl_name(member.text),
+                vhdl_selection_suffix(member.text),
                 { std::move(prefix) }, cover(start, member.span) };
             continue;
         }
@@ -977,6 +986,10 @@ Expression VhdlParser::parse_primary()
             target += "^.";
         }
         const auto first = expect_identifier("external signal path");
+        // A generate index that is not a literal (`g(N)`) is a globally
+        // static expression; the path keeps a `(#k)` placeholder for the
+        // k-th index expression, evaluated at elaboration.
+        std::vector<Expression> path_indices;
         const auto path_element = [&](const Token& part) {
             target += vhdl_name(part.text);
             if (at(TokenKind::LeftParen) && at(TokenKind::Number, 1U)
@@ -984,6 +997,13 @@ Expression VhdlParser::parse_primary()
                 advance();
                 target += "(" + advance().text + ")";
                 advance();
+            } else if (at(TokenKind::LeftParen)) {
+                advance();
+                target += "(#" + std::to_string(path_indices.size()) + ")";
+                path_indices.push_back(parse_expression(0, false));
+                expect(TokenKind::RightParen,
+                    "')' after external path generate index",
+                    "FSIM-VHDL-PARSE-277");
             }
         };
         path_element(first);
@@ -1015,7 +1035,8 @@ Expression VhdlParser::parse_primary()
         Expression external {
             ExpressionKind::Call,
             "@vhdl-external",
-            { Expression { ExpressionKind::Identifier, target, { }, first.span },
+            { Expression { ExpressionKind::Identifier, target,
+                  std::move(path_indices), first.span },
                 std::move(subtype) },
             cover(start.span, previous().span)
         };
@@ -1182,9 +1203,17 @@ Expression VhdlParser::parse_primary()
         std::string canonical = vhdl_name(name.text);
         if (const auto external = vhdl_external_aliases_.find(canonical);
             external != vhdl_external_aliases_.end()
-            && !at(TokenKind::Dot) && !at(TokenKind::Apostrophe)) {
+            && !at(TokenKind::Apostrophe)
+            && (!at(TokenKind::Dot) || at(TokenKind::Identifier, 1))) {
             auto expression = external->second;
             expression.span = name.span;
+            // An element or record element of the object an external-name
+            // alias denotes is selected by suffix (IEEE 1076-2008 6.6.2,
+            // 8.3, 8.7).
+            if (at(TokenKind::Dot) || at(TokenKind::LeftParen)) {
+                return parse_vhdl_name_suffixes(
+                    std::move(expression), name.span);
+            }
             return expression;
         }
         std::string selected_spelling { name.text };
@@ -1261,7 +1290,11 @@ Expression VhdlParser::parse_primary()
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
             } else if (canonical_part == "all") {
-                selected.text = canonical;
+                // Only the name before the first dereference is spelled
+                // out; `pp.all.all` dereferences the dereference.
+                if (!saw_dereference) {
+                    selected.text = canonical;
+                }
                 selected.span = cover(name.span, part.span);
                 selected = Expression { ExpressionKind::Call,
                     "@vhdl-dereference",
@@ -1305,7 +1338,7 @@ Expression VhdlParser::parse_primary()
                 }
                 const auto member = expect_identifier("selected dereferenced element");
                 selected = Expression { ExpressionKind::Call,
-                    "@vhdl-member:" + vhdl_name(member.text),
+                    vhdl_selection_suffix(member.text),
                     { std::move(selected) },
                     cover(name.span, member.span) };
             }
@@ -1422,7 +1455,7 @@ Expression VhdlParser::parse_primary()
                             if (match(TokenKind::Dot)) {
                                 const auto member = expect_identifier("selected attribute element");
                                 value = Expression { ExpressionKind::Call,
-                                    "@vhdl-member:" + vhdl_name(member.text),
+                                    vhdl_selection_suffix(member.text),
                                     { std::move(value) },
                                     cover(name.span, member.span) };
                                 continue;
@@ -1660,7 +1693,7 @@ Expression VhdlParser::parse_primary()
                 // every revision (IEEE 1076-1993 6.3).
                 const auto member = expect_identifier("selected record element");
                 call = Expression { ExpressionKind::Call,
-                    "@vhdl-member:" + vhdl_name(member.text),
+                    vhdl_selection_suffix(member.text),
                     { std::move(call) },
                     cover(name.span, member.span) };
             }

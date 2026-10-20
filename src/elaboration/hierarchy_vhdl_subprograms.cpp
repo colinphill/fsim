@@ -227,15 +227,18 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
         targets.insert(targets.end(),
             expression.referenced_name->overloads.begin(),
             expression.referenced_name->overloads.end());
-        const auto template_call = std::ranges::any_of(
-            targets, [&](const semantic::DeclarationId target_id) {
-                const auto target = specialized.find_declaration(target_id);
-                return target && target->vhdl != nullptr
-                    && (target->vhdl->form
-                            == Form::generic_function_template
-                        || target->vhdl->form
-                            == Form::generic_procedure_template);
-            });
+        const auto is_template = [&](const semantic::DeclarationId target_id) {
+            const auto target = specialized.find_declaration(target_id);
+            return target && target->vhdl != nullptr
+                && (target->vhdl->form == Form::generic_function_template
+                    || target->vhdl->form == Form::generic_procedure_template);
+        };
+        // `function f is new f ...` adds an instance homograph; a call that
+        // can denote it is not a call of the template (IEEE 1076-2008
+        // 4.4, 12.3).
+        const auto template_call
+            = std::ranges::any_of(targets, is_template)
+            && std::ranges::all_of(targets, is_template);
         if (!template_call) {
             continue;
         }

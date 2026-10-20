@@ -154,7 +154,7 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       } else {
         method_aliases.push_back(SignalAliasDeclaration{
             canonical_alias, std::move(target), {}, PortDirection::Unknown,
-            span_from(alias_start, previous()), std::nullopt});
+            span_from(alias_start, previous()), std::nullopt, std::nullopt});
       }
       continue;
     }
@@ -1943,6 +1943,7 @@ void VhdlParser::parse_vhdl_object_alias(
         separator == std::string::npos ? actual
                                        : actual.substr(separator + 1U));
   }
+  std::optional<VhdlAliasSignature> signature;
   if (match(TokenKind::LeftBracket)) {
       const auto signature_start = previous();
       require_vhdl_standard(
@@ -1950,17 +1951,34 @@ void VhdlParser::parse_vhdl_object_alias(
           "select VHDL-1993 or remove the overload-disambiguating signature");
       // An empty signature `[]` names a subprogram without parameters or a
       // result (IEEE 1076-2008 4.5.3).
+      VhdlAliasSignature parsed;
+      bool well_formed = true;
+      if (!at(TokenKind::RightBracket) && !keyword("return", 0, true)) {
+        parsed.parameters.push_back(parse_vhdl_type(true, true));
+        while (match(TokenKind::Comma)) {
+          parsed.parameters.push_back(parse_vhdl_type(true, true));
+        }
+      }
+      if (match_keyword("return", true)) {
+        parsed.result = parse_vhdl_type(true, true);
+      }
       while (!at_end() && !at(TokenKind::RightBracket) && !at(TokenKind::Semicolon)) {
+          well_formed = false;
           advance();
       }
       expect(TokenKind::RightBracket, "']' after alias signature",
           "FSIM-VHDL-PARSE-236");
+      if (well_formed) {
+        signature = std::move(parsed);
+      }
   }
   expect(TokenKind::Semicolon, "';' after alias declaration",
          "FSIM-VHDL-PARSE-236");
   const auto canonical = vhdl_name(name.text);
+  // Subprogram aliases overload one another (IEEE 1076-2008 4.5.3).
   if (std::ranges::any_of(aliases, [&](const auto &alias) {
-        return alias.name == canonical;
+        return alias.name == canonical
+            && !(signature && alias.signature);
       })) {
     error(name, "FSIM-VHDL-SEM-083",
           "duplicate bounded object alias '" + canonical + "'");
@@ -1969,7 +1987,7 @@ void VhdlParser::parse_vhdl_object_alias(
   aliases.push_back(SignalAliasDeclaration {
       canonical, std::move(actual), std::move(type),
       PortDirection::Unknown, span_from(start, previous()),
-      std::move(actual_expression) });
+      std::move(actual_expression), std::move(signature) });
 }
 
 bool VhdlParser::parse_vhdl_local_nonobject_declaration(

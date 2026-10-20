@@ -1384,7 +1384,21 @@ class VhdlExecutableBuilder final {
         expression.argument_names.clear();
         continue;
       }
-      if (declaration == nullptr || !declaration->subtype
+      // An object alias without a subtype indication denotes its object
+      // and has that object's subtype (IEEE 1076-2008 6.6.2).
+      const bool untyped_object_alias = declaration != nullptr
+          && declaration->form == vh::DeclarationForm::alias
+          && !declaration->subtype && declaration->alias_target
+          && declaration->alias_target->selected
+          && expression.operands.size() == 1U
+          && [&] {
+               const auto* aliased = find_declaration(
+                   *declaration->alias_target->selected);
+               return aliased != nullptr && aliased->subtype
+                   && !aliased->callable && indexed_object(aliased->form);
+             }();
+      if (declaration == nullptr
+          || (!declaration->subtype && !untyped_object_alias)
           || !indexed_object(declaration->form)) {
         continue;
       }
@@ -1431,6 +1445,9 @@ class VhdlExecutableBuilder final {
       // A selected record element of the object (`v.re1(1)`) is an indexed
       // name too.
       const auto record_member = [&] {
+        if (!declaration->subtype) {
+          return false;
+        }
         const auto text = support::canonical_vhdl_spelling(expression.text);
         const auto root = support::canonical_vhdl_spelling(declaration->name);
         const auto at = text.find(root + ".");

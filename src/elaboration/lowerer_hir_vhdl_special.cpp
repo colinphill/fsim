@@ -1060,9 +1060,14 @@ Lowerer::hir_vhdl_protected_object_storage(const ContainerObjectId anchor,
         for (const auto member_id : member_ids) {
             const auto* member = find_vhdl_declaration(
                 *specialized_hir_unit_, member_id);
+            // The member's subtype names are those visible in the protected
+            // body, which may be a generic package's (IEEE 1076-2008 5.6.3).
+            const auto saved_scope = hir_process_scope_;
+            hir_process_scope_ = member->scope;
             const auto subtype = member->subtype
                 ? hir_effective_vhdl_subtype(*member->subtype)
                 : std::nullopt;
+            hir_process_scope_ = saved_scope;
             const auto name = object_name + "." + member->name;
             if (subtype && hir_vhdl_subtype_protected_type(*subtype)) {
                 const auto nested = create_hir_vhdl_protected_anchor(
@@ -1643,8 +1648,7 @@ Lowerer::lower_hir_vhdl_environment_call_path_container_expression(
     }
     const auto& source = *expression->vhdl;
     if (source.kind == semantic::vhdl::ExpressionKind::call
-        && (source.text == "@vhdl-dereference"
-            || source.text == "@vhdl-member:all")
+        && source.text == "@vhdl-dereference"
         && source.operands.size() == 1U) {
         return lower_hir_vhdl_environment_call_path_container_expression(
             source.operands.front());
@@ -1691,8 +1695,7 @@ Lowerer::hir_vhdl_environment_call_path_member_selection(
         return std::nullopt;
     }
     if (selected->vhdl->kind == semantic::vhdl::ExpressionKind::call
-        && (selected->vhdl->text == "@vhdl-dereference"
-            || selected->vhdl->text == "@vhdl-member:all")
+        && selected->vhdl->text == "@vhdl-dereference"
         && selected->vhdl->operands.size() == 1U) {
         selected = specialized_hir_unit_->find_expression(
             selected->vhdl->operands.front());
@@ -1726,8 +1729,7 @@ Lowerer::hir_vhdl_environment_call_path_member_selection(
     if (base_expression && base_expression->vhdl != nullptr
         && base_expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
-        && (base_expression->vhdl->text == "@vhdl-dereference"
-            || base_expression->vhdl->text == "@vhdl-member:all")
+        && base_expression->vhdl->text == "@vhdl-dereference"
         && base_expression->vhdl->operands.size() == 1U) {
         base = base_expression->vhdl->operands.front();
     }
@@ -1914,7 +1916,7 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
         }
     }
     if (source.kind != semantic::vhdl::ExpressionKind::call
-        || source.text != "@vhdl-member:all"
+        || source.text != "@vhdl-dereference"
         || source.operands.size() != 1U) {
         return std::nullopt;
     }
@@ -3051,8 +3053,7 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
         const auto value = specialized_hir_unit_->find_expression(candidate);
         if (!value || value->vhdl == nullptr
             || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || (value->vhdl->text != "@vhdl-dereference"
-                && value->vhdl->text != "@vhdl-member:all")
+            || value->vhdl->text != "@vhdl-dereference"
             || value->vhdl->operands.size() != 1U) {
             return candidate;
         }

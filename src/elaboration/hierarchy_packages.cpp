@@ -1093,13 +1093,16 @@ namespace {
                     actual_specialization, actual_element->first,
                     actual_element->second);
                 if (!formal_type || !actual_type) {
+                    const auto formal_predefined = predefined_vector_identity(
+                        formal_specialization, formal_element->first,
+                        formal_element->second);
                     if (formal_type || actual_type
-                        || !predefined_bit_vector_identity(
-                            formal_specialization, formal_element->first,
-                            formal_element->second)
-                        || !predefined_bit_vector_identity(
-                            actual_specialization, actual_element->first,
-                            actual_element->second)) {
+                        || formal_predefined
+                            == semantic::vhdl::BuiltinTypeIdentity::none
+                        || formal_predefined
+                            != predefined_vector_identity(
+                                actual_specialization, actual_element->first,
+                                actual_element->second)) {
                         continue;
                     }
                 } else if (*formal_type != *actual_type) {
@@ -1212,15 +1215,20 @@ namespace {
                             actual_specialization, actual_member->first,
                             actual_member->second);
                         if (!formal_member_type || !actual_member_type) {
-                            if (formal_member_type || actual_member_type
-                                || !predefined_bit_vector_identity(
+                            const auto formal_predefined
+                                = predefined_vector_identity(
                                     formal_specialization,
                                     formal_member->first,
-                                    formal_member->second)
-                                || !predefined_bit_vector_identity(
-                                    actual_specialization,
-                                    actual_member->first,
-                                    actual_member->second)) {
+                                    formal_member->second);
+                            if (formal_member_type || actual_member_type
+                                || formal_predefined
+                                    == semantic::vhdl::BuiltinTypeIdentity::
+                                        none
+                                || formal_predefined
+                                    != predefined_vector_identity(
+                                        actual_specialization,
+                                        actual_member->first,
+                                        actual_member->second)) {
                                 resolved_nested_path = false;
                                 break;
                             }
@@ -1407,6 +1415,29 @@ namespace {
             return std::nullopt;
         }
 
+        // The predefined array type (BIT_VECTOR, STD_ULOGIC_VECTOR, ...)
+        // a subtype denotes; STD_LOGIC_VECTOR is a subtype of
+        // STD_ULOGIC_VECTOR (IEEE 1076-2008 16.7).
+        [[nodiscard]] static semantic::vhdl::BuiltinTypeIdentity
+        predefined_vector_identity(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            const Scope scope)
+        {
+            using Identity = semantic::vhdl::BuiltinTypeIdentity;
+            if (predefined_bit_vector_identity(specialization, input, scope)) {
+                return Identity::std_standard_bit_vector;
+            }
+            const auto current = link_subtype(specialization, input, scope);
+            if (current.type_mark.target.valid()) {
+                return Identity::none;
+            }
+            return current.builtin_type
+                    == Identity::ieee_std_logic_1164_std_logic_vector
+                ? Identity::ieee_std_logic_1164_std_ulogic_vector
+                : current.builtin_type;
+        }
+
         [[nodiscard]] static bool predefined_bit_vector_identity(
             const SpecializedUnit& specialization,
             const Subtype& input,
@@ -1581,8 +1612,9 @@ namespace {
             }
             auto current = link_subtype(
                 specialization, std::move(subtype), input_scope);
-            if (predefined_bit_vector_identity(
-                    specialization, current, input_scope)) {
+            if (predefined_vector_identity(
+                    specialization, current, input_scope)
+                != semantic::vhdl::BuiltinTypeIdentity::none) {
                 if (current.constraints.empty()) {
                     return { true, true, false,
                         std::vector<semantic::vhdl::RangeConstraint> { } };
@@ -5875,7 +5907,8 @@ namespace {
                 || domain == frontend::ValueDomain::Logic4
                 || domain == frontend::ValueDomain::Logic9)
             && (source.kind == semantic::vhdl::ExpressionKind::binary
-                || source.kind == semantic::vhdl::ExpressionKind::unary)) {
+                || source.kind == semantic::vhdl::ExpressionKind::unary
+                || source.kind == semantic::vhdl::ExpressionKind::call)) {
             if (const auto value
                 = specialization.evaluate_vhdl_constant_expression(
                     expression_id)) {
@@ -7421,6 +7454,107 @@ namespace {
         return packed;
     }
 
+    // The element type of the one-dimensional array type a subtype
+    // denotes, by simple spelling.
+    std::optional<std::string> compiled_vhdl_array_element_spelling(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const semantic::ScopeId scope)
+    {
+        const auto effective = semantic::CompiledDesignResolver {
+            specialization
+        }.effective_vhdl_subtype(subtype, scope);
+        auto target = effective ? effective->type_mark.target
+                                : semantic::TypeId { };
+        std::set<semantic::TypeId> visited;
+        while (target.valid() && visited.insert(target).second) {
+            const auto type = specialization.find_type(target);
+            if (!type || type->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            if (type->vhdl->form == semantic::vhdl::TypeForm::array) {
+                if (type->vhdl->array_dimensions.size() != 1U
+                    || !type->vhdl->element_subtype) {
+                    return std::nullopt;
+                }
+                auto spelling = type->vhdl->element_subtype->type_mark.spelling;
+                if (const auto dot = spelling.find_last_of('.');
+                    dot != std::string::npos) {
+                    spelling.erase(0U, dot + 1U);
+                }
+                std::ranges::transform(spelling, spelling.begin(),
+                    [](const char c) {
+                        return static_cast<char>(
+                            std::tolower(static_cast<unsigned char>(c)));
+                    });
+                return spelling;
+            }
+            if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                return std::nullopt;
+            }
+            target = type->vhdl->base.type_mark.target;
+        }
+        return std::nullopt;
+    }
+
+    // The operand of a qualified expression or of a chain of array type
+    // conversions whose element type is the target's, so the operand's
+    // elements are the value's (IEEE 1076-2008 9.3.5, 9.3.6); nullopt when
+    // a conversion changes the element type.
+    std::optional<semantic::ExpressionId>
+    compiled_vhdl_element_preserving_operand(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression_id,
+        const semantic::vhdl::SubtypeIndication& target,
+        const semantic::ScopeId scope)
+    {
+        const auto element = compiled_vhdl_array_element_spelling(
+            specialization, target, scope);
+        if (!element) {
+            return std::nullopt;
+        }
+        constexpr auto qualified_prefix
+            = semantic::vhdl::qualified_expression_prefix;
+        for (std::size_t depth { }; depth < 8U; ++depth) {
+            const auto expression = specialization.find_expression(
+                expression_id);
+            if (!expression || expression->vhdl == nullptr
+                || expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || expression->vhdl->operands.size() != 1U) {
+                return expression_id;
+            }
+            const auto& source = *expression->vhdl;
+            semantic::vhdl::SubtypeIndication mark;
+            if (source.text.starts_with(qualified_prefix)) {
+                mark.type_mark.spelling
+                    = source.text.substr(qualified_prefix.size());
+            } else {
+                const auto declaration = source.referenced_name
+                        && source.referenced_name->selected
+                    ? specialization.find_declaration(
+                          *source.referenced_name->selected)
+                    : std::nullopt;
+                if (!declaration || declaration->vhdl == nullptr
+                    || (declaration->vhdl->form
+                            != semantic::vhdl::DeclarationForm::type
+                        && declaration->vhdl->form
+                            != semantic::vhdl::DeclarationForm::subtype)) {
+                    return expression_id;
+                }
+                mark.type_mark.spelling = source.text;
+            }
+            const auto operand_element = compiled_vhdl_array_element_spelling(
+                specialization, mark, source.scope);
+            if (!operand_element || *operand_element != *element) {
+                return std::nullopt;
+            }
+            expression_id = source.operands.front();
+        }
+        return std::nullopt;
+    }
+
     std::optional<PackedLogic4> compiled_vhdl_static_composite_value(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::ExpressionId expression,
@@ -7807,6 +7941,41 @@ namespace {
         actual.vhdl_packed_value = std::move(vhdl_packed_value);
         actual.vhdl_boolean_array_value
             = std::move(vhdl_boolean_array_value);
+        // A record generic keeps its element values so the target unit can
+        // select them, also when the actual is the parent's own generic.
+        if (formal && formal->vhdl != nullptr
+            && formal->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_constant
+            && formal->vhdl->subtype && binding.expression) {
+            const auto subtype = semantic::CompiledDesignResolver { parent }
+                                     .effective_vhdl_subtype(
+                                         *formal->vhdl->subtype,
+                                         formal->vhdl->scope);
+            auto target = subtype ? subtype->type_mark.target
+                                  : semantic::TypeId { };
+            std::set<semantic::TypeId> visited;
+            bool record_formal { };
+            while (target.valid() && visited.insert(target).second) {
+                const auto type = parent.find_type(target);
+                if (!type || type->vhdl == nullptr) {
+                    break;
+                }
+                if (type->vhdl->form == semantic::vhdl::TypeForm::record) {
+                    record_formal = true;
+                    break;
+                }
+                if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                    break;
+                }
+                target = type->vhdl->base.type_mark.target;
+            }
+            if (record_formal) {
+                actual.vhdl_record_value
+                    = parent.evaluate_vhdl_record_expression(
+                        *binding.expression);
+            }
+        }
         return { std::move(actual), requires_static_value };
     }
 
@@ -13231,6 +13400,80 @@ namespace {
         return true;
     }
 
+    // A port of a type whose elements are unconstrained (a record element
+    // `x : integer_vector`) takes the static element constraints of a whole
+    // signal actual of that type (IEEE 1076-2008 6.5.6.3).
+    std::optional<semantic::vhdl::SubtypeIndication>
+    vhdl_port_subtype_from_actual(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& formal,
+        const semantic::ScopeId formal_scope,
+        const semantic::vhdl::SubtypeIndication& actual,
+        const std::size_t actual_width,
+        const std::string_view actual_nominal)
+    {
+        // FSIM_VHDL_PORT_TRACE prints why a formal is not completed.
+        if (std::getenv("FSIM_VHDL_PORT_TRACE") != nullptr) {
+            std::cerr << "[fsim-vhdl-port] formal="
+                      << formal.type_mark.spelling << '#'
+                      << formal.type_mark.target.value()
+                      << " constraints=" << formal.constraints.size() << '/'
+                      << formal.element_constraints.size()
+                      << " actual=" << actual.type_mark.spelling << '#'
+                      << actual.type_mark.target.value()
+                      << " constraints=" << actual.constraints.size() << '/'
+                      << actual.element_constraints.size()
+                      << " width=" << actual_width << '\n';
+        }
+        // A type mark selected from a package can lack a unit-local target;
+        // the completed formal's nominal type then identifies its type.
+        const bool unresolved_marks = !formal.type_mark.target.valid()
+            && !actual.type_mark.target.valid() && !actual_nominal.empty();
+        if (!formal.constraints.empty()
+            || !formal.element_constraints.empty()
+            || (!formal.type_mark.target.valid() && !unresolved_marks)
+            || actual.element_constraints.empty()
+            || actual.type_mark.target != formal.type_mark.target) {
+            return std::nullopt;
+        }
+        auto completed = formal;
+        completed.constraints = actual.constraints;
+        completed.element_constraints = actual.element_constraints;
+        // Only static bounds carry over; expressions belong to the actual's
+        // region.
+        bool static_bounds = true;
+        const auto make_static
+            = [&](std::vector<semantic::vhdl::RangeConstraint>& ranges) {
+                  for (auto& range : ranges) {
+                      static_bounds = static_bounds && range.left
+                          && range.right;
+                      range.left_expression.reset();
+                      range.right_expression.reset();
+                  }
+              };
+        make_static(completed.constraints);
+        for (auto& element : completed.element_constraints) {
+            make_static(element.constraints);
+        }
+        completed.unconstrained = false;
+        completed.executable_width = actual_width;
+        const auto layout = static_bounds
+            ? compiled_vhdl_named_signal_layout(
+                  specialization, completed, formal_scope)
+            : std::nullopt;
+        if (!layout || layout->width != actual_width) {
+            return std::nullopt;
+        }
+        if (unresolved_marks) {
+            const auto type = compiled_vhdl_signal_type(
+                specialization, completed, formal_scope);
+            if (!type || type->nominal_type != actual_nominal) {
+                return std::nullopt;
+            }
+        }
+        return completed;
+    }
+
 } // namespace
 
 void HierarchyBuilder::note_boundary_driver(
@@ -17861,7 +18104,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 && formal_signal_type->integer_range
             ? formal_signal_type->integer_range
             : compiled_integer_range(*formal_declaration.subtype);
-        const auto static_value = accepts_input && width
+        auto static_value = accepts_input && width
                 && *width <= 64U
             ? compiled_vhdl_static_port_value(
                   port_actual_specialization,
@@ -17871,6 +18114,22 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                   domain,
                   *width)
             : std::nullopt;
+        // A static array aggregate actual, possibly qualified or converted
+        // between array types with the same element type, is the port's
+        // value from the start (IEEE 1076-2008 6.5.6.3, 9.3.6).
+        if (!static_value && accepts_input && width && *width <= 64U
+            && formal_signal_type && formal_signal_type->vhdl_array) {
+            if (const auto actual = compiled_vhdl_element_preserving_operand(
+                    port_actual_specialization, *binding.expression,
+                    *formal_declaration.subtype, formal_declaration.scope)) {
+                const auto composite = compiled_vhdl_static_composite_value(
+                    port_actual_specialization, *actual,
+                    *formal_declaration.subtype, formal_declaration.scope);
+                if (composite && composite->width() == *width) {
+                    static_value = composite;
+                }
+            }
+        }
         if (accepts_input && !value && !static_value
             && component_defaulted_port_formals.contains(
                 binding.formal.value())) {
@@ -17932,6 +18191,100 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             info.declaration_span = compiled_source_span(
                 *compiled_, binding.source);
             design_.signal_info_.push_back(std::move(info));
+            // Without a static actual value the formal starts at its
+            // default, the initial value of its driver (IEEE 1076-2008
+            // 6.5.2, 14.7.3.4).
+            auto port_default = !value && !static_value
+                    && formal_declaration.initializer
+                    && formal_declaration.subtype
+                ? compiled_vhdl_static_port_value(
+                      child_interface_specialization,
+                      *formal_declaration.initializer,
+                      *formal_declaration.subtype,
+                      formal_declaration.scope, domain, *width)
+                : std::nullopt;
+            if (port_default && port_default->width() != *width) {
+                port_default.reset();
+            }
+            // An input formal associated with a slice of a signal starts
+            // at that slice of the signal's initial value; its adapter
+            // would publish it only a delta later (IEEE 1076-2008 14.7.5.1).
+            const auto slice_initial = [&]() -> std::optional<PackedLogic4> {
+                if (value || static_value || !accepts_input) {
+                    return std::nullopt;
+                }
+                const auto slice = port_actual_specialization.find_expression(
+                    *binding.expression);
+                if (!slice || slice->vhdl == nullptr
+                    || slice->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::slice
+                    || slice->vhdl->operands.size() != 3U) {
+                    return std::nullopt;
+                }
+                const auto prefix = port_actual_specialization.find_expression(
+                    slice->vhdl->operands[0]);
+                const auto actual = prefix && prefix->vhdl != nullptr
+                        && prefix->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::name
+                    ? find_compiled_vhdl_signal(
+                          working_signals, prefix->vhdl->text)
+                    : std::nullopt;
+                const auto first = port_actual_specialization
+                                       .evaluate_integral_expression(
+                                           slice->vhdl->operands[1]);
+                const auto last = port_actual_specialization
+                                      .evaluate_integral_expression(
+                                          slice->vhdl->operands[2]);
+                if (!actual || !first || !last
+                    || *actual >= design_.signal_info_.size()
+                    || *actual >= design_.signals_.size()) {
+                    return std::nullopt;
+                }
+                const auto& source = design_.signal_info_[*actual];
+                std::int64_t left { };
+                std::int64_t right { };
+                std::uint64_t stride { 1U };
+                if (source.vhdl_array
+                    && source.vhdl_array->dimensions.size() == 1U
+                    && source.vhdl_array->dimensions.front().range
+                    && source.vhdl_array->dimensions.front().stride != 0U) {
+                    const auto& dimension
+                        = source.vhdl_array->dimensions.front();
+                    left = dimension.range->left;
+                    right = dimension.range->right;
+                    stride = dimension.stride;
+                } else if (source.packed_range) {
+                    left = source.packed_range->left;
+                    right = source.packed_range->right;
+                } else {
+                    return std::nullopt;
+                }
+                const bool descending = left >= right;
+                const auto low = std::min(left, right);
+                const auto high = std::max(left, right);
+                if (std::min(*first, *last) < low
+                    || std::max(*first, *last) > high) {
+                    return std::nullopt;
+                }
+                const auto position = [&](const std::int64_t index) {
+                    return static_cast<std::uint64_t>(
+                        descending ? index - right : right - index);
+                };
+                const auto offset
+                    = std::min(position(*first), position(*last)) * stride;
+                const auto slice_width = (std::max(position(*first),
+                                              position(*last))
+                                             - std::min(position(*first),
+                                                 position(*last))
+                                             + 1U)
+                    * stride;
+                const auto& initial = design_.signals_[*actual].initial_value;
+                if (slice_width != *width
+                    || offset + slice_width > initial.width()) {
+                    return std::nullopt;
+                }
+                return initial.extract_bits(offset, slice_width);
+            }();
             design_.signals_.push_back(
                 runtime::simir::Signal {
                     constant_name,
@@ -17940,6 +18293,10 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                               *value, domain, *width)
                         : static_value
                         ? *static_value
+                        : port_default
+                        ? *port_default
+                        : slice_initial
+                        ? *slice_initial
                         : formal_signal_type
                         ? default_compiled_packed_value(
                               *formal_signal_type, *width)
@@ -19858,7 +20215,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     };
     using Form = semantic::vhdl::DeclarationForm;
     if (declaration.form == Form::alias) {
-        if (!declaration.alias_target) {
+        // A subprogram alias (6.6.3) denotes no object.
+        if (!declaration.alias_target || declaration.alias_signature) {
             return true;
         }
         auto target_name = declaration.alias_target->text();
@@ -20966,13 +21324,14 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                                               : *range.left > *range.right;
             }
         }
-        // A VHDL-2019 signal of an unconstrained subtype takes the shape of
-        // its initial value (IEEE 1076-2019 6.4.2.3).
-        if (!changed && standard == "2019" && declaration.initializer) {
+        // A VHDL-2019 signal of an unconstrained or partially constrained
+        // subtype takes the rest of its shape from its initial value (IEEE
+        // 1076-2019 6.4.2.3).
+        if (complete && standard == "2019" && declaration.initializer) {
             const auto declared = semantic::CompiledDesignResolver {
                 working_specialization
-            }.effective_vhdl_subtype(*declaration.subtype, declaration.scope);
-            if (declared && declared->unconstrained) {
+            }.effective_vhdl_subtype(*evaluated.subtype, declaration.scope);
+            if (declared) {
                 auto signals = working_signals;
                 auto read_only = working_read_only_signals;
                 auto containers = container_objects;
@@ -20980,7 +21339,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                         working_specialization, *declaration.initializer,
                         *declared, declaration.scope, signals, read_only,
                         containers);
-                    completed && !completed->unconstrained) {
+                    completed && !completed->unconstrained
+                    && *completed != *declared) {
                     evaluated.subtype = std::move(*completed);
                     changed = true;
                 }
@@ -29063,10 +29423,141 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
                     *compiled_, binding.source));
             return false;
         }
+        // An unconstrained array port associated with an expression
+        // (`to_unsigned(4, 4)`, an aggregate) takes the index ranges of the
+        // expression's value, from the shape service (IEEE 1076-2008
+        // 6.5.6.3).
+        if (formal_declaration.subtype
+            && formal_declaration.subtype->constraints.empty()
+            && formal_declaration.subtype->element_constraints.empty()
+            && expression && expression->vhdl != nullptr
+            && expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            && !(expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && expression->vhdl->text == "@vhdl-formal-subelements")) {
+            Lowerer shape_lowerer {
+                design_,
+                working_signals,
+                working_read_only_signals,
+                string_objects,
+                read_only_strings,
+                container_objects,
+                read_only_containers,
+                diagnostics_,
+            };
+            shape_lowerer.set_specialized_hir_unit(
+                &port_actual_specialization);
+            auto completed = shape_lowerer.hir_vhdl_initialized_object_subtype(
+                *binding.expression, *formal_declaration.subtype,
+                formal_declaration.scope);
+            if (completed && !completed->constraints.empty()) {
+                for (auto& range : completed->constraints) {
+                    range.left_expression.reset();
+                    range.right_expression.reset();
+                }
+                auto replacement = formal_declaration;
+                replacement.subtype = std::move(completed);
+                replacement.subtype->unconstrained = false;
+                const auto layout = compiled_vhdl_named_signal_layout(
+                    *child_interface_specialization, *replacement.subtype,
+                    replacement.scope);
+                if (layout && layout->width != 0U
+                    && std::ranges::all_of(replacement.subtype->constraints,
+                        [](const semantic::vhdl::RangeConstraint& range) {
+                            return range.left && range.right;
+                        })) {
+                    replacement.subtype->executable_width = layout->width;
+                    if (child_interface_specialization->replace(
+                            replacement)) {
+                        formal_declaration = std::move(replacement);
+                    }
+                }
+            }
+        }
+        // A port of a type whose elements are unconstrained takes the
+        // element constraints of a whole signal actual (IEEE 1076-2008
+        // 6.5.6.3) before the actual is checked against it.
+        if (formal_declaration.subtype && expression
+            && expression->vhdl != nullptr
+            && expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && expression->vhdl->referenced_name
+            && expression->vhdl->referenced_name->selected) {
+            const auto actual_object
+                = port_actual_specialization.find_declaration(
+                    *expression->vhdl->referenced_name->selected);
+            const auto actual_signal_id = actual_object
+                    && actual_object->vhdl != nullptr
+                    && actual_object->vhdl->subtype
+                ? working_signals.find(std::string {
+                      expression->vhdl->referenced_name->text() })
+                : working_signals.end();
+            if (actual_signal_id != working_signals.end()
+                && actual_signal_id->second < design_.signal_info_.size()) {
+                if (auto completed = vhdl_port_subtype_from_actual(
+                        *child_interface_specialization,
+                        *formal_declaration.subtype,
+                        formal_declaration.scope,
+                        *actual_object->vhdl->subtype,
+                        design_.signal_info_[actual_signal_id->second]
+                            .width,
+                        design_.signal_info_[actual_signal_id->second]
+                            .nominal_type)) {
+                    auto replacement = formal_declaration;
+                    replacement.subtype = std::move(completed);
+                    if (child_interface_specialization->replace(
+                            replacement)) {
+                        formal_declaration = std::move(replacement);
+                    }
+                }
+            }
+        }
+        // A mode-view port has the modes of its view's elements (IEEE
+        // 1076-2019 6.5.2): inputs only make it an input, outputs only an
+        // output, and both an inout.
+        auto port_direction = direction;
+        if (port_direction == frontend::PortDirection::Unknown
+            && formal_declaration.interface_view
+            && formal_declaration.interface_view->composition
+                == semantic::vhdl::ModeViewCompositionState::complete) {
+            bool reads { };
+            bool writes { };
+            const auto visit = [&](const auto& self,
+                                   const std::vector<
+                                       semantic::vhdl::ModeViewElement>&
+                                       elements) -> void {
+                for (const auto& element : elements) {
+                    if (!element.elements.empty()) {
+                        self(self, element.elements);
+                        continue;
+                    }
+                    switch (element.direction) {
+                    case semantic::vhdl::Direction::input:
+                        reads = true;
+                        break;
+                    case semantic::vhdl::Direction::output:
+                    case semantic::vhdl::Direction::buffer:
+                        writes = true;
+                        break;
+                    case semantic::vhdl::Direction::inout:
+                        reads = true;
+                        writes = true;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            };
+            visit(visit, formal_declaration.interface_view->elements);
+            port_direction = reads && writes
+                ? frontend::PortDirection::Inout
+                : writes ? frontend::PortDirection::Output
+                : reads  ? frontend::PortDirection::Input
+                         : direction;
+        }
         auto port_actual = materialize_compiled_vhdl_port_actual(
             binding, expression ? &*expression : nullptr,
             formal_declaration, port_actual_specialization,
-            *child_interface_specialization, direction, child_path,
+            *child_interface_specialization, port_direction, child_path,
             working_path, architecture,
             component_defaulted_port_formals, working_signals,
             working_read_only_signals, string_objects,
@@ -29085,13 +29576,15 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
             = std::move(port_actual->hir_declaration);
         auto actual_hir_scope = std::move(port_actual->hir_scope);
         // A port of an unconstrained array type takes its index ranges from
-        // a whole signal actual (IEEE 1076-2008 6.5.6.3); record them on
-        // the formal, so `p'range` inside the entity is static.
+        // a whole signal actual, or from the subtype of an expression actual
+        // carried by its implicit signal (IEEE 1076-2008 6.5.6.3); record
+        // them on the formal, so `p'range` inside the entity is static.
         if (formal_declaration.subtype
             && formal_declaration.subtype->constraints.empty()
             && expression && expression->vhdl != nullptr
-            && expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
-            && actual_hir_declaration
+            && (expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::name
+                || actual_hir_declaration)
             && *actual_signal < design_.signal_info_.size()) {
             const auto& actual_info = design_.signal_info_[*actual_signal];
             const auto unconstrained_formal = compiled_vhdl_signal_type(
@@ -31255,6 +31748,29 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                     }
                     replacement.subtype->unconstrained = false;
                     replacement.subtype->executable_width = actual_info->width;
+                    if (materialization.specialization.replace(replacement)) {
+                        stored = std::move(replacement);
+                        block_ports[*formal_index] = &stored;
+                        formal = &stored;
+                    }
+                }
+            }
+            const auto actual_declaration = actual_info != nullptr
+                    && actual->vhdl->referenced_name
+                    && actual->vhdl->referenced_name->selected
+                ? materialization.specialization.find_declaration(
+                      *actual->vhdl->referenced_name->selected)
+                : std::nullopt;
+            if (formal->subtype && actual_declaration
+                && actual_declaration->vhdl != nullptr
+                && actual_declaration->vhdl->subtype) {
+                if (auto completed = vhdl_port_subtype_from_actual(
+                        materialization.specialization, *formal->subtype,
+                        formal->scope, *actual_declaration->vhdl->subtype,
+                        actual_info->width, actual_info->nominal_type)) {
+                    auto& stored = block_port_declarations[*formal_index];
+                    auto replacement = stored;
+                    replacement.subtype = std::move(completed);
                     if (materialization.specialization.replace(replacement)) {
                         stored = std::move(replacement);
                         block_ports[*formal_index] = &stored;

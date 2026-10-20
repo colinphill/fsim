@@ -253,6 +253,87 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 78 (part 2): VHDL closures
+
+Full run on the frozen `b78y`, compared with Batch 78 part 1 (`b78g`). The
+second part of Batch 78 closes 51 corpus tests (nvc 46, vests 4,
+vhdl-compliance 1) and loses none. The labelled ctest has the same 28 known
+failures.
+
+| Suite | Batch78 part 1 passes / in scope | Batch78 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2547 / 2564 | 2547 / 2564 | 262 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1838 / 2067 | 1838 / 2067 | 348 |
+| vests | 3621 / 3646 | 3625 / 3646 | 2 |
+| nvc | 1033 / 1245 | 1079 / 1245 | 237 |
+| vhdl-compliance | 45 / 69 | 46 / 69 | 3 |
+
+Port association (6.5.6.3, 6.5.7.1):
+- An output formal associated part by part writes each record element at
+  its packed member offset, and each array element or slice at its stride.
+  `open` parts are skipped, and so are null array elements (5.3.2.2).
+  A record member actual (`r.f`) is written as a slice of its record.
+- Per-element constraints of an unconstrained record port are derived from
+  its subelement actuals for every predefined vector type, with
+  STD_LOGIC_VECTOR identified with STD_ULOGIC_VECTOR (16.7).
+- The synthetic signal of an expression or composed actual starts from the
+  formal's default expression or, for an input slice of a signal, from that
+  slice of the signal's initial value. A static port value keeps its
+  composite elements.
+- A mode-view port with no declared direction takes it from the view's
+  element modes.
+
+Names and resolution:
+- Subprogram aliases (6.6.3): the parser keeps the signature, aliases with
+  signatures overload one another, and callable resolution replaces an
+  alias by the target overloads its signature selects (matched by base
+  type). This includes aliases of generic subprograms used as generic
+  actuals. Aliases of protected methods and of predefined operations are
+  not yet resolved.
+- External names (8.7) accept indexed generate paths (`g(i)`), an external
+  alias accepts selected and indexed suffixes, and the subtype of an
+  external signal comes from its declared subtype and the signal's shape.
+- Package instances declared in a package are visible through use clauses
+  of that package, and their members resolve with the instance's generic
+  actuals.
+- Subprogram specializations inside generic packages are keyed by their
+  generic actuals, so two instances of `pint` no longer share one body.
+- A case-generate alternative is chosen by occurrence when several
+  alternatives share a label.
+
+Values and expressions:
+- MATH_REAL constants and functions, and real MOD, run at run time.
+- Numeric array conversions check real versus integer elements before the
+  element root type.
+- A callable returning BOOLEAN accepts an integer 0 or 1 from a coerced
+  return value (configuration generics).
+- `s.f'delayed` takes its width and domain from the selected member.
+- A process ending without a wait statement and without a sensitivity list
+  waits forever after its last statement.
+- Static folding of a parameterless function call (`if get_true generate`)
+  applies only to names that denote functions; a character generic keeps its
+  bound value.
+
+Signal attributes (16.2.4):
+- A whole composite signal's `'LAST_VALUE` is taken element by element. In a
+  cycle with an event on the signal, each assigned element takes its prior
+  value, changed or not (attr6, signal22). A selected prefix such as
+  `s(i)'LAST_VALUE` counts only events on that element. The element reads of
+  a whole-signal query are marked in `SignalSelection` (runtime state
+  schema 89).
+
+Open leads:
+- issue1074 elaborates but its sink reads the source's values a delta late:
+  per-subelement port adapters add a delta, where the effective value should
+  be propagated in the same update (14.7.3). This is the input-composer item.
+- issue1474: a port subtype from a generic package instantiated inside
+  another package uses the generic's default.
+- driver12: an inout record port's default from a function call is not
+  folded into its drivers.
+- alias15 and protected12 (protected method aliases), issue801 and issue843
+  (aliases of predefined TO_STRING).
+
 ### Batch 78 (part 1): compile and elaborate performance for UVM and VHDL
 
 Full run of Batch 77 on the frozen `b77w1` (SystemVerilog suites) and `b77w2`

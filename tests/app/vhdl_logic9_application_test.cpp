@@ -1405,7 +1405,9 @@ end architecture;
                 }
             }
         }
-        assert(last_value_count == 2U);
+        // A whole array's 'LAST_VALUE is taken element by element (IEEE
+        // 1076-2008 16.2.4): one read per element of each 129-bit vector.
+        assert(last_value_count == 2U * 129U);
         assert(driving_value_count == 2U);
         const auto process_count = project->design.processes().size();
         fsim::app::Simulation simulation {

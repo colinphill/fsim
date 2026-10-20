@@ -565,6 +565,10 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
         if (const auto signal = hir_direct_signal(current)) {
             dependencies.push_back(*signal);
         }
+        // A signal denoted by an external name (IEEE 1076-2008 8.7).
+        if (const auto signal = hir_vhdl_external_signal_lookup(current)) {
+            dependencies.push_back(*signal);
+        }
         if (const auto declaration = hir_referenced_declaration(current)) {
             const auto binding = hir_runtime_binding(
                 *declaration, process_scope, false);
@@ -1437,11 +1441,17 @@ bool Lowerer::initialize_hir_declarations(
                                 != semantic::vhdl::RangeKind::array_index) {
                                 return false;
                             }
+                            // `X'range` takes X's direction (IEEE 1076-2008 5.3.2.2); a STRING
+                            // register models an ascending index when it is unknown.
+                            const bool descending = range.direction_from_bounds
+                                ? hir_vhdl_range_direction(range, hir_process_scope_)
+                                      .value_or(false)
+                                : range.descending;
                             const auto left = hir_range_left(range);
                             const auto right = hir_range_right(range);
                             const bool null_range = range.null
                                 || (left && right
-                                    && (range.descending
+                                    && (descending
                                             ? *left < *right
                                             : *left > *right));
                             if (null_range) {
@@ -1493,7 +1503,7 @@ bool Lowerer::initialize_hir_declarations(
                                 const auto non_null = allocate_register(
                                     1U, frontend::ValueDomain::Bit2);
                                 process_.operations.emplace_back(Binary {
-                                    range.descending
+                                    descending
                                         ? BinaryOperator::greater_equal_signed
                                         : BinaryOperator::less_equal_signed,
                                     non_null,
@@ -1517,10 +1527,10 @@ bool Lowerer::initialize_hir_declarations(
                                     IntegerBinary {
                                         IntegerBinaryOperator::subtract,
                                         difference,
-                                        range.descending
+                                        descending
                                             ? *left_register
                                             : *right_register,
-                                        range.descending
+                                        descending
                                             ? *right_register
                                             : *left_register,
                                     });
@@ -1809,8 +1819,9 @@ bool Lowerer::initialize_hir_declarations(
                 && completed && completed->unconstrained) {
                 apply_hir_vhdl_shape(
                     *completed, *shape, declaration->vhdl->scope);
+                // Each element occupies the same number of bits.
                 auto width = vhdl_subtype_width(*completed);
-                if (width && *width != length) {
+                if (width && *width % length != 0U) {
                     width.reset();
                 }
                 const auto domain = hir_expression_domain(
@@ -2172,6 +2183,10 @@ bool Lowerer::initialize_hir_declarations(
                         hir_source_span(declaration->vhdl->source));
                 }
                 return false;
+            }
+            if (declaration->vhdl != nullptr) {
+                (void)emit_hir_vhdl_call_length_check(*initializer,
+                    binding->width, hir_source_span(declaration->vhdl->source));
             }
             if (register_width(*initial) != binding->width) {
                 initial = resize_register(
@@ -3604,6 +3619,32 @@ bool Lowerer::lower_hir_output_actual_write(
             return true;
         }
     }
+    // A record element of a VHDL signal (`s.x.a`) is one static part of
+    // it, with a driver of its own (IEEE 1076-2008 6.5.7.1, 14.7.2).
+    if (expression->vhdl != nullptr
+        && expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
+        && expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice) {
+        if (const auto member = hir_vhdl_member_selection(target);
+            member && member->declaration == *declaration
+            && !member->root.valid() && !member->index
+            && !member->access_object_root && member->width != 0U
+            && member->offset <= binding->width
+            && member->width <= binding->width - member->offset
+            && member->offset <= std::numeric_limits<std::uint32_t>::max()) {
+            if (register_width(source) != member->width) {
+                source = resize_register(
+                    source, member->width, member->signed_value);
+            }
+            process_.operations.emplace_back(WriteUpdateSlice {
+                *binding->signal,
+                source,
+                static_cast<std::uint32_t>(member->offset),
+                SignalUpdateDomain::generic,
+            });
+            record_readonly_vhdl_output_write(*binding);
+            return true;
+        }
+    }
 
     std::span<const semantic::ExpressionId> operands;
     std::string_view selection_operation;
@@ -3916,6 +3957,7 @@ void Lowerer::reset_hir_process_state()
     hir_vhdl_shaped_locals_.clear();
     hir_vhdl_shaped_heap_views_.clear();
     hir_vhdl_shaped_heap_profiles_.clear();
+    hir_vhdl_access_heaps_.clear();
     hir_vhdl_shaped_active_unit_ = nullptr;
     next_register_ = 0U;
     next_string_register_ = 0U;
@@ -4329,6 +4371,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             actual_expression
                 = specialized_hir_unit_->find_expression(actual);
         }
+        if (actual_expression && actual_expression->vhdl != nullptr
+            && !description.actual_slice) {
+            (void)emit_hir_vhdl_call_length_check(actual, signal.width,
+                hir_source_span(actual_expression->vhdl->source));
+        }
         auto value = description.input_actual_vhdl_context
                 && actual_expression
                 && actual_expression->vhdl != nullptr
@@ -4572,38 +4619,81 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             subelements && subelements->vhdl != nullptr
             && subelements->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
             && subelements->vhdl->text == "@vhdl-formal-subelements") {
-            // An output formal associated slice by slice (IEEE 1076-2008
-            // 6.5.7.1): each actual receives its part of the formal.
-            if (!signal.packed_range
-                || signal.packed_range->width() != register_width(value)) {
+            // An output formal associated part by part (IEEE 1076-2008
+            // 6.5.7.1): each actual receives its part of the formal, an
+            // element or slice of an array or an element of a record.
+            if (signal.width != register_width(value)) {
                 process_ = { };
                 return std::nullopt;
             }
-            const auto& range = *signal.packed_range;
-            const bool descending = range.left >= range.right;
-            const auto low = std::min(range.left, range.right);
-            const auto high = std::max(range.left, range.right);
-            const auto position = [&](const std::int64_t index)
-                -> std::optional<std::uint32_t> {
-                if (index < low || index > high) {
-                    return std::nullopt;
-                }
-                return static_cast<std::uint32_t>(descending
-                        ? index - range.right
-                        : range.right - index);
+            struct PartPlace {
+                std::uint32_t offset { };
+                std::uint32_t width { };
             };
-            for (const auto& association : subelements->vhdl->associations) {
+            const auto part_place = [&](
+                const semantic::vhdl::AggregateAssociation& association)
+                -> std::optional<PartPlace> {
+                if (!association.choice_spelling.empty()
+                    && association.choice_spelling != "@array") {
+                    const auto member = std::ranges::find_if(
+                        signal.packed_members,
+                        [&](const PackedMemberMetadata& candidate) {
+                            return same_hir_identifier(candidate.name,
+                                association.choice_spelling, true);
+                        });
+                    const auto width = member != signal.packed_members.end()
+                        ? member->width()
+                        : std::nullopt;
+                    if (!width || member->lsb_offset + *width > signal.width) {
+                        return std::nullopt;
+                    }
+                    return PartPlace {
+                        static_cast<std::uint32_t>(member->lsb_offset),
+                        static_cast<std::uint32_t>(*width) };
+                }
                 if (association.choices.size() != 1U) {
-                    process_ = { };
                     return std::nullopt;
                 }
+                // The rightmost element is the least significant; each
+                // element of an array of composites spans its stride.
+                std::int64_t left { };
+                std::int64_t right { };
+                std::uint64_t stride { 1U };
+                if (signal.vhdl_array
+                    && signal.vhdl_array->dimensions.size() == 1U
+                    && signal.vhdl_array->dimensions.front().range
+                    && signal.vhdl_array->dimensions.front().stride != 0U) {
+                    const auto& dimension
+                        = signal.vhdl_array->dimensions.front();
+                    left = dimension.range->left;
+                    right = dimension.range->right;
+                    stride = dimension.stride;
+                } else if (signal.packed_range) {
+                    left = signal.packed_range->left;
+                    right = signal.packed_range->right;
+                } else {
+                    return std::nullopt;
+                }
+                const bool descending = left >= right;
+                const auto low = std::min(left, right);
+                const auto high = std::max(left, right);
+                const auto position = [&](const std::int64_t index)
+                    -> std::optional<std::uint64_t> {
+                    if (index < low || index > high) {
+                        return std::nullopt;
+                    }
+                    return static_cast<std::uint64_t>(
+                        descending ? index - right : right - index);
+                };
                 const auto choice = specialized_hir_unit_->find_expression(
                     association.choices.front());
                 std::optional<std::int64_t> first;
                 std::optional<std::int64_t> last;
                 if (choice && choice->vhdl != nullptr
-                    && choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                    && (choice->vhdl->text == "to" || choice->vhdl->text == "downto")
+                    && choice->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::binary
+                    && (choice->vhdl->text == "to"
+                        || choice->vhdl->text == "downto")
                     && choice->vhdl->operands.size() == 2U) {
                     first = hir_constant_integer(choice->vhdl->operands[0]);
                     last = hir_constant_integer(choice->vhdl->operands[1]);
@@ -4611,18 +4701,48 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     first = hir_constant_integer(association.choices.front());
                     last = first;
                 }
-                const auto first_position = first ? position(*first) : std::nullopt;
-                const auto last_position = last ? position(*last) : std::nullopt;
+                const auto first_position
+                    = first ? position(*first) : std::nullopt;
+                const auto last_position
+                    = last ? position(*last) : std::nullopt;
                 if (!first_position || !last_position) {
+                    return std::nullopt;
+                }
+                const auto offset
+                    = std::min(*first_position, *last_position) * stride;
+                const auto width = (std::max(*first_position, *last_position)
+                    - std::min(*first_position, *last_position) + 1U)
+                    * stride;
+                if (offset + width > signal.width) {
+                    return std::nullopt;
+                }
+                return PartPlace { static_cast<std::uint32_t>(offset),
+                    static_cast<std::uint32_t>(width) };
+            };
+            for (const auto& association : subelements->vhdl->associations) {
+                // An OPEN part is left unassociated (6.5.7.1).
+                const auto actual = specialized_hir_unit_->find_expression(
+                    association.value);
+                if (actual && actual->vhdl != nullptr
+                    && actual->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::name
+                    && same_hir_identifier(actual->vhdl->text, "open", true)) {
+                    continue;
+                }
+                const auto place = part_place(association);
+                if (!place) {
                     process_ = { };
                     return std::nullopt;
                 }
-                const auto offset = std::min(*first_position, *last_position);
-                const auto width = std::max(*first_position, *last_position)
-                    - offset + 1U;
-                const auto part = allocate_register(width, register_domain(value));
+                // A null array element has no scalar subelements to
+                // deliver (5.3.2.2).
+                if (place->width == 0U) {
+                    continue;
+                }
+                const auto part
+                    = allocate_register(place->width, register_domain(value));
                 process_.operations.emplace_back(Extract {
-                    part, value, offset, width });
+                    part, value, place->offset, place->width });
                 if (!lower_hir_output_actual_write(association.value, part)) {
                     process_ = { };
                     return std::nullopt;
@@ -5120,6 +5240,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             });
     if (vhdl_trailing_wait && vhdl_explicit_wait) {
         process_.operations[*vhdl_trailing_wait] = Jump { resume_entry };
+    } else if (vhdl_trailing_wait) {
+        // Nothing can resume a process without sensitivity or wait once
+        // its statements end (`process begin ...; finish; end process`,
+        // IEEE 1076-2008 11.3).
+        process_.operations[*vhdl_trailing_wait] = WaitForever { };
     }
     // A concurrent procedure call is a process that calls the procedure and
     // then waits on its signal actuals (IEEE 1076-2008 11.4); the

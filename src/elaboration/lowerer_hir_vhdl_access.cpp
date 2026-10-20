@@ -735,8 +735,7 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         const auto value = specialized_hir_unit_->find_expression(value_id);
         if (!value || value->vhdl == nullptr
             || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
-            || (value->vhdl->text != "@vhdl-dereference"
-                && value->vhdl->text != "@vhdl-member:all")
+            || value->vhdl->text != "@vhdl-dereference"
             || value->vhdl->operands.size() != 1U) {
             return false;
         }
@@ -1014,8 +1013,7 @@ Lowerer::lower_hir_vhdl_access_string_object(
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind
             != semantic::vhdl::ExpressionKind::call
-        || (expression->vhdl->text != "@vhdl-dereference"
-            && expression->vhdl->text != "@vhdl-member:all")
+        || expression->vhdl->text != "@vhdl-dereference"
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
     }

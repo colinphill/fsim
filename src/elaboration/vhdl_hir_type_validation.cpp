@@ -4076,6 +4076,11 @@ private:
                 }
                 return { };
             }
+            // IEEE.MATH_REAL's "**"(INTEGER, REAL) is REAL (IEEE 1076.2).
+            if (operation == "**" && left.kind == OperandClass::integer
+                && right.kind == OperandClass::floating) {
+                return right;
+            }
             if (operation == "**" && integer_or_floating_class(left.kind)) {
                 return left;
             }
@@ -8503,6 +8508,7 @@ private:
             == semantic::vhdl::ExpressionKind::aggregate) {
             const auto expected_kind = profile(expected).kind;
             return expected_kind == ProfileKind::array
+                || expected_kind == ProfileKind::string
                 || expected_kind == ProfileKind::record;
         }
         const auto actual_subtype = expression_subtype(actual_id);
@@ -8538,6 +8544,38 @@ private:
             : std::nullopt;
         return !expected_root || !actual_root
             || *expected_root == *actual_root;
+    }
+
+    // A positional association whose value has the aggregate's nominal
+    // one-dimensional array type but bounds known only at run time: an
+    // array segment of unknown length (IEEE 1076-2008 9.3.3.3).
+    bool dynamic_array_segment(
+        const semantic::ExpressionId value_id,
+        const SubtypeIndication& expected_array,
+        const SubtypeIndication& expected_element,
+        const semantic::ScopeId scope) const
+    {
+        if (unit_standard(scope) < std::string_view { "2008" }
+            || positional_array_segment_count(
+                value_id, expected_array, expected_element, scope)) {
+            return false;
+        }
+        const auto value = specialization_.find_expression(value_id);
+        if (!value || value->vhdl == nullptr
+            || value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            || value->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+            return false;
+        }
+        const auto actual = expression_subtype(value_id);
+        if (!actual
+            || !same_nominal_array_type(expected_array, *actual, scope)) {
+            return false;
+        }
+        const auto actual_profile = profile(*actual);
+        return actual_profile.kind == ProfileKind::array
+            && actual_profile.dimensions.size() == 1U;
     }
 
     std::optional<std::uint64_t> positional_array_segment_count(
@@ -9242,10 +9280,11 @@ private:
         }
         if (profile(*element).kind
             != ProfileKind::enumeration) {
-            // STD.STANDARD.CHARACTER may not have a retained TypeDefinition.
-            // Resolve the spelling in the expected type's declaration scope
-            // before accepting this compiler-owned implicit type, so a visible
-            // user `character` type never inherits the builtin identity.
+            // STD.STANDARD.CHARACTER and BIT (and the STD_LOGIC_1164 logic
+            // types) may not have a retained TypeDefinition. Resolve the
+            // spelling in the expected type's declaration scope before
+            // accepting this compiler-owned implicit type, so a visible user
+            // type of the same name never inherits the builtin identity.
             auto spelling = std::string_view {
                 element->type_mark.spelling
             };
@@ -9253,14 +9292,44 @@ private:
             if (separator != std::string_view::npos) {
                 spelling.remove_prefix(separator + 1U);
             }
-            if (!equal_ignoring_ascii_case(spelling, "character")) {
+            struct PredefinedCharacterElement {
+                std::string_view name;
+                std::string_view library;
+                std::string_view package;
+                std::string_view allowed;
+            };
+            constexpr std::array predefined_elements {
+                PredefinedCharacterElement {
+                    "character", "std", "standard", { } },
+                PredefinedCharacterElement { "bit", "std", "standard", "01" },
+                PredefinedCharacterElement { "std_ulogic", "ieee",
+                    "std_logic_1164", "UX01ZWLH-" },
+                PredefinedCharacterElement { "std_logic", "ieee",
+                    "std_logic_1164", "UX01ZWLH-" },
+            };
+            const auto predefined = std::ranges::find_if(
+                predefined_elements, [&](const auto& candidate) {
+                    return equal_ignoring_ascii_case(
+                        spelling, candidate.name);
+                });
+            if (predefined == predefined_elements.end()) {
                 return false;
             }
+            const auto members_allowed = [&] {
+                return predefined->allowed.empty()
+                    || std::ranges::all_of(text, [&](const char character) {
+                           return predefined->allowed.find(character)
+                               != std::string_view::npos;
+                       });
+            };
             const auto qualified
                 = lowercase_ascii_copy(element->type_mark.spelling);
-            if (qualified == "standard.character"
-                || qualified == "std.standard.character") {
-                return true;
+            const auto package_name = std::string { predefined->package }
+                + "." + std::string { predefined->name };
+            if (qualified == package_name
+                || qualified == std::string { predefined->library } + "."
+                        + package_name) {
+                return members_allowed();
             }
             semantic::vhdl::Name reference;
             reference.spelling = element->type_mark.spelling;
@@ -9274,11 +9343,11 @@ private:
             if (visible.status
                     == semantic::CompiledResolutionStatus::not_found
                 && visible.candidates.empty()) {
-                return true;
+                return members_allowed();
             }
-            // A standard CHARACTER declaration can be present in the linked
-            // design. Accept that exact owner while keeping a local or
-            // imported user-defined `character` distinct.
+            // A standard declaration can be present in the linked design.
+            // Accept that exact owner while keeping a local or imported
+            // user-defined type of the same name distinct.
             const auto visible_id = visible.unique();
             const auto declaration = visible_id
                 ? specialization_.find_declaration(*visible_id)
@@ -9290,9 +9359,11 @@ private:
                 return false;
             }
             return specialization_.design().vhdl_scope_in_package(
-                       declaration->vhdl->scope, "std", "standard")
+                       declaration->vhdl->scope, predefined->library,
+                       predefined->package)
                 && equal_ignoring_ascii_case(
-                    declaration->vhdl->name, "character");
+                    declaration->vhdl->name, predefined->name)
+                && members_allowed();
         }
 
         return string_enumeration_membership(text, *element, type_scope)
@@ -9747,6 +9818,19 @@ private:
                     association.source);
                 continue;
             }
+            // VHDL-2008 9.3.3.3: a positional value of the aggregate's own
+            // array type is a segment, including one of run-time length
+            // (`(x, y) := f(n)`); segment widths are checked by the
+            // bounded walk or at run time.
+            if (association.positional()
+                && expression.kind
+                    != semantic::vhdl::ExpressionKind::aggregate
+                && (positional_array_segment_count(association.value,
+                        array_subtype, element, expression.scope)
+                    || dynamic_array_segment(association.value,
+                        array_subtype, element, expression.scope))) {
+                continue;
+            }
 
             if (expression.kind
                     == semantic::vhdl::ExpressionKind::call
@@ -9864,6 +9948,11 @@ private:
                     : aggregate.scope;
                 const auto segment_count = positional_array_segment_count(
                     association.value, array_subtype, element, scope);
+                if (!segment_count
+                    && dynamic_array_segment(
+                        association.value, array_subtype, element, scope)) {
+                    return std::nullopt;
+                }
                 const auto increment = segment_count.value_or(1U);
                 if (increment
                     > std::numeric_limits<std::uint64_t>::max() - count) {
@@ -10140,6 +10229,9 @@ private:
         std::uint64_t assigned_segment_count { };
         bool has_others = false;
         bool dynamic_sole_choice = false;
+        // After a positional segment of run-time length, later positions are
+        // known only at run time.
+        bool dynamic_positional_segment = false;
         bool positional_exhausted = dimension.null;
         auto positional = dimension.descending ? maximum : minimum;
         const auto covered_by_segment = [&](const std::int64_t index) {
@@ -10165,6 +10257,7 @@ private:
                 const auto operand = specialization_.find_expression(
                     expression->vhdl->operands.front());
                 if ((element_profile.kind == ProfileKind::array
+                        || element_profile.kind == ProfileKind::string
                         || element_profile.kind == ProfileKind::record)
                     && operand && operand->vhdl != nullptr
                     && operand->vhdl->kind
@@ -10197,6 +10290,7 @@ private:
                 const auto element_profile = profile(
                     element);
                 if (element_profile.kind == ProfileKind::array
+                    || element_profile.kind == ProfileKind::string
                     || element_profile.kind == ProfileKind::record) {
                     validate_aggregate(value, element);
                     return;
@@ -10580,6 +10674,16 @@ private:
                     }
                     continue;
                 }
+                if (dynamic_array_segment(
+                        association.value, array_subtype, element, scope)) {
+                    dynamic_positional_segment = true;
+                    continue;
+                }
+                if (dynamic_positional_segment) {
+                    validate_aggregate_element(element, association.value,
+                        association.source, expected_declaration_scope);
+                    continue;
+                }
                 if (positional_exhausted) {
                     report(
                         "FSIM-ELAB-VHARRAYAGG-003",
@@ -10869,6 +10973,7 @@ private:
             }
         }
         if (!has_others && !dynamic_sole_choice
+            && !dynamic_positional_segment
             && static_cast<std::uint64_t>(assigned.size())
                     + assigned_segment_count
                 < element_count) {
@@ -11554,6 +11659,11 @@ private:
         } else {
             const auto group_size = value.operands.size() - 1U;
             const auto group_profile = profile(base->subtype);
+            // STRING has no retained array definition; an index into a
+            // STRING element is outside this selection model.
+            if (group_profile.kind == ProfileKind::string) {
+                return std::nullopt;
+            }
             const auto rank = group_profile.dimensions.size();
             if (!base->selectors.empty() || group_size != rank) {
                 base->invalid_index_group = true;
@@ -13339,7 +13449,21 @@ private:
                 || expression.text == "<=" || expression.text == ">"
                 || expression.text == ">=";
             // Ordering is defined for one-dimensional arrays of discrete
-            // elements (IEEE 1076-2008 9.2.3), which the lowerer supports.
+            // elements (IEEE 1076-2008 9.2.3), and of any scalar element
+            // from VHDL-2019 (IEEE 1076-2019 9.2.3), which the lowerer
+            // supports for REAL.
+            const auto scalar_elements = [&] {
+                const auto& scopes
+                    = specialization_.design().semantics.scopes();
+                if (!expression.scope.valid()
+                    || expression.scope.value() >= scopes.size()) {
+                    return false;
+                }
+                const auto unit = specialization_.design().find_unit(
+                    scopes[expression.scope.value()].unit);
+                return unit && unit->vhdl != nullptr
+                    && unit->vhdl->standard == "2019";
+            }();
             const auto discrete_array = [&](const std::optional<semantic::TypeId> root) {
                 const auto* definition = root ? type_definition(*root) : nullptr;
                 if (definition == nullptr || definition->form != TypeForm::array
@@ -13350,7 +13474,9 @@ private:
                 const auto element = subtype_operand_type(
                     *definition->element_subtype, 0U);
                 return element.kind == OperandClass::integer
-                    || element.kind == OperandClass::enumeration;
+                    || element.kind == OperandClass::enumeration
+                    || (scalar_elements
+                        && element.kind == OperandClass::floating);
             };
             if (relational && (left || right)
                 && !(discrete_array(left) || discrete_array(right))) {

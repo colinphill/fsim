@@ -36,6 +36,16 @@ struct SpecializedHirVhdlPackedValue {
         const SpecializedHirVhdlPackedValue&) = default;
 };
 
+/// A statically evaluated record value whose elements are all integer or
+/// enumeration scalars, in element declaration order.
+struct SpecializedHirVhdlRecordValue {
+    TypeId record_type;
+    std::vector<std::int64_t> elements;
+
+    friend bool operator==(const SpecializedHirVhdlRecordValue&,
+        const SpecializedHirVhdlRecordValue&) = default;
+};
+
 /// A bounded, statically evaluated one-dimensional array whose element type
 /// is the predefined VHDL BOOLEAN type. The array and element identities are
 /// retained separately from the values so a Boolean array cannot be
@@ -85,6 +95,9 @@ struct SpecializedHirActualIdentity {
     // nominal array identity and bounds. It is not encoded as packed bits.
     std::optional<SpecializedHirVhdlBooleanArrayValue>
         vhdl_boolean_array_value { };
+    // A record actual of scalar elements, evaluated in the parent so the
+    // target unit can select its elements (IEEE 1076-2008 6.5.6.2, 8.3).
+    std::optional<SpecializedHirVhdlRecordValue> vhdl_record_value { };
 
     friend bool operator==(const SpecializedHirActualIdentity&,
         const SpecializedHirActualIdentity&) = default;
@@ -338,6 +351,11 @@ public:
     /// index through the right index.
     [[nodiscard]] std::optional<SpecializedHirVhdlPackedArrayValue>
     evaluate_vhdl_packed_array_expression(ExpressionId expression) const;
+
+    /// Evaluate a record value whose elements are all integer or
+    /// enumeration scalars. Other values return no value.
+    [[nodiscard]] std::optional<SpecializedHirVhdlRecordValue>
+    evaluate_vhdl_record_expression(ExpressionId expression) const;
 
     /// Whether a subtype is a one-dimensional array of the predefined
     /// BOOLEAN type, proven from retained type identity or an unshadowed
