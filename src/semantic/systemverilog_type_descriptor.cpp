@@ -331,8 +331,12 @@ std::optional<SystemVerilogTypeDescriptor> describe_systemverilog_type(
                 result.kind = Kind::enumeration;
                 result.nominal = current.target.target;
                 result.nominal_name = definition->systemverilog->name;
+                // The typedef's declared type repeats the enumeration's
+                // base range, which the nominal type already carries.
+                sv::TypeReference nominal;
+                nominal.target = current.target;
                 if (const auto width
-                    = unit.evaluate_systemverilog_type_width(current)) {
+                    = unit.evaluate_systemverilog_type_width(nominal)) {
                     result.bits = *width;
                 }
                 return result;

@@ -1230,7 +1230,18 @@ Expression VhdlParser::parse_primary()
               };
         Expression selected { ExpressionKind::Identifier, canonical, { }, name.span };
         attach_selected_spelling(selected);
+        // The result of a parameterless function call is the prefix of a
+        // selected record element (IEEE 1076-2008 8.3).
+        if (vhdl_parameterless_function_names_.contains(canonical)
+            && !vhdl_object_classes_.contains(canonical)
+            && std::ranges::find(vhdl_enclosing_function_names_, canonical)
+                == vhdl_enclosing_function_names_.end()
+            && at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
+            && vhdl_name(current(1).text) != "all") {
+            return parse_vhdl_name_suffixes(std::move(selected), name.span);
+        }
         bool saw_dereference = false;
+        bool method_result = false;
         // An index or element selected through an access object reaches
         // the designated object (IEEE 1076-2008 8.3).
         // So does an array attribute of an access object (8.3, 16.2.3).
@@ -1303,7 +1314,7 @@ Expression VhdlParser::parse_primary()
                     { std::move(selected) },
                     cover(name.span, part.span) };
                 saw_dereference = true;
-            } else if (saw_dereference) {
+            } else if (saw_dereference || method_result) {
                 selected = Expression { ExpressionKind::Call,
                     "@vhdl-member:" + canonical_part,
                     { std::move(selected) },
@@ -1316,6 +1327,19 @@ Expression VhdlParser::parse_primary()
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
                 attach_selected_spelling(selected);
+                // The result of a parameterless method call on a protected
+                // object prefixes a selected record element (8.3).
+                if (const auto object = vhdl_object_classes_.find(
+                        canonical.substr(0, canonical.find('.')));
+                    canonical.find('.') == canonical.rfind('.')
+                    && object != vhdl_object_classes_.end()
+                    && object->second == "variable"
+                    && vhdl_parameterless_function_names_.contains(
+                        canonical_part)
+                    && at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
+                    && vhdl_name(current(1).text) != "all") {
+                    method_result = true;
+                }
             }
         }
         if (const auto api = vhdl_simulator_api(selected.text);
@@ -1325,7 +1349,7 @@ Expression VhdlParser::parse_primary()
                 "the STD.ENV simulator, data, and time interface",
                 "select VHDL-2019 or remove the STD.ENV reference");
         }
-        if (saw_dereference) {
+        if (saw_dereference || method_result) {
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
                     selected = parse_index_or_slice_suffix(
@@ -1420,12 +1444,16 @@ Expression VhdlParser::parse_primary()
                         : canonical.substr(separator + 1U);
                     auto found = values->second.find(entity);
                     // An attribute of an object applies to its aliases.
+                    auto specified_entity = entity;
                     for (auto alias = vhdl_object_alias_targets_.find(entity);
                          found == values->second.end()
                          && alias != vhdl_object_alias_targets_.end()
                          && alias->second != alias->first;
                          alias = vhdl_object_alias_targets_.find(alias->second)) {
                         found = values->second.find(alias->second);
+                        if (found != values->second.end()) {
+                            specified_entity = alias->second;
+                        }
                     }
                     if (const auto object_class
                         = vhdl_object_classes_.find(entity);
@@ -1451,8 +1479,14 @@ Expression VhdlParser::parse_primary()
                         // the HIR can recover the declared attribute subtype
                         // after replacing this occurrence with its static
                         // value (IEEE 1076-2008 6.7).
+                        // An alias's attribute names the aliased object's
+                        // specification.
                         value.nominal_type = "@fsim-vhdl-user-attribute:"
-                            + canonical + ":" + designator;
+                            + (separator == std::string::npos
+                                    ? specified_entity
+                                    : canonical.substr(0, separator + 1U)
+                                        + specified_entity)
+                            + ":" + designator;
                         for (;;) {
                             if (match(TokenKind::Dot)) {
                                 const auto member = expect_identifier("selected attribute element");
@@ -1467,8 +1501,13 @@ Expression VhdlParser::parse_primary()
                             if (!match(TokenKind::LeftParen)) {
                                 break;
                             }
-                            if (value.kind == ExpressionKind::IntegerLiteral
-                                || value.kind == ExpressionKind::BooleanLiteral) {
+                            const auto& specified
+                                = value.text.starts_with("@vhdl-qualified:")
+                                    && value.operands.size() == 1U
+                                ? value.operands.front()
+                                : value;
+                            if (specified.kind == ExpressionKind::IntegerLiteral
+                                || specified.kind == ExpressionKind::BooleanLiteral) {
                                 error(previous(), "FSIM-VHDL-SEM-126",
                                     "the value of attribute '" + attribute.text
                                         + "' is not an array and cannot be indexed");

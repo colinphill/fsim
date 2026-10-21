@@ -1343,6 +1343,123 @@ bool Lowerer::emit_hir_vhdl_call_length_check(
     return true;
 }
 
+void Lowerer::emit_hir_vhdl_initializer_length_checks(
+    semantic::ExpressionId value,
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const frontend::SourceSpan& span,
+    const std::size_t depth)
+{
+    if (specialized_hir_unit_ == nullptr || depth > 16U) {
+        return;
+    }
+    auto expression = specialized_hir_unit_->find_expression(value);
+    while (expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->operands.size() == 1U
+        && expression->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix)) {
+        value = expression->vhdl->operands.front();
+        expression = specialized_hir_unit_->find_expression(value);
+    }
+    if (!expression || expression->vhdl == nullptr) {
+        return;
+    }
+    const auto effective = hir_effective_vhdl_subtype(subtype);
+    if (!effective) {
+        return;
+    }
+    const auto& source = *expression->vhdl;
+    const auto* definition = semantic::vhdl_base_type_definition(
+        *specialized_hir_unit_, effective->type_mark.target);
+    if (source.kind == semantic::vhdl::ExpressionKind::aggregate) {
+        if (definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::record) {
+            // Each record element association checks against its element's
+            // subtype (IEEE 1076-2008 9.3.3.2).
+            const auto& elements = definition->record_elements;
+            std::vector<bool> covered(elements.size());
+            std::size_t position { };
+            for (const auto& association : source.associations) {
+                std::vector<std::size_t> targets;
+                if (association.positional()) {
+                    if (position < elements.size()) {
+                        targets.push_back(position);
+                    }
+                    ++position;
+                } else {
+                    std::vector<std::string> names;
+                    for (const auto choice_id : association.choices) {
+                        const auto choice
+                            = specialized_hir_unit_->find_expression(
+                                choice_id);
+                        if (choice && choice->vhdl != nullptr
+                            && choice->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::name) {
+                            names.push_back(choice->vhdl->text);
+                        }
+                    }
+                    if (names.empty() && association.choices.empty()) {
+                        names.push_back(association.choice_spelling);
+                    }
+                    for (const auto& name : names) {
+                        if (same_hir_identifier(name, "others", true)) {
+                            for (std::size_t index { };
+                                index < elements.size(); ++index) {
+                                if (!covered[index]) {
+                                    targets.push_back(index);
+                                }
+                            }
+                            continue;
+                        }
+                        const auto found = std::ranges::find_if(elements,
+                            [&](const semantic::vhdl::RecordElement& element) {
+                                return same_hir_identifier(
+                                    element.name, name, true);
+                            });
+                        if (found != elements.end()) {
+                            targets.push_back(static_cast<std::size_t>(
+                                std::distance(elements.begin(), found)));
+                        }
+                    }
+                }
+                for (const auto index : targets) {
+                    covered[index] = true;
+                    emit_hir_vhdl_initializer_length_checks(association.value,
+                        semantic::vhdl::constrained_element_subtype(
+                            *effective, elements[index].name,
+                            elements[index].subtype),
+                        span, depth + 1U);
+                }
+            }
+            return;
+        }
+        if (definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::array
+            && definition->element_subtype
+            && definition->array_dimensions.size() == 1U) {
+            const auto element = semantic::vhdl::constrained_element_subtype(
+                *effective, "", *definition->element_subtype);
+            for (const auto& association : source.associations) {
+                emit_hir_vhdl_initializer_length_checks(
+                    association.value, element, span, depth + 1U);
+            }
+        }
+        return;
+    }
+    if (source.kind != semantic::vhdl::ExpressionKind::call
+        && source.kind != semantic::vhdl::ExpressionKind::name) {
+        return;
+    }
+    const bool array_subtype = (definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::array)
+        || (definition == nullptr && hir_vhdl_array_type_family(*effective));
+    if (array_subtype && !effective->unconstrained
+        && effective->executable_width && *effective->executable_width != 0U) {
+        (void)emit_hir_vhdl_call_length_check(value,
+            static_cast<std::size_t>(*effective->executable_width), span);
+    }
+}
+
 void Lowerer::emit_hir_vhdl_string_length_check(
     const StringRegisterId target,
     const StringRegisterId value,
@@ -4861,58 +4978,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 append.value = *lowered;
             }
             process_.operations.emplace_back(append);
-            if (stream.text == "@stream-left") {
-                ContainerBitstream reverse;
-                reverse.operation = ContainerBitstreamOperation::reverse;
-                reverse.bits = bits;
-                reverse.slice = static_cast<std::uint32_t>(*slice);
-                process_.operations.emplace_back(reverse);
-            }
-            for (auto operand = stream.operands.begin() + 1;
-                operand != stream.operands.end(); ++operand) {
-                if (const auto destination
-                    = hir_container_object_binding(*operand)) {
-                    if (destination->type == nullptr
-                        || destination->read_only) {
-                        return assignment_rejected(__LINE__);
-                    }
-                    const auto unpacked = destination->local
-                        ? *destination->local
-                        : allocate_container_register(*destination->type);
-                    if (!destination->local) {
-                        process_.operations.emplace_back(ReadContainerObject {
-                            unpacked, destination->object });
-                    }
-                    ContainerBitstream take;
-                    take.operation
-                        = ContainerBitstreamOperation::take_container;
-                    take.bits = bits;
-                    take.container = unpacked;
-                    process_.operations.emplace_back(take);
-                    if (!destination->local) {
-                        process_.operations.emplace_back(WriteContainerObject {
-                            destination->object, unpacked, std::nullopt });
-                    }
-                    continue;
-                }
-                const auto width = hir_expression_width(
-                    *operand, hir_process_scope_);
-                if (!width || *width == 0U
-                    || *width > std::numeric_limits<std::uint32_t>::max()) {
-                    return assignment_rejected(__LINE__);
-                }
-                const auto part = allocate_register(*width,
-                    hir_expression_domain(*operand, hir_process_scope_)
-                        .value_or(frontend::ValueDomain::Logic4));
-                ContainerBitstream take;
-                take.operation = ContainerBitstreamOperation::take_value;
-                take.bits = bits;
-                take.value = part;
-                take.slice = static_cast<std::uint32_t>(*width);
-                process_.operations.emplace_back(take);
-                if (!lower_hir_packed_copy_out(*operand, part)) {
-                    return assignment_rejected(__LINE__);
-                }
+            if (!lower_hir_sv_stream_target_bits(*target, bits)) {
+                return assignment_rejected(__LINE__);
             }
             return true;
         }
@@ -8273,8 +8340,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     synchronization_value = synchronization.value;
                 }
             }
-            auto lowered = synchronization_value
-                ? synchronization_value
+            // An assignment pattern takes the property's type as its
+            // context (IEEE 1800-2017 10.9).
+            const auto pattern = synchronization_value
+                ? std::nullopt
+                : hir_systemverilog_packed_pattern_operand(
+                      *value, property->type);
+            auto lowered = synchronization_value ? synchronization_value
+                : pattern
+                ? lower_hir_systemverilog_packed_pattern(
+                      *pattern, property->type, property->width)
                 : lower_hir_expression(*value, property->width);
             if (!lowered) {
                 return assignment_rejected(__LINE__);
@@ -11195,6 +11270,39 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            // A literal is the ordinal of its spelling in the target's
+            // enumeration type (IEEE 1076-2008 5.2.2.1): a character literal
+            // such as '1' is overloaded across types.
+            const auto literal_ordinal = [&](const semantic::ExpressionId id)
+                -> std::optional<std::int64_t> {
+                return target_enumeration
+                    ? hir_resolver().vhdl_enumeration_literal_ordinal(
+                          *target_enumeration, id)
+                    : std::nullopt;
+            };
+            const auto enumeration_ordinal = [&](
+                                                 const semantic::ExpressionId id)
+                -> std::optional<std::int64_t> {
+                if (const auto ordinal = literal_ordinal(id)) {
+                    return ordinal;
+                }
+                return specialized_hir_unit_->evaluate_integral_expression(id);
+            };
+            const auto bound = [&](const std::optional<std::int64_t> folded,
+                                   const std::optional<semantic::ExpressionId>
+                                       expression)
+                -> std::optional<std::int64_t> {
+                if (expression) {
+                    if (const auto ordinal = literal_ordinal(*expression)) {
+                        return ordinal;
+                    }
+                }
+                return folded ? folded
+                    : expression
+                    ? specialized_hir_unit_->evaluate_integral_expression(
+                          *expression)
+                    : std::nullopt;
+            };
             const auto enumeration_range = [&](const auto& self,
                                                const semantic::vhdl::SubtypeIndication& subtype,
                                                std::unordered_set<std::uint32_t>& visiting)
@@ -11208,20 +11316,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 == semantic::vhdl::RangeKind::discrete;
                     });
                 if (constraint != subtype.constraints.end()) {
-                    const auto left = constraint->left
-                        ? constraint->left
-                        : constraint->left_expression
-                        ? specialized_hir_unit_
-                              ->evaluate_integral_expression(
-                                  *constraint->left_expression)
-                        : std::nullopt;
-                    const auto right = constraint->right
-                        ? constraint->right
-                        : constraint->right_expression
-                        ? specialized_hir_unit_
-                              ->evaluate_integral_expression(
-                                  *constraint->right_expression)
-                        : std::nullopt;
+                    const auto left = bound(
+                        constraint->left, constraint->left_expression);
+                    const auto right = bound(
+                        constraint->right, constraint->right_expression);
                     if (left && right) {
                         return frontend::EnumerationRange {
                             *left,
@@ -11267,8 +11365,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                       range_visiting)
                 : std::nullopt;
             const auto ordinal = target_enumeration_range
-                ? specialized_hir_unit_->evaluate_integral_expression(
-                      *value)
+                ? enumeration_ordinal(*value)
                 : std::nullopt;
             if (target_enumeration_range && ordinal
                 && (*ordinal
@@ -22384,6 +22481,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
 
                 std::vector<ContainerPredicateNode> key;
+                // A key beyond the bounded key graph sorts element by
+                // element in SimIR.
+                std::optional<std::pair<std::string, semantic::ExpressionId>>
+                    general_key;
+                const auto key_diagnostics = diagnostics_.size();
                 if (container_call.operands.size() >= 2U) {
                     using ValueKind = ContainerPredicateValueKind;
                     const auto iterator = explicit_iterator
@@ -22710,9 +22812,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     };
                     const auto root = lower_key(key_expression_id);
                     if (!root) {
-                        return true;
-                    }
-                    if (key[*root].value_kind != ValueKind::element) {
+                        key.clear();
+                        general_key.emplace(
+                            iterator_name, key_expression_id);
+                    } else if (key[*root].value_kind != ValueKind::element) {
                         report(
                             "FSIM-ELAB-SVORDER-008",
                             "container ordering key root must have the receiver "
@@ -22737,9 +22840,33 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 } else if (container_call.text == ".shuffle") {
                     operation = ContainerOrderingOperator::shuffle;
                 }
+                const auto order = [&](const ContainerRegisterId target,
+                                       const ContainerType& type) {
+                    if (!general_key) {
+                        process_.operations.emplace_back(OrderContainer {
+                            operation, target, std::move(key) });
+                        return true;
+                    }
+                    const auto graph_diagnostics = std::vector<Diagnostic>(
+                        diagnostics_.begin()
+                            + static_cast<std::ptrdiff_t>(key_diagnostics),
+                        diagnostics_.end());
+                    diagnostics_.resize(key_diagnostics);
+                    if (lower_hir_container_keyed_order_loop(target, type,
+                            operation
+                                == ContainerOrderingOperator::descending,
+                            general_key->first, general_key->second)) {
+                        return true;
+                    }
+                    diagnostics_.resize(key_diagnostics);
+                    diagnostics_.insert(diagnostics_.end(),
+                        graph_diagnostics.begin(), graph_diagnostics.end());
+                    return false;
+                };
                 if (direct_receiver) {
-                    process_.operations.emplace_back(OrderContainer {
-                        operation, base, std::move(key) });
+                    if (!order(base, *selection->base.type)) {
+                        return true;
+                    }
                     if (!selection->base.local) {
                         process_.operations.emplace_back(WriteContainerObject {
                             selection->base.object, base, std::nullopt });
@@ -22753,8 +22880,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     selection->selected_type,
                     base,
                     selection->selected_type);
-                process_.operations.emplace_back(OrderContainer {
-                    operation, ordering_target, std::move(key) });
+                if (!order(ordering_target, selection->selected_type)) {
+                    return true;
+                }
                 const auto replacement = allocate_container_register(
                     *selection->base.type);
                 process_.operations.emplace_back(CopyContainerRegister {
@@ -25058,5 +25186,78 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_container_concatenation(
     return built;
 }
 
-} // namespace fsim::elaboration
 
+bool Lowerer::lower_hir_sv_stream_target_bits(
+    const semantic::ExpressionId target,
+    const ContainerRegisterId bits)
+{
+    const auto target_expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(target)
+        : std::nullopt;
+    if (!target_expression || target_expression->systemverilog == nullptr
+        || target_expression->systemverilog->operands.size() < 2U) {
+        return false;
+    }
+    const auto& stream = *target_expression->systemverilog;
+    const auto slice = hir_constant_integer(stream.operands.front());
+    if (!slice || *slice <= 0
+        || *slice > std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+    }
+    if (stream.text == "@stream-left") {
+        ContainerBitstream reverse;
+        reverse.operation = ContainerBitstreamOperation::reverse;
+        reverse.bits = bits;
+        reverse.slice = static_cast<std::uint32_t>(*slice);
+        process_.operations.emplace_back(reverse);
+    }
+    for (auto operand = stream.operands.begin() + 1;
+        operand != stream.operands.end(); ++operand) {
+        if (const auto destination
+            = hir_container_object_binding(*operand)) {
+            if (destination->type == nullptr
+                || destination->read_only) {
+                return false;
+            }
+            const auto unpacked = destination->local
+                ? *destination->local
+                : allocate_container_register(*destination->type);
+            if (!destination->local) {
+                process_.operations.emplace_back(ReadContainerObject {
+                    unpacked, destination->object });
+            }
+            ContainerBitstream take;
+            take.operation
+                = ContainerBitstreamOperation::take_container;
+            take.bits = bits;
+            take.container = unpacked;
+            process_.operations.emplace_back(take);
+            if (!destination->local) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    destination->object, unpacked, std::nullopt });
+            }
+            continue;
+        }
+        const auto width = hir_expression_width(
+            *operand, hir_process_scope_);
+        if (!width || *width == 0U
+            || *width > std::numeric_limits<std::uint32_t>::max()) {
+            return false;
+        }
+        const auto part = allocate_register(*width,
+            hir_expression_domain(*operand, hir_process_scope_)
+                .value_or(frontend::ValueDomain::Logic4));
+        ContainerBitstream take;
+        take.operation = ContainerBitstreamOperation::take_value;
+        take.bits = bits;
+        take.value = part;
+        take.slice = static_cast<std::uint32_t>(*width);
+        process_.operations.emplace_back(take);
+        if (!lower_hir_packed_copy_out(*operand, part)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace fsim::elaboration

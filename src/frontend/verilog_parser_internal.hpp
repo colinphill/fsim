@@ -509,10 +509,6 @@ class VerilogParser final : private detail::ParserBase {
   [[nodiscard]] bool
   compilation_unit_class_method_definition_start() const;
 
-  [[nodiscard]] bool compilation_unit_dpi_export_definition_start(
-      const std::vector<SystemVerilogDpiDeclaration>& declarations,
-      SystemVerilogDpiCallableKind kind) const;
-
   void resolve_dpi_declarations(
       std::vector<SystemVerilogDpiDeclaration>& declarations,
       const std::vector<FunctionDeclaration>& functions,

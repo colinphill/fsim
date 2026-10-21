@@ -5,6 +5,7 @@
 #include "constraint_bounds_internal.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <map>
 #include <new>
@@ -321,8 +322,7 @@ systemverilog_class_randomize_members(
     for (std::size_t index = 0; index < object.properties.size(); ++index) {
       const auto& property = object.properties[index];
       if (property.kind != SystemVerilogClassPropertyKind::ClassHandle
-          || property.handle == 0 || property.handle_container
-          || !visited.insert(property.handle).second) {
+          && !property.handle_container) {
         continue;
       }
       // Only rand handles extend randomization to their objects
@@ -330,6 +330,29 @@ systemverilog_class_randomize_members(
       const bool rand_handle = property.random_state
           && property.random_state->enabled
           && property.random_state->kind == SystemVerilogClassRandomKind::Rand;
+      if (property.handle_container) {
+        // The objects of an array or queue of handles join element by
+        // element as `name[i].` (IEEE 1800-2017 18.4, 18.5.9).
+        if (property.handle_container->kind()
+            == SystemVerilogClassContainerKind::AssociativeArray) {
+          continue;
+        }
+        const auto elements = property.handle_container->sequential_values();
+        for (std::size_t element = 0; element < elements.size(); ++element) {
+          if (elements[element] == 0
+              || !visited.insert(elements[element]).second) {
+            continue;
+          }
+          children.push_back({elements[element],
+              current.path + object.property_names[index] + "["
+                  + std::to_string(element) + "].",
+              current.randomized && rand_handle});
+        }
+        continue;
+      }
+      if (property.handle == 0 || !visited.insert(property.handle).second) {
+        continue;
+      }
       children.push_back({property.handle,
           current.path + object.property_names[index] + ".",
           current.randomized && rand_handle});
@@ -359,6 +382,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     std::set<std::size_t> selected;
     const PropertyDomains* domains{};
     const SystemVerilogClassConstraintConfigurator* constraints{};
+    /// Cleared for an element past the solved size of its container.
+    bool active{true};
   };
   std::vector<Node> nodes;
   nodes.reserve(members.size() + 1U);
@@ -508,7 +533,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     // 1800-2017 18.5.14.1), so the members (in reverse preorder) come
     // first and the root last.
     for (auto node = nodes.rbegin(); node != nodes.rend(); ++node) {
-      if (node->constraints != nullptr && *node->constraints) {
+      if (node->active && node->constraints != nullptr
+          && *node->constraints) {
         (*node->constraints)(solver, view_of(*node, all));
       }
     }
@@ -564,6 +590,65 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     randomized_container[c] = node.selected.contains(static_cast<std::size_t>(
         std::distance(node.object->property_names.begin(), found)));
   }
+  // Arrays and queues of class handles take part through their element
+  // count `name[]` and, when random and resizable, a solved `name.size()`;
+  // an element past the solved size leaves the call together with the
+  // objects reached from it (IEEE 1800-2017 18.4, 18.5.8.1, 18.5.9).
+  struct HandleContainer {
+    std::size_t node{};
+    std::size_t index{};
+    std::string name;
+    std::size_t count{};
+    bool random{};
+    bool resizable{};
+  };
+  std::vector<HandleContainer> handle_containers;
+  for (std::size_t n = 0; n < nodes.size(); ++n) {
+    const auto& node = nodes[n];
+    for (std::size_t index = 0; index < node.object->properties.size();
+         ++index) {
+      const auto& property = node.object->properties[index];
+      if (!property.handle_container
+          || property.handle_container->kind()
+              == SystemVerilogClassContainerKind::AssociativeArray) {
+        continue;
+      }
+      const auto kind = property.handle_container->kind();
+      const bool rand = property.random_state
+          && property.random_state->enabled
+          && property.random_state->kind == SystemVerilogClassRandomKind::Rand;
+      handle_containers.push_back({n, index, node.object->property_names[index],
+          property.handle_container->size(),
+          rand && node.selected.contains(index),
+          kind == SystemVerilogClassContainerKind::DynamicArray
+              || kind == SystemVerilogClassContainerKind::Queue});
+    }
+  }
+  std::vector<std::set<std::size_t>> base_selected;
+  base_selected.reserve(nodes.size());
+  for (const auto& node : nodes) base_selected.push_back(node.selected);
+  const auto sized_handles = [](const HandleContainer& held) {
+    return held.random && held.resizable;
+  };
+  // The objects of elements at or past `sizes[h]` leave the solve.
+  const auto activate = [&](const std::vector<std::size_t>& sizes) {
+    for (std::size_t n = 1; n < nodes.size(); ++n) {
+      bool active = true;
+      for (std::size_t h = 0; active && h < handle_containers.size(); ++h) {
+        const auto& held = handle_containers[h];
+        const auto prefix = nodes[held.node].path + held.name + "[";
+        if (!nodes[n].path.starts_with(prefix)) continue;
+        const auto close = nodes[n].path.find(']', prefix.size());
+        std::size_t element{};
+        const auto parsed = std::from_chars(
+            nodes[n].path.data() + prefix.size(),
+            nodes[n].path.data() + close, element);
+        if (parsed.ec == std::errc{} && element >= sizes[h]) active = false;
+      }
+      nodes[n].active = active;
+      nodes[n].selected = active ? base_selected[n] : std::set<std::size_t>{};
+    }
+  };
   const auto synthetic = [&](const std::size_t n, std::string name,
                              SystemVerilogClassPropertyValue value,
                              const bool chosen) {
@@ -634,7 +719,28 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
   };
   // Phase one gives each random resizable container a size; phase two
   // materializes every container's elements.
+  const auto add_handle_counts = [&](const std::vector<std::size_t>& sizes) {
+    for (std::size_t h = 0; h < handle_containers.size(); ++h) {
+      (void)synthetic(handle_containers[h].node,
+          handle_containers[h].name + "[]",
+          count_property(sizes[h], false), false);
+    }
+  };
   const auto add_sizes = [&] {
+    for (std::size_t n = 0; n < nodes.size(); ++n) {
+      nodes[n].active = true;
+      nodes[n].selected = base_selected[n];
+    }
+    for (const auto& held : handle_containers) {
+      if (sized_handles(held)) {
+        const auto index = synthetic(held.node, held.name + ".size()",
+            count_property(held.count, true), true);
+        preserved.emplace(held.node, index);
+      } else {
+        (void)synthetic(held.node, held.name + "[]",
+            count_property(held.count, false), false);
+      }
+    }
     for (std::size_t c = 0; c < containers.size(); ++c) {
       const auto& container = containers[c];
       if (container.resizable && randomized_container[c]
@@ -1069,10 +1175,14 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         [&](const std::size_t c) {
           return containers[c].resizable && randomized_container[c]
               && containers[c].element_paths.empty();
-        });
+        }) || std::ranges::any_of(handle_containers, sized_handles);
     std::vector<std::size_t> sizes(containers.size());
     for (std::size_t c = 0; c < containers.size(); ++c) {
       sizes[c] = containers[c].values.size();
+    }
+    std::vector<std::size_t> handle_sizes(handle_containers.size());
+    for (std::size_t h = 0; h < handle_containers.size(); ++h) {
+      handle_sizes[h] = handle_containers[h].count;
     }
     Outcome outcome;
     // A size that leaves the elements' constraints unsatisfiable is
@@ -1106,8 +1216,26 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           const auto& value = sizing.values.at(chosen->property.variable);
           sizes[c] = static_cast<std::size_t>(value.low_word().aval);
         }
+        for (std::size_t h = 0; h < handle_containers.size(); ++h) {
+          if (!sized_handles(handle_containers[h])) continue;
+          const auto& node = nodes[handle_containers[h].node];
+          const auto found = std::ranges::find(node.object->property_names,
+              handle_containers[h].name + ".size()");
+          const auto index = static_cast<std::size_t>(
+              std::distance(node.object->property_names.begin(), found));
+          const auto chosen = std::ranges::find_if(
+              sizing.selected, [&](const auto& item) {
+                return item.node == handle_containers[h].node
+                    && item.property.property_index == index;
+              });
+          if (chosen == sizing.selected.end()) continue;
+          handle_sizes[h] = static_cast<std::size_t>(
+              sizing.values.at(chosen->property.variable).low_word().aval);
+        }
         strip();
       }
+      activate(handle_sizes);
+      add_handle_counts(handle_sizes);
       for (std::size_t c = 0; c < containers.size(); ++c) {
         materialize(c, sizes[c]);
       }
@@ -1209,6 +1337,20 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
       }
       container.values = std::move(values);
       container.committed = true;
+    }
+    // A resized array or queue of handles keeps its leading elements; new
+    // elements are null (IEEE 1800-2017 7.5.1, 18.4).
+    for (std::size_t h = 0; h < handle_containers.size(); ++h) {
+      const auto& held = handle_containers[h];
+      if (!sized_handles(held) || handle_sizes[h] == held.count) continue;
+      auto& stored = *nodes[held.node].object->properties[held.index]
+          .handle_container;
+      if (stored.kind() == SystemVerilogClassContainerKind::DynamicArray) {
+        stored.resize(handle_sizes[h]);
+        continue;
+      }
+      while (stored.size() > handle_sizes[h]) (void)stored.pop_back();
+      while (stored.size() < handle_sizes[h]) stored.push_back(heap, 0);
     }
     return outcome.result;
   } catch (const SystemVerilogConstraintResourceError& error) {

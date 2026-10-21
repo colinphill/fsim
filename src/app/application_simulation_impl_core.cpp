@@ -463,8 +463,12 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         const auto& specialization
             = class_heap.object(member.handle).specialization_identity;
         member.property_domains = enumeration_domains(specialization);
-        member.class_constraints = class_constraints_of(
-            member.handle, specialization, member.path);
+        // Only an object reached through rand handles adds its constraints;
+        // others are state the solve may read (IEEE 1800-2017 18.5.9).
+        if (member.randomized) {
+            member.class_constraints = class_constraints_of(
+                member.handle, specialization, member.path);
+        }
     }
     if (!inline_constraints.empty()) {
         request.inline_constraints

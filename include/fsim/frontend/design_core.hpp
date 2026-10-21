@@ -551,6 +551,7 @@ enum class VhdlPredefinedSubtypeAttribute : std::uint8_t {
     None,
     Index,
     DesignatedSubtype,
+    Element,
 };
 
 struct Type {

@@ -1179,6 +1179,141 @@ class VhdlExecutableBuilder final {
             overload->declarations.begin(), overload->declarations.end());
       }
     };
+    // `use pkg.T` with a type mark also makes visible the package's
+    // explicit homographs of T's predefined operators: those whose profile
+    // names T's base type (IEEE 1076-2008 12.4).
+    const auto append_type_mark_operators = [&](vh::Name& name,
+        const semantic::ScopeId scope, const vh::Unit& context_owner,
+        const std::string_view spelling, const std::size_t separator,
+        const std::string_view wanted) {
+      static constexpr std::array<std::string_view, 16U> word_operators {
+          "and", "or", "nand", "nor", "xor", "xnor", "not", "abs", "mod",
+          "rem", "sll", "srl", "sla", "sra", "rol", "ror" };
+      const bool operator_symbol = !wanted.empty()
+          && ((std::isalpha(static_cast<unsigned char>(wanted.front())) == 0
+                  && wanted.front() != '\\' && wanted.front() != '\'')
+              || std::ranges::any_of(word_operators,
+                  [&](const std::string_view word) {
+                    return support::canonical_vhdl_spelling(std::string { word })
+                        == support::canonical_vhdl_spelling(
+                            std::string { wanted });
+                  }));
+      // The base type's enumeration literals and physical units are also
+      // made visible (12.4).
+      if (wanted.empty() || context_owner.standard == "vhdl-1987"
+          || context_owner.standard == "vhdl-1993"
+          || context_owner.standard == "vhdl-2002") {
+        return;
+      }
+      const auto* package = package_from_prefix(
+          scope, spelling.substr(0U, separator));
+      if (package == nullptr) {
+        return;
+      }
+      const auto mark_name = support::canonical_vhdl_spelling(
+          std::string { spelling.substr(separator + 1U) });
+      const auto root = [&](semantic::TypeId type) {
+        std::set<std::uint32_t> visited;
+        while (type.valid() && visited.insert(type.value()).second) {
+          const auto* record = hir_.find_type(type);
+          if (record == nullptr
+              || (record->form != vh::TypeForm::subtype
+                  && record->form != vh::TypeForm::alias)) {
+            break;
+          }
+          type = record->base.type_mark.target;
+        }
+        return type;
+      };
+      // Type marks may not be linked yet; then a mark's base is found by
+      // following the package's subtype declarations by spelling.
+      const auto base_spelling = [&](std::string spelling_name) {
+        for (std::size_t depth { }; depth < 16U; ++depth) {
+          if (const auto dot = spelling_name.rfind('.');
+              dot != std::string::npos) {
+            spelling_name.erase(0U, dot + 1U);
+          }
+          const auto found = std::ranges::find_if(package->declarations,
+              [&](const semantic::DeclarationId id) {
+                const auto* declaration = hir_.find_declaration(id);
+                return declaration != nullptr
+                    && declaration->form == vh::DeclarationForm::subtype
+                    && declaration->subtype
+                    && support::canonical_vhdl_spelling(declaration->name)
+                        == spelling_name;
+              });
+          if (found == package->declarations.end()) {
+            break;
+          }
+          spelling_name = support::canonical_vhdl_spelling(
+              hir_.find_declaration(*found)->subtype->type_mark.spelling);
+        }
+        return spelling_name;
+      };
+      for (const auto mark_id : package->declarations) {
+        const auto* mark = hir_.find_declaration(mark_id);
+        if (mark == nullptr
+            || (mark->form != vh::DeclarationForm::type
+                && mark->form != vh::DeclarationForm::subtype)
+            || support::canonical_vhdl_spelling(mark->name) != mark_name) {
+          continue;
+        }
+        const auto base = root(mark->declared_type ? *mark->declared_type
+                : mark->subtype ? mark->subtype->type_mark.target
+                : semantic::TypeId { });
+        const auto base_name = base_spelling(mark_name);
+        const auto names_base = [&](const std::optional<vh::SubtypeIndication>&
+                                        subtype) {
+          if (!subtype) {
+            return false;
+          }
+          const auto target = root(subtype->type_mark.target);
+          if (base.valid() && target.valid()) {
+            return target == base;
+          }
+          return base_spelling(support::canonical_vhdl_spelling(
+                     subtype->type_mark.spelling))
+              == base_name;
+        };
+        vh::Name operators;
+        append_package_member(operators, *package, name.canonical);
+        const auto* base_type = base.valid() ? hir_.find_type(base) : nullptr;
+        for (const auto candidate : operators.overloads) {
+          const auto* callable = hir_.find_declaration(candidate);
+          if (callable != nullptr && !callable->callable) {
+            const bool base_literal = base_type != nullptr
+                && (std::ranges::any_of(base_type->enumeration_literals,
+                        [&](const auto& literal) {
+                          return literal.declaration == candidate;
+                        })
+                    || std::ranges::any_of(base_type->physical_units,
+                        [&](const auto& unit) {
+                          return unit.declaration == candidate;
+                        }));
+            if (base_literal
+                && std::ranges::find(name.overloads, candidate)
+                    == name.overloads.end()) {
+              name.overloads.push_back(candidate);
+            }
+            continue;
+          }
+          if (callable == nullptr || !operator_symbol) {
+            continue;
+          }
+          const bool related = names_base(callable->callable->return_type)
+              || std::ranges::any_of(callable->callable->formals,
+                  [&](const semantic::DeclarationId formal_id) {
+                    const auto* formal = hir_.find_declaration(formal_id);
+                    return formal != nullptr && names_base(formal->subtype);
+                  });
+          if (related
+              && std::ranges::find(name.overloads, candidate)
+                  == name.overloads.end()) {
+            name.overloads.push_back(candidate);
+          }
+        }
+      }
+    };
     const auto resolve_name = [&](vh::Name& name,
                                   const semantic::ScopeId scope) {
       auto prior_overloads = std::move(name.overloads);
@@ -1208,14 +1343,73 @@ class VhdlExecutableBuilder final {
           }
         }
       } else {
+        // Enumeration literals are overloadable, and literals of different
+        // types are not homographs: an inner literal leaves an outer one of
+        // another type visible (IEEE 1076-2008 12.3). The walk continues
+        // into the primary unit's region (12.1).
+        const auto literals_only = [&](const std::vector<semantic::DeclarationId>&
+                                           declarations) {
+          return !declarations.empty()
+              && std::ranges::all_of(declarations,
+                  [&](const semantic::DeclarationId id) {
+                    const auto* declaration = hir_.find_declaration(id);
+                    return declaration != nullptr
+                        && declaration->form
+                            == vh::DeclarationForm::enumeration_literal;
+                  });
+        };
+        const auto primary_scope = [&]() -> std::optional<semantic::ScopeId> {
+          const auto* unit = owner_unit(scope);
+          if (unit == nullptr
+              || (unit->kind != vh::UnitKind::architecture
+                  && (unit->kind != vh::UnitKind::package
+                      || unit->primary_name.empty()))) {
+            return std::nullopt;
+          }
+          const auto expected_kind = unit->kind == vh::UnitKind::architecture
+              ? vh::UnitKind::entity
+              : vh::UnitKind::package;
+          const auto primary = std::ranges::find_if(
+              hir_.units(), [&](const vh::Unit& candidate) {
+                return candidate.kind == expected_kind
+                    && (expected_kind != vh::UnitKind::package
+                        || candidate.primary_name.empty())
+                    && support::canonical_vhdl_spelling(candidate.library)
+                        == support::canonical_vhdl_spelling(unit->library)
+                    && support::canonical_vhdl_spelling(candidate.name)
+                        == support::canonical_vhdl_spelling(
+                            unit->primary_name);
+              });
+          return primary == hir_.units().end()
+              ? std::nullopt
+              : std::optional { primary->scope };
+        };
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
+        bool primary_visited { };
         while (visible_scope) {
           if (const auto* overload = overload_in_scope(
                   *visible_scope, name.canonical)) {
-            name.overloads = overload->declarations;
-            break;
+            if (name.overloads.empty()) {
+              if (primary_visited) {
+                break;
+              }
+              name.overloads = overload->declarations;
+            } else if (literals_only(overload->declarations)) {
+              name.overloads.insert(name.overloads.end(),
+                  overload->declarations.begin(),
+                  overload->declarations.end());
+            } else {
+              break;
+            }
+            if (!literals_only(name.overloads)) {
+              break;
+            }
           }
           visible_scope = parent_scope(*visible_scope);
+          if (!visible_scope && !primary_visited) {
+            primary_visited = true;
+            visible_scope = primary_scope();
+          }
         }
         if (name.overloads.empty()) {
           if (const auto declaration = lexical_declaration(
@@ -1243,11 +1437,48 @@ class VhdlExecutableBuilder final {
                       }
                       continue;
                     }
-                    if (context.kind != vh::ContextKind::use_clause
-                        || !spelling.ends_with(".all")) {
+                    if (context.kind != vh::ContextKind::use_clause) {
                       continue;
                     }
-                    if (const auto* package = package_unit(spelling)) {
+                    // `use pkg.member` makes that one member visible
+                    // (IEEE 1076-2008 12.4); an operator symbol is spelled
+                    // with or without its quotes.
+                    if (!spelling.ends_with(".all")) {
+                      const auto separator = spelling.rfind('.');
+                      if (separator == std::string::npos) {
+                        continue;
+                      }
+                      auto member = std::string_view { spelling }.substr(
+                          separator + 1U);
+                      if (member.size() >= 2U && member.front() == '"'
+                          && member.back() == '"') {
+                        member = member.substr(1U, member.size() - 2U);
+                      }
+                      auto wanted = std::string_view { name.canonical };
+                      if (wanted.size() >= 2U && wanted.front() == '"'
+                          && wanted.back() == '"') {
+                        wanted = wanted.substr(1U, wanted.size() - 2U);
+                      }
+                      if (support::canonical_vhdl_spelling(std::string { member })
+                          != support::canonical_vhdl_spelling(
+                              std::string { wanted })) {
+                        append_type_mark_operators(name, scope, *context_owner,
+                            spelling, separator, wanted);
+                        continue;
+                      }
+                      if (const auto* package = package_from_prefix(scope,
+                              std::string_view { spelling }.substr(
+                                  0U, separator))) {
+                        append_package_member(
+                            name, *package, name.canonical);
+                      }
+                      continue;
+                    }
+                    // `use inst.all` of a package instance declared in a
+                    // declarative region names the instance (4.9, 12.4).
+                    if (const auto* package = package_from_prefix(scope,
+                            std::string_view { spelling }.substr(
+                                0U, spelling.size() - 4U))) {
                       append_package_member(
                           name, *package, name.canonical);
                     }

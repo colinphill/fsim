@@ -96,6 +96,31 @@ namespace {
                         composed.expression = instance[index].expression;
                         composed.type = instance[index].type;
                         consumed[index] = true;
+                    } else if (index < component_formals.size()) {
+                        // An unassociated local generic constant has its
+                        // default value (IEEE 1076-2008 6.5.6.2), which is
+                        // what the binding map then reads.
+                        const auto declaration = compiled.find_declaration(
+                            component_formals[index]);
+                        if (declaration && declaration->vhdl != nullptr
+                            && declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::
+                                    generic_constant
+                            && declaration->vhdl->initializer
+                            && composed.kind
+                                == semantic::vhdl::AssociationKind::
+                                    expression) {
+                            composed.expression
+                                = declaration->vhdl->initializer;
+                        } else if (declaration && declaration->vhdl != nullptr
+                            && declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::port) {
+                            // An unassociated local port is open
+                            // (6.5.6.3), and so is the formal it binds.
+                            composed.kind
+                                = semantic::vhdl::AssociationKind::open;
+                            composed.expression.reset();
+                        }
                     }
                 }
             }
@@ -476,6 +501,13 @@ HierarchyBuilder::materialize_compiled_vhdl_component_port_defaults(
                 == semantic::vhdl::AssociationKind::expression) {
             continue;
         }
+        // Only an unassociated local port of mode in reads as its default
+        // value; a local port of another mode is open (IEEE 1076-2008
+        // 6.5.6.3), leaving the entity port its own signal.
+        if (compiled_port_direction(component_formal->vhdl->direction)
+            != frontend::PortDirection::Input) {
+            continue;
+        }
         binding.kind
             = semantic::SpecializedHirAssociationKind::expression;
         binding.expression = component_formal->vhdl->initializer;
@@ -782,6 +814,36 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                                 formal->vhdl->name, name.spelling);
                 });
         };
+        // Default binding pairs each local with the entity formal of the
+        // same simple name (IEEE 1076-2008 7.3.3); profiles whose names
+        // differ pair by position.
+        std::vector<std::size_t> target_of(component_formals.size());
+        bool by_name = !binding_map;
+        for (std::size_t index { };
+            by_name && index < component_formals.size(); ++index) {
+            const auto component_formal = compiled_->find_declaration(
+                component_formals[index]);
+            const auto found = component_formal
+                    && component_formal->vhdl != nullptr
+                ? std::ranges::find_if(target_formals,
+                      [&](const auto formal_id) {
+                          const auto formal
+                              = compiled_->find_declaration(formal_id);
+                          return formal && formal->vhdl != nullptr
+                              && vhdl_configuration_detail::
+                                  configuration_name_equal(
+                                      formal->vhdl->name,
+                                      component_formal->vhdl->name);
+                      })
+                : target_formals.end();
+            by_name = found != target_formals.end();
+            target_of[index] = static_cast<std::size_t>(
+                std::distance(target_formals.begin(), found));
+        }
+        for (std::size_t index { }; !by_name && index < target_of.size();
+            ++index) {
+            target_of[index] = index;
+        }
         std::size_t positional { };
         std::vector<bool> mapped(component_formals.size());
         for (auto& association : associations) {
@@ -821,12 +883,11 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
             } else {
                 index = positional++;
             }
-            if (index >= target_formals.size()) {
+            if (index >= component_formals.size()
+                || target_of[index] >= target_formals.size()) {
                 continue;
             }
-            if (index < mapped.size()) {
-                mapped[index] = true;
-            }
+            mapped[index] = true;
             if (!ports
                 && (association.kind
                         == semantic::vhdl::AssociationKind::open
@@ -848,7 +909,7 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                 }
             }
             const auto target = compiled_->find_declaration(
-                target_formals[index]);
+                target_formals[target_of[index]]);
             if (!target || target->vhdl == nullptr) {
                 continue;
             }
@@ -856,21 +917,20 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                 target->vhdl->name,
                 target->vhdl->name,
                 association.source,
-                target_formals[index],
+                target_formals[target_of[index]],
                 { }
             };
         }
         for (std::size_t index { };
-            !binding_map && index < component_formals.size()
-            && index < target_formals.size();
+            !binding_map && index < component_formals.size();
             ++index) {
-            if (mapped[index]) {
+            if (mapped[index] || target_of[index] >= target_formals.size()) {
                 continue;
             }
             const auto component_formal = compiled_->find_declaration(
                 component_formals[index]);
             const auto target = compiled_->find_declaration(
-                target_formals[index]);
+                target_formals[target_of[index]]);
             if (!component_formal || component_formal->vhdl == nullptr
                 || !component_formal->vhdl->initializer
                 || !target || target->vhdl == nullptr) {
@@ -882,7 +942,7 @@ HierarchyBuilder::prepare_compiled_vhdl_component_associations(
                         target->vhdl->name,
                         target->vhdl->name,
                         component_formal->vhdl->source,
-                        target_formals[index],
+                        target_formals[target_of[index]],
                         { },
                     },
                     semantic::vhdl::AssociationKind::expression,

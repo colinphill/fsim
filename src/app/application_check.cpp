@@ -643,12 +643,6 @@ static std::optional<CompilationWorkspace> check_project_impl(
     for (const auto& frontend_diagnostic : result.diagnostics) {
       import_diagnostic(diagnostics, frontend_diagnostic);
     }
-    for (auto& function : result.design.functions) {
-      checked.parsed.functions.push_back(std::move(function));
-    }
-    for (auto& task : result.design.tasks) {
-      checked.parsed.tasks.push_back(std::move(task));
-    }
     for (auto& declaration :
         result.design.systemverilog_dpi_declarations) {
       checked.parsed.systemverilog_dpi_declarations.push_back(

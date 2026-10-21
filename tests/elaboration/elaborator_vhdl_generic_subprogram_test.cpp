@@ -248,10 +248,16 @@ end architecture;
              "FSIM-ELAB-VHGSUB-001",
              "FSIM-ELAB-VHGSUB-003",
              "FSIM-ELAB-VHGSUB-004",
-             "FSIM-ELAB-VHGSUB-006",
+             "FSIM-ELAB-VHGSUB-006"}) {
+        assert(has_diagnostic(invalid_result, code));
+    }
+    // A recursive call inside a generic subprogram names the enclosing
+    // instance, and a selected template name is allowed (IEEE 1076-2008
+    // 4.2.1, 4.4).
+    for (const auto code : {
              "FSIM-ELAB-VHGSUB-007",
              "FSIM-ELAB-VHGSUB-009"}) {
-        assert(has_diagnostic(invalid_result, code));
+        assert(!has_diagnostic(invalid_result, code));
     }
 
     const auto mismatched = fsim::frontend::parse_text(

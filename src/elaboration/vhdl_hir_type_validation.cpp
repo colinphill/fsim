@@ -512,8 +512,19 @@ private:
                     ? array_root(*return_type) : std::nullopt;
                 const auto actual_root = actual_type
                     ? array_root(*actual_type) : std::nullopt;
-                if (return_root && actual_root
-                    && *return_root == *actual_root) {
+                bool same_root = return_root && actual_root
+                    && *return_root == *actual_root;
+                if (!return_root || !actual_root) {
+                    // Targetless predefined vectors (BIT_VECTOR, STRING)
+                    // have no TypeId; compare their predefined identity.
+                    const auto return_identity = predefined_array_identity(
+                        return_subtype, function->vhdl->scope);
+                    const auto actual_identity = predefined_array_identity(
+                        actual_subtype, prefix->vhdl->scope);
+                    same_root = return_identity && actual_identity
+                        && *return_identity == *actual_identity;
+                }
+                if (same_root) {
                     const auto return_profile = profile(return_subtype);
                     const auto actual_profile = profile(actual_subtype);
                     const auto is_unconstrained_rank_one_array
@@ -9513,9 +9524,29 @@ private:
                 : std::nullopt;
         }
         if (const auto subtype = expression_subtype(id)) {
-            if (subtype->executable_width) {
+            // An unconstrained array subtype's executable width is no
+            // property of the value (IEEE 1076-2008 5.3.2.2).
+            if (subtype->executable_width && !subtype->unconstrained) {
                 return static_cast<std::size_t>(
                     *subtype->executable_width);
+            }
+            // An array value without a static width (an unconstrained
+            // function result, say) has the length of its value
+            // (IEEE 1076-2008 5.3.2.2); it is not a one-bit scalar.
+            auto scope = value.scope;
+            if (!scope.valid() && value.referenced_name
+                && value.referenced_name->selected) {
+                if (const auto referenced = specialization_.find_declaration(
+                        *value.referenced_name->selected);
+                    referenced && referenced->vhdl != nullptr) {
+                    scope = referenced->vhdl->scope;
+                }
+            }
+            if (subtype->unconstrained || expression_array_root(id)
+                || predefined_array_identity(*subtype, scope)
+                || (value.kind == semantic::vhdl::ExpressionKind::call
+                    && !value.text.starts_with('@'))) {
+                return std::nullopt;
             }
             if (subtype->domain == semantic::vhdl::ValueDomain::bit2
                 || subtype->domain

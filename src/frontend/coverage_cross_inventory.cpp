@@ -60,10 +60,12 @@ bool bin_intersects(
                     && *value.exact_value <= selected_upper;
             }
             if (value.range_left && value.range_right) {
-                const auto lower = std::min(
-                    *value.range_left, *value.range_right);
-                const auto upper = std::max(
-                    *value.range_left, *value.range_right);
+                const auto lower = value.range_left_open
+                    ? std::numeric_limits<std::int64_t>::min()
+                    : std::min(*value.range_left, *value.range_right);
+                const auto upper = value.range_right_open
+                    ? std::numeric_limits<std::int64_t>::max()
+                    : std::max(*value.range_left, *value.range_right);
                 return lower <= selected_upper && upper >= selected_lower;
             }
             return false;

@@ -390,29 +390,6 @@ ParseResult VerilogParser::run() {
                 design.systemverilog_class_method_definitions.push_back(
                     parse_class_out_of_block_method(
                         declaration, SystemVerilogClassMethodKind::Function));
-            } else if (compilation_unit_dpi_export_definition_start(
-                           design.systemverilog_dpi_declarations,
-                           SystemVerilogDpiCallableKind::Function)) {
-                auto function = parse_function(declaration);
-                const bool duplicate = std::ranges::any_of(
-                                           design.functions,
-                                           [&](const FunctionDeclaration& existing) {
-                                               return existing.name == function.name;
-                                           })
-                    || std::ranges::any_of(
-                        design.tasks,
-                        [&](const TaskDeclaration& existing) {
-                            return existing.name == function.name;
-                        });
-                if (duplicate) {
-                    error(
-                        declaration,
-                        "FSIM-SV-SEM-228",
-                        "duplicate compilation-unit callable '"
-                            + function.name + "'");
-                } else {
-                    design.functions.push_back(std::move(function));
-                }
             } else {
                 // A compilation-unit function (IEEE 1800-2017 3.12.1).
                 auto& unit = compilation_unit_package(declaration);
@@ -434,28 +411,6 @@ ParseResult VerilogParser::run() {
                 design.systemverilog_class_method_definitions.push_back(
                     parse_class_out_of_block_method(
                         declaration, SystemVerilogClassMethodKind::Task));
-            } else if (compilation_unit_dpi_export_definition_start(
-                           design.systemverilog_dpi_declarations,
-                           SystemVerilogDpiCallableKind::Task)) {
-                auto task = parse_task(declaration);
-                const bool duplicate = std::ranges::any_of(
-                                           design.tasks,
-                                           [&](const TaskDeclaration& existing) {
-                                               return existing.name == task.name;
-                                           })
-                    || std::ranges::any_of(
-                        design.functions,
-                        [&](const FunctionDeclaration& existing) {
-                            return existing.name == task.name;
-                        });
-                if (duplicate) {
-                    error(
-                        declaration,
-                        "FSIM-SV-SEM-228",
-                        "duplicate compilation-unit callable '" + task.name + "'");
-                } else {
-                    design.tasks.push_back(std::move(task));
-                }
             } else {
                 // A compilation-unit task (IEEE 1800-2017 3.12.1).
                 auto& unit = compilation_unit_package(declaration);
@@ -667,6 +622,18 @@ ParseResult VerilogParser::run() {
         }
     }
     compilation_unit_forward_types_.clear();
+    // Compilation-unit DPI declarations bind the `$unit` callables (IEEE
+    // 1800-2017 35.5.4), wherever the export appears.
+    {
+        static const std::vector<FunctionDeclaration> no_functions;
+        static const std::vector<TaskDeclaration> no_tasks;
+        resolve_dpi_declarations(
+            design.systemverilog_dpi_declarations,
+            compilation_unit_package_ ? compilation_unit_package_->functions
+                                      : no_functions,
+            compilation_unit_package_ ? compilation_unit_package_->tasks
+                                      : no_tasks);
+    }
     if (compilation_unit_package_) {
         compilation_unit_package_->span = cover(
             compilation_unit_package_->span, previous().span);
@@ -681,10 +648,6 @@ ParseResult VerilogParser::run() {
             "unterminated `begin_keywords region");
         keyword_stack_.clear();
     }
-    resolve_dpi_declarations(
-        design.systemverilog_dpi_declarations,
-        design.functions,
-        design.tasks);
     if (const auto package = systemverilog_standard_package(
             standard_revision_)) {
         for (auto& unit : design.units) {

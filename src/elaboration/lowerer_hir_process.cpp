@@ -1169,7 +1169,16 @@ bool Lowerer::initialize_hir_declarations(
                 // Constants, types, aliases, package instances, attributes,
                 // and nested subprograms remain available through HIR name
                 // resolution. Only variables and file objects own
-                // process-local storage.
+                // process-local storage. A constant's elaboration still
+                // checks its value's lengths (IEEE 1076-2008 14.4.2.5).
+                if (declaration->vhdl->form == Form::constant
+                    && declaration->vhdl->initializer
+                    && declaration->vhdl->subtype) {
+                    emit_hir_vhdl_initializer_length_checks(
+                        *declaration->vhdl->initializer,
+                        *declaration->vhdl->subtype,
+                        hir_source_span(declaration->vhdl->source));
+                }
                 continue;
             }
         }
@@ -1305,6 +1314,24 @@ bool Lowerer::initialize_hir_declarations(
                     }
                     process_.operations.emplace_back(ResizeContainer {
                         destination, *size, std::nullopt, false });
+                    continue;
+                }
+                // A locator method initializes the queue it declares
+                // (`int found[$] = q.find_index(x) with (...)`, 7.12.1).
+                const HirContainerObjectBinding declared {
+                    declaration_id,
+                    input.name,
+                    { },
+                    destination,
+                    &*type,
+                    false,
+                };
+                if (constructor != nullptr
+                    && constructor->kind == semantic::sv::ExpressionKind::call
+                    && constructor->text.starts_with('.')
+                    && lower_hir_container_locator_assignment(
+                        semantic::ExpressionId { }, *input.initializer,
+                        &declared)) {
                     continue;
                 }
                 const auto initializer_expression
@@ -2466,14 +2493,19 @@ std::optional<Process> Lowerer::lower_hir_process(
                         *sensitivity.expression, input.scope);
                     // An edge of a vector expression is detected on its
                     // least significant bit (IEEE 1800-2017 9.4.2).
+                    // An operand the event-expression path cannot watch
+                    // (a member of a container element, say) waits through
+                    // the general leading event control instead.
                     if (!width || *width == 0U
                         || *width > std::numeric_limits<std::uint32_t>::max()) {
-                        return std::nullopt;
+                        dynamic_terms = true;
+                        break;
                     }
                     auto dependencies = hir_signal_dependencies(
                         *sensitivity.expression, input.scope);
                     if (dependencies.empty()) {
-                        return std::nullopt;
+                        dynamic_terms = true;
+                        break;
                     }
                     description.event_expression
                         = *sensitivity.expression;
@@ -3440,6 +3472,27 @@ bool Lowerer::lower_hir_output_actual_write(
         : std::nullopt;
     if (expression && hir_container_element_binding(target)) {
         return lower_hir_packed_copy_out(target, source);
+    }
+    // A stream of unpacked operands takes the output's bits in order; a
+    // value wider than the operands supplies its leftmost bits (IEEE
+    // 1800-2017 11.4.14.3, 23.3.3).
+    if (expression && expression->systemverilog != nullptr
+        && hir_sv_container_stream(target)) {
+        ContainerType bit_queue;
+        bit_queue.element_kind = ContainerElementKind::Packed;
+        bit_queue.element_width = 1U;
+        bit_queue.queue = true;
+        const auto bits = allocate_container_register(bit_queue);
+        ContainerBitstream clear;
+        clear.operation = ContainerBitstreamOperation::clear;
+        clear.bits = bits;
+        process_.operations.emplace_back(clear);
+        ContainerBitstream append;
+        append.operation = ContainerBitstreamOperation::append_value;
+        append.bits = bits;
+        append.value = source;
+        process_.operations.emplace_back(append);
+        return lower_hir_sv_stream_target_bits(target, bits);
     }
     // An output connected to a streaming concatenation unpacks into its
     // operands (IEEE 1800-2017 11.4.14.3, 23.3.3): the leftmost bits fill
@@ -4569,7 +4622,96 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             && !frontend::is_real_scalar_kind(signal.systemverilog_scalar)) {
             value = resize_register(value, *actual_width, true);
         }
-        if (description.actual_slice) {
+        const auto update_domain = process_.scheduling_domain
+                == ProcessSchedulingDomain::systemverilog
+            ? SignalUpdateDomain::systemverilog_active
+            : SignalUpdateDomain::generic;
+        // A concatenation of nets and constant selects takes the
+        // instance's slice piece by piece, as the equivalent continuous
+        // assignment does (IEEE 1800-2017 23.3.3.5, 11.4.12).
+        const auto concatenated_slice = [&]() -> std::optional<bool> {
+            const auto actual = specialized_hir_unit_->find_expression(
+                *description.output_actual);
+            if (!description.actual_slice || !actual
+                || actual->systemverilog == nullptr
+                || actual->systemverilog->kind
+                    != semantic::sv::ExpressionKind::concatenation
+                || actual->systemverilog->operands.empty()) {
+                return std::nullopt;
+            }
+            struct Piece {
+                SignalId signal;
+                std::size_t offset { };
+                std::size_t width { };
+            };
+            std::vector<Piece> pieces;
+            std::size_t total { };
+            for (const auto operand : actual->systemverilog->operands) {
+                auto root = hir_direct_signal(operand);
+                std::size_t offset { };
+                std::size_t width = root
+                    ? design_.signal_info_[*root].width : 0U;
+                const auto selected
+                    = specialized_hir_unit_->find_expression(operand);
+                if (!root && selected && selected->systemverilog != nullptr
+                    && (selected->systemverilog->kind
+                            == semantic::sv::ExpressionKind::index
+                        || selected->systemverilog->kind
+                            == semantic::sv::ExpressionKind::slice)
+                    && !selected->systemverilog->operands.empty()) {
+                    root = hir_direct_signal(
+                        selected->systemverilog->operands.front());
+                    const auto selection = hir_constant_selection(
+                        operand, hir_process_scope_);
+                    if (!selection) {
+                        return false;
+                    }
+                    offset = selection->offset;
+                    width = selection->width;
+                }
+                if (!root || width == 0U
+                    || offset + width > design_.signal_info_[*root].width) {
+                    return false;
+                }
+                pieces.push_back({ *root, offset, width });
+                total += width;
+            }
+            const auto [offset, width] = *description.actual_slice;
+            if (width != signal.width || offset + width > total
+                || register_width(value) != width) {
+                return false;
+            }
+            std::size_t low { };
+            for (auto piece = pieces.rbegin(); piece != pieces.rend();
+                ++piece) {
+                const auto first = std::max<std::size_t>(low, offset);
+                const auto last = std::min<std::size_t>(
+                    low + piece->width, offset + width);
+                if (first < last) {
+                    const auto part = allocate_register(
+                        last - first, register_domain(value));
+                    process_.operations.emplace_back(Extract {
+                        part, value,
+                        static_cast<std::uint32_t>(first - offset),
+                        static_cast<std::uint32_t>(last - first) });
+                    process_.operations.emplace_back(WriteUpdateSlice {
+                        piece->signal,
+                        part,
+                        static_cast<std::uint32_t>(
+                            piece->offset + (first - low)),
+                        update_domain,
+                    });
+                }
+                low += piece->width;
+            }
+            return true;
+        }();
+        if (concatenated_slice) {
+            if (!*concatenated_slice) {
+                process_ = { };
+                return std::nullopt;
+            }
+        } else if (description.actual_slice) {
             // One instance of an instance array drives its slice of the
             // actual net.
             auto target = hir_direct_signal(*description.output_actual);

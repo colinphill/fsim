@@ -790,6 +790,8 @@ VERILATOR_NONSTANDARD = {
     "t_clocking_drive_same": "needs IEEE 1800-2023 clocking drive rules",
     "t_randomize_unpacked_struct_no_rand_members": "needs IEEE 1800-2023 "
         "rand member rules",
+    "t_constraint_real_struct_field": "needs IEEE 1800-2023 rand member "
+        "rules",
     "t_forceable_writemem": "needs the Verilator forceable metacomment",
     # foreach over a string is new in IEEE 1800-2023 (12.7.3).
     "t_foreach": "needs IEEE 1800-2023 foreach over a string",
@@ -1264,8 +1266,9 @@ def ivtest_cases(root: Path) -> list[Case]:
         gold = None
         module = None
         diff = None
-        if len(fields) > 3:
-            extra = fields[3]
+        # The fields after the directory are the top module and a gold or
+        # diff option, in that order when both are given (`top gold=...`).
+        for extra in fields[3:]:
             if extra.startswith("gold="):
                 gold = base / "gold" / extra[5:]
             elif extra.startswith("unordered="):

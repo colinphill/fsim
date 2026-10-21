@@ -726,6 +726,15 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     function.name = vhdl_name(name.text);
   }
   function.arguments = parse_vhdl_function_parameters();
+  // A function callable without parameters may prefix a selected name
+  // (`f.element`, IEEE 1076-2008 8.3).
+  if (name.kind == TokenKind::Identifier
+      && std::ranges::all_of(function.arguments,
+          [](const FunctionArgument& argument) {
+              return argument.default_value.has_value();
+          })) {
+    vhdl_parameterless_function_names_.insert(function.name);
+  }
   if (name.kind == TokenKind::StringLiteral) {
     // IEEE 1076-2008 4.5.2: an operator symbol names an operator, and an
     // operator function has one parameter for a unary and two for a binary
@@ -844,6 +853,8 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
 
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-158");
+  // Inside F, `F.name` is an expanded name of F's declarations (8.3).
+  vhdl_enclosing_function_names_.push_back(function.name);
   while (!at_end() && !keyword("begin", 0, true)) {
     if (match_keyword("file", true)) {
       parse_vhdl_file_declaration(
@@ -975,6 +986,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   function.statements = parse_statement_list({"end"});
   sequential_loop_labels_seen_.clear();
   in_vhdl_function_ = previous_function_state;
+  vhdl_enclosing_function_names_.pop_back();
 
   expect_keyword(
       "end", true, "FSIM-VHDL-PARSE-162");

@@ -545,6 +545,12 @@ private:
         // The position (left to right) and count of an instance-array
         // occurrence, whose wide actuals are sliced (23.3.3.5).
         std::optional<std::pair<std::size_t, std::size_t>> array_position { };
+        // Package and `$unit` objects named by actuals (26.3), materialized
+        // on first use like the instance's own processes do.
+        std::function<std::optional<SignalId>(semantic::DeclarationId)>
+            package_signal { };
+        std::function<std::optional<ContainerObjectId>(semantic::DeclarationId)>
+            package_container { };
     };
 
     void add_compiled_vhdl_root(
@@ -674,6 +680,32 @@ private:
         SignalMap& signals,
         ReadOnlySignalSet& read_only_signals,
         ContainerMap& container_objects);
+    // A read-only signal named `name` of the constrained composite
+    // `subtype` holding `known`, or else `expression` evaluated at
+    // elaboration. It is not registered by name.
+    std::optional<SignalId> add_compiled_vhdl_composite_value_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId scope,
+        semantic::SourceSpanId source,
+        const std::string& name,
+        const std::optional<PackedLogic4>& known,
+        std::optional<semantic::ExpressionId> expression,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
+    // A composite generic actual evaluated in the parent region once it is
+    // elaborated (IEEE 1076-2008 14.4.2.1), as bits of `subtype`.
+    std::optional<PackedLogic4> evaluate_compiled_vhdl_composite_actual(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId scope,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
     // The declared subtype of an object completed by the shape of its
     // initial value; nullopt when that shape is not known.
     std::optional<semantic::vhdl::SubtypeIndication>
@@ -791,9 +823,15 @@ private:
         std::span<const semantic::DeclarationId> declarations,
         const semantic::SpecializedHirUnit& specialization);
 
+    // A scalar constant whose value folds only at elaboration (`i(n)'length`
+    // of a port) is evaluated in `path` and bound into `specialization`.
     bool validate_compiled_vhdl_generated_constants(
         std::span<const semantic::DeclarationId> declarations,
-        const semantic::SpecializedHirUnit& specialization);
+        semantic::SpecializedHirUnit& specialization,
+        std::string_view path = { },
+        const SignalMap* signals = nullptr,
+        const ReadOnlySignalSet* read_only_signals = nullptr,
+        const ContainerMap* container_objects = nullptr);
 
     std::vector<semantic::SourceSpanId>
     prepare_compiled_vhdl_component_associations(
@@ -1861,10 +1899,11 @@ private:
         systemverilog_interface_parameter_identities_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_types_;
-    // Each interface instance's specialization, reserved before the
-    // instantiating unit's processes lower calls through it.
+    // Each instance's and loop-generate iteration's specialization; an
+    // interface's is reserved before the instantiating unit's processes
+    // lower calls through it.
     std::unordered_map<std::string,
-        std::shared_ptr<const std::optional<semantic::SpecializedHirUnit>>>
+        std::shared_ptr<const semantic::SpecializedHirUnit>>
         systemverilog_instance_specializations_;
     // The last name component of every SystemVerilog disable target, and
     // the labels of named blocks and tasks it may name.

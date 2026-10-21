@@ -452,7 +452,25 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 }
                 const auto actual = working_containers.find(
                     actual_name);
-                if (actual == working_containers.end()) {
+                // A package or `$unit` object is connected directly
+                // (IEEE 1800-2017 23.3.3, 26.3).
+                std::optional<ContainerObjectId> package_object;
+                if (actual == working_containers.end()
+                    && context.package_container) {
+                    const auto& reference
+                        = base_expression->systemverilog->referenced_name;
+                    const auto declaration = reference && reference->selected
+                        ? reference->selected
+                        : semantic::CompiledDesignResolver {
+                              working_specialization
+                          }.resolve_expression_name(base_id, { })
+                              .unique();
+                    if (declaration) {
+                        package_object
+                            = context.package_container(*declaration);
+                    }
+                }
+                if (actual == working_containers.end() && !package_object) {
                     report(
                         "FSIM-ELAB-SVPORT-006",
                         "unknown container connection object '"
@@ -462,11 +480,13 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             *compiled_, binding.source));
                     return false;
                 }
+                const auto actual_object = package_object
+                    ? *package_object : actual->second;
                 const auto actual_info = std::ranges::find_if(
                     design_.container_object_info_.rbegin(),
                     design_.container_object_info_.rend(),
                     [&](const ContainerObjectInfo& candidate) {
-                        return candidate.id == actual->second;
+                        return candidate.id == actual_object;
                     });
                 if (actual_info
                     == design_.container_object_info_.rend()) {
@@ -600,7 +620,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         return false;
                     }
                     slice_alias = ContainerSliceAlias {
-                        actual->second,
+                        actual_object,
                         selected_type.index_left,
                         selected_type.index_right,
                     };
@@ -646,7 +666,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         // range while reads and writes map across the actual's
                         // complete declared range.
                         slice_alias = ContainerSliceAlias {
-                            actual->second,
+                            actual_object,
                             selected_type.index_left,
                             selected_type.index_right,
                         };
@@ -675,7 +695,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             *compiled_, binding.source));
                     return false;
                 }
-                auto connected_object = actual->second;
+                auto connected_object = actual_object;
                 if (slice_alias) {
                     const auto index
                         = design_.container_objects_.size();
@@ -707,7 +727,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         });
                 }
                 if (writable) {
-                    auto& drivers = container_boundary_driver_paths_[actual->second];
+                    auto& drivers = container_boundary_driver_paths_[actual_object];
                     const auto nested_with = [](
                                                  const std::string_view left,
                                                  const std::string_view right) {
@@ -1675,6 +1695,14 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 };
                 actual_lowerer.set_specialized_hir_unit(
                     &working_specialization);
+                if (context.package_signal) {
+                    actual_lowerer.set_package_constant_signal(
+                        context.package_signal);
+                }
+                if (context.package_container) {
+                    actual_lowerer.set_package_container_object(
+                        context.package_container);
+                }
                 actual_lowerer.set_systemverilog_interface_handles(
                     &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_);

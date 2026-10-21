@@ -519,10 +519,26 @@ namespace coverage_parser_detail {
                 || *separator + 1U == interior.size()) {
                 return std::nullopt;
             }
-            const auto left = coverage_literal(interior.first(*separator));
+            // `$` stands for the coverpoint's minimum or maximum value
+            // (IEEE 1800-2017 19.5.1); the open side holds the other bound.
+            const auto open = [](const std::span<const Token> side) {
+                return side.size() == 1U && side.front().text == "$";
+            };
+            const auto left_tokens = interior.first(*separator);
+            const auto right_tokens = interior.subspan(*separator + 1U);
+            result.range_left_open = open(left_tokens);
+            result.range_right_open = open(right_tokens);
+            if (result.range_left_open && result.range_right_open) {
+                return std::nullopt;
+            }
+            const auto left = coverage_literal(
+                result.range_left_open ? right_tokens : left_tokens);
             const auto right = coverage_literal(
-                interior.subspan(*separator + 1U));
-            if (!left || !right || left->wildcard || right->wildcard) {
+                result.range_right_open ? left_tokens : right_tokens);
+            if (!left || !right || left->wildcard || right->wildcard
+                || ((result.range_left_open || result.range_right_open)
+                    && (left->real_bits || absolute_tolerance
+                        || relative_tolerance))) {
                 return std::nullopt;
             }
             if (left->real_bits || right->real_bits

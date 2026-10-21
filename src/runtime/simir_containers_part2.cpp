@@ -970,8 +970,16 @@ void Interpreter::Impl::execute_container(
                 scheduler.now(), scheduler.delta());
         }
     } catch (const std::exception& error) {
-        container_error(
-            process.id, process.pc, error.what());
+        // A malformed file or an address outside the range ends the load
+        // with an error message; simulation continues (IEEE 1800-2017
+        // 21.4).
+        if (!report_hook) {
+            container_error(
+                process.id, process.pc, error.what());
+        } else {
+            report_hook(process.id, error.what(), AssertionSeverity::error,
+                SourceLocation { }, scheduler.now(), scheduler.delta());
+        }
     }
     ++process.pc;
 }
@@ -1262,11 +1270,17 @@ void consume_container_bits(
     ContainerValue& value,
     const bool variable_size)
 {
+    // A 2-state element converts X and Z bits to 0 (IEEE 1800-2017 6.22).
+    const bool two_state = value.type.two_state
+        || value.type.element_kind == ContainerElementKind::Scalar;
     const auto take_packed = [&](const std::size_t width) {
         PackedLogic4 element(width, Logic4::zero);
         for (std::size_t bit = width; bit-- > 0U;) {
             if (position < bits.size()) {
-                element.set(bit, bits[position].get(0U));
+                const auto selected = bits[position].get(0U);
+                element.set(bit, two_state && selected != Logic4::one
+                        ? Logic4::zero
+                        : selected);
                 ++position;
             }
         }

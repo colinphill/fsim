@@ -3,6 +3,7 @@
 
 #include <bit>
 #include <charconv>
+#include <limits>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -254,6 +255,7 @@ class Lowerer final {
       }
       const auto* binding = exact_binding(expression);
       if (binding == nullptr) {
+        if (auto value = specialization_parameter(expression)) return value;
         error_ = "constraint name has no binding for specialization '"
             + std::string{specialization_} + "'";
         return std::nullopt;
@@ -296,19 +298,32 @@ class Lowerer final {
         error_ = "constraint size() receiver has no exact binding";
         return std::nullopt;
       }
-      if (nested_ != nullptr && nested_->contains(binding->canonical_identity)) {
-        return builder_.constant(low_value(32,
-            nested_->at(binding->canonical_identity).size()), index_profile());
-      }
-      if (const auto* elements = container(binding->canonical_identity)) {
-        return builder_.constant(
-            low_value(32, elements->size()), index_profile());
-      }
       // While sizes are solved a random container's size is a variable
-      // (IEEE 1800-2017 18.4).
+      // (IEEE 1800-2017 18.4), even when its current elements are known.
       const auto size = variables_.find(
           binding->canonical_identity + ".size()");
       if (size == variables_.end()) {
+        // A materialized count is the size; an array of handles has
+        // elements past its old size that no object joins yet.
+        if (const auto count = variables_.find(
+                binding->canonical_identity + "[]");
+            count != variables_.end()
+            && count->second < solver_variables_.size()
+            && solver_variables_[count->second].domain.size() == 1U) {
+          return builder_.constant(low_value(32,
+              solver_variables_[count->second].domain.front()
+                  .low_word().aval), index_profile());
+        }
+        if (nested_ != nullptr
+            && nested_->contains(binding->canonical_identity)) {
+          return builder_.constant(low_value(32,
+              nested_->at(binding->canonical_identity).size()),
+              index_profile());
+        }
+        if (const auto* elements = container(binding->canonical_identity)) {
+          return builder_.constant(
+              low_value(32, elements->size()), index_profile());
+        }
         error_ = "constraint container '" + binding->canonical_identity
             + "' has no size";
         return std::nullopt;
@@ -629,7 +644,26 @@ class Lowerer final {
         // Outside the array: guarded from constraining (18.5.8.1).
         return builder_.constant(low_value(32, 0), index_profile());
       }
-      const auto found = variables_.find(*path);
+      auto found = variables_.find(*path);
+      if (found == variables_.end()) {
+        // A member of an object in an array of handles is named by its
+        // canonical property identity (`a[0].<class>::m`).
+        const auto dot = path->rfind('.');
+        const auto member = "::" + path->substr(dot + 1U);
+        const auto prefix = path->substr(0, dot + 1U);
+        for (auto candidate = variables_.lower_bound(prefix);
+             candidate != variables_.end()
+             && candidate->first.starts_with(prefix);
+             ++candidate) {
+          const auto rest = std::string_view{candidate->first}.substr(
+              prefix.size());
+          if (rest.ends_with(member)
+              && rest.find_first_of(".[") == std::string_view::npos) {
+            found = candidate;
+            break;
+          }
+        }
+      }
       if (found == variables_.end()
           || found->second >= solver_variables_.size()) {
         error_ = "constraint member '" + *path
@@ -1559,6 +1593,58 @@ class Lowerer final {
     return property == expression.bindings.end() ? nullptr : &*property;
   }
 
+  /// A value parameter of a specialization made after the constraints were
+  /// bound (`C#(5)`): its value is in the specialization identity
+  /// (`C<len:NAME=len:value{integer:N};...>`), its profile in the
+  /// parameter's binding of another specialization.
+  [[nodiscard]] std::optional<ExpressionId> specialization_parameter(
+      const sv::ConstraintExpression& expression) {
+    const auto parameter = std::ranges::find_if(expression.bindings,
+        [](const sv::ConstraintBinding& binding) {
+          return binding.kind == sv::ConstraintReferenceKind::parameter
+              && !binding.constant_value.empty();
+        });
+    if (parameter == expression.bindings.end()) return std::nullopt;
+    const auto name = expression.text.substr(expression.text.rfind(':') + 1U);
+    const auto key = std::to_string(name.size()) + ":" + name + "=";
+    const std::string_view identity{specialization_};
+    const auto open = identity.rfind('<');
+    if (open == std::string_view::npos) return std::nullopt;
+    for (auto at = open + 1U; at < identity.size();) {
+      const auto colon = identity.find(':', at);
+      if (colon == std::string_view::npos) return std::nullopt;
+      const auto length = decimal(identity.substr(at, colon - at));
+      if (!length) return std::nullopt;
+      const auto value_start = colon + 1U + *length + 1U;
+      const auto value_colon = identity.find(':', value_start);
+      if (value_colon == std::string_view::npos) return std::nullopt;
+      const auto value_length
+          = decimal(identity.substr(value_start, value_colon - value_start));
+      if (!value_length) return std::nullopt;
+      const auto value = identity.substr(value_colon + 1U, *value_length);
+      if (identity.substr(at, colon + 1U + *length + 1U - at) == key) {
+        constexpr std::string_view prefix{"value{integer:"};
+        if (!value.starts_with(prefix) || !value.ends_with('}')) {
+          return std::nullopt;
+        }
+        const auto digits
+            = value.substr(prefix.size(), value.size() - prefix.size() - 1U);
+        std::int64_t number{};
+        const auto parsed = std::from_chars(
+            digits.data(), digits.data() + digits.size(), number, 10);
+        if (parsed.ec != std::errc{}
+            || parsed.ptr != digits.data() + digits.size()) {
+          return std::nullopt;
+        }
+        const auto profile = systemverilog_constraint_profile(*parameter);
+        return builder_.constant(low_value(profile.width,
+            static_cast<std::uint64_t>(number)), profile);
+      }
+      at = value_colon + 1U + *value_length + 1U;
+    }
+    return std::nullopt;
+  }
+
   /// A binding's declared profile; a binding of another specialization
   /// takes the profile of the solver variable it names.
   [[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
@@ -2106,7 +2192,15 @@ void configure_class_constraints(
     const auto base = identity.substr(0, identity.size() - 2U);
     std::vector<runtime::SystemVerilogConstraintVariableId> elements;
     std::vector<std::string> children;
-    for (std::size_t index = 0;; ++index) {
+    // The count bounds the elements: the objects of an array of handles
+    // past its solved size keep their variables as state.
+    std::size_t count = std::numeric_limits<std::size_t>::max();
+    if (id < solver.variables().size()
+        && solver.variables()[id].domain.size() == 1U) {
+      count = static_cast<std::size_t>(
+          solver.variables()[id].domain.front().low_word().aval);
+    }
+    for (std::size_t index = 0; index < count; ++index) {
       auto element_name = base + "[" + std::to_string(index) + "]";
       if (const auto element = variables.find(element_name);
           element != variables.end()) {

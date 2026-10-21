@@ -1297,11 +1297,7 @@ endprogram
         StandardRevision::SystemVerilog2017);
     // The callable belongs to the compilation-unit (`$unit`) package.
     const auto retained_function_count = [&] {
-        auto count = static_cast<std::size_t>(std::ranges::count_if(
-            retained_anonymous_program.design.functions,
-            [](const auto& function) {
-                return function.name == "retained_value";
-            }));
+        std::size_t count { };
         for (const auto& unit : retained_anonymous_program.design.units) {
             count += static_cast<std::size_t>(std::ranges::count_if(
                 unit.functions, [](const auto& function) {

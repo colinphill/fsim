@@ -98,6 +98,11 @@ struct SpecializedHirActualIdentity {
     // A record actual of scalar elements, evaluated in the parent so the
     // target unit can select its elements (IEEE 1076-2008 6.5.6.2, 8.3).
     std::optional<SpecializedHirVhdlRecordValue> vhdl_record_value { };
+    // A composite actual that is globally but not locally static, evaluated
+    // when the parent region was elaborated (IEEE 1076-2008 14.4.2.1): its
+    // bits, leftmost first. The target unit reads the generic from a
+    // read-only signal that holds them; the bits are also in `identity`.
+    std::optional<std::string> vhdl_elaborated_bits { };
     // A parameter of another unit that a type actual's declaration depends
     // on (`.T(d_t)` with `typedef logic [W-1:0] d_t;` in a parameterized
     // parent): the parent's value, so the type's shape evaluates in this

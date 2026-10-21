@@ -2006,15 +2006,35 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 const auto object = name
                     ? container_objects_.find(*name)
                     : container_objects_.end();
+                // A subprogram's local or formal unpacked array is bound
+                // when its body is lowered (IEEE 1800-2017 21.4).
+                const auto declared_fixed_local = [&] {
+                    const auto id = source.target
+                        ? hir_referenced_declaration(*source.target)
+                        : std::nullopt;
+                    const auto record = id
+                        ? specialized_hir_unit_->find_declaration(*id)
+                        : std::nullopt;
+                    if (!record || record->systemverilog == nullptr
+                        || !record->systemverilog->type) {
+                        return false;
+                    }
+                    const auto type = hir_systemverilog_container_type(
+                        *record->systemverilog->type);
+                    return type && type->fixed;
+                };
                 const auto valid_object = source.value && source.target
                     && hir_filename_operand(*source.value, source.scope)
-                    && object != container_objects_.end()
-                    && (source.memory_write
-                        || !read_only_container_objects_.contains(*name))
-                    && static_cast<std::size_t>(object->second)
-                        < design_.container_object_info_.size()
-                    && design_.container_object_info_[object->second]
-                        .type.fixed;
+                    && ((object != container_objects_.end()
+                            && (source.memory_write
+                                || !read_only_container_objects_.contains(
+                                    *name))
+                            && static_cast<std::size_t>(object->second)
+                                < design_.container_object_info_.size()
+                            && design_.container_object_info_[object->second]
+                                .type.fixed)
+                        || (object == container_objects_.end()
+                            && declared_fixed_local()));
                 if (!valid_object) {
                     statement_fail("FSIM-ELAB-SVMEMORY-003",
                         "memory transfer requires a writable bounded "
@@ -4463,30 +4483,33 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
         return false;
     }
     const auto path = lower_hir_filename(*source.value);
-    const auto name = hir_name(*source.target);
-    const auto object = name
-        ? container_objects_.find(*name)
-        : container_objects_.end();
-    if (!path || object == container_objects_.end()
-        || (!source.memory_write
-            && read_only_container_objects_.contains(*name))
-        || static_cast<std::size_t>(object->second)
-            >= design_.container_object_info_.size()) {
+    // The memory is a module's array or a subprogram's local or formal one
+    // (IEEE 1800-2017 21.4).
+    const auto binding = hir_container_object_binding(*source.target);
+    if (!path || !binding || binding->type == nullptr
+        || (!source.memory_write && binding->read_only)
+        || (!binding->local
+            && static_cast<std::size_t>(binding->object)
+                >= design_.container_object_info_.size())) {
         report("FSIM-ELAB-SVMEMORY-003",
             "memory transfer requires a writable fixed-array object",
             hir_source_span(source.source));
         return true;
     }
-    const auto& type = design_.container_object_info_[object->second].type;
+    const auto& type = *binding->type;
     if (!type.fixed) {
         report("FSIM-ELAB-SVMEMORY-003",
             "$readmem*/$writemem* requires a bounded static array",
             hir_source_span(source.source));
         return true;
     }
-    const auto target = allocate_container_register(type);
-    process_.operations.emplace_back(ReadContainerObject {
-        target, object->second });
+    const auto target = binding->local
+        ? *binding->local
+        : allocate_container_register(type);
+    if (!binding->local) {
+        process_.operations.emplace_back(ReadContainerObject {
+            target, binding->object });
+    }
     const auto lower_bound = [&](const std::size_t index)
         -> std::optional<RegisterId> {
         return index < source.task_arguments.size()
@@ -4500,9 +4523,9 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
         target, *path, start, finish,
         source.memory_hex, source.memory_write,
     });
-    if (!source.memory_write) {
+    if (!source.memory_write && !binding->local) {
         process_.operations.emplace_back(WriteContainerObject {
-            object->second, target, std::nullopt });
+            binding->object, target, std::nullopt });
     }
     return true;
 }

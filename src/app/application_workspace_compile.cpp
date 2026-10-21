@@ -80,6 +80,18 @@ namespace {
         const semantic::UnitId container)
     {
         const auto scopes = design.semantics.scopes();
+        // A DPI export is one C-linkage definition (IEEE 1800-2017 35.5.4):
+        // its compilation unit stays in a single object.
+        if (std::ranges::any_of(design.systemverilog_hir.dpi_declarations(),
+                [&](const auto& dpi) {
+                    return dpi.direction
+                            == semantic::sv::DpiDirection::export_declaration
+                        && dpi.owner_scope.valid()
+                        && dpi.owner_scope.value() < scopes.size()
+                        && scopes[dpi.owner_scope.value()].unit == container;
+                })) {
+            return true;
+        }
         for (const auto& declaration : design.systemverilog_hir.declarations()) {
             if (!declaration.scope.valid()
                 || declaration.scope.value() >= scopes.size()

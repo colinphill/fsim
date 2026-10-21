@@ -947,6 +947,25 @@ void VhdlHirBuilder::add_disconnection_specifications(
     };
 }
 
+namespace {
+[[nodiscard]] std::optional<vh::PredefinedAttribute>
+predefined_subtype_attribute(
+    const frontend::VhdlPredefinedSubtypeAttribute attribute)
+{
+    switch (attribute) {
+    case frontend::VhdlPredefinedSubtypeAttribute::Index:
+        return vh::PredefinedAttribute::index;
+    case frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype:
+        return vh::PredefinedAttribute::designated_subtype;
+    case frontend::VhdlPredefinedSubtypeAttribute::Element:
+        return vh::PredefinedAttribute::element;
+    case frontend::VhdlPredefinedSubtypeAttribute::None:
+        break;
+    }
+    return std::nullopt;
+}
+} // namespace
+
 [[nodiscard]] vh::SubtypeIndication VhdlHirBuilder::subtype(
     const frontend::Type& type,
     const frontend::SourceSpan& fallback,
@@ -995,6 +1014,17 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     object = &candidate;
                 }
             }
+        }
+        // `T'element` or `T'index` of a type mark resolves by type below;
+        // only an object prefix takes the object's subtype here.
+        const auto attribute_of_object = type.vhdl_predefined_subtype_attribute
+            != frontend::VhdlPredefinedSubtypeAttribute::None;
+        if (attribute_of_object && object != nullptr
+            && (object->form == vh::DeclarationForm::type
+                || object->form == vh::DeclarationForm::subtype
+                || object->form == vh::DeclarationForm::generic_type
+                || object->form == vh::DeclarationForm::alias)) {
+            object = nullptr;
         }
         if (object != nullptr) {
             auto result = *object->subtype;
@@ -1260,6 +1290,15 @@ void VhdlHirBuilder::add_disconnection_specifications(
                         std::move(constraint));
                 }
             }
+            if (attribute_of_object) {
+                result.predefined_attribute = predefined_subtype_attribute(
+                    type.vhdl_predefined_subtype_attribute);
+                if (type.vhdl_predefined_subtype_attribute_dimension) {
+                    result.predefined_attribute_dimension = expression(
+                        *type.vhdl_predefined_subtype_attribute_dimension,
+                        scope, parent);
+                }
+            }
             return result;
         }
     }
@@ -1322,16 +1361,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
         result.domain = vh::ValueDomain::bit2;
     }
     result.executable_width = type.width();
-    switch (type.vhdl_predefined_subtype_attribute) {
-    case frontend::VhdlPredefinedSubtypeAttribute::Index:
-        result.predefined_attribute = vh::PredefinedAttribute::index;
-        break;
-    case frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype:
-        result.predefined_attribute = vh::PredefinedAttribute::designated_subtype;
-        break;
-    case frontend::VhdlPredefinedSubtypeAttribute::None:
-        break;
-    }
+    result.predefined_attribute = predefined_subtype_attribute(
+        type.vhdl_predefined_subtype_attribute);
     if (type.vhdl_predefined_subtype_attribute_dimension) {
         result.predefined_attribute_dimension = expression(
             *type.vhdl_predefined_subtype_attribute_dimension,

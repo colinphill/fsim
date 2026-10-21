@@ -30,21 +30,6 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
         return vhdl_configuration_detail::configuration_name_equal(
             left, right);
     };
-    const auto name_part_count = [](const std::string_view spelling) {
-        std::size_t count { };
-        std::size_t begin { };
-        while (begin < spelling.size()) {
-            const auto end = spelling.find('.', begin);
-            if (end != begin) {
-                ++count;
-            }
-            if (end == std::string_view::npos) {
-                break;
-            }
-            begin = end + 1U;
-        }
-        return count;
-    };
     const auto library_equal = [&](const std::string_view left,
                                    const std::string_view right) {
         return name_equal(
@@ -87,11 +72,6 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
     const auto validate_generic_callables
         = [&](const std::span<const semantic::DeclarationId> declarations) {
               using Form = semantic::vhdl::DeclarationForm;
-              const auto scope_within = [&](const semantic::ScopeId inner,
-                                            const semantic::ScopeId outer) {
-                  return semantic::scope_within(
-                      compiled_->semantics, inner, outer);
-              };
               for (const auto declaration_id : declarations) {
                   const auto declaration
                       = specialized.find_declaration(declaration_id);
@@ -108,18 +88,9 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                   }
                   const auto& template_name
                       = declaration->vhdl->package->template_name;
-                  const auto spelling = template_name.text();
-                  if (name_part_count(spelling) != 1U) {
-                      append_diagnostic(
-                          "FSIM-ELAB-VHGSUB-009",
-                          "selected or scoped generic subprogram templates "
-                          "are outside the bounded directly visible subset",
-                          declaration->vhdl->source);
-                      generic_callables_valid = false;
-                      continue;
-                  }
                   // `function f is new f ...` names its template, not the
-                  // instance it declares (IEEE 1076-2008 4.4).
+                  // instance it declares; an expanded name selects it from
+                  // its package (IEEE 1076-2008 4.4, 8.3).
                   const auto template_resolution = resolver.resolve_vhdl(
                       template_name, declaration->vhdl->scope,
                       [](const semantic::CompiledDeclarationView& view) {
@@ -175,41 +146,8 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                       generic_callables_valid = false;
                       continue;
                   }
-                  const auto body = specialized.find_declaration(
-                      callable->body);
-                  if (!body || body->vhdl == nullptr
-                      || !body->vhdl->nested_scope) {
-                      continue;
-                  }
-                  const auto recursive = std::ranges::any_of(
-                      compiled_->vhdl_hir.expressions(),
-                      [&](const semantic::vhdl::Expression& expression) {
-                          if (expression.kind
-                                  != semantic::vhdl::ExpressionKind::call
-                              || !expression.referenced_name
-                              || !scope_within(expression.scope,
-                                  *body->vhdl->nested_scope)) {
-                              return false;
-                          }
-                          const auto& reference
-                              = *expression.referenced_name;
-                          return (reference.selected
-                                     && (*reference.selected
-                                             == *template_id
-                                         || *reference.selected
-                                             == callable->body))
-                              || name_equal(
-                                  reference.text(),
-                                  template_declaration->vhdl->name);
-                      });
-                  if (recursive) {
-                      append_diagnostic(
-                          "FSIM-ELAB-VHGSUB-007",
-                          "bounded generic subprogram template contains a "
-                          "recursive call",
-                          declaration->vhdl->source);
-                      generic_callables_valid = false;
-                  }
+                  // A recursive call in the body denotes the instance
+                  // (IEEE 1076-2008 4.4); the resolver keeps its bindings.
               }
           };
     validate_generic_callables(entity.declarations);

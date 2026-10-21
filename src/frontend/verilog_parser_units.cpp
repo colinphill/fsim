@@ -1701,7 +1701,7 @@ void VerilogParser::parse_parameter_group(
     }();
     if (!type_parameter && !class_list
         && language_ == Language::SystemVerilog2017
-        && (at(TokenKind::LeftBracket) || (typedef_array && !port_list))) {
+        && (at(TokenKind::LeftBracket) || typedef_array)) {
       auto container_type = at(TokenKind::LeftBracket) || !typedef_array
           ? type
           : *typedef_array;

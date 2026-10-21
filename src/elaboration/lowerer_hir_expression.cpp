@@ -5087,8 +5087,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         // An array element value of another length fails the implicit
         // subtype conversion (IEEE 1076-2008 9.3.3.1, 10.6.2.1).
         const auto* expected_definition = definition_for(*expected);
-        const bool length_failure = expected_definition != nullptr
-            && expected_definition->form == semantic::vhdl::TypeForm::array
+        const bool length_failure
+            = ((expected_definition != nullptr
+                   && expected_definition->form
+                       == semantic::vhdl::TypeForm::array)
+                || (expected_definition == nullptr
+                    && hir_vhdl_array_type_family(*expected)))
             && source && source->vhdl != nullptr
             && (source->vhdl->kind == semantic::vhdl::ExpressionKind::call
                 || source->vhdl->kind
@@ -11118,7 +11122,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
             && ((prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
                     && prefix->vhdl->text.starts_with("'"))
                 || prefix->vhdl->kind
-                    == semantic::vhdl::ExpressionKind::string_literal);
+                    == semantic::vhdl::ExpressionKind::string_literal
+                // A user attribute's value is qualified by its type.
+                || (prefix->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && prefix->vhdl->text.starts_with(
+                        semantic::vhdl::qualified_expression_prefix)
+                    && prefix->vhdl->operands.size() == 1U));
         const auto text = attribute
             ? specialized_hir_unit_->evaluate_string_expression(
                   indexed->vhdl->operands.front())
@@ -11520,9 +11530,8 @@ Lowerer::hir_parameter_member_slice(const HirHierarchicalParameter& whole,
     if (systemverilog_instance_units_ != nullptr) {
         const auto owner = systemverilog_instance_units_->find(
             std::string { owner_instance });
-        if (owner != systemverilog_instance_units_->end() && owner->second
-            && *owner->second) {
-            const auto& unit_hir = **owner->second;
+        if (owner != systemverilog_instance_units_->end() && owner->second) {
+            const auto& unit_hir = *owner->second;
             const auto source_unit = unit_hir.design().find_unit(unit_id);
             if (source_unit && source_unit->systemverilog != nullptr) {
                 for (const auto id : source_unit->systemverilog->declarations) {
@@ -12544,6 +12553,51 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (const auto typed = lower_hir_systemverilog_parameter_pattern(
                 expression_id, *actual)) {
             return typed;
+        }
+        // A parameter of an explicit integral type holds its actual
+        // converted to that type (IEEE 1800-2017 6.20.2): the actual is
+        // read at the parameter's width, then extended by its signedness.
+        if (formal_expression && formal_expression->systemverilog != nullptr
+            && scalar_context == frontend::SystemVerilogScalarKind::None) {
+            const auto parameter_id = hir_referenced_declaration(expression_id);
+            const auto parameter = parameter_id
+                ? specialized_hir_unit_->find_declaration(*parameter_id)
+                : std::nullopt;
+            const auto* type = parameter && parameter->systemverilog != nullptr
+                    && (parameter->systemverilog->form
+                            == semantic::sv::DeclarationForm::parameter
+                        || parameter->systemverilog->form
+                            == semantic::sv::DeclarationForm::local_parameter)
+                    && parameter->systemverilog->type
+                ? &*parameter->systemverilog->type
+                : nullptr;
+            const bool integral_type = type != nullptr
+                && (!type->target.spelling.empty() || type->packed_range)
+                && !type->container_form && type->unpacked_dimensions.empty()
+                && type->value_form != semantic::sv::TypeForm::string
+                && type->value_form != semantic::sv::TypeForm::class_handle
+                && hir_systemverilog_scalar_kind(expression_id)
+                    == frontend::SystemVerilogScalarKind::None
+                && hir_systemverilog_scalar_kind(*actual)
+                    == frontend::SystemVerilogScalarKind::None;
+            const auto width = integral_type
+                ? hir_expression_width(expression_id, hir_process_scope_)
+                : std::nullopt;
+            if (width && *width != 0U && *width <= 64U) {
+                auto value = lower_hir_expression(*actual, *width);
+                if (value && register_width(*value) != *width) {
+                    value = resize_register(
+                        *value, *width, hir_expression_signed(*actual));
+                }
+                if (value && expected_width != 0U
+                    && expected_width != *width) {
+                    value = resize_register(*value, expected_width,
+                        hir_expression_signed(expression_id));
+                }
+                if (value) {
+                    return value;
+                }
+            }
         }
         return lower_hir_expression(*actual, expected_width, scalar_context);
     }
@@ -14471,6 +14525,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->referenced_name
         && resolve_hir_vhdl_function_call(
             expression_id, hir_process_scope_, expected_width);
+    if (expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+        && expression->vhdl->operands.size() == 2U
+        && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        std::cerr << "[fsim-hir-lower] vhdl-binary text="
+                  << expression->vhdl->text
+                  << " overloaded=" << overloaded_vhdl_operator
+                  << " strings="
+                  << hir_vhdl_string_comparison_operands(
+                         expression->vhdl->operands[0],
+                         expression->vhdl->operands[1])
+                  << " left-string="
+                  << hir_expression_is_string(
+                         expression->vhdl->operands[0], hir_process_scope_)
+                  << '\n';
+    }
     if (overloaded_vhdl_operator) {
         return lower_hir_function_call(expression_id, expected_width);
     }
@@ -16093,6 +16163,67 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             std::move(names),
         });
         result = destination;
+    } else if (const auto handle_cast_identity = [&]() -> std::string {
+                   // `$cast(dest, value)` to a destination whose type is a
+                   // type parameter bound to a class (IEEE 1800-2017 8.16,
+                   // 8.25) checks the handle like a class cast.
+                   if (expression->systemverilog == nullptr
+                       || expression->systemverilog->kind
+                           != semantic::sv::ExpressionKind::call
+                       || expression->systemverilog->text
+                           != "@sv-dollar-cast"
+                       || expression->systemverilog->operands.size()
+                           != 2U) {
+                       return { };
+                   }
+                   const auto declaration = hir_target_declaration(
+                       expression->systemverilog->operands.front());
+                   const auto record = declaration
+                       ? specialized_hir_unit_->find_declaration(
+                             *declaration)
+                       : std::nullopt;
+                   if (!record || record->systemverilog == nullptr
+                       || !record->systemverilog->type) {
+                       return { };
+                   }
+                   const auto type
+                       = hir_resolver().effective_systemverilog_type(
+                           *record->systemverilog->type,
+                           record->systemverilog->scope);
+                   return type ? type->class_identity : std::string { };
+               }();
+        !handle_cast_identity.empty()) {
+        const auto& cast = *expression->systemverilog;
+        const auto prior = lower_hir_expression(
+            cast.operands.front(), 64U);
+        const auto value = lower_hir_expression(
+            cast.operands.back(), 64U);
+        if (!prior || !value || register_width(*prior) != 64U
+            || register_width(*value) != 64U) {
+            return std::nullopt;
+        }
+        const auto success = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ClassMethodCall {
+            success,
+            *value,
+            "@checked-cast:" + handle_cast_identity,
+            { },
+            { },
+            { },
+            1U,
+            false,
+        });
+        const auto selected = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConditionalSelect {
+            selected, success, *value, *prior });
+        if (!lower_hir_packed_copy_out(cast.operands.front(), selected)) {
+            return std::nullopt;
+        }
+        result = expected_width > 1U
+            ? std::optional { resize_register(success, expected_width, false) }
+            : std::optional { success };
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
@@ -16850,6 +16981,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 // A typedef another instance or array element publishes
                 // (`ifc[0].type_t`, IEEE 1800-2017 20.6.2, 23.6) is not a
                 // value.
+                const bool earlier_miss = std::exchange(
+                    hierarchical_reference_missed_, false);
                 if (const auto typedef_bits = hir_hierarchical_parameter(
                         call.operands.front(), "$bits:")) {
                     if (const auto bits
@@ -16857,6 +16990,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         packed_bits = static_cast<std::size_t>(*bits);
                     }
                 }
+                // The publishing instance is elaborated later; the
+                // statement is lowered again then.
+                if (!packed_bits && hierarchical_reference_missed_
+                    && hierarchical_reference_retry_) {
+                    return std::nullopt;
+                }
+                hierarchical_reference_missed_
+                    = hierarchical_reference_missed_ || earlier_miss;
                 if (!packed_bits) {
                     packed_bits = hir_expression_width(
                         call.operands.front(), hir_process_scope_);
@@ -26482,12 +26623,21 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         const auto api = hir_vhdl_simulator_api(source);
         if (source.kind == semantic::vhdl::ExpressionKind::aggregate
             && contextual_subtype != nullptr) {
+            // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the rejecting line.
+            const auto rejected = [](const unsigned line = __builtin_LINE()) {
+                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                    std::cerr << "[fsim-hir-lower] vhdl-string-aggregate-"
+                                 "rejected line="
+                              << line << '\n';
+                }
+                return std::optional<StringRegisterId> { };
+            };
             const auto effective = hir_effective_vhdl_subtype(
                 *contextual_subtype);
             if (!effective
                 || effective->domain
                     != semantic::vhdl::ValueDomain::string) {
-                return std::nullopt;
+                return rejected();
             }
             const auto predefined_string = [&] {
                 auto type_id = effective->type_mark.target;
@@ -26582,7 +26732,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     const auto piece = lower_hir_vhdl_string_piece(
                         association.value, &piece_context);
                     if (!piece) {
-                        return std::nullopt;
+                        return rejected();
                     }
                     pieces.push_back(*piece);
                 }
@@ -26594,12 +26744,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             if (!predefined_string || !width || *width == 0U
                 || *width % 8U != 0U
                 || *width / 8U > maximum_string_bytes) {
-                return std::nullopt;
+                return rejected();
             }
             const auto packed = lower_hir_vhdl_aggregate(
                 expression_id, *width, &*effective);
             if (!packed) {
-                return std::nullopt;
+                return rejected();
             }
             return lower_hir_packed_characters_to_string(*packed, *width);
         }
@@ -26855,19 +27005,19 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         if (source.kind == semantic::vhdl::ExpressionKind::call
             && source.text.starts_with(
                 semantic::vhdl::qualified_expression_prefix)
-            &&
-            [&] {
-                const auto qualified_subtype
-                    = hir_vhdl_expression_subtype(expression_id);
-                return qualified_subtype
-                    && hir_vhdl_predefined_string_type(*qualified_subtype);
-            }()
-            && source.operands.size() == 1U
-            && hir_expression_is_string(
-                source.operands.front(), hir_process_scope_)) {
-            // T'(string expression) denotes the operand's value (IEEE
-            // 1076-2008 9.3.5).
-            return lower_hir_string_expression(source.operands.front());
+            && source.operands.size() == 1U) {
+            const auto qualified_subtype
+                = hir_vhdl_expression_subtype(expression_id);
+            if (qualified_subtype
+                && hir_vhdl_predefined_string_type(*qualified_subtype)
+                && hir_expression_is_string(
+                    expression_id, hir_process_scope_)) {
+                // T'(string expression) denotes the operand's value, and
+                // T is the context of an aggregate operand (IEEE 1076-2008
+                // 9.3.3.3, 9.3.5).
+                return lower_hir_string_expression(
+                    source.operands.front(), &*qualified_subtype);
+            }
         }
         if (source.kind == semantic::vhdl::ExpressionKind::string_literal
             && source.decoded_string) {
@@ -28080,11 +28230,20 @@ Lowerer::capture_hir_packed_update_target(
         ? hir_runtime_binding(*declaration, hir_process_scope_, true)
         : std::nullopt;
     const auto selected = index || slice;
+    // A reference to another scope's variable (`if0.l0`, IEEE 1800-2017
+    // 23.6) updates the signal it names.
+    const bool direct_actual = !binding
+        && (!selected || !source.operands.empty());
+    if (direct_actual) {
+        binding = hir_direct_signal_binding(
+            selected ? source.operands.front() : target);
+    }
     if (!binding
         || (selected
             && (source.operands.size() != (index ? 2U : 3U)
-                || hir_target_declaration(source.operands.front())
-                    != declaration))) {
+                || (!direct_actual
+                    && hir_target_declaration(source.operands.front())
+                        != declaration)))) {
         return std::nullopt;
     }
     if (binding->signal
@@ -28492,9 +28651,21 @@ bool Lowerer::hir_vhdl_aggregate_is_writable(
     if (expression->vhdl->kind
         != semantic::vhdl::ExpressionKind::aggregate) {
         const auto target = hir_target_declaration(aggregate);
+        // A STRING variable lives in a string register (writes go through
+        // lower_hir_vhdl_aggregate_copy_out); a null array takes no bits.
+        if (target && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::name
+            && hir_local_string_registers_.contains(target->value())) {
+            return true;
+        }
         const auto binding = target
             ? hir_runtime_binding(*target, hir_process_scope_, false)
             : std::nullopt;
+        if (!binding && target) {
+            const auto width = hir_vhdl_expression_runtime_width(
+                aggregate, hir_process_scope_);
+            return width && *width == 0U;
+        }
         return binding
             && (binding->kind == HirRuntimeBindingKind::local
                 || signal_binding_is_writable(*binding));
@@ -28765,6 +28936,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         std::int64_t left { };
         std::int64_t right { };
         bool descending { };
+        bool null { };
     };
     const auto bounds = [&](const Subtype& subtype,
                             const TypeDefinition* definition)
@@ -28779,8 +28951,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
             && definition->array_dimensions.front().constraint) {
             range = &*definition->array_dimensions.front().constraint;
         }
-        if (!range || range->kind != semantic::vhdl::RangeKind::array_index
-            || range->null) {
+        if (!range || range->kind != semantic::vhdl::RangeKind::array_index) {
             return std::nullopt;
         }
         auto left = range->left;
@@ -28794,7 +28965,9 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (!left || !right) {
             return std::nullopt;
         }
-        return IndexBounds { *left, *right, range->descending };
+        return IndexBounds { *left, *right, range->descending,
+            range->null
+                || (range->descending ? *left < *right : *left > *right) };
     };
     const auto extent = [&](const Subtype& subtype,
                             const TypeDefinition* definition)
@@ -28803,6 +28976,9 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (!selected) {
             return std::nullopt;
         }
+        if (selected->null) {
+            return std::optional<std::uint64_t> { 0U };
+        }
         const auto distance = index_distance(selected->left, selected->right);
         return distance == std::numeric_limits<std::uint64_t>::max()
             ? std::nullopt : std::optional { distance + 1U };
@@ -28810,7 +28986,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
     const auto source_bounds = named
         ? bounds(*source_effective, source_array->definition)
         : std::nullopt;
-    if (named && !source_bounds) {
+    if (named && (!source_bounds || source_bounds->null)) {
         return std::nullopt;
     }
     auto source_count = extent(*source_effective, source_array->definition);
@@ -28881,10 +29057,16 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (!width && effective) {
             width = vhdl_subtype_width(*effective);
         }
+        // A null array target takes no elements and no bits (IEEE
+        // 1076-2008 10.6.2.1); it stays in the segment list as a
+        // zero-width piece that writes nothing.
+        const bool null_array = width && *width == 0U && target
+            && target->form == TypeForm::array;
         if (!target_expression || target_expression->vhdl == nullptr
             || target_expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::aggregate
-            || !effective || !target || !width || *width == 0U
+            || !effective || !target || !width
+            || (*width == 0U && !null_array)
             || *width > std::numeric_limits<std::uint32_t>::max()
             || target_width
                 > std::numeric_limits<std::uint32_t>::max() - *width) {
@@ -28922,7 +29104,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
                 || !same_nominal_type(*target_element_type,
                     *source_element_type)
                 || !target_element_width || *target_element_width != *element_width
-                || !target_extent || *target_extent == 0U
+                || !target_extent || (*target_extent == 0U) != null_array
                 || *target_extent
                     > std::numeric_limits<std::uint64_t>::max() / *element_width
                 || *target_extent * *element_width != *width) {
@@ -28935,7 +29117,7 @@ Lowerer::hir_vhdl_mixed_aggregate_target_segments(
         if (target_count > std::numeric_limits<std::uint64_t>::max() - count) {
             return std::nullopt;
         }
-        if (named) {
+        if (named && count != 0U) {
             const auto selected = choice_bounds(association.choices.front());
             const auto source_low = std::min(
                 source_bounds->left, source_bounds->right);
@@ -28995,6 +29177,24 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
     }
     if (expression->vhdl->kind
         != semantic::vhdl::ExpressionKind::aggregate) {
+        // A STRING variable held in a string register takes the
+        // CHARACTER bytes of its piece.
+        if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+            if (const auto target = hir_target_declaration(aggregate_id)) {
+                if (const auto local = hir_local_string_registers_.find(
+                        target->value());
+                    local != hir_local_string_registers_.end()) {
+                    const auto width = register_width(source);
+                    if (width == 0U || width % 8U != 0U) {
+                        return false;
+                    }
+                    process_.operations.emplace_back(CopyStringRegister {
+                        local->second,
+                        lower_hir_packed_characters_to_string(source, width) });
+                    return true;
+                }
+            }
+        }
         if (const auto target
             = capture_hir_packed_update_target(aggregate_id)) {
             return write_hir_packed_update_target(*target, source);
@@ -29090,6 +29290,9 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
         std::size_t offset = *width;
         for (std::size_t index { }; index < segments->targets.size(); ++index) {
             const auto segment_width = segments->widths[index];
+            if (segment_width == 0U) {
+                continue;
+            }
             if (segment_width > offset) {
                 return false;
             }
@@ -30015,11 +30218,20 @@ bool Lowerer::lower_hir_packed_copy_out(
         return false;
     }
     const auto declaration = hir_target_declaration(target);
-    const auto binding = declaration
+    const auto selected = index || slice;
+    auto binding = declaration
         ? hir_runtime_binding(
               *declaration, hir_process_scope_, true)
         : std::nullopt;
-    const auto selected = index || slice;
+    // An output actual naming another scope's variable (`if0.l0`, IEEE
+    // 1800-2017 23.6) writes the signal the reference names.
+    const bool direct_actual = !binding
+        && expression->systemverilog != nullptr
+        && (!selected || !operands.empty());
+    if (direct_actual) {
+        binding = hir_direct_signal_binding(
+            selected ? operands.front() : target);
+    }
     // An element of a multidimensional VHDL array with static indices
     // (`v(2, 1)`) is a static part of the object.
     const auto vhdl_element = expression->vhdl != nullptr && index
@@ -30034,8 +30246,9 @@ bool Lowerer::lower_hir_packed_copy_out(
     if (!binding || !signal_binding_can_emit_write(*binding)
         || (selected && !static_vhdl_element
             && (operands.size() != (index ? 2U : 3U)
-                || hir_referenced_declaration(operands.front())
-                    != declaration))) {
+                || (!direct_actual
+                    && hir_referenced_declaration(operands.front())
+                        != declaration)))) {
         return false;
     }
     const auto member = hir_systemverilog_member_selection(

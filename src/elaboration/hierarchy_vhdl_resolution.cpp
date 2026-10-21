@@ -241,10 +241,14 @@ bool vhdl_conversion_actual(
     // Subelement associations or an aggregate of signal names and literals
     // (`p(0) => '1', p(1) => x`) give the formal the actuals' value in the
     // same cycle and at initialization (IEEE 1076-2008 6.5.7.1, 14.7.5.2).
-    if (expression && expression->vhdl != nullptr
-        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-        && !expression->vhdl->associations.empty()
-        && std::ranges::all_of(expression->vhdl->associations,
+    // Nested formal parts (`p.b.x => s`) nest their subelement aggregates.
+    const auto conversion_aggregate = [&](const auto& self,
+                                          const semantic::vhdl::Expression& aggregate,
+                                          const std::size_t depth) -> bool {
+        return depth <= 16U
+            && aggregate.kind == semantic::vhdl::ExpressionKind::aggregate
+            && !aggregate.associations.empty()
+            && std::ranges::all_of(aggregate.associations,
             [&](const semantic::vhdl::AggregateAssociation& association) {
                 const auto value = specialization.find_expression(
                     association.value);
@@ -252,6 +256,10 @@ bool vhdl_conversion_actual(
                     return false;
                 }
                 const auto kind = value->vhdl->kind;
+                if (kind == semantic::vhdl::ExpressionKind::aggregate
+                    && value->vhdl->text == "@vhdl-formal-subelements") {
+                    return self(self, *value->vhdl, depth + 1U);
+                }
                 // A type conversion or conversion function of a signal name
                 // (`p(3 downto 2) => std_ulogic_vector(s)`).
                 if (kind == semantic::vhdl::ExpressionKind::call
@@ -271,7 +279,10 @@ bool vhdl_conversion_actual(
                         specialization, association.value)
                     || (kind == semantic::vhdl::ExpressionKind::name
                         && value->vhdl->text.find('.') == std::string::npos);
-            })) {
+            });
+    };
+    if (expression && expression->vhdl != nullptr
+        && conversion_aggregate(conversion_aggregate, *expression->vhdl, 0U)) {
         return true;
     }
     // A conversion function may be an operator symbol written as a call
@@ -624,10 +635,28 @@ bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
     // resolution from the source's type.
     // One association is a whole conversion of its source, as for a plain
     // conversion actual.
+    // Nested formal parts count each leaf association.
+    const auto leaf_associations = [&](const auto& self,
+                                       const semantic::ExpressionId id,
+                                       const std::size_t depth) -> std::size_t {
+        const auto expression = specialization.find_expression(id);
+        if (!expression || expression->vhdl == nullptr || depth > 16U
+            || expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::aggregate
+            || (depth != 0U
+                && expression->vhdl->text != "@vhdl-formal-subelements")) {
+            return 1U;
+        }
+        std::size_t count { };
+        for (const auto& association : expression->vhdl->associations) {
+            count += self(self, association.value, depth + 1U);
+        }
+        return count;
+    };
     if (const auto expression = specialization.find_expression(actual);
         expression && expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-        && expression->vhdl->associations.size() > 1U
+        && leaf_associations(leaf_associations, actual, 0U) > 1U
         && std::ranges::any_of(program->sources, [&](const SignalId source) {
                return source < design_.signal_info_.size()
                    && (native_resolution(design_.signal_info_[source])

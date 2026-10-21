@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
@@ -2681,9 +2682,34 @@ Lowerer::hir_class_property_profile(
             return result;
         }
     }
+    // A property's type is resolved where the class declares it (IEEE
+    // 1800-2017 8.4, 8.25): a class typedef, a class localparam or a
+    // package import of the class's scope.
+    const auto declared_type = [&]()
+        -> std::optional<semantic::SystemVerilogTypeDescriptor> {
+        if (selected == nullptr || event_property) {
+            return std::nullopt;
+        }
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            selected->declaration);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        auto described = semantic::describe_systemverilog_type(
+            *specialized_hir_unit_, selected->type,
+            declaration->systemverilog->scope);
+        if (!described || !described->unpacked.empty()
+            || !described->bits || *described->bits == 0U) {
+            return std::nullopt;
+        }
+        return described;
+    }();
     const auto property_width = selected == nullptr ? std::nullopt
         : event_property ? std::optional<std::size_t> { 1U }
-                         : hir_systemverilog_type_width(selected->type);
+        : declared_type
+        ? std::optional<std::size_t> {
+              static_cast<std::size_t>(*declared_type->bits) }
+        : hir_systemverilog_type_width(selected->type);
     if (selected == nullptr
         || selected->static_storage != static_access
         || selected->type.value_form
@@ -2713,10 +2739,13 @@ Lowerer::hir_class_property_profile(
             result.width = *specialized;
         }
     }
-    result.domain = selected->type.four_state && !event_property
+    result.domain = (declared_type ? declared_type->four_state
+                                   : selected->type.four_state)
+            && !event_property
         ? frontend::ValueDomain::Logic4
         : frontend::ValueDomain::Bit2;
-    result.signed_value = selected->type.signed_value;
+    result.signed_value = declared_type ? declared_type->is_signed
+                                        : selected->type.signed_value;
     result.event = event_property;
     // A property typed by a type parameter whose actual is a class holds a
     // handle (IEEE 1800-2017 8.25); the access carries the actual class.
@@ -8821,6 +8850,15 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
     if (!selected) {
         return std::nullopt;
     }
+    // The callee takes its types from the target instance's parameters
+    // (IEEE 1800-2017 13.4, 23.8); a call lowered before that instance
+    // elaborates is retried once its specialization exists.
+    if (generate_chain.empty() && hierarchical_reference_retry_
+        && systemverilog_instance_units_ != nullptr
+        && !systemverilog_instance_units_->contains(target_path)) {
+        hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
     return std::pair { *selected, "@instance:" + target_path };
 }
 
@@ -13561,6 +13599,17 @@ Lowerer::resolve_hir_vhdl_function_call(
             *expression->vhdl->referenced_name,
             expression->vhdl->scope, true);
     }
+    // An arithmetic operator the type resolution typed is the predefined
+    // operator: no user overload accepts it in its context (9.2.6, 12.5).
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+        && (expression->vhdl->resolved_type
+            || !expression->vhdl->resolved_builtin_type.empty())) {
+        const auto op = lowercase_ascii_copy(expression->vhdl->text);
+        if (op == "+" || op == "-" || op == "*" || op == "/" || op == "mod"
+            || op == "rem" || op == "**") {
+            return std::nullopt;
+        }
+    }
     // A relation the type resolution typed BOOLEAN is not a user overload
     // returning another type (IEEE 1076-2008 9.2.3, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
@@ -14995,6 +15044,15 @@ Lowerer::lower_hir_function_call_value(
                     }
                 }
             }
+            // A recursive call runs in the caller's unspecialized frame: a
+            // call per static value would also lower every dead recursive
+            // branch, without end.
+            if (actual_value && active_hir_callable_
+                && *active_hir_callable_ < hir_callable_frames_.size()
+                && hir_callable_frames_[*active_hir_callable_].declaration
+                    == resolution->body) {
+                actual_value.reset();
+            }
             if (actual_value) {
                 static_integer_actuals.emplace_back(index, *actual_value);
                 static_integer_actual_expressions.emplace_back(
@@ -15728,6 +15786,24 @@ Lowerer::lower_hir_function_call_value(
             hir_callable_indices_.emplace(callable_key, frame_index);
             key_reservation.reserve(hir_callable_indices_, callable_key);
         }
+    }
+    // FSIM_HIR_CALLABLE_KEY_TRACE prints each new callable frame's key.
+    if (new_frame && std::getenv("FSIM_HIR_CALLABLE_KEY_TRACE") != nullptr) {
+        std::cerr << "[fsim-hir-lower] callable-key " << callable_key << '\n';
+    }
+    // A recursion whose static actuals change on every call would
+    // specialize without end.
+    constexpr std::size_t maximum_body_frames { 4096U };
+    if (new_frame
+        && ++hir_callable_body_frames_[resolution->body.value()]
+            > maximum_body_frames) {
+        report(
+            "FSIM-ELAB-HIR-001",
+            "VHDL subprogram specialization does not terminate",
+            hir_source_span(declaration->vhdl != nullptr
+                    ? declaration->vhdl->source
+                    : semantic::SourceSpanId { }));
+        return std::nullopt;
     }
     if (new_frame) {
         HirCallableFrame frame;

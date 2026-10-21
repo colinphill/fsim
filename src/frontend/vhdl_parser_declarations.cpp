@@ -1260,6 +1260,7 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   const auto name = vhdl_name(name_token.text);
   if (match(TokenKind::Colon)) {
     auto type = parse_vhdl_type(true, true);
+    auto type_mark = type.spelling;
     expect(TokenKind::Semicolon, "';' after attribute declaration",
            "FSIM-VHDL-PARSE-265");
     if (std::ranges::any_of(unit.vhdl_attributes, [&](const auto &attribute) {
@@ -1277,7 +1278,7 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
                                  {},
                                  {},
                                  span_from(start, previous())});
-    vhdl_declared_attributes_.insert(name);
+    vhdl_declared_attributes_.insert_or_assign(name, std::move(type_mark));
     return;
   }
   if (!match_keyword("of", true)) {
@@ -1364,12 +1365,23 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
           "VHDL attribute specification references undeclared attribute '" +
               name + "'");
   }
+  // The value has the attribute's type, as a qualified expression of
+  // its type mark (IEEE 1076-2008 7.2, 9.3.5).
+  auto named_value = value;
+  if (const auto declared = vhdl_declared_attributes_.find(name);
+      declared != vhdl_declared_attributes_.end()
+      && !declared->second.empty()) {
+    named_value = Expression{ExpressionKind::Call,
+                             "@vhdl-qualified:" + declared->second,
+                             {value},
+                             value.span};
+  }
   for (const auto& specified : entity_names) {
-    vhdl_attribute_values_[name].insert_or_assign(specified, value);
+    vhdl_attribute_values_[name].insert_or_assign(specified, named_value);
     // `all` and `others` apply to the named entity class only.
     if (specified == "all" || specified == "others") {
       vhdl_attribute_values_[name].insert_or_assign(
-          specified + ":" + vhdl_name(entity_class.text), value);
+          specified + ":" + vhdl_name(entity_class.text), named_value);
     }
   }
   unit.vhdl_attributes.push_back(
@@ -1808,6 +1820,74 @@ void VhdlParser::parse_vhdl_object_alias(
   // designated by an operator symbol or character literal (IEEE 1076-2008
   // 6.6.3). Its target and signature are read here; calls through it are
   // resolved with the overloads of its target.
+  // A subprogram alias signature (IEEE 1076-2008 4.5.3, 6.6.3); an empty
+  // signature `[]` names a subprogram without parameters or a result.
+  const auto parse_alias_signature = [&]() -> std::optional<VhdlAliasSignature> {
+    const auto signature_start = previous();
+    require_vhdl_standard(
+        signature_start, VhdlStandard::Vhdl1993, "an alias signature",
+        "select VHDL-1993 or remove the overload-disambiguating signature");
+    VhdlAliasSignature parsed;
+    bool well_formed = true;
+    if (!at(TokenKind::RightBracket) && !keyword("return", 0, true)) {
+      parsed.parameters.push_back(parse_vhdl_type(true, true));
+      while (match(TokenKind::Comma)) {
+        parsed.parameters.push_back(parse_vhdl_type(true, true));
+      }
+    }
+    if (match_keyword("return", true)) {
+      parsed.result = parse_vhdl_type(true, true);
+    }
+    while (!at_end() && !at(TokenKind::RightBracket)
+        && !at(TokenKind::Semicolon)) {
+      well_formed = false;
+      advance();
+    }
+    expect(TokenKind::RightBracket, "']' after alias signature",
+        "FSIM-VHDL-PARSE-236");
+    return well_formed ? std::optional { std::move(parsed) } : std::nullopt;
+  };
+  // An alias designated by an operator symbol denotes the subprogram its
+  // target and signature select (`alias "+" is work.p."+" [bit_vector,
+  // bit_vector return bit_vector];`, IEEE 1076-2008 6.6.3).
+  if (at(TokenKind::StringLiteral)) {
+    std::size_t lookahead = 2;
+    while (at(TokenKind::Identifier, lookahead)
+        && at(TokenKind::Dot, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (keyword("is", 1, true)
+        && (at(TokenKind::StringLiteral, lookahead)
+            || at(TokenKind::Identifier, lookahead))
+        && at(TokenKind::LeftBracket, lookahead + 1)) {
+      const auto designator = advance();
+      expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
+      std::string target;
+      while (at(TokenKind::Identifier) && at(TokenKind::Dot, 1)) {
+        target += vhdl_name(advance().text);
+        target += '.';
+        advance();
+      }
+      const auto member = advance();
+      target += member.kind == TokenKind::StringLiteral
+          ? detail::ascii_lower(string_literal_text(member))
+          : vhdl_name(member.text);
+      expect(TokenKind::LeftBracket, "'[' before alias signature",
+          "FSIM-VHDL-PARSE-236");
+      auto signature = parse_alias_signature();
+      expect(TokenKind::Semicolon, "';' after alias declaration",
+          "FSIM-VHDL-PARSE-236");
+      if (!signature) {
+        return;
+      }
+      aliases.push_back(SignalAliasDeclaration {
+          detail::ascii_lower(string_literal_text(designator)),
+          std::move(target), Type { },
+          PortDirection::Unknown, span_from(start, previous()),
+          std::nullopt, std::move(signature) });
+      return;
+    }
+  }
   if (at(TokenKind::StringLiteral) || at(TokenKind::CharacterLiteral)) {
     advance();
     expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
@@ -1838,6 +1918,39 @@ void VhdlParser::parse_vhdl_object_alias(
         && at(TokenKind::Identifier, lookahead + 1)
         && keyword("converse", lookahead + 1, true);
   };
+  // An alias of a subtype-valued attribute (`alias index_t is
+  // arr_t'index;`) denotes that subtype (IEEE 1076-2019 6.6.3, 16.2.3).
+  const auto is_subtype_attribute_alias = [&]() {
+    if (!keyword("is", 0, true) || !at(TokenKind::Identifier, 1)) {
+      return false;
+    }
+    std::size_t lookahead = 2;
+    while (at(TokenKind::Dot, lookahead)
+           && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    return at(TokenKind::Apostrophe, lookahead)
+        && at(TokenKind::Identifier, lookahead + 1)
+        && (keyword("index", lookahead + 1, true)
+            || keyword("element", lookahead + 1, true)
+            || keyword("designated_subtype", lookahead + 1, true));
+  };
+  if (is_subtype_attribute_alias()) {
+    (void)match_keyword("is", true);
+    auto type = parse_vhdl_type(true, true);
+    expect(TokenKind::Semicolon, "';' after alias declaration",
+        "FSIM-VHDL-PARSE-236");
+    const auto canonical = vhdl_name(name.text);
+    type.vhdl_type_declaration = start.span.source_name + ":"
+        + std::to_string(start.span.begin.offset) + ":" + canonical;
+    TypeAliasDeclaration alias;
+    alias.name = canonical;
+    alias.type = std::move(type);
+    alias.span = span_from(start, previous());
+    alias.declaration_kind = TypeDeclarationKind::VhdlSubtype;
+    type_aliases.push_back(std::move(alias));
+    return;
+  }
   if (is_converse_alias()) {
     (void)match_keyword("is", true);
     require_vhdl_standard(
@@ -1945,32 +2058,7 @@ void VhdlParser::parse_vhdl_object_alias(
   }
   std::optional<VhdlAliasSignature> signature;
   if (match(TokenKind::LeftBracket)) {
-      const auto signature_start = previous();
-      require_vhdl_standard(
-          signature_start, VhdlStandard::Vhdl1993, "an alias signature",
-          "select VHDL-1993 or remove the overload-disambiguating signature");
-      // An empty signature `[]` names a subprogram without parameters or a
-      // result (IEEE 1076-2008 4.5.3).
-      VhdlAliasSignature parsed;
-      bool well_formed = true;
-      if (!at(TokenKind::RightBracket) && !keyword("return", 0, true)) {
-        parsed.parameters.push_back(parse_vhdl_type(true, true));
-        while (match(TokenKind::Comma)) {
-          parsed.parameters.push_back(parse_vhdl_type(true, true));
-        }
-      }
-      if (match_keyword("return", true)) {
-        parsed.result = parse_vhdl_type(true, true);
-      }
-      while (!at_end() && !at(TokenKind::RightBracket) && !at(TokenKind::Semicolon)) {
-          well_formed = false;
-          advance();
-      }
-      expect(TokenKind::RightBracket, "']' after alias signature",
-          "FSIM-VHDL-PARSE-236");
-      if (well_formed) {
-        signature = std::move(parsed);
-      }
+    signature = parse_alias_signature();
   }
   expect(TokenKind::Semicolon, "';' after alias declaration",
          "FSIM-VHDL-PARSE-236");

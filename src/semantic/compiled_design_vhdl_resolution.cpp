@@ -73,6 +73,11 @@ constexpr std::string_view null_type { "@null" };
     if (name == "std_logic") {
         return "std_ulogic";
     }
+    // The IEEE library's STD_LOGIC_VECTOR is a resolved subtype of
+    // STD_ULOGIC_VECTOR (IEEE 1076-2008 16.7).
+    if (name == "std_logic_vector") {
+        return "std_ulogic_vector";
+    }
     return std::string { name };
 }
 
@@ -238,6 +243,49 @@ public:
                 && declaration.subtype) {
                 resolve(*declaration.initializer,
                     subtype_key(*declaration.subtype, declaration.scope));
+            }
+        }
+        // The bounds of a range constraint on an enumeration subtype denote
+        // literals of that type (IEEE 1076-2008 5.2.1, 9.3.2): '0' in
+        // `subtype b is four_value range '0' to '1'` is four_value's '0'.
+        const auto range_bounds = [&](const vhdl::SubtypeIndication& subtype,
+                                      const ScopeId scope) {
+            if (subtype.constraints.size() != 1U) {
+                return;
+            }
+            const auto key = subtype_key(subtype, scope);
+            const auto* root = key.id.valid() ? type(key.id) : nullptr;
+            if (root == nullptr || root->form != vhdl::TypeForm::enumeration) {
+                return;
+            }
+            const auto& range = subtype.constraints.front();
+            for (const auto& bound :
+                { range.left_expression, range.right_expression }) {
+                if (bound) {
+                    resolve(*bound, key);
+                }
+            }
+        };
+        for (const auto& type : design_.vhdl_hir.types()) {
+            const auto* owner = declaration(type.declaration);
+            if (owner == nullptr) {
+                continue;
+            }
+            range_bounds(type.base, owner->scope);
+            if (type.element_subtype) {
+                range_bounds(*type.element_subtype, owner->scope);
+            }
+            for (const auto& element : type.record_elements) {
+                range_bounds(element.subtype, owner->scope);
+            }
+        }
+        for (const auto& declaration : design_.vhdl_hir.declarations()) {
+            if (declaration.subtype) {
+                range_bounds(*declaration.subtype, declaration.scope);
+            }
+            if (declaration.callable && declaration.callable->return_type) {
+                range_bounds(
+                    *declaration.callable->return_type, declaration.scope);
             }
         }
         for (const auto& statement : design_.vhdl_hir.statements()) {
@@ -1112,6 +1160,13 @@ private:
                 return result;
             }
             const auto visible = functions(*record);
+            if (trace_) {
+                std::fprintf(stderr,
+                    "FSIM_VHDL_RESOLVE call expression=%u text=%s visible=%zu "
+                    "overloads=%zu\n",
+                    record->id.value(), record->text.c_str(), visible.size(),
+                    record->referenced_name->overloads.size());
+            }
             // A type mark applied to one operand is a type conversion (9.3.6).
             if (visible.empty() && record->operands.size() == 1U
                 && declaration_types(*record->referenced_name).empty()) {
@@ -1197,28 +1252,67 @@ private:
         if (record.operands.size() != 2U) {
             return result;
         }
-        // A user overload of the operator may give any result type.
-        if (record.referenced_name && !functions(record).empty()) {
-            return result;
-        }
-        if (relational(record.text)) {
+        const auto op = lowered(record.text);
+        const bool user_overloads
+            = record.referenced_name && !functions(record).empty();
+        if (relational(record.text) && !user_overloads) {
             return { builtin("boolean") };
         }
-        const auto op = lowered(record.text);
-        if (op == "+" || op == "-" || op == "and" || op == "or"
-            || op == "nand" || op == "nor" || op == "xor" || op == "xnor") {
-            // The operands and the result have one type (9.2.2, 9.2.6).
-            const auto& left = candidates(record.operands.front());
-            const auto& right = candidates(record.operands.back());
-            if (left.empty() || right.empty()) {
-                return result;
-            }
-            for (const auto& candidate : left) {
-                if (any_compatible(candidate, right)) {
-                    add(result, candidate);
-                }
-            }
+        // The operands and the result of these predefined operators have
+        // one type (9.2.2, 9.2.6, 9.2.7); a physical operand is not modelled.
+        const bool same_type = op == "+" || op == "-" || op == "and"
+            || op == "or" || op == "nand" || op == "nor" || op == "xor"
+            || op == "xnor";
+        const bool multiplying
+            = op == "*" || op == "/" || op == "mod" || op == "rem";
+        const auto& left = candidates(record.operands.front());
+        const auto& right = candidates(record.operands.back());
+        if (left.empty() || right.empty()) {
             return result;
+        }
+        const auto physical = [&](const TypeKey& key) {
+            const auto* definition = key.id.valid() ? type(key.id) : nullptr;
+            return key.builtin == "time"
+                || (definition != nullptr
+                    && definition->form == vhdl::TypeForm::physical);
+        };
+        if (multiplying
+            && (std::ranges::any_of(left, physical)
+                || std::ranges::any_of(right, physical))) {
+            return result;
+        }
+        for (const auto& candidate : left) {
+            if (!any_compatible(candidate, right)) {
+                continue;
+            }
+            if (relational(record.text)) {
+                add(result, builtin("boolean"));
+            } else if (same_type
+                || (multiplying
+                    && (integer_class(candidate)
+                        || (floating_class(candidate)
+                            && (op == "*" || op == "/"))))) {
+                add(result, candidate);
+            }
+        }
+        if (!user_overloads) {
+            return result;
+        }
+        // A user overload adds its result type when it accepts the
+        // operands. Where the predefined forms are not modelled, or an
+        // overload's result type is unknown, the result stays unknown.
+        if (!relational(record.text) && !same_type && !multiplying) {
+            return { };
+        }
+        for (const auto& callable : functions(record)) {
+            if (!applicable(callable, record, std::nullopt)) {
+                continue;
+            }
+            const auto key = result_key(*callable.declaration);
+            if (!key.known()) {
+                return { };
+            }
+            add(result, key);
         }
         return result;
     }
@@ -1436,27 +1530,43 @@ private:
         const auto op = lowered(record.text);
         bool user_overloads
             = record.referenced_name && !functions(record).empty();
-        // An arithmetic operator no user overload accepts is the predefined
-        // operator of its integer operands' type (9.2.6, 12.5); the
-        // operator's type records that decision.
-        if (user_overloads
-            && (op == "+" || op == "-" || op == "*" || op == "/"
-                || op == "mod" || op == "rem" || op == "**")
+        // An arithmetic operator no user overload accepts in its context
+        // is the predefined operator of its integer operands' type (9.2.6,
+        // 12.5): inside `function "+" (a, b : integer) return bit`,
+        // `d := a + b` is the predefined "+". The operator's type records
+        // that decision and types both operands.
+        const bool arithmetic = op == "+" || op == "-" || op == "*"
+            || op == "/" || op == "mod" || op == "rem" || op == "**";
+        if (user_overloads && arithmetic
             && std::ranges::none_of(functions(record),
                 [&](const Callable& callable) {
-                    return applicable(callable, record, std::nullopt);
+                    return applicable(callable, record, expected);
                 })) {
             std::vector<TypeKey> common;
             for (const auto& left : candidates(record.operands.front())) {
                 if (integer_class(left)
                     && any_compatible(left, candidates(record.operands.back()))
-                    && !candidates(record.operands.back()).empty()) {
+                    && !candidates(record.operands.back()).empty()
+                    && (!expected || compatible(*expected, left))) {
                     add(common, left);
                 }
+            }
+            // An operand that is itself an overloaded operator has no type
+            // before its context gives one; an integer context does.
+            if (common.empty() && expected && integer_class(*expected)
+                && op != "**"
+                && std::ranges::all_of(record.operands,
+                    [&](const ExpressionId operand) {
+                        return any_compatible(*expected, candidates(operand));
+                    })) {
+                add(common, *expected);
             }
             if (common.size() == 1U) {
                 annotate_type(record.id, common.front());
                 user_overloads = false;
+                if (op != "**") {
+                    operand_type = common.front();
+                }
             }
         }
         // A relation in a BOOLEAN context that no user overload returning
@@ -1495,7 +1605,7 @@ private:
                                 && key.builtin != universal_real);
                     });
             }
-        } else if (!user_overloads
+        } else if (!user_overloads && !operand_type
             && (op == "+" || op == "-" || op == "and" || op == "or"
                 || op == "nand" || op == "nor" || op == "xor"
                 || op == "xnor")) {

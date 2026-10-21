@@ -236,7 +236,7 @@ public:
         const CoverageHirContext* coverage, bool module) noexcept;
     void set_hir_code_coverage_active(bool active) noexcept;
     using HirInstanceUnits = std::unordered_map<std::string,
-        std::shared_ptr<const std::optional<semantic::SpecializedHirUnit>>>;
+        std::shared_ptr<const semantic::SpecializedHirUnit>>;
     void set_systemverilog_interface_handles(
         const std::unordered_map<std::string, std::uint64_t>* handles,
         const std::unordered_map<std::string, std::string>* types = nullptr,
@@ -1161,6 +1161,12 @@ private:
     // emits the run-time failure and returns true.
     bool emit_hir_vhdl_call_length_check(semantic::ExpressionId value,
         std::size_t target_width, const frontend::SourceSpan& span);
+    // The same check for each array-valued element of an initializer that
+    // is not otherwise lowered (an unread constant): only the checks are
+    // emitted, no value.
+    void emit_hir_vhdl_initializer_length_checks(semantic::ExpressionId value,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const frontend::SourceSpan& span, std::size_t depth = 0U);
     void emit_hir_vhdl_string_length_check(
         StringRegisterId target, StringRegisterId value,
         const frontend::SourceSpan& span);
@@ -2414,6 +2420,10 @@ private:
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_vhdl_string_piece(semantic::ExpressionId operand,
         const semantic::vhdl::SubtypeIndication* string_context);
+    // Unpacks a bit queue into the operands of a stream target, reversing
+    // `<<` slices first (IEEE 1800-2017 11.4.14.3).
+    [[nodiscard]] bool lower_hir_sv_stream_target_bits(
+        semantic::ExpressionId target, ContainerRegisterId bits);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_expression(
         semantic::ExpressionId expression,
@@ -2937,9 +2947,12 @@ private:
     lower_hir_systemverilog_container_expression(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    // With `declared_target`, the result initializes that container (a
+    // local's declaration initializer) instead of the target expression.
     [[nodiscard]] bool lower_hir_container_locator_assignment(
         semantic::ExpressionId target,
-        semantic::ExpressionId value);
+        semantic::ExpressionId value,
+        const HirContainerObjectBinding* declared_target = nullptr);
     [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
     lower_hir_static_container_actual(
         semantic::ExpressionId expression,
@@ -3508,6 +3521,9 @@ private:
     // these registers instead of evaluating them again (IEEE 1800-2017
     // 11.4.1).
     std::unordered_map<std::uint32_t, RegisterId> hir_captured_update_indices_;
+    // Bound `with`-clause iterators over signed elements: such an iterator
+    // has its element's signedness (IEEE 1800-2017 7.12).
+    std::unordered_set<std::uint32_t> hir_captured_signed_;
     // Whether every side effect of the current update target is captured.
     bool hir_update_indices_captured_ { };
     // The declaration an assignment or initializer writes, so that `new`
@@ -3696,6 +3712,13 @@ private:
         const runtime::simir::ContainerType& source_type,
         runtime::simir::ContainerRegisterId destination,
         std::string_view iterator_name, semantic::ExpressionId predicate);
+    // `sort`/`rsort` with a key expression (IEEE 1800-2017 7.12.2) beyond
+    // the bounded key graph: an insertion sort in SimIR whose comparisons
+    // evaluate the key with the iterator bound to each element.
+    [[nodiscard]] bool lower_hir_container_keyed_order_loop(
+        runtime::simir::ContainerRegisterId target,
+        const runtime::simir::ContainerType& type, bool descending,
+        std::string_view iterator_name, semantic::ExpressionId key);
     // A reduction (`sum with (e)`) accumulated element by element; the
     // result has the with expression's width (IEEE 1800-2017 7.12.3).
     [[nodiscard]] std::optional<RegisterId> lower_hir_container_reduction_loop(
@@ -3988,6 +4011,9 @@ private:
     // instance's parameter values.
     void bind_hir_instance_parameters(HirCallableFrame& frame) const;
     std::unordered_map<std::string, std::size_t> hir_callable_indices_;
+    // Distinct frames per callable body; bounds a specialization that never
+    // repeats (a recursion whose actuals keep changing).
+    std::unordered_map<std::uint32_t, std::size_t> hir_callable_body_frames_;
     std::unordered_map<std::string, std::size_t>
         hir_interface_callable_indices_;
     std::deque<std::size_t> pending_hir_callables_;

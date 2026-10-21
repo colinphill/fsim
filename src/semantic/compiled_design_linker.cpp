@@ -3090,6 +3090,27 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
                 || !declaration->package) {
                 continue;
             }
+            // A generic subprogram instance names its template, whose
+            // expanded name's prefix is the package (IEEE 1076-2008 4.4,
+            // 8.3); a simple template name is visible without one.
+            if (declaration->form
+                    == vhdl::DeclarationForm::generic_function_instance
+                || declaration->form
+                    == vhdl::DeclarationForm::generic_procedure_instance) {
+                auto template_name = declaration->package->template_name;
+                const auto spelling = std::string { template_name.text() };
+                const auto separator = spelling.rfind('.');
+                if (separator == std::string::npos) {
+                    continue;
+                }
+                template_name.spelling = spelling.substr(0U, separator);
+                template_name.canonical
+                    = support::ascii_lower(template_name.spelling);
+                add_reference(references, CompiledReferenceKind::package,
+                    unit.id, unit.library, template_name,
+                    declaration->source);
+                continue;
+            }
             add_reference(references, CompiledReferenceKind::package,
                 unit.id, unit.library,
                 declaration->package->template_name,
@@ -3121,6 +3142,23 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         }
         add_vhdl_selected_package_reference(design, references,
             owner->id, owner->library, expression);
+    }
+    // A procedure call by expanded name (`work.pkg.proc(x)`, IEEE 1076-2008
+    // 8.3) depends on its package like a selected function call.
+    for (const auto& statement : design.vhdl_hir.statements()) {
+        if (statement.kind != vhdl::StatementKind::procedure_call) {
+            continue;
+        }
+        const auto* owner = instance_owner(statement.scope);
+        if (owner == nullptr || owner->language != Language::vhdl) {
+            continue;
+        }
+        vhdl::Expression call;
+        call.kind = vhdl::ExpressionKind::call;
+        call.text = statement.procedure.spelling;
+        call.referenced_name = statement.procedure;
+        add_vhdl_selected_package_reference(design, references,
+            owner->id, owner->library, call);
     }
     for (const auto& declaration : design.vhdl_hir.declarations()) {
         const auto* owner = instance_owner(declaration.scope);

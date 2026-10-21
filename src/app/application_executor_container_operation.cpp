@@ -2321,10 +2321,23 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 }
                 throw;
             }
-            const auto load_result =
-                runtime::simir::load_memory_text_with_status(
+            // A malformed file or an address outside the range ends the
+            // load with an error message; simulation continues (IEEE
+            // 1800-2017 21.4).
+            runtime::simir::MemoryLoadResult load_result { };
+            try {
+                load_result = runtime::simir::load_memory_text_with_status(
                     mutable_container(load->target), text,
                     load->hexadecimal, start, finish);
+            } catch (const std::invalid_argument& error) {
+                state.context->report(error.what(),
+                    runtime::simir::AssertionSeverity::error,
+                    runtime::simir::SourceLocation { });
+            } catch (const std::out_of_range& error) {
+                state.context->report(error.what(),
+                    runtime::simir::AssertionSeverity::error,
+                    runtime::simir::SourceLocation { });
+            }
             if (load_result.word_count_mismatch) {
                 state.context->report(
                     "read-memory file word count differs from the selected range",

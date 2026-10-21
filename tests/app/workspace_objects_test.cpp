@@ -550,6 +550,67 @@ void check_compilation_unit_partition(const std::filesystem::path& root,
     }
 }
 
+// A DPI export of a compilation-unit task is one C-linkage definition
+// (IEEE 1800-2017 35.5.4): the compilation unit that owns it is kept in one
+// object, so the linked design names the export once.
+void check_compilation_unit_dpi_export_partition(
+    const std::filesystem::path& root)
+{
+    const auto source = root / "exports.sv";
+    write_file(source,
+        "export \"DPI-C\" task unit_export;\n"
+        "task unit_export; $display(\"export\"); endtask\n"
+        "task unit_helper; $display(\"helper\"); endtask\n"
+        "module tb; initial unit_helper(); endmodule\n");
+    fsim::project::Config config;
+    config.base_directory = root;
+    config.project.name = "compilation-unit-dpi-export";
+    config.build.cache_path = root / ".fsim" / "cache";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files = { source };
+    config.source_sets.push_back(std::move(sources));
+    fsim::diagnostic::Engine diagnostics;
+    auto checked = detail::check_project_for_object(config, diagnostics);
+    if (!checked) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(checked && !diagnostics.has_error());
+    const auto groups = detail::partition_workspace_objects(
+        *checked, config, diagnostics);
+    assert(groups && !diagnostics.has_error());
+    assert(groups->size() == 1U);
+    auto projection = fsim::semantic::extract_compiled_objects(*checked,
+        groups->front().units, groups->front().classes,
+        groups->front().primitives, std::vector<std::string> { });
+    assert(projection.ok());
+    const auto path = root / "exports.fsimobj";
+    const auto published = detail::publish_workspace_object(config, *checked,
+        std::move(*projection.design), path, diagnostics);
+    if (!published) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(published && !diagnostics.has_error());
+    const auto metadata = fsim::artifact::load_object_metadata(path, diagnostics);
+    assert(metadata && !diagnostics.has_error());
+    std::filesystem::remove(source);
+    const auto loaded = detail::load_workspace_objects(
+        std::array { detail::WorkspaceObjectSelection { path, metadata->units } },
+        diagnostics);
+    if (!loaded) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(loaded && !diagnostics.has_error());
+    assert(std::ranges::count_if(loaded->systemverilog_hir.dpi_declarations(),
+               [](const auto& declaration) {
+                   return declaration.direction
+                       == fsim::semantic::sv::DpiDirection::export_declaration;
+               })
+        == 1);
+}
+
 void check_global_class_partition(const std::filesystem::path& root)
 {
     const auto source = root / "classes.sv";
@@ -784,6 +845,7 @@ int main()
     check_split_uvm_environment(temporary.path / "uvm");
     check_compilation_unit_partition(temporary.path / "mutable-state", true);
     check_compilation_unit_partition(temporary.path / "constant-support", false);
+    check_compilation_unit_dpi_export_partition(temporary.path / "dpi-export");
     check_global_class_partition(temporary.path / "global-classes");
     check_vhdl_extended_top_resolution(
         temporary.path / "vhdl-extended-top-resolution");

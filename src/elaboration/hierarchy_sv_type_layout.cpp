@@ -430,9 +430,31 @@ std::optional<ContainerType> systemverilog_container_type(
         return std::max(*candidate.executable_width, element_width);
     };
     std::unordered_set<std::uint32_t> visiting;
+    // A typedef's own declaration scope resolves the names in it; a
+    // reference into another unit (`$unit`, an imported package) has no
+    // bound target until it is resolved there (IEEE 1800-2017 3.12.1).
+    const auto definition_scope = [&](const semantic::sv::TypeDefinition& type,
+                                      const semantic::ScopeId fallback) {
+        const auto declaration = type.declaration.valid()
+            ? working_specialization.find_declaration(type.declaration)
+            : std::nullopt;
+        return declaration && declaration->systemverilog != nullptr
+            ? declaration->systemverilog->scope
+            : fallback;
+    };
     const auto profile = [&](const auto& self,
-                             const semantic::sv::TypeReference& candidate,
-                             const bool box_leaf) -> std::optional<ContainerType> {
+                             const semantic::sv::TypeReference& unresolved,
+                             const bool box_leaf,
+                             const semantic::ScopeId scope)
+        -> std::optional<ContainerType> {
+        auto candidate = unresolved;
+        if (!candidate.container_form && !candidate.target.target.valid()
+            && !candidate.target.spelling.empty()) {
+            candidate = semantic::CompiledDesignResolver {
+                working_specialization
+            }.effective_systemverilog_type(candidate, scope)
+                            .value_or(candidate);
+        }
         if (candidate.container_form) {
             if (candidate.container_element_types.size() > 1U) {
                 return std::nullopt;
@@ -486,10 +508,9 @@ std::optional<ContainerType> systemverilog_container_type(
             const semantic::CompiledDesignResolver type_resolver {
                 working_specialization
             };
-            leaf = type_resolver.effective_systemverilog_type(
-                                    leaf, working_specialization.scope())
+            leaf = type_resolver.effective_systemverilog_type(leaf, scope)
                        .value_or(leaf);
-            auto element = self(self, leaf, false);
+            auto element = self(self, leaf, false, scope);
             if (!element) {
                 return std::nullopt;
             }
@@ -712,8 +733,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.element_nominal_type
                     = nominal_identity(candidate);
                 for (const auto& member : type.members) {
-                    auto member_type = self(
-                        self, member.type, true);
+                    auto member_type = self(self, member.type, true,
+                        definition_scope(type, scope));
                     if (!member_type) {
                         visiting.erase(
                             candidate.target.target.value());
@@ -733,8 +754,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 std::uint64_t width { };
                 bool two_state = !candidate.four_state;
                 for (const auto& member : type.members) {
-                    const auto member_type = self(
-                        self, member.type, false);
+                    const auto member_type = self(self, member.type,
+                        false, definition_scope(type, scope));
                     if (!member_type
                         || member_type->fixed
                         || member_type->queue
@@ -781,7 +802,8 @@ std::optional<ContainerType> systemverilog_container_type(
                 }
                 return result;
             }
-            auto base = self(self, type.base, box_leaf);
+            auto base = self(self, type.base, box_leaf,
+                definition_scope(type, scope));
             visiting.erase(candidate.target.target.value());
             if (!base) {
                 return std::nullopt;
@@ -863,7 +885,8 @@ std::optional<ContainerType> systemverilog_container_type(
                       reference, working_specialization.scope())
               .value_or(reference);
     const auto aggregate_value = !materialized.container_form;
-    auto result = profile(profile, materialized, aggregate_value);
+    auto result = profile(profile, materialized, aggregate_value,
+        working_specialization.scope());
     if (aggregate_value
         && (!result
             || result->element_kind

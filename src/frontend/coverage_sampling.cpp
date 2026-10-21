@@ -298,8 +298,13 @@ namespace {
             if (compare_coverage_planes(left, right, signed_range) > 0) {
                 std::swap(left, right);
             }
-            return compare_coverage_planes(sampled, left, signed_range) >= 0
-                && compare_coverage_planes(sampled, right, signed_range) <= 0;
+            // A `$` side is bounded only by the sampled type (19.5.1).
+            return (candidate.range_left_open
+                       || compare_coverage_planes(
+                              sampled, left, signed_range) >= 0)
+                && (candidate.range_right_open
+                    || compare_coverage_planes(
+                           sampled, right, signed_range) <= 0);
         }
 
         if ((!candidate.wildcard_value_bits.empty()
@@ -392,10 +397,14 @@ namespace {
                     return true;
                 }
                 if (candidate.range_left && candidate.range_right) {
-                    const auto lower = std::min(
-                        *candidate.range_left, *candidate.range_right);
-                    const auto upper = std::max(
-                        *candidate.range_left, *candidate.range_right);
+                    const auto lower = candidate.range_left_open
+                        ? std::numeric_limits<std::int64_t>::min()
+                        : std::min(
+                              *candidate.range_left, *candidate.range_right);
+                    const auto upper = candidate.range_right_open
+                        ? std::numeric_limits<std::int64_t>::max()
+                        : std::max(
+                              *candidate.range_left, *candidate.range_right);
                     if (sample.unknown_mask == 0U
                         && sample.value >= lower && sample.value <= upper) {
                         return true;

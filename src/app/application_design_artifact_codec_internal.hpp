@@ -367,7 +367,7 @@ namespace codec_detail {
             std::same_as<T, frontend::VhdlPredefinedSubtypeAttribute>) {
             return value >= frontend::VhdlPredefinedSubtypeAttribute::None
                 && value
-                    <= frontend::VhdlPredefinedSubtypeAttribute::DesignatedSubtype;
+                    <= frontend::VhdlPredefinedSubtypeAttribute::Element;
         } else if constexpr (
             std::same_as<T, frontend::VhdlModeViewElementKind>) {
             return value >= frontend::VhdlModeViewElementKind::direction
@@ -685,7 +685,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, semantic::vhdl::PredefinedAttribute>) {
             return value >= semantic::vhdl::PredefinedAttribute::left
-                && value <= semantic::vhdl::PredefinedAttribute::reflect;
+                && value <= semantic::vhdl::PredefinedAttribute::element;
         } else if constexpr (std::same_as<T, semantic::vhdl::ExpressionKind>) {
             return value >= semantic::vhdl::ExpressionKind::invalid
                 && value <= semantic::vhdl::ExpressionKind::conditional;

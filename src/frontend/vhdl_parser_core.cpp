@@ -104,6 +104,20 @@ ParseResult VhdlParser::run()
                 return name == "std.env.all";
             });
         });
+        // VITAL_Timing declares the BOOLEAN attributes VITAL_Level0 and
+        // VITAL_Level1 (IEEE 1076.4-2000 4.1); the built-in package carries
+        // no VHDL source for them.
+        if (std::ranges::any_of(pending_context, [](const VhdlContextItem& item) {
+                return item.kind == VhdlContextItemKind::UseClause
+                    && std::ranges::any_of(item.selected_names, [](const std::string_view name) {
+                           return name == "ieee.vital_timing.all"
+                               || name == "ieee.vital_timing.vital_level0"
+                               || name == "ieee.vital_timing.vital_level1";
+                       });
+            })) {
+            vhdl_declared_attributes_.try_emplace("vital_level0", "boolean");
+            vhdl_declared_attributes_.try_emplace("vital_level1", "boolean");
+        }
         if (at(TokenKind::PslDirective)) {
             const auto marker = advance();
             skip_vhdl_psl_markers();
@@ -1282,16 +1296,24 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     if (at(TokenKind::Apostrophe)
         && at(TokenKind::Identifier, 1)
         && (keyword("index", 1, true)
+            || keyword("element", 1, true)
             || keyword("designated_subtype", 1, true))) {
         advance();
         const auto attribute = expect_identifier(
             "subtype-valued attribute designator");
         const auto designator = vhdl_name(attribute.text);
         require_vhdl_standard(
-            attribute, VhdlStandard::Vhdl2019,
+            attribute,
+            designator == "element" ? VhdlStandard::Vhdl2008
+                                    : VhdlStandard::Vhdl2019,
             "the predefined '" + designator + " subtype attribute",
-            "select VHDL-2019 or name the resulting subtype explicitly");
-        if (designator == "index") {
+            "select a later VHDL revision or name the resulting subtype "
+            "explicitly");
+        if (designator == "element") {
+            // `A'element` is the element subtype of an array type or
+            // object (IEEE 1076-2008 16.2.2).
+            subtype_attribute = VhdlPredefinedSubtypeAttribute::Element;
+        } else if (designator == "index") {
             subtype_attribute = VhdlPredefinedSubtypeAttribute::Index;
             if (match(TokenKind::LeftParen)) {
                 subtype_attribute_dimension = parse_expression();
@@ -1328,6 +1350,12 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
 
     Type type;
     type.spelling = spelling;
+    if (subtype_attribute != VhdlPredefinedSubtypeAttribute::None) {
+        // The prefix may name an object rather than a type; the HIR
+        // projection looks it up like `obj'subtype`.
+        type.vhdl_object_subtype = spelling;
+        type.named_type_span = cover(first.span, previous().span);
+    }
     type.vhdl_predefined_subtype_attribute = subtype_attribute;
     type.vhdl_predefined_subtype_attribute_dimension =
         std::move(subtype_attribute_dimension);

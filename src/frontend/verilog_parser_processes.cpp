@@ -1958,8 +1958,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             std::string_view { "$urandom" }, std::string_view { "$random" },
             std::string_view { "$urandom_range" },
         };
+        // `$random;` and `$urandom;` need no argument list.
+        const bool argumentless_random = at(TokenKind::Semicolon, lookahead)
+            && (current().text == "$random" || current().text == "$urandom");
         if (language_ == Language::SystemVerilog2017
-            && at(TokenKind::LeftParen, lookahead)
+            && (at(TokenKind::LeftParen, lookahead) || argumentless_random)
             && std::ranges::find(discardable_system_functions,
                    std::string_view { current().text })
                 != discardable_system_functions.end()) {

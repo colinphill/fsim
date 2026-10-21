@@ -253,6 +253,85 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 80: VHDL context typing and elaboration-time values, SV declared-type places
+
+Full run on the frozen `b80y`, compared with Batch 79 (`b79ab`). Batch 80
+closes 54 corpus tests (Verilator 21, nvc 18, vests 10, vhdl-compliance 3,
+ivtest 2) and loses none.
+
+| Suite | Batch79 passes / in scope | Batch80 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2547 / 2564 | 2549 / 2563 | 263 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1876 / 2068 | 1897 / 2067 | 348 |
+| vests | 3625 / 3646 | 3635 / 3646 | 2 |
+| nvc | 1092 / 1245 | 1110 / 1245 | 237 |
+| vhdl-compliance | 46 / 69 | 49 / 69 | 3 |
+
+VHDL typing and names (IEEE 1076-2008 9.3, 12.4, 6.7):
+- Literals and operands are typed by their context: range bounds of an
+  enumeration subtype denote that type's literals (`'0' to '1'` of a
+  four-valued type), user operator overloads apply only when their result fits
+  the context, and enumeration subtypes keep their base type's storage width.
+- User attribute values are qualified by the attribute's type mark; an
+  attribute read through an object alias names the aliased object's
+  specification, and a STRING attribute value can be indexed.
+- Subtype-valued attributes (`T'element`, `T'index(N)`,
+  `T'designated_subtype`, object prefixes) are type marks wherever a type mark
+  is allowed.
+- A 2008 use clause naming a type makes its base type's enumeration literals,
+  physical units and operators visible; `use pkg.literal` names an
+  enumeration literal.
+- `F.e` after a parameterless function selects an element of its record
+  result; with no such element it is an expanded name whose prefix is a
+  function call, an analysis error (8.3). Inside `F`, `F.x` is still an
+  expanded name of `F`'s declarations.
+
+VHDL elaboration (IEEE 1076-2008 6.5.6, 14.4):
+- Generic constants evaluated at elaboration bind as read-only signals;
+  component generic defaults substitute into binding maps; an unassociated
+  component port of a mode other than `in` is open.
+- Components bind to entities by simple name when no configuration applies.
+- Package-instance composite element bounds and generic-map comparisons use
+  the instance's generic frame; `use inst.all` of a local package instance.
+- Recursive calls of a generic subprogram name the enclosing instance, and
+  a selected template name is allowed (FSIM-ELAB-VHGSUB-007/009 retired).
+- Aggregates decompose by shape for values and targets; nested formal
+  subelement conversions; null and unconstrained call results keep their
+  shapes.
+
+SystemVerilog:
+- Class property types resolve in the declaring class's scope; class value
+  parameters of an explicit integral type are converted to that type, and
+  `type(name)` actuals take the object's declared type.
+- Randomize: handle containers join as members, `.size()` sizing,
+  constraints only from rand-reached objects (18.5.9), constraint parameter
+  values from the runtime specialization.
+- Exported `$unit` DPI functions and tasks live in the `$unit` package, and a
+  workspace object owning such an export shares the `$unit` container.
+- `$readmem` into local and formal arrays, recoverable `$readmem` errors,
+  covergroup `$` bin bounds, keyed `sort`/`rsort` (`with` expressions),
+  static locals initialized by locator methods, typedef-array parameter ports,
+  hierarchical direct bindings in packed copy-out.
+
+Regressions the full run and the labelled ctest caught:
+- The first full run (`b80x`) lost 12 tests. The fixes are the `F.e`
+  analysis check, indexing a qualified attribute string, attribute reads
+  through an alias, enumeration range bound typing, and the width of an
+  enumeration-typed class property (it was squared). All 12 pass on `b80y`.
+- Retiring VHGSUB-007/009 changed the catalog count (2965) and the pinned
+  audit values.
+
+Open leads (`.local-artifacts/lrm-closure/triage/b80/`):
+- C9 port source network (conv17, conv19, driver12/18/19/23, elab26):
+  `plan-C9-port-source-network.md`.
+- SV HIR-001 clusters G1, G2+G3, G5, G8 and constant-function array values
+  for G6: `plan-sv-hir001-clusters.md`.
+- Process-local runtime binding and environment types (record14, reflect4,
+  tb_015), issue815: `plan-signal-adapter-runtime-binding.md`.
+- `integer'image(T'pos(T'low))` on an enumeration subtype gives
+  FSIM-ELAB-VHIMAGE-001.
+
 ### Batch 79: constraint containers, interface and type-parameter contexts, VHDL formal parts and null arrays
 
 Full run on the frozen `b79ab`, compared with Batch 78 (`b78y`). Batch 79

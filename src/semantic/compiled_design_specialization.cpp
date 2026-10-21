@@ -4391,6 +4391,11 @@ private:
             }
         }
         ensure_actual(declaration);
+        // A composite actual evaluated at elaboration is read from its
+        // signal; it does not fold, and the formal's default does not apply.
+        if (elaborated_actuals_.contains(declaration)) {
+            return std::nullopt;
+        }
         // A record actual keeps its elements; its integral identity is
         // only a cache key (IEEE 1076-2008 6.5.6.2).
         if (const auto actual = actual_vhdl_record_values_.find(declaration);
@@ -13586,6 +13591,9 @@ private:
             actual_vhdl_record_values_.emplace(
                 actual->declaration, *actual->vhdl_record_value);
         }
+        if (actual->vhdl_elaborated_bits) {
+            elaborated_actuals_.insert(actual->declaration);
+        }
         if (actual->actual_declaration
             && *actual->actual_declaration != actual->declaration) {
             actual_declarations_.emplace(
@@ -13647,6 +13655,7 @@ private:
         actual_vhdl_boolean_array_values_;
     std::map<DeclarationId, SpecializedHirVhdlRecordValue>
         actual_vhdl_record_values_;
+    std::set<DeclarationId> elaborated_actuals_;
     std::map<std::string, std::optional<std::int64_t>>
         hierarchy_identities_;
     std::map<DeclarationId, std::optional<std::int64_t>> declarations_;

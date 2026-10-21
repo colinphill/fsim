@@ -32,6 +32,58 @@ std::string encoded(const std::string_view value)
     return std::to_string(value.size()) + ":" + std::string { value };
 }
 
+// The value of a sized or unsized based literal without x or z digits
+// (`8'h81`, `'d5`), as an unsigned 64-bit pattern (IEEE 1800-2017 5.7.1).
+std::optional<std::uint64_t> based_literal_bits(std::string_view text)
+{
+    const auto tick = text.find('\'');
+    if (tick == std::string_view::npos || tick + 2U > text.size()) {
+        return std::nullopt;
+    }
+    auto position = tick + 1U;
+    if (text[position] == 's' || text[position] == 'S') {
+        ++position;
+    }
+    if (position >= text.size()) {
+        return std::nullopt;
+    }
+    unsigned radix { };
+    switch (text[position]) {
+    case 'b': case 'B': radix = 2U; break;
+    case 'o': case 'O': radix = 8U; break;
+    case 'd': case 'D': radix = 10U; break;
+    case 'h': case 'H': radix = 16U; break;
+    default: return std::nullopt;
+    }
+    ++position;
+    std::uint64_t value { };
+    bool digits { };
+    for (; position < text.size(); ++position) {
+        const auto character = text[position];
+        if (character == '_') {
+            continue;
+        }
+        unsigned digit { };
+        if (character >= '0' && character <= '9') {
+            digit = static_cast<unsigned>(character - '0');
+        } else if (character >= 'a' && character <= 'f') {
+            digit = static_cast<unsigned>(character - 'a') + 10U;
+        } else if (character >= 'A' && character <= 'F') {
+            digit = static_cast<unsigned>(character - 'A') + 10U;
+        } else {
+            return std::nullopt;
+        }
+        if (digit >= radix
+            || value > (std::numeric_limits<std::uint64_t>::max() - digit)
+                    / radix) {
+            return std::nullopt;
+        }
+        value = value * radix + digit;
+        digits = true;
+    }
+    return digits ? std::optional { value } : std::nullopt;
+}
+
 std::optional<std::int64_t> integer_literal(const std::string_view text)
 {
     if (text.empty()) {
@@ -968,6 +1020,23 @@ private:
         const Environment& environment, const std::string_view owner,
         const SourceSpanId source)
     {
+        // `type(name)` denotes the declared type of the named object
+        // (IEEE 1800-2017 6.23).
+        if (input.type_of && !input.target.target.valid()
+            && !input.packed_range && !input.executable_width
+            && input.class_identity.empty() && !input.container_form
+            && input.unpacked_dimensions.empty()) {
+            const auto* operand = record_for(expressions_, *input.type_of);
+            const auto* named = operand != nullptr
+                    && operand->referenced_name
+                    && operand->referenced_name->selected
+                ? record_for(declarations_,
+                      *operand->referenced_name->selected)
+                : nullptr;
+            if (named != nullptr && named->type && !named->type->type_of) {
+                return type(*named->type, environment, owner, source);
+            }
+        }
         if (input.target.target.valid()) {
             const auto replacement = environment.types.find(
                 input.target.target);
@@ -1340,6 +1409,68 @@ private:
                         "value parameter '" + parameter.name
                             + "' has no locally constant actual or default");
                     return std::nullopt;
+                }
+                // A value parameter of an explicit integral type holds its
+                // actual converted to that type, so actuals equal after
+                // conversion name one specialization (IEEE 1800-2017
+                // 6.20.2, 8.25).
+                if (parameter.type
+                    && (!parameter.type->target.spelling.empty()
+                        || parameter.type->packed_range)) {
+                    const auto* literal = resolved->expression
+                        ? record_for(expressions_, *resolved->expression)
+                        : nullptr;
+                    std::optional<std::uint64_t> bits;
+                    if (resolved->integer) {
+                        bits = static_cast<std::uint64_t>(*resolved->integer);
+                    } else if (literal != nullptr
+                        && literal->kind == ExpressionKind::logic_literal) {
+                        bits = based_literal_bits(literal->text);
+                    }
+                    const auto declared = bits
+                        ? type(*parameter.type, result.environment, identity,
+                              parameter.source)
+                        : std::nullopt;
+                    const auto& spelling = declared
+                        ? declared->type.target.spelling
+                        : std::string { };
+                    const bool integral = declared
+                        && !declared->type.container_form
+                        && declared->type.unpacked_dimensions.empty()
+                        && declared->type.value_form != TypeForm::class_handle
+                        && declared->type.value_form != TypeForm::string
+                        && spelling != "real" && spelling != "shortreal"
+                        && spelling != "realtime" && spelling != "string";
+                    const auto width = integral
+                        ? storage_width(declared->type)
+                        : std::nullopt;
+                    // The predefined integer types are signed (6.11).
+                    const bool signed_type = declared
+                        && (declared->type.signed_value || spelling == "int"
+                            || spelling == "integer" || spelling == "shortint"
+                            || spelling == "longint" || spelling == "byte");
+                    if (width && *width != 0U && *width <= 64U) {
+                        auto value = *bits;
+                        if (*width < 64U) {
+                            value &= (std::uint64_t { 1 } << *width) - 1U;
+                            if (signed_type
+                                && ((value >> (*width - 1U)) & 1U) != 0U) {
+                                value |= ~((std::uint64_t { 1 } << *width)
+                                    - 1U);
+                            }
+                        }
+                        const auto converted = signed_type
+                            ? static_cast<std::int64_t>(value)
+                            : value > static_cast<std::uint64_t>(
+                                  std::numeric_limits<std::int64_t>::max())
+                            ? std::optional<std::int64_t> { }
+                            : std::optional { static_cast<std::int64_t>(
+                                  value) };
+                        if (converted) {
+                            resolved->canonical
+                                = "integer:" + std::to_string(*converted);
+                        }
+                    }
                 }
                 retained.expression = resolved->expression;
                 retained.context_bindings = resolved->context;

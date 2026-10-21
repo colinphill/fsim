@@ -522,42 +522,6 @@ bool VerilogParser::compilation_unit_class_method_definition_start() const {
       && at(TokenKind::Scope, *candidate - 1U);
 }
 
-bool VerilogParser::compilation_unit_dpi_export_definition_start(
-    const std::vector<SystemVerilogDpiDeclaration>& declarations,
-    const SystemVerilogDpiCallableKind kind) const {
-  std::optional<std::size_t> candidate;
-  std::size_t brackets{};
-  for (std::size_t lookahead{};
-       !at(TokenKind::EndOfFile, lookahead); ++lookahead) {
-    const bool top_level = brackets == 0;
-    if (top_level
-        && (at(TokenKind::LeftParen, lookahead)
-            || at(TokenKind::Semicolon, lookahead))) {
-      break;
-    }
-    if (top_level && at(TokenKind::Identifier, lookahead)
-        && !keyword_reserved(keyword_set_, current(lookahead).text)) {
-      candidate = lookahead;
-    }
-    if (at(TokenKind::LeftBracket, lookahead)) ++brackets;
-    else if (at(TokenKind::RightBracket, lookahead) && brackets > 0) {
-      --brackets;
-    }
-  }
-  if (!candidate
-      || (*candidate > 0 && at(TokenKind::Scope, *candidate - 1U))) {
-    return false;
-  }
-  const auto name = current(*candidate).text;
-  return std::ranges::any_of(
-      declarations,
-      [&](const SystemVerilogDpiDeclaration& declaration) {
-        return declaration.direction == SystemVerilogDpiDirection::Export
-            && declaration.callable_kind == kind
-            && declaration.systemverilog_name == name;
-      });
-}
-
 void VerilogParser::resolve_dpi_declarations(
     std::vector<SystemVerilogDpiDeclaration>& declarations,
     const std::vector<FunctionDeclaration>& functions,

@@ -2289,9 +2289,7 @@ scheduler.
 | `FSIM-ELAB-VHGSUB-003` | error | A generic subprogram instantiation selects the wrong subprogram kind or a nongeneric subprogram. |
 | `FSIM-ELAB-VHGSUB-004` | error | A selected generic subprogram template has no conforming executable body. |
 | `FSIM-ELAB-VHGSUB-006` | error | A generic subprogram template is called before being instantiated. |
-| `FSIM-ELAB-VHGSUB-007` | error | A bounded generic subprogram template contains a recursive call. |
 | `FSIM-ELAB-VHGSUB-008` | error | A materialized generic subprogram instance conflicts with another callable subprogram. |
-| `FSIM-ELAB-VHGSUB-009` | error | A selected or scoped generic subprogram template is outside the bounded directly visible subset. |
 | `FSIM-ELAB-VHGSUB-011` | error | A generic subprogram template contains an unsupported interface-package formal. |
 | `FSIM-ELAB-VHGSUB-012` | error | Generic subprogram specialization failed to retain its selected template body. |
 | `FSIM-ELAB-VHGSUB-013` | error | A generic subprogram declaration and body do not have conforming generic lists and callable profiles. |

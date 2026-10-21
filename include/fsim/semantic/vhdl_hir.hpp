@@ -226,6 +226,7 @@ enum class PredefinedAttribute : std::uint8_t {
     index,
     designated_subtype,
     reflect,
+    element,
 };
 
 enum class ExpressionKind : std::uint8_t {

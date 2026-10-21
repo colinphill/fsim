@@ -393,7 +393,10 @@ void VerilogParser::structure_coverpoint_bins(
 
         std::vector<SystemVerilogCoverageBinValue> expanded_values;
         for (const auto& value : bin.values) {
-            if (!value.range_left || !value.range_right) {
+            // An open `$` range is not expanded before the coverpoint's
+            // type is known.
+            if (!value.range_left || !value.range_right
+                || value.range_left_open || value.range_right_open) {
                 expanded_values.push_back(value);
                 continue;
             }

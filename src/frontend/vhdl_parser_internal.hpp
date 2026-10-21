@@ -47,7 +47,8 @@ private:
   // unit's context clause when the unit ends.
   std::vector<VhdlContextItem> deferred_context_items_;
   // Attribute names declared by any unit analyzed so far.
-  std::unordered_set<std::string> vhdl_declared_attributes_;
+  // Type mark of each attribute declared so far, by attribute name.
+  std::unordered_map<std::string, std::string> vhdl_declared_attributes_;
   // Attribute specification values by attribute and entity name, read in
   // place of `name'attribute`.
   std::unordered_map<std::string, std::unordered_map<std::string, Expression>>
@@ -436,6 +437,10 @@ private:
   // Component names declared so far: `label : name;` in a block or generate
   // body instantiates such a component (IEEE 1076-2008 11.7.1).
   std::unordered_set<std::string> vhdl_component_names_;
+  // Functions declared so far that can be called without parameters.
+  std::unordered_set<std::string> vhdl_parameterless_function_names_;
+  // Functions whose declarative part or body is being parsed.
+  std::vector<std::string> vhdl_enclosing_function_names_;
   // Configuration specifications in block declarative parts, moved to the
   // enclosing architecture once it is parsed.
   std::vector<VhdlComponentConfiguration> block_configuration_specifications_;

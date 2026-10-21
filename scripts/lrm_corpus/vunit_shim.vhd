@@ -20,6 +20,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use std.textio.all;
 
 package vunit_shim_pkg is
   type runner_sync_t is (runner_idle, runner_active);
@@ -77,6 +78,15 @@ package vunit_shim_pkg is
 end package;
 
 package body vunit_shim_pkg is
+  -- Markers are written to OUTPUT, not reported: a testbench may disable
+  -- report output (SetVhdlAssertEnable, IEEE 1076-2019 16.6).
+  procedure shim_print(constant text : in string) is
+    variable output_line : line;
+  begin
+    write(output_line, text);
+    writeline(output, output_line);
+  end procedure;
+
   function result(str : string) return string is
   begin
     return check_result_tag & str;
@@ -185,7 +195,7 @@ package body vunit_shim_pkg is
     variable count : natural;
   begin
     count := state.failure_count;
-    report "VUNIT-SHIM: done failures=" & integer'image(count) severity note;
+    shim_print("VUNIT-SHIM: done failures=" & integer'image(count));
     std.env.finish;
   end procedure;
 
@@ -201,26 +211,26 @@ package body vunit_shim_pkg is
     state.attempt_run;
     selected := state.run_selected;
     if selected then
-      report "VUNIT-SHIM: start " & name severity note;
+      shim_print("VUNIT-SHIM: start " & name);
     end if;
     return selected;
   end function;
 
   procedure info(constant msg : in string) is
   begin
-    report "VUNIT-SHIM: info " & msg severity note;
+    shim_print("VUNIT-SHIM: info " & msg);
   end procedure;
 
   procedure warning(constant msg : in string) is
   begin
-    report "VUNIT-SHIM: warning " & msg severity note;
+    shim_print("VUNIT-SHIM: warning " & msg);
   end procedure;
 
   -- Failures are attributed to the most recently started test case.
   procedure fail_with(constant msg : in string) is
   begin
     state.record_failure;
-    report "VUNIT-SHIM: fail: " & msg severity note;
+    shim_print("VUNIT-SHIM: fail: " & msg);
   end procedure;
 
   procedure error(constant msg : in string) is

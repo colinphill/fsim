@@ -772,7 +772,8 @@ Lowerer::lower_hir_systemverilog_container_expression(
 
 bool Lowerer::lower_hir_container_locator_assignment(
     const semantic::ExpressionId target_id,
-    const semantic::ExpressionId value_id)
+    const semantic::ExpressionId value_id,
+    const HirContainerObjectBinding* const declared_target)
 {
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(value_id)
@@ -786,7 +787,9 @@ bool Lowerer::lower_hir_container_locator_assignment(
     const auto& call = *expression->systemverilog;
     const bool predicate = is_predicate_locator(call.text);
     const auto span = hir_source_span(call.source);
-    const auto target = hir_container_object_binding(target_id);
+    const auto target = declared_target != nullptr
+        ? std::optional { *declared_target }
+        : hir_container_object_binding(target_id);
     if (!target || target->type == nullptr) {
         report(
             predicate ? "FSIM-ELAB-SVFIND-006"
@@ -1018,12 +1021,16 @@ bool Lowerer::lower_hir_container_locator_loop(
     for (const auto& [id, is_index] : references) {
         hir_captured_update_indices_.insert_or_assign(
             id, is_index ? index : element);
+        if (!is_index && source_type.signed_elements) {
+            hir_captured_signed_.insert(id);
+        }
     }
     const auto width = hir_expression_width(predicate, hir_process_scope_)
                            .value_or(1U);
     auto truth = lower_hir_expression(predicate, width);
     for (const auto& reference : references) {
         hir_captured_update_indices_.erase(reference.first);
+        hir_captured_signed_.erase(reference.first);
     }
     if (!truth) {
         return false;
@@ -1067,6 +1074,153 @@ bool Lowerer::lower_hir_container_locator_loop(
     return true;
 }
 
+bool Lowerer::lower_hir_container_keyed_order_loop(
+    const runtime::simir::ContainerRegisterId target,
+    const runtime::simir::ContainerType& type,
+    const bool descending,
+    const std::string_view iterator_name,
+    const semantic::ExpressionId key)
+{
+    using runtime::simir::BinaryOperator;
+    const auto references = hir_container_iterator_references(
+        key, iterator_name);
+    // The key is a function of the element alone; `item.index` names the
+    // element's original position, which an in-place sort does not keep.
+    if (std::ranges::any_of(references,
+            [](const auto& reference) { return reference.second; })) {
+        return false;
+    }
+    const auto element_domain = type.two_state
+        ? frontend::ValueDomain::Bit2
+        : frontend::ValueDomain::Logic4;
+    const auto probe = allocate_register(type.element_width, element_domain);
+    for (const auto& reference : references) {
+        hir_captured_update_indices_.insert_or_assign(
+            reference.first, probe);
+        if (type.signed_elements) {
+            hir_captured_signed_.insert(reference.first);
+        }
+    }
+    const auto width = hir_expression_width(key, hir_process_scope_);
+    const bool signed_key = hir_expression_signed(key);
+    for (const auto& reference : references) {
+        hir_captured_update_indices_.erase(reference.first);
+        hir_captured_signed_.erase(reference.first);
+    }
+    if (!width || *width == 0U) {
+        return false;
+    }
+    const auto key_of = [&](const RegisterId element)
+        -> std::optional<RegisterId> {
+        for (const auto& reference : references) {
+            hir_captured_update_indices_.insert_or_assign(
+                reference.first, element);
+            if (type.signed_elements) {
+                hir_captured_signed_.insert(reference.first);
+            }
+        }
+        auto value = lower_hir_expression(key, *width);
+        for (const auto& reference : references) {
+            hir_captured_update_indices_.erase(reference.first);
+            hir_captured_signed_.erase(reference.first);
+        }
+        if (value && register_width(*value) != *width) {
+            value = resize_register(*value, *width, signed_key);
+        }
+        return value;
+    };
+    const bool linear = type.fixed;
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, target });
+    const auto one = load_constant(
+        PackedLogic4::from_aval_bval(32U, 1U, 0U),
+        frontend::ValueDomain::Bit2);
+    const auto zero = load_constant(
+        PackedLogic4::from_aval_bval(32U, 0U, 0U),
+        frontend::ValueDomain::Bit2);
+    // for (i = 1; i < size; ++i)
+    //   for (j = i; j > 0 && key(a[j]) precedes key(a[j-1]); --j) swap
+    const auto outer_index = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(CopyRegister { outer_index, one });
+    const auto outer = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::less_unsigned, more, outer_index, size });
+    const auto outer_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { more, 0U, 0U });
+    const auto outer_body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto inner_index = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        CopyRegister { inner_index, outer_index });
+    const auto inner = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto positive = allocate_register(1U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::not_equal, positive, inner_index, zero });
+    const auto inner_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { positive, 0U, 0U });
+    const auto inner_body = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto previous_index = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::subtract_unsigned, previous_index, inner_index, one });
+    const auto previous = allocate_register(
+        type.element_width, element_domain);
+    process_.operations.emplace_back(ContainerRead {
+        previous, target, previous_index, true, linear, false });
+    const auto current = allocate_register(
+        type.element_width, element_domain);
+    process_.operations.emplace_back(ContainerRead {
+        current, target, inner_index, true, linear, false });
+    const auto previous_key = key_of(previous);
+    const auto current_key = key_of(current);
+    if (!previous_key || !current_key) {
+        return false;
+    }
+    const auto precedes = allocate_register(1U, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(Binary {
+        signed_key ? BinaryOperator::less_signed
+                   : BinaryOperator::less_unsigned,
+        precedes,
+        descending ? *previous_key : *current_key,
+        descending ? *current_key : *previous_key });
+    const auto swap_test = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Branch { precedes, 0U, 0U });
+    const auto swap = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(ContainerWrite {
+        target, previous_index, current, true, linear, false });
+    process_.operations.emplace_back(ContainerWrite {
+        target, inner_index, previous, true, linear, false });
+    process_.operations.emplace_back(
+        CopyRegister { inner_index, previous_index });
+    process_.operations.emplace_back(Jump { inner });
+    const auto advance = static_cast<InstructionIndex>(
+        process_.operations.size());
+    const auto advanced = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_unsigned, advanced, outer_index, one });
+    process_.operations.emplace_back(CopyRegister { outer_index, advanced });
+    process_.operations.emplace_back(Jump { outer });
+    const auto end = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[outer_test] = Branch {
+        more, outer_body, end, UnknownBranchPolicy::when_false };
+    process_.operations[inner_test] = Branch {
+        positive, inner_body, advance, UnknownBranchPolicy::when_false };
+    process_.operations[swap_test] = Branch {
+        precedes, swap, advance, UnknownBranchPolicy::when_false };
+    return true;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     const std::string_view method,
     const runtime::simir::ContainerRegisterId source,
@@ -1085,11 +1239,16 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
         source_type.element_width, element_domain);
     for (const auto& [id, is_index] : references) {
         hir_captured_update_indices_.insert_or_assign(id, probe);
+        if (!is_index && source_type.signed_elements) {
+            hir_captured_signed_.insert(id);
+        }
     }
     const auto width = hir_expression_width(
         transformation, hir_process_scope_);
+    const bool signed_transformation = hir_expression_signed(transformation);
     for (const auto& reference : references) {
         hir_captured_update_indices_.erase(reference.first);
+        hir_captured_signed_.erase(reference.first);
     }
     if (!width || *width == 0U) {
         return std::nullopt;
@@ -1129,17 +1288,20 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     for (const auto& [id, is_index] : references) {
         hir_captured_update_indices_.insert_or_assign(
             id, is_index ? count : element);
+        if (!is_index && source_type.signed_elements) {
+            hir_captured_signed_.insert(id);
+        }
     }
     auto value = lower_hir_expression(transformation, *width);
     for (const auto& reference : references) {
         hir_captured_update_indices_.erase(reference.first);
+        hir_captured_signed_.erase(reference.first);
     }
     if (!value) {
         return std::nullopt;
     }
     if (register_width(*value) != *width) {
-        value = resize_register(*value, *width,
-            hir_expression_signed(transformation));
+        value = resize_register(*value, *width, signed_transformation);
     }
     const auto combined = allocate_register(*width, accumulator_domain);
     process_.operations.emplace_back(Binary {

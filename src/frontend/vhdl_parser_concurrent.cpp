@@ -1081,9 +1081,14 @@ void VhdlParser::parse_vhdl_port_map(
     if (!at(TokenKind::Identifier)) {
       return std::nullopt;
     }
-    if (at(TokenKind::Dot, 1) && at(TokenKind::Identifier, 2)
-        && at(TokenKind::Arrow, 3)) {
-      return 3U;
+    // `p.b.x =>` selects a nested record element.
+    std::size_t selected = 1U;
+    while (at(TokenKind::Dot, selected)
+        && at(TokenKind::Identifier, selected + 1U)) {
+      selected += 2U;
+    }
+    if (selected > 1U && at(TokenKind::Arrow, selected)) {
+      return selected;
     }
     if (!at(TokenKind::LeftParen, 1)) {
       return std::nullopt;
@@ -1109,8 +1114,14 @@ void VhdlParser::parse_vhdl_port_map(
       saw_named_port = true;
       const auto port = vhdl_name(advance().text);
       Expression choice;
+      // The record elements between the port and the selected one.
+      std::vector<Token> outer_elements;
       if (match(TokenKind::Dot)) {
-        const auto element = advance();
+        auto element = advance();
+        while (match(TokenKind::Dot)) {
+          outer_elements.push_back(element);
+          element = advance();
+        }
         choice = Expression { ExpressionKind::Identifier,
             vhdl_name(element.text), { }, element.span };
       } else {
@@ -1161,14 +1172,44 @@ void VhdlParser::parse_vhdl_port_map(
         connections.push_back(std::move(connection));
         group = std::prev(subelement_groups.end());
       }
-      auto& aggregate = connections[group->connection].value;
+      auto* nested = &connections[group->connection].value;
+      // A nested element is a choice of the aggregate for its enclosing
+      // element (IEEE 1076-2008 6.5.7.1).
+      for (const auto& outer : outer_elements) {
+        const auto name = vhdl_name(outer.text);
+        std::optional<std::size_t> existing;
+        for (std::size_t index { }; index < nested->operands.size();
+             ++index) {
+          if (index < nested->aggregate_choices.size()
+              && nested->aggregate_choices[index] == name
+              && nested->operands[index].kind == ExpressionKind::Aggregate
+              && nested->operands[index].text
+                  == "@vhdl-formal-subelements") {
+            existing = index;
+          }
+        }
+        if (!existing) {
+          Expression inner { ExpressionKind::Aggregate,
+              "@vhdl-formal-subelements", { }, outer.span };
+          nested->aggregate_choices.push_back(name);
+          nested->aggregate_choice_expressions.push_back({ Expression {
+              ExpressionKind::Identifier, name, { }, outer.span } });
+          nested->operands.push_back(std::move(inner));
+          existing = nested->operands.size() - 1U;
+        }
+        nested = &nested->operands[*existing];
+        nested->span = cover(nested->span, previous().span);
+      }
+      auto& aggregate = *nested;
       const bool element_choice = choice.kind == ExpressionKind::Identifier;
       aggregate.aggregate_choices.push_back(
           element_choice ? choice.text : std::string { "@array" });
       aggregate.aggregate_choice_expressions.push_back({ std::move(choice) });
       aggregate.operands.push_back(std::move(actual));
       aggregate.span = cover(aggregate.span, previous().span);
-      connections[group->connection].span = aggregate.span;
+      auto& whole = connections[group->connection];
+      whole.value.span = cover(whole.value.span, previous().span);
+      whole.span = whole.value.span;
       if (!match(TokenKind::Comma)) {
         break;
       }
@@ -1280,6 +1321,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         view.name = port.name;
         view.type = port.type;
         view.direction = port.direction;
+        view.default_value = port.default_value;
         ports.push_back(std::move(view));
       }
       // The formal's index constraints may name the entity's generics,
@@ -1361,6 +1403,9 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         signal.name = implicit;
         signal.type = port->type;
         signal.span = span;
+        // The converted port's driving value starts at its default (IEEE
+        // 1076-1993 4.3.2, 12.6.1).
+        signal.default_value = port->default_value;
         if (!generic_actuals.empty()) {
           const auto substitute = [&](const auto& self, Expression& node) -> void {
             if (node.kind == ExpressionKind::Identifier) {
@@ -1378,6 +1423,9 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
           for (auto& constraint : signal.type.vhdl_array_constraints) {
             substitute(substitute, constraint.left);
             substitute(substitute, constraint.right);
+          }
+          if (signal.default_value) {
+            substitute(substitute, *signal.default_value);
           }
         }
         unit.signals.push_back(std::move(signal));

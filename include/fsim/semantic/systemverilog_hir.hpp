@@ -1497,6 +1497,10 @@ struct CoverageBinValue {
     std::optional<std::uint64_t> range_right_real_bits;
     bool range_left_inclusive { true };
     bool range_right_inclusive { true };
+    // A `$` bound is the coverpoint's minimum or maximum value (19.5.1);
+    // the matching bound then holds the other end.
+    bool range_left_open { };
+    bool range_right_open { };
     SourceSpanId source;
 };
 

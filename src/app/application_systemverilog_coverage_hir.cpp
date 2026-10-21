@@ -404,6 +404,8 @@ public:
         output.range_right_real_bits = input.range_right_real_bits;
         output.range_left_inclusive = input.range_left_inclusive;
         output.range_right_inclusive = input.range_right_inclusive;
+        output.range_left_open = input.range_left_open;
+        output.range_right_open = input.range_right_open;
         return output;
     }
 

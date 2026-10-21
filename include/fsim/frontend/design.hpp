@@ -121,6 +121,10 @@ struct SystemVerilogCoverageBinValue {
     std::optional<std::uint64_t> range_right_real_bits;
     bool range_left_inclusive { true };
     bool range_right_inclusive { true };
+    // A `$` bound is the coverpoint's minimum or maximum value (19.5.1);
+    // the matching bound then holds the other end.
+    bool range_left_open { };
+    bool range_right_open { };
 };
 
 enum class SystemVerilogCoverageTransitionRepetitionKind {
@@ -1696,10 +1700,6 @@ struct DesignUnit {
 struct ParsedDesign {
     std::vector<DesignUnit> units;
     std::vector<VerilogUdpDeclaration> udp_declarations;
-    // Ordinary compilation-unit callables are distinct from class-qualified
-    // out-of-block definitions and provide exact scope ownership for DPI export.
-    std::vector<FunctionDeclaration> functions;
-    std::vector<TaskDeclaration> tasks;
     // Compilation-unit DPI declarations remain outside selectable design units.
     std::vector<SystemVerilogDpiDeclaration> systemverilog_dpi_declarations;
     // Compilation-unit classes remain non-top-selectable declarations.

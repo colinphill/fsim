@@ -1094,6 +1094,17 @@ namespace {
         return classify(classify, subtype, use_scope);
     }
 
+    // The array types of IEEE numeric_std, by simple name.
+    [[nodiscard]] bool numeric_std_array_mark(const std::string_view mark)
+    {
+        return same_hir_identifier(mark, "unsigned", true)
+            || same_hir_identifier(mark, "signed", true)
+            || same_hir_identifier(mark, "unresolved_unsigned", true)
+            || same_hir_identifier(mark, "unresolved_signed", true)
+            || same_hir_identifier(mark, "u_unsigned", true)
+            || same_hir_identifier(mark, "u_signed", true);
+    }
+
 } // namespace
 
 semantic::vhdl::BuiltinTypeIdentity hir_vhdl_standard_array_builtin_type(
@@ -1261,8 +1272,8 @@ const semantic::SpecializedHirUnit* Lowerer::hir_callee_unit(
         : hierarchy_ + "." + std::string { receiver };
     const auto found = systemverilog_instance_units_->find(path);
     return found != systemverilog_instance_units_->end() && found->second
-            && *found->second && &**found->second != specialized_hir_unit_
-        ? &**found->second
+            && found->second.get() != specialized_hir_unit_
+        ? found->second.get()
         : nullptr;
 }
 
@@ -2487,6 +2498,10 @@ std::optional<semantic::ExpressionId> Lowerer::hir_constant_initializer(
         if (actual != actuals.end() && actual->actual_expression) {
             return actual->actual_expression;
         }
+        // An actual evaluated at elaboration is read from its signal.
+        if (actual != actuals.end() && actual->vhdl_elaborated_bits) {
+            return std::nullopt;
+        }
     }
     if (source.form == semantic::vhdl::DeclarationForm::generic_constant) {
         return source.initializer;
@@ -2956,8 +2971,14 @@ Lowerer::hir_vhdl_unconstrained_constant_range(
                 }
             }
         }
+        // The element subtype takes the element constraints of the declared
+        // subtype (`t_sulv_array(open)(7 downto 0)`, 5.3.2.2).
+        const auto owner = hir_effective_vhdl_subtype(subtype)
+                               .value_or(subtype);
         const auto element = array->element_subtype
-            ? hir_effective_vhdl_subtype(*array->element_subtype)
+            ? hir_effective_vhdl_subtype(
+                  semantic::vhdl::constrained_element_subtype(
+                      owner, "", *array->element_subtype))
             : std::nullopt;
         const auto element_bits
             = element ? vhdl_subtype_width(*element) : std::nullopt;
@@ -3042,7 +3063,35 @@ Lowerer::hir_vhdl_unconstrained_constant_range(
                     operator_name, value->vhdl->scope).candidates.empty()) {
             return std::nullopt;
         }
+        // The type a subtype or alias chain names.
+        const auto root_type = [&](semantic::TypeId type_id) {
+            std::unordered_set<std::uint32_t> visited;
+            while (type_id.valid() && visited.insert(type_id.value()).second) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr
+                    || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                        && type->vhdl->form
+                            != semantic::vhdl::TypeForm::alias)
+                    || !type->vhdl->base.type_mark.target.valid()) {
+                    break;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+            return type_id;
+        };
+        const auto element_root = array->element_subtype
+            ? root_type(array->element_subtype->type_mark.target)
+            : semantic::TypeId { };
         for (const auto operand : value->vhdl->operands) {
+            // String literals and aggregates take their type from the
+            // context (9.3.2, 9.3.3.3); the other operands fix it.
+            const auto operand_value
+                = specialized_hir_unit_->find_expression(operand);
+            if (operand_value && operand_value->vhdl != nullptr
+                && (operand_value->vhdl->kind == Kind::string_literal
+                    || operand_value->vhdl->kind == Kind::aggregate)) {
+                continue;
+            }
             const auto operand_subtype = hir_vhdl_expression_subtype(operand);
             const auto* operand_array = operand_subtype
                     && operand_subtype->type_mark.target.valid()
@@ -3050,7 +3099,13 @@ Lowerer::hir_vhdl_unconstrained_constant_range(
                       *specialized_hir_unit_,
                       operand_subtype->type_mark.target)
                 : nullptr;
-            if (operand_array == nullptr || operand_array->id != array->id) {
+            if (operand_array != nullptr && operand_array->id == array->id) {
+                continue;
+            }
+            // An element operand (9.2.5).
+            if (!operand_subtype || !element_root.valid()
+                || root_type(operand_subtype->type_mark.target)
+                    != element_root) {
                 return std::nullopt;
             }
         }
@@ -3075,19 +3130,33 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
-        || expression->vhdl->operands.size() < 2U) {
+    if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
     }
-    // `a(b'range)` is a slice, not an element (8.5).
-    const auto selector = specialized_hir_unit_->find_expression(
-        expression->vhdl->operands[1]);
-    if ((selector && selector->vhdl != nullptr
+    // A qualified expression of an unconstrained array type takes its index
+    // range from its operand (IEEE 1076-2008 9.3.5).
+    const bool qualified
+        = expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->operands.size() == 1U
+        && expression->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix);
+    if (!qualified
+        && (expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
+            || expression->vhdl->operands.size() < 2U)) {
+        return std::nullopt;
+    }
+    if (!qualified) {
+        // `a(b'range)` is a slice, not an element (8.5).
+        const auto selector = specialized_hir_unit_->find_expression(
+            expression->vhdl->operands[1]);
+        if (selector && selector->vhdl != nullptr
             && selector->vhdl->kind == semantic::vhdl::ExpressionKind::call
             && (selector->vhdl->text == "'range"
-                || selector->vhdl->text == "'reverse_range"))
-        || !hir_vhdl_range_shapes_.insert(expression_id.value()).second) {
+                || selector->vhdl->text == "'reverse_range")) {
+            return std::nullopt;
+        }
+    }
+    if (!hir_vhdl_range_shapes_.insert(expression_id.value()).second) {
         return std::nullopt;
     }
     const auto shape = hir_vhdl_shape(expression_id);
@@ -3166,12 +3235,15 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_direct_range(
             const auto& constraint = subtype->constraints.front();
             if (constraint.kind == semantic::vhdl::RangeKind::array_index
                 && constraint.left && constraint.right
-                && *constraint.left == 1 && !constraint.descending
-                && *constraint.right > 0
-                && static_cast<std::uint64_t>(*constraint.right) == *width) {
-                return HirPackedRange {
-                    *constraint.left, *constraint.right, false
-                };
+                && (*constraint.left == *constraint.right
+                    || constraint.descending
+                        == (*constraint.left > *constraint.right))
+                && index_distance(*constraint.left, *constraint.right)
+                    != std::numeric_limits<std::uint64_t>::max()
+                && index_distance(*constraint.left, *constraint.right) + 1U
+                    == *width) {
+                return HirPackedRange { *constraint.left, *constraint.right,
+                    constraint.descending };
             }
         }
     }
@@ -4455,7 +4527,8 @@ bool Lowerer::hir_expression_signed(
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
-    if (hir_vhdl_runtime_string_bound(expression_id)) {
+    if (hir_vhdl_runtime_string_bound(expression_id)
+        || hir_captured_signed_.contains(expression_id.value())) {
         return true;
     }
     // `SIGNED'("0111")` has the signedness of its type mark, not of its
@@ -5395,6 +5468,14 @@ std::optional<std::string> Lowerer::hir_vhdl_array_type_family(
         }
         if (lowered == "unsigned" || lowered == "signed") {
             return lowered;
+        }
+        // numeric_std's resolved vectors are subtypes of its unresolved
+        // ones (IEEE 1076-2008 16.8.5.1).
+        if (lowered == "unresolved_unsigned" || lowered == "u_unsigned") {
+            return std::string { "unsigned" };
+        }
+        if (lowered == "unresolved_signed" || lowered == "u_signed") {
+            return std::string { "signed" };
         }
         return std::nullopt;
     };
@@ -7598,11 +7679,14 @@ Lowerer::hir_runtime_binding(
                         == semantic::vhdl::DeclarationForm::file
                     || (source.form == semantic::vhdl::DeclarationForm::port
                         && callable_formal())));
-        // A composite constant the elaborator materialized as a read-only
-        // signal, identified by its declaration span.
+        // A composite constant (or a generic constant whose actual was
+        // evaluated at elaboration) the elaborator materialized as a
+        // read-only signal, identified by its declaration span.
         const auto materialized_constant = [&] {
             if (process_variable
-                || source.form != semantic::vhdl::DeclarationForm::constant) {
+                || (source.form != semantic::vhdl::DeclarationForm::constant
+                    && source.form
+                        != semantic::vhdl::DeclarationForm::generic_constant)) {
                 return false;
             }
             const auto found = signals_.find(source.name);
@@ -11016,6 +11100,37 @@ bool Lowerer::hir_expression_is_string(
                 semantic::vhdl::qualified_expression_prefix)) {
             const auto subtype = hir_vhdl_expression_subtype(expression_id);
             if (subtype && hir_vhdl_predefined_string_type(*subtype)) {
+                // A positional STRING aggregate of STRING pieces and
+                // CHARACTER literals is a string (IEEE 1076-2008 9.3.3.3).
+                const auto operand = specialized_hir_unit_->find_expression(
+                    source.operands.front());
+                if (operand && operand->vhdl != nullptr
+                    && operand->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::aggregate
+                    && !operand->vhdl->associations.empty()) {
+                    bool string_piece { };
+                    const bool pieces = std::ranges::all_of(
+                        operand->vhdl->associations,
+                        [&](const semantic::vhdl::AggregateAssociation&
+                                association) {
+                            if (!association.positional()) {
+                                return false;
+                            }
+                            if (hir_expression_is_string(
+                                    association.value, process_scope)) {
+                                string_piece = true;
+                                return true;
+                            }
+                            const auto value
+                                = specialized_hir_unit_->find_expression(
+                                    association.value);
+                            return value && value->vhdl != nullptr
+                                && value->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::
+                                        logic_literal;
+                        });
+                    return pieces && string_piece;
+                }
                 return hir_expression_is_string(
                     source.operands.front(), process_scope);
             }
@@ -13596,6 +13711,34 @@ Lowerer::hir_vhdl_attribute_profile(
                 ? HirVhdlAttributeFailure::enumeration_profile
                 : HirVhdlAttributeFailure::scalar_profile);
     }
+    // A subtype of a package instance is bounded by that instance's
+    // generics (IEEE 1076-2008 4.9); the unit's evaluator binds them, where
+    // the declared range alone folds with the uninstantiated package.
+    if (source.operands.size() == 1U && !implicit_object_value
+        && prefix_profile->type_prefix
+        && semantic::vhdl::is_scalar_bound_attribute(source.text)) {
+        const auto prefix = specialized_hir_unit_->find_expression(
+            source.operands.front());
+        const auto instance = prefix && prefix->vhdl != nullptr
+                && prefix->vhdl->referenced_name
+            ? hir_resolver()
+                  .resolve_vhdl_package_members(
+                      *prefix->vhdl->referenced_name, prefix->vhdl->scope)
+                  .unique()
+            : std::nullopt;
+        if (instance && instance->package_instance
+            && !instance->generic_bindings.empty()) {
+            const auto bound = specialized_hir_unit_
+                ->evaluate_integral_expression(expression_id);
+            if (!bound) {
+                return fail(HirVhdlAttributeFailure::scalar_profile);
+            }
+            result.constant = *bound;
+            result.width = *prefix_width;
+            result.domain = prefix_domain;
+            return result;
+        }
+    }
     if (source.operands.size() == 1U && !implicit_object_value) {
         if (source.text == "'left") {
             result.constant = left;
@@ -14685,6 +14828,13 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    // A bound iterator (`item` of a `with` clause) has its register's
+    // domain.
+    if (const auto captured
+        = hir_captured_update_indices_.find(expression_id.value());
+        captured != hir_captured_update_indices_.end()) {
+        return register_domain(captured->second);
     }
     if (const auto shaped = hir_vhdl_shaped_domain(expression_id)) {
         return shaped;
@@ -16088,6 +16238,25 @@ Lowerer::hir_systemverilog_packed_shape(
             return member->shape;
         }
     }
+    // An elaborated unpacked array's recorded element shape: its bounds
+    // are evaluated in the object's own specialization (IEEE 1800-2017
+    // 7.4.5, 23.6).
+    if (element_shape) {
+        if (const auto object = hir_container_object_binding(expression_id);
+            object && !object->local) {
+            const auto recorded
+                = design_.container_element_packed_shape_.find(
+                    object->object);
+            if (recorded != design_.container_element_packed_shape_.end()) {
+                std::vector<HirPackedRange> shape;
+                for (const auto& [left, right] : recorded->second) {
+                    shape.push_back(
+                        HirPackedRange { left, right, left >= right });
+                }
+                return shape;
+            }
+        }
+    }
     const auto declaration_id = hir_referenced_declaration(expression_id);
     const auto declaration = declaration_id
         ? specialized_hir_unit_->find_declaration(*declaration_id)
@@ -16125,12 +16294,24 @@ Lowerer::hir_systemverilog_packed_shape(
                 || definition->systemverilog->form
                     == semantic::sv::TypeForm::packed_union)
             && !definition->systemverilog->base.packed_dimensions.empty();
+        // An unpacked array typedef's elements have its base's packed
+        // dimensions (IEEE 1800-2017 7.4.5).
+        const auto container_typedef = element_shape && definition
+            && definition->systemverilog != nullptr
+            && (definition->systemverilog->form
+                    == semantic::sv::TypeForm::static_array
+                || definition->systemverilog->form
+                    == semantic::sv::TypeForm::dynamic_array
+                || definition->systemverilog->form
+                    == semantic::sv::TypeForm::queue
+                || definition->systemverilog->form
+                    == semantic::sv::TypeForm::associative_array);
         if (!definition || definition->systemverilog == nullptr
             || (definition->systemverilog->form
                     != semantic::sv::TypeForm::alias
                 && definition->systemverilog->form
                     != semantic::sv::TypeForm::packed_integral
-                && !structure_array)) {
+                && !structure_array && !container_typedef)) {
             break;
         }
         type = &definition->systemverilog->base;
@@ -20980,21 +21161,38 @@ Lowerer::hir_vhdl_expression_subtype(
                                   : std::nullopt;
         // A value of an unconstrained array attribute takes its index range
         // from the value, as an initialized constant does (IEEE 1076-2008
-        // 7.2, 6.4.2.2).
+        // 7.2, 6.4.2.2). The parser qualifies the value by the attribute's
+        // type mark.
+        auto value_id = expression_id;
+        auto value_kind = source.kind;
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.text.starts_with(
+                semantic::vhdl::qualified_expression_prefix)
+            && source.operands.size() == 1U) {
+            if (const auto operand = specialized_hir_unit_->find_expression(
+                    source.operands.front());
+                operand && operand->vhdl != nullptr) {
+                value_id = source.operands.front();
+                value_kind = operand->vhdl->kind;
+            }
+        }
         if (effective && effective->constraints.empty()
-            && (source.kind == semantic::vhdl::ExpressionKind::string_literal
-                || source.kind == semantic::vhdl::ExpressionKind::aggregate)
+            && (value_kind == semantic::vhdl::ExpressionKind::string_literal
+                || value_kind == semantic::vhdl::ExpressionKind::aggregate)
             && hir_vhdl_array_type_family(*effective)
             && hir_vhdl_attribute_values_.insert(expression_id.value())
                    .second) {
             auto completed = hir_vhdl_initialized_object_subtype(
-                expression_id, *effective, source.scope);
+                value_id, *effective, source.scope);
             hir_vhdl_attribute_values_.erase(expression_id.value());
             if (completed) {
                 return completed;
             }
         }
-        return effective;
+        if (effective) {
+            return effective;
+        }
+        // An unresolved specification leaves the value's own subtype.
     }
     // A conversion to an unconstrained array type has the target type and
     // the operand's index range (IEEE 1076-2008 9.3.6).
@@ -21474,6 +21672,56 @@ Lowerer::hir_vhdl_expression_subtype(
         if (!unary_not && !binary_logic) {
             return std::nullopt;
         }
+        // numeric_std's logical operators on UNSIGNED/SIGNED keep their
+        // operand's type and return the normalized range L'LENGTH-1 downto 0
+        // (IEEE 1076-2008 16.8.5); the vector-vector forms need equal
+        // lengths.
+        const auto numeric_operand = [&](const semantic::ExpressionId operand)
+            -> std::optional<std::pair<
+                semantic::vhdl::SubtypeIndication, std::size_t>> {
+            const auto subtype = hir_vhdl_expression_subtype(operand);
+            if (!subtype
+                || !numeric_std_array_mark(
+                    simple_name_of(subtype->type_mark.spelling))) {
+                return std::nullopt;
+            }
+            const auto width = hir_expression_width(
+                operand, hir_process_scope_);
+            if (!width || *width == 0U
+                || *width > static_cast<std::size_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+                return std::nullopt;
+            }
+            return std::pair { *subtype, *width };
+        };
+        if (const auto left = numeric_operand(source.operands.front())) {
+            bool matched = unary_not;
+            if (binary_logic) {
+                const auto right = numeric_operand(source.operands.back());
+                matched = right && right->second == left->second
+                    && same_hir_identifier(
+                        simple_name_of(right->first.type_mark.spelling),
+                        simple_name_of(left->first.type_mark.spelling),
+                        true);
+            }
+            if (matched) {
+                auto result = left->first;
+                result.executable_width = left->second;
+                result.unconstrained = false;
+                result.constraints.clear();
+                semantic::vhdl::RangeConstraint normalized_range;
+                normalized_range.kind
+                    = semantic::vhdl::RangeKind::array_index;
+                normalized_range.left
+                    = static_cast<std::int64_t>(left->second) - 1;
+                normalized_range.right = 0;
+                normalized_range.descending = true;
+                normalized_range.direction_from_bounds = false;
+                normalized_range.source = source.source;
+                result.constraints.push_back(std::move(normalized_range));
+                return result;
+            }
+        }
         const auto vector_operand = [&](const semantic::ExpressionId operand)
             -> std::optional<std::pair<
                 semantic::vhdl::SubtypeIndication, std::size_t>> {
@@ -21922,7 +22170,31 @@ Lowerer::hir_vhdl_expression_subtype(
         && (source.text == "'val" || source.text == "'succ"
             || source.text == "'pred" || source.text == "'leftof"
             || source.text == "'rightof" || source.text == "'value")) {
-        return hir_vhdl_expression_subtype(source.operands.front());
+        if (auto prefix = hir_vhdl_expression_subtype(source.operands.front())) {
+            return prefix;
+        }
+        // A type-mark prefix gives the result its base type (IEEE
+        // 1076-2008 16.2.2): `character'val(66)` is a CHARACTER.
+        if (const auto type = hir_vhdl_type_actual(source.operands.front())) {
+            return hir_effective_vhdl_subtype(*type).value_or(*type);
+        }
+        const auto prefix = specialized_hir_unit_->find_expression(
+            source.operands.front());
+        if (prefix && prefix->vhdl != nullptr
+            && prefix->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && !prefix->vhdl->text.empty()) {
+            semantic::vhdl::SubtypeIndication named;
+            named.type_mark.spelling = prefix->vhdl->text;
+            if (auto resolved = hir_effective_vhdl_subtype(named);
+                resolved && (resolved->type_mark.target.valid()
+                    || resolved->builtin_type
+                        != semantic::vhdl::BuiltinTypeIdentity::none
+                    || resolved->domain
+                        != semantic::vhdl::ValueDomain::unknown)) {
+                return resolved;
+            }
+        }
+        return std::nullopt;
     }
     // A signal's 'LAST_VALUE, 'DRIVING_VALUE and 'DELAYED have the
     // signal's subtype (IEEE 1076-2008 16.2.4).
