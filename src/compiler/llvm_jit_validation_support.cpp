@@ -834,11 +834,11 @@ std::optional<std::string> validate_file_position_metadata(
     std::vector<PackedRegisterValidation>& registers)
 {
     using namespace runtime::simir;
-    if (operation.kind > FilePositionKind::rewind)
+    if (operation.kind > FilePositionKind::canseek)
         return "FilePosition kind is invalid";
     registers.push_back({ operation.handle, 32U, false });
     registers.push_back({ operation.destination, 32U, true });
-    if (operation.kind == FilePositionKind::seek) {
+    if (file_position_uses_operands(operation.kind)) {
         registers.push_back({ operation.offset, 32U, false });
         registers.push_back({ operation.origin, 32U, false });
     }

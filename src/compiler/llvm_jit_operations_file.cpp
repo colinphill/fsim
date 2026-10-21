@@ -399,12 +399,12 @@ void FileOperationLowerer::lower(
 void FileOperationLowerer::lower(
     const runtime::simir::FilePosition& operation) {
   auto* zero = constant_i64(context, 0);
-  const auto offset = operation.kind
-          == runtime::simir::FilePositionKind::seek
+  const auto offset =
+      runtime::simir::file_position_uses_operands(operation.kind)
       ? load_register(builder, registers, operation.offset)
       : EncodedValue{zero, zero, 32};
-  const auto origin = operation.kind
-          == runtime::simir::FilePositionKind::seek
+  const auto origin =
+      runtime::simir::file_position_uses_operands(operation.kind)
       ? load_register(builder, registers, operation.origin)
       : EncodedValue{zero, zero, 32};
   auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.position.aval");

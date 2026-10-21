@@ -225,36 +225,36 @@ namespace {
         }
     }
 
-    bool is_simple_variable_output_port(
-        const semantic::sv::Declaration& declaration,
-        const semantic::sv::TypeReference& effective_type) noexcept
-    {
-        if (!declaration.type
-            || declaration.type->value_form
-                != semantic::sv::TypeForm::packed_integral
-            || effective_type.value_form
-                != semantic::sv::TypeForm::packed_integral
-            || declaration.type->virtual_interface
-            || effective_type.virtual_interface
-            || declaration.type->container_form
-            || effective_type.container_form
-            || !declaration.type->unpacked_dimensions.empty()
-            || !effective_type.unpacked_dimensions.empty()
-            || !declaration.type->systemverilog_resolution_function.empty()
-            || !effective_type.systemverilog_resolution_function.empty()
-            || !explicit_systemverilog_net_type(*declaration.type).empty()
-            || !explicit_systemverilog_net_type(effective_type).empty()) {
-            return false;
-        }
-        return frontend::systemverilog_scalar_kind(
-                   declaration.type->target.spelling)
-                == frontend::SystemVerilogScalarKind::None
-            && frontend::systemverilog_scalar_kind(
-                   effective_type.target.spelling)
-                == frontend::SystemVerilogScalarKind::None;
-    }
-
 } // namespace
+
+bool hierarchy_sv_ports_detail::is_simple_variable_output_port(
+    const semantic::sv::Declaration& declaration,
+    const semantic::sv::TypeReference& effective_type) noexcept
+{
+    if (!declaration.type
+        || declaration.type->value_form
+            != semantic::sv::TypeForm::packed_integral
+        || effective_type.value_form
+            != semantic::sv::TypeForm::packed_integral
+        || declaration.type->virtual_interface
+        || effective_type.virtual_interface
+        || declaration.type->container_form
+        || effective_type.container_form
+        || !declaration.type->unpacked_dimensions.empty()
+        || !effective_type.unpacked_dimensions.empty()
+        || !declaration.type->systemverilog_resolution_function.empty()
+        || !effective_type.systemverilog_resolution_function.empty()
+        || !explicit_systemverilog_net_type(*declaration.type).empty()
+        || !explicit_systemverilog_net_type(effective_type).empty()) {
+        return false;
+    }
+    return frontend::systemverilog_scalar_kind(
+               declaration.type->target.spelling)
+            == frontend::SystemVerilogScalarKind::None
+        && frontend::systemverilog_scalar_kind(
+               effective_type.target.spelling)
+            == frontend::SystemVerilogScalarKind::None;
+}
 
 bool HierarchyBuilder::bind_compiled_systemverilog_ports(
     const CompiledSystemVerilogPortBindingContext& context)
@@ -1158,6 +1158,17 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     full_name, id);
                 actual_signal = id;
             }
+        } else if (direction == frontend::PortDirection::Inout
+            && actual_name.find('.') != std::string::npos
+            && actual_name.find('[') == std::string::npos) {
+            // A hierarchical name of a net, such as an interface instance's
+            // member, is the same net as a simple name: the port joins it
+            // rather than copying through it (IEEE 1800-2023 23.3.3).
+            const auto hierarchical = design_.signal_by_name_.find(
+                std::string { working_path } + "." + actual_name);
+            if (hierarchical != design_.signal_by_name_.end()) {
+                actual_signal = hierarchical->second;
+            }
         }
         const auto actual_expression = binding.expression
             ? working_specialization.find_expression(
@@ -1536,15 +1547,26 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         || effective_type.four_state
                     ? frontend::ValueDomain::Logic4
                     : frontend::ValueDomain::Bit2;
-            if (is_simple_variable_output_port(
+            // A resolved VHDL std_logic signal reached through SystemVerilog
+            // port nets is a net as well: each of its sources is one driver
+            // (IEEE 1076-2019 14.7.3.2), so a variable port drives it once.
+            const auto vhdl_resolved_actual
+                = actual_native_resolution != ResolutionKind::none
+                && actual_info.systemverilog_net_type.empty()
+                && actual_info.source_domain
+                    == frontend::ValueDomain::Logic9
+                && formal_domain != frontend::ValueDomain::Logic9;
+            if (hierarchy_sv_ports_detail::is_simple_variable_output_port(
                     formal_declaration, effective_type)
                 && (actual_native_resolution != ResolutionKind::none
                     || supported_user_resolved_net
                     || single_driver_uwire)
-                && !actual_info.systemverilog_net_type.empty()
+                && (!actual_info.systemverilog_net_type.empty()
+                    || vhdl_resolved_actual)
                 && formal_width && *formal_width != 0U
                 && *formal_width == actual_info.width
                 && (formal_domain == actual_info.source_domain
+                    || vhdl_resolved_actual
                     || (formal_domain == frontend::ValueDomain::Bit2
                         && actual_info.source_domain
                             == frontend::ValueDomain::Logic4))) {

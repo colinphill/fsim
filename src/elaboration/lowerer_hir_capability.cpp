@@ -14511,6 +14511,7 @@ Lowerer::hir_vhdl_signal_attribute_profile(
                    || source.text == "'driving_value"
                    || source.text == "'last_event"
                    || source.text == "'last_active"
+                   || source.text == "'transaction"
                    || source.text == "'delayed")
                    && selected && selected->vhdl != nullptr
                    && (selected->vhdl->kind
@@ -15212,14 +15213,15 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return frontend::ValueDomain::Bit2;
         }
     }
-    if (hir_vhdl_standard_enumeration_literal(expression_id)) {
+    if (hir_vhdl_standard_enumeration_literal(expression_id)
+        || hir_vhdl_reflection_class_literal(expression_id)) {
         return frontend::ValueDomain::Bit2;
     }
     if (is_hir_vhdl_environment_status_literal(expression_id)) {
         return frontend::ValueDomain::Bit2;
     }
     if (is_hir_vhdl_file_call(expression_id)) {
-        return frontend::ValueDomain::Boolean;
+        return hir_vhdl_file_call_type(expression_id).second;
     }
     if (const auto selection
         = hir_vhdl_environment_call_path_member_selection(expression_id);
@@ -18453,11 +18455,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     if (hir_vhdl_standard_enumeration_literal(expression_id)) {
         return 2U;
     }
+    if (hir_vhdl_reflection_class_literal(expression_id)) {
+        return 4U;
+    }
     if (is_hir_vhdl_environment_status_literal(expression_id)) {
         return 3U;
     }
     if (is_hir_vhdl_file_call(expression_id)) {
-        return 1U;
+        return hir_vhdl_file_call_type(expression_id).first;
     }
     if (is_hir_vhdl_environment_expression(expression_id)
         && expression->vhdl != nullptr) {
@@ -26578,6 +26583,7 @@ bool Lowerer::can_lower_hir_expression(
                 break;
             }
             if (hir_vhdl_standard_enumeration_literal(expression_id)
+                || hir_vhdl_reflection_class_literal(expression_id)
                 || hir_vhdl_character_literal_code(expression_id, 0U)) {
                 supported = true;
                 break;

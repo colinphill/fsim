@@ -30,11 +30,16 @@ using runtime::Logic4;
 using runtime::PackedLogic4;
 
 // One formal or the result of a C signature: `&` marks a scalar passed by
-// pointer; B and V vectors always pass by pointer (IEEE 1800-2023 H.8).
+// pointer; B and V vectors always pass by pointer (IEEE 1800-2023 H.8). An
+// open array `A` passes an svOpenArrayHandle (H.12) for elements of type
+// `element`, `width` bits each, over the unpacked `bounds` (left, right per
+// dimension); `&` then marks an output or inout.
 struct Parameter {
     char code { };
     bool reference { };
     std::size_t width { };
+    char element { };
+    std::vector<std::int32_t> bounds;
 };
 
 struct Signature {
@@ -103,7 +108,35 @@ struct Signature {
                 + std::string { identity } + "'" };
         }
         parameter.code = text.front();
-        if (parameter.code == 'B' || parameter.code == 'V') {
+        if (parameter.code == 'A') {
+            if (text.size() < 2U) {
+                throw std::runtime_error { "malformed DPI import identity '"
+                    + std::string { identity } + "'" };
+            }
+            parameter.element = text[1U];
+            auto rest = text.substr(2U);
+            const auto slash = rest.find('/');
+            const auto width_text = rest.substr(0U, slash);
+            parameter.width = width_text.empty()
+                ? code_width(parameter.element)
+                : static_cast<std::size_t>(
+                      std::stoull(std::string { width_text }));
+            rest = slash == std::string_view::npos ? std::string_view { }
+                                                   : rest.substr(slash + 1U);
+            while (!rest.empty()) {
+                const auto next = rest.find('/');
+                parameter.bounds.push_back(static_cast<std::int32_t>(
+                    std::stol(std::string { rest.substr(0U, next) })));
+                rest = next == std::string_view::npos
+                    ? std::string_view { }
+                    : rest.substr(next + 1U);
+            }
+            if (parameter.width == 0U || parameter.bounds.empty()
+                || parameter.bounds.size() % 2U != 0U) {
+                throw std::runtime_error { "malformed DPI import identity '"
+                    + std::string { identity } + "'" };
+            }
+        } else if (parameter.code == 'B' || parameter.code == 'V') {
             parameter.width = static_cast<std::size_t>(
                 std::stoull(std::string { text.substr(1U) }));
         } else {
@@ -258,7 +291,123 @@ struct Slot {
     std::vector<std::uint32_t> bits;
     std::vector<LogicWord> logic;
     void* reference { };
+    // An open array's elements and handle.
+    std::vector<unsigned char> bytes;
+    fsim_svdpi_open_array_v3 open { };
 };
+
+// The C size of one open-array element (IEEE 1800-2023 H.10).
+[[nodiscard]] std::size_t element_bytes(const Parameter& parameter)
+{
+    const auto words = (parameter.width + 31U) / 32U;
+    switch (parameter.element) {
+    case 'B':
+        return words * sizeof(std::uint32_t);
+    case 'V':
+        return words * sizeof(LogicWord);
+    case 's':
+    case 'S':
+        return 2U;
+    case 'i':
+    case 'I':
+        return 4U;
+    case 'l':
+    case 'L':
+        return 8U;
+    default:
+        return 1U;
+    }
+}
+
+[[nodiscard]] std::size_t open_elements(const Parameter& parameter)
+{
+    std::size_t count = 1U;
+    for (std::size_t index = 0U; index + 1U < parameter.bounds.size();
+         index += 2U) {
+        const auto left = std::int64_t { parameter.bounds[index] };
+        const auto right = std::int64_t { parameter.bounds[index + 1U] };
+        count *= static_cast<std::size_t>(
+            (left >= right ? left - right : right - left) + 1);
+    }
+    return count;
+}
+
+void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& value,
+    const std::string& text);
+[[nodiscard]] PackedLogic4 load_actual(const Slot& slot, const Parameter& parameter);
+
+// The elements of an open-array actual, leftmost element in the most
+// significant bits of `value`, in their canonical C layout (H.12.1).
+void store_open_array(Slot& slot, const Parameter& parameter,
+    const PackedLogic4& value)
+{
+    const auto count = open_elements(parameter);
+    const auto stride = element_bytes(parameter);
+    const Parameter element { parameter.element, false, parameter.width, { }, { } };
+    slot.bytes.assign(count * stride, 0U);
+    for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
+        const auto offset = (count - 1U - ordinal) * parameter.width;
+        PackedLogic4 bits(parameter.width, Logic4::zero);
+        for (std::size_t bit = 0U; bit < parameter.width; ++bit) {
+            if (offset + bit < value.width()) {
+                bits.set(bit, value.get(offset + bit));
+            }
+        }
+        Slot item;
+        store_actual(item, element, bits, { });
+        auto* const target = slot.bytes.data() + ordinal * stride;
+        if (parameter.element == 'B') {
+            std::memcpy(target, item.bits.data(), stride);
+        } else if (parameter.element == 'V') {
+            std::memcpy(target, item.logic.data(), stride);
+        } else {
+            std::memcpy(target, &item.scalar, stride);
+        }
+    }
+    slot.open.magic = FSIM_SVDPI_OPEN_ARRAY_MAGIC;
+    slot.open.struct_size = static_cast<std::uint32_t>(sizeof(slot.open));
+    slot.open.dimensions
+        = static_cast<std::int32_t>(parameter.bounds.size() / 2U);
+    const bool vector = parameter.element == 'B' || parameter.element == 'V';
+    slot.open.packed_left
+        = vector ? static_cast<std::int32_t>(parameter.width) - 1 : 0;
+    slot.open.packed_right = 0;
+    slot.open.element_code = static_cast<std::uint32_t>(parameter.element);
+    slot.open.element_width = static_cast<std::uint32_t>(parameter.width);
+    slot.open.element_bytes = static_cast<std::uint32_t>(stride);
+    slot.open.data = slot.bytes.data();
+    slot.open.bounds = parameter.bounds.data();
+    slot.scalar.pointer = &slot.open;
+}
+
+[[nodiscard]] PackedLogic4 load_open_array(
+    const Slot& slot, const Parameter& parameter)
+{
+    const auto count = open_elements(parameter);
+    const auto stride = element_bytes(parameter);
+    const Parameter element { parameter.element, false, parameter.width, { }, { } };
+    PackedLogic4 value(count * parameter.width, Logic4::zero);
+    for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
+        const auto* const source = slot.bytes.data() + ordinal * stride;
+        Slot item;
+        if (parameter.element == 'B') {
+            item.bits.resize(stride / sizeof(std::uint32_t));
+            std::memcpy(item.bits.data(), source, stride);
+        } else if (parameter.element == 'V') {
+            item.logic.resize(stride / sizeof(LogicWord));
+            std::memcpy(item.logic.data(), source, stride);
+        } else {
+            std::memcpy(&item.scalar, source, stride);
+        }
+        const auto bits = load_actual(item, element);
+        const auto offset = (count - 1U - ordinal) * parameter.width;
+        for (std::size_t bit = 0U; bit < parameter.width && bit < bits.width();
+             ++bit) {
+            value.set(offset + bit, bits.get(bit));
+        }
+    }
+    return value;
+}
 
 void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& value,
     const std::string& text)
@@ -326,6 +475,9 @@ void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& va
         slot.scalar.pointer = slot.logic.data();
         break;
     }
+    case 'A':
+        store_open_array(slot, parameter, value);
+        break;
     default:
         throw std::runtime_error { "unsupported DPI argument type" };
     }
@@ -376,6 +528,8 @@ void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& va
         }
         return value;
     }
+    case 'A':
+        return load_open_array(slot, parameter);
     default:
         return PackedLogic4 { };
     }
@@ -465,7 +619,8 @@ public:
             auto& slot = slots[index];
             store_actual(slot, parameter, actuals[index],
                 index < strings.size() ? strings[index] : empty_);
-            const bool vector = parameter.code == 'B' || parameter.code == 'V';
+            const bool vector = parameter.code == 'B' || parameter.code == 'V'
+                || parameter.code == 'A';
             if (parameter.reference && !vector) {
                 slot.reference = &slot.scalar;
                 values[index] = &slot.reference;
@@ -501,7 +656,8 @@ public:
         for (std::size_t index = 0U; index < parameters.size(); ++index) {
             const auto& parameter = parameters[index];
             const bool vector = parameter.code == 'B' || parameter.code == 'V';
-            if (!parameter.reference && !vector) {
+            if ((!parameter.reference && !vector)
+                || (parameter.code == 'A' && !parameter.reference)) {
                 continue;
             }
             if (parameter.code == 'z') {
@@ -538,7 +694,8 @@ public:
                 *reinterpret_cast<const ffi_arg*>(bytes));
             break;
         }
-        return load_actual(returned, Parameter { code, false, code_width(code) });
+        return load_actual(
+            returned, Parameter { code, false, code_width(code), { }, { } });
     }
 
 private:

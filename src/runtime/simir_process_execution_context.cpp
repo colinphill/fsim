@@ -238,7 +238,7 @@ void ProcessExecutionContext::write_file_formatted(
 }
 
 [[nodiscard]] std::int32_t ProcessExecutionContext::position_file(
-    FileHandle, FilePositionKind, std::int32_t, std::int32_t)
+    FileHandle, FilePositionKind, std::int32_t, std::int32_t, bool)
 {
     throw std::logic_error {
         "alternate process executor does not support file positioning"

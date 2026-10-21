@@ -2641,7 +2641,8 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     const SignalId source,
     const std::string_view attribute,
     const runtime::SimulationTick duration,
-    const frontend::SourceSpan span)
+    const frontend::SourceSpan span,
+    const std::optional<HirConstantSelection> selection)
 {
     if (source >= design_.signals_.size()
         || source >= design_.signal_info_.size()) {
@@ -2653,8 +2654,20 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     }
 
     const auto source_info = design_.signal_info_[source];
+    // Only S(i)'TRANSACTION keeps its element: it toggles on that
+    // element's transactions alone (IEEE 1076-2019 16.2.4).
+    const auto element = attribute == "transaction" && selection
+        && selection->offset <= std::numeric_limits<std::uint32_t>::max()
+        && selection->width != 0U
+        && selection->width <= std::numeric_limits<std::uint32_t>::max()
+        && selection->width < source_info.width
+        ? selection
+        : std::nullopt;
     const auto name = source_info.name + "'" + std::string { attribute }
-        + "(" + std::to_string(duration) + ")";
+        + "(" + std::to_string(duration) + ")"
+        + (element ? "[" + std::to_string(element->offset) + "+"
+                    + std::to_string(element->width) + "]"
+                   : std::string { });
     if (const auto existing = design_.signal_by_name_.find(name);
         existing != design_.signal_by_name_.end()) {
         record_implicit_signal_dependency(existing->second);
@@ -2745,7 +2758,24 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         true,
     });
 
-    if (attribute == "transaction") {
+    if (attribute == "transaction" && element) {
+        // Woken by any transaction on S; toggles only when the element
+        // itself was active in this cycle.
+        driver.register_count = 3U;
+        driver.register_value_kinds.assign(3U, ValueKind::logic4);
+        SignalActive active { 2U, source };
+        active.selection = runtime::simir::SignalSelection {
+            static_cast<std::uint32_t>(element->offset),
+            static_cast<std::uint32_t>(element->width),
+        };
+        driver.operations.emplace_back(std::move(active));
+        driver.operations.emplace_back(
+            Branch { 2U, 2U, 5U, UnknownBranchPolicy::when_false });
+        driver.operations.emplace_back(ReadSignal { 0U, derived });
+        driver.operations.emplace_back(UnaryNot { 1U, 0U });
+        driver.operations.emplace_back(WriteUpdate {
+            derived, 1U, SignalUpdateDomain::systemverilog_active });
+    } else if (attribute == "transaction") {
         driver.register_count = 2U;
         driver.register_value_kinds.assign(2U, ValueKind::logic4);
         driver.operations.emplace_back(ReadSignal { 0U, derived });
@@ -3188,7 +3218,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
     const auto read_derived = [&](const std::string_view name)
         -> std::optional<RegisterId> {
         const auto derived = vhdl_implicit_signal_attribute(
-            attribute->signal, name, attribute->duration, span);
+            attribute->signal, name, attribute->duration, span,
+            name == "transaction" ? attribute->selection : std::nullopt);
         if (!derived) {
             return std::nullopt;
         }
@@ -15682,6 +15713,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             = load_constant(unsigned_value(*file_enumeration, width),
                 frontend::ValueDomain::Bit2);
         result = destination;
+    } else if (const auto type_class
+        = hir_vhdl_reflection_class_literal(expression_id)) {
+        const auto width = expected_width == 0U ? 4U : expected_width;
+        result = load_constant(unsigned_value(*type_class, width),
+            frontend::ValueDomain::Bit2);
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::index

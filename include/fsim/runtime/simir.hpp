@@ -1403,10 +1403,14 @@ struct WaitOn {
     // lowering uses timeout_result to distinguish timeout resumption from an
     // event resumption. A rearmed wait preserves the absolute deadline
     // established by the operation at timeout_origin instead of restarting the
-    // timeout after a false condition.
+    // timeout after a false condition. When timeout_source is set, timeout
+    // is zero and the deadline is the signed TIME value held in that register
+    // when the origin wait suspends.
     std::optional<SimulationTick> timeout;
     std::optional<RegisterId> timeout_result;
     std::optional<InstructionIndex> timeout_origin;
+    std::optional<RegisterId> timeout_source;
+    std::uint32_t timeout_source_width { };
 };
 
 /// Suspend until either a packed input term changes or the selected fixed
@@ -2642,12 +2646,18 @@ public:
     [[nodiscard]] RunResult finish();
 
     /// Deposit immediately and activate sensitive processes in the next delta.
-    void deposit_signal(SignalId signal, PackedLogic4 value);
+    /// A systemverilog origin domain (a VPI write from a calltf) wakes
+    /// SystemVerilog processes in the current Active region instead
+    /// (IEEE 1800-2023 38.34).
+    void deposit_signal(SignalId signal, PackedLogic4 value,
+        ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
 
     /// Override the visible value while preserving subsequently driven values.
     /// Releasing the force publishes the most recent underlying driven value.
-    void force_signal(SignalId signal, PackedLogic4 value);
-    void release_signal(SignalId signal);
+    void force_signal(SignalId signal, PackedLogic4 value,
+        ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
+    void release_signal(SignalId signal,
+        ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
     void force_signal_slice(
         SignalId signal, PackedLogic4 value, std::size_t offset);
     void release_signal_slice(

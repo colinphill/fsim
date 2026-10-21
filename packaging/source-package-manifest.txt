@@ -370,6 +370,7 @@ include/fsim/elaboration/coverage_inventory.hpp
 include/fsim/elaboration/coverage_memory_toggle.hpp
 include/fsim/elaboration/coverage_points.hpp
 include/fsim/elaboration/coverage_toggle_selection.hpp
+include/fsim/elaboration/dpi_c_type.hpp
 include/fsim/elaboration/elaborator.hpp
 include/fsim/elaboration/verilog_coverage_conditions.hpp
 include/fsim/elaboration/verilog_coverage_points.hpp
@@ -972,6 +973,7 @@ src/elaboration/coverage_instance_identity.cpp
 src/elaboration/coverage_inventory.cpp
 src/elaboration/coverage_memory_toggle.cpp
 src/elaboration/coverage_points.cpp
+src/elaboration/dpi_c_type.cpp
 src/elaboration/elaborate.cpp
 src/elaboration/elaborated_design.cpp
 src/elaboration/elaborated_design_cone_fusion.cpp
@@ -1343,6 +1345,7 @@ src/runtime/tf_registration.cpp
 src/runtime/tf_synchronization.cpp
 src/runtime/tf_time.cpp
 src/runtime/tf_value.cpp
+src/runtime/tf_veriusertfs.cpp
 src/runtime/trace_model.cpp
 src/runtime/transaction_record.cpp
 src/runtime/uvm_activity.cpp

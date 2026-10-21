@@ -7,6 +7,7 @@ function(fsim_add_tf_link_surface target)
     "${PROJECT_SOURCE_DIR}/src/runtime/vpi_standard.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_link.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/tf_containment.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/tf_veriusertfs.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/acc_lifecycle.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/acc_handle.cpp"
     "${PROJECT_SOURCE_DIR}/src/runtime/acc_iterator.cpp"

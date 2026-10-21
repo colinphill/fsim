@@ -62,6 +62,29 @@ typedef struct fsim_svdpi_call_context_v3 {
   fsim_svdpi_time_scale_v3 get_time_precision;
 } fsim_svdpi_call_context_v3;
 
+/* The svOpenArrayHandle the simulator passes for an open-array formal
+ * (IEEE 1800-2023 35.5.6.1, H.12): `data` holds every element in the
+ * canonical C representation of the element type, leftmost element first
+ * (row-major over the unpacked dimensions), `element_bytes` apart.
+ * `bounds` holds each unpacked dimension's left and right index, dimension 1
+ * first; dimension 0 is the packed part. `element_code` is the element's DPI
+ * type code: b svBit, g svLogic (one byte each), c s i l and C S I L the C
+ * integer types, B an svBitVecVal and V an svLogicVecVal array. */
+#define FSIM_SVDPI_OPEN_ARRAY_MAGIC 0x6f70656eu
+
+typedef struct fsim_svdpi_open_array_v3 {
+  uint32_t magic;
+  uint32_t struct_size;
+  int32_t dimensions;
+  int32_t packed_left;
+  int32_t packed_right;
+  uint32_t element_code;
+  uint32_t element_width;
+  uint32_t element_bytes;
+  void* data;
+  const int32_t* bounds;
+} fsim_svdpi_open_array_v3;
+
 FSIM_SVDPI_BRIDGE_API int FSIM_SVDPI_CALL
 fsim_svdpi_call_context_enter_v3(fsim_svdpi_call_context_v3* context);
 FSIM_SVDPI_BRIDGE_API int FSIM_SVDPI_CALL

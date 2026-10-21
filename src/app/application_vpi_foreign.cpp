@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstdarg>
@@ -381,6 +382,17 @@ struct Value {
         }
     }
     return result;
+}
+
+// A real-typed value carried as IEEE 754 bits: binary64, or binary32 for a
+// 32-bit shortreal.
+[[nodiscard]] double real_bits(const PackedLogic4& value)
+{
+    const auto bits = low_bits(value);
+    return value.width() == 32U
+        ? static_cast<double>(std::bit_cast<float>(
+              static_cast<std::uint32_t>(bits)))
+        : std::bit_cast<double>(bits);
 }
 
 [[nodiscard]] std::int64_t signed_bits(const PackedLogic4& value,
@@ -808,7 +820,10 @@ public:
              index < site.arguments.size() && index < actuals.size();
              ++index) {
             auto& argument = site.arguments[index];
-            if (argument.expression) {
+            if (argument.expression && argument.real) {
+                argument.value.kind = Value::Kind::real;
+                argument.value.real = real_bits(actuals[index]);
+            } else if (argument.expression) {
                 argument.value.kind = Value::Kind::bits;
                 argument.value.bits = actuals[index];
             }
@@ -943,6 +958,7 @@ private:
         fsim_vpi_handle_v1 object { };
         bool expression { };
         bool string_literal { };
+        bool real { };
         Value value;
     };
     struct CallSite {
@@ -1192,6 +1208,7 @@ private:
                 argument.value.text = argument.text;
             } else if (name.starts_with("e:")) {
                 argument.expression = true;
+                argument.real = name.starts_with("e:r:");
                 argument.value.is_signed = name.starts_with("e:s:");
                 argument.text = name.size() > 4U ? name.substr(4U) : "";
             } else {
@@ -1307,6 +1324,23 @@ private:
         return delay;
     }
 
+    // vpiScaledRealTime is in the time unit of `object`'s module, or of
+    // the simulation without one (IEEE 1800-2023 38.36.2, 38.34).
+    [[nodiscard]] runtime::SystemVerilogVpiTimeValue delay_of(
+        const s_vpi_time& time, const fsim_vpi_handle_v1 object) const
+    {
+        auto delay = delay_of(time);
+        if (time.type == vpiScaledRealTime) {
+            if (const auto scale = module_time_scale(object)) {
+                const auto profile
+                    = simulation_.systemverilog_vpi_time().profile();
+                delay.scaled_real *= std::pow(10.0,
+                    scale->first - static_cast<int>(profile.unit_exponent));
+            }
+        }
+        return delay;
+    }
+
     fsim_vpi_status_v1 register_callback(
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
@@ -1317,11 +1351,33 @@ private:
         }
         auto stored = std::make_unique<Callback>();
         stored->data = *data;
-        if (data->time != nullptr) {
+        // Simulation action callbacks take no time (IEEE 1800-2023
+        // 38.36.3); a caller may leave the field uninitialized.
+        const auto action_reason = data->reason == cbEndOfCompile
+            || data->reason == cbStartOfSimulation
+            || data->reason == cbEndOfSimulation
+            || data->reason == cbError || data->reason == cbPLIError
+            || data->reason == cbTchkViolation
+            || data->reason == cbStartOfSave || data->reason == cbEndOfSave
+            || data->reason == cbStartOfRestart
+            || data->reason == cbEndOfRestart
+            || data->reason == cbStartOfReset
+            || data->reason == cbEndOfReset
+            || data->reason == cbEnterInteractive
+            || data->reason == cbExitInteractive
+            || data->reason == cbInteractiveScopeChange
+            || data->reason == cbUnresolvedSystf;
+        if (!action_reason && data->time != nullptr) {
             stored->time = *data->time;
             stored->has_time = true;
         }
-        if (data->value != nullptr) {
+        // Only the object callbacks read value (IEEE 1800-2023 38.36.1);
+        // other reasons may leave the field uninitialized.
+        const auto value_reason = data->reason == cbValueChange
+            || data->reason == cbForce || data->reason == cbRelease
+            || data->reason == cbAssign || data->reason == cbDeassign
+            || data->reason == cbDisable;
+        if (value_reason && data->value != nullptr) {
             stored->value.format = data->value->format;
             stored->has_value = true;
         }
@@ -1350,7 +1406,7 @@ private:
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             kind = runtime::SystemVerilogVpiCallbackKind::AfterDelay;
-            delay = delay_of(stored->time);
+            delay = delay_of(stored->time, object);
             break;
         // The time of these callbacks names a time queue, not a delay
         // (IEEE 1800-2023 38.36.2); cbAtEndOfSimTime runs after the
@@ -1360,22 +1416,19 @@ private:
             if (!stored->has_time) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
-            delay = delay_of(stored->time);
-            if (stored->time.type == vpiSimTime) {
-                const auto now = simulation_.systemverilog_vpi_time().query(
-                    runtime::SystemVerilogVpiTimeFormat::IntegerTicks);
-                const auto current
-                    = (static_cast<std::uint64_t>(now.value.high) << 32U)
-                    | now.value.low;
-                const auto requested
-                    = (static_cast<std::uint64_t>(stored->time.high) << 32U)
-                    | stored->time.low;
-                if (requested < current) {
-                    return FSIM_VPI_STATUS_NOT_FOUND;
-                }
-                delay->high = static_cast<std::uint32_t>((requested - current) >> 32U);
-                delay->low = static_cast<std::uint32_t>(requested - current);
+            auto& time_service = simulation_.systemverilog_vpi_time();
+            const auto requested
+                = time_service.convert_delay(delay_of(stored->time, object));
+            const auto now = time_service.query(
+                runtime::SystemVerilogVpiTimeFormat::IntegerTicks);
+            if (!requested || requested.ticks < now.ticks) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
             }
+            const auto precision_ticks
+                = (requested.ticks - now.ticks) * now.profile.tick_multiplier;
+            delay = runtime::SystemVerilogVpiTimeValue { };
+            delay->high = static_cast<std::uint32_t>(precision_ticks >> 32U);
+            delay->low = static_cast<std::uint32_t>(precision_ticks);
             kind = data->reason == cbAtStartOfSimTime
                 ? runtime::SystemVerilogVpiCallbackKind::AfterDelay
                 : runtime::SystemVerilogVpiCallbackKind::ReadWrite;
@@ -1404,9 +1457,11 @@ private:
                 && data->reason != cbAtEndOfSimTime && stored->has_time
                 && (stored->time.high != 0 || stored->time.low != 0
                     || stored->time.real != 0.0)) {
-                delay = delay_of(stored->time);
+                delay = delay_of(stored->time, object);
             }
             registration.delay = delay;
+            registration.at_slot_start = data->reason == cbAfterDelay
+                || data->reason == cbAtStartOfSimTime;
             registration.callback
                 = [this, serial](
                       const runtime::SystemVerilogVpiCallbackEvent& event) {
@@ -1477,7 +1532,7 @@ private:
         data.time = nullptr;
         data.value = nullptr;
         if (stored.has_time) {
-            fill_time(time, 0U);
+            fill_time(time, internal(stored.data.obj));
             data.time = &time;
         }
         if (event && stored.has_value
@@ -1823,6 +1878,28 @@ private:
         return 0U;
     }
 
+    [[nodiscard]] std::optional<std::pair<int, int>> module_time_scale(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (handle == 0U) {
+            return std::nullopt;
+        }
+        auto scope = handle;
+        if (const auto* site = call_of(handle)) {
+            const auto found = registry_.find(site->scope);
+            scope = found && found.value ? found.value->handle : 0U;
+        } else {
+            const auto reference = resolve(handle);
+            const auto* select = select_of(reference);
+            scope = select ? select->parent : reference;
+        }
+        const auto module = info(enclosing_module(scope));
+        if (!module) {
+            return std::nullopt;
+        }
+        return simulation_.systemverilog_instance_time_scale(module->full_name);
+    }
+
     fsim_vpi_status_v1 handle(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
@@ -1969,6 +2046,12 @@ private:
             return succeed(result, 0U, static_cast<std::uint64_t>(value));
         };
         if (property == vpiTimeUnit || property == vpiTimePrecision) {
+            // An object answers with its module's `timescale; a null
+            // handle with the simulation time unit (IEEE 1800-2023 38.6).
+            if (const auto scale = module_time_scale(request.handle)) {
+                return integer(property == vpiTimeUnit ? scale->first
+                                                       : scale->second);
+            }
             const auto profile = simulation_.systemverilog_vpi_time().profile();
             return integer(property == vpiTimeUnit ? profile.unit_exponent
                                                    : profile.precision_exponent);
@@ -1999,6 +2082,9 @@ private:
             case vpiConstType:
                 if (named->string_literal) {
                     return integer(vpiStringConst);
+                }
+                if (named->real || named->value.kind == Value::Kind::real) {
+                    return integer(vpiRealConst);
                 }
                 if (named->text.find("'b") != std::string::npos
                     || named->text.find("'B") != std::string::npos) {
@@ -2085,6 +2171,8 @@ private:
             return integer(object->source ? object->source->line : 0);
         case vpiTopModule:
             return integer(object->parent == 0U ? 1 : 0);
+        case vpiCellInstance:
+            return integer(object->type && object->type->is_cell ? 1 : 0);
         case vpiAutomatic:
             return integer(object->type
                         && object->type->lifetime
@@ -2166,6 +2254,32 @@ private:
             return "vpiPort";
         case vpiIterator:
             return "vpiIterator";
+        case vpiIntVar:
+            return "vpiIntVar";
+        case vpiShortIntVar:
+            return "vpiShortIntVar";
+        case vpiLongIntVar:
+            return "vpiLongIntVar";
+        case vpiByteVar:
+            return "vpiByteVar";
+        case vpiBitVar:
+            return "vpiBitVar";
+        case vpiStringVar:
+            return "vpiStringVar";
+        case vpiEnumVar:
+            return "vpiEnumVar";
+        case vpiStructVar:
+            return "vpiStructVar";
+        case vpiPackage:
+            return "vpiPackage";
+        case vpiInterface:
+            return "vpiInterface";
+        case vpiProgram:
+            return "vpiProgram";
+        case vpiNetBit:
+            return "vpiNetBit";
+        case vpiRegBit:
+            return "vpiRegBit";
         default:
             return nullptr;
         }
@@ -2317,13 +2431,18 @@ private:
         return slot.c_str();
     }
 
-    void fill_time(s_vpi_time& time, const fsim_vpi_handle_v1) const
+    void fill_time(s_vpi_time& time, const fsim_vpi_handle_v1 object) const
     {
         auto& service = simulation_.systemverilog_vpi_time();
         if (time.type == vpiScaledRealTime) {
-            time.real = service.query(
-                    runtime::SystemVerilogVpiTimeFormat::ScaledReal)
-                            .value.scaled_real;
+            const auto query
+                = service.query(runtime::SystemVerilogVpiTimeFormat::ScaledReal);
+            time.real = query.value.scaled_real;
+            // In the time unit of the object's module (IEEE 1800-2023 38.13).
+            if (const auto scale = module_time_scale(object)) {
+                time.real *= std::pow(10.0,
+                    static_cast<int>(query.profile.unit_exponent) - scale->first);
+            }
             return;
         }
         if (time.type == vpiSimTime) {
@@ -2605,6 +2724,7 @@ private:
             return succeed(result);
         }
         auto object = resolve(request.handle);
+        const auto requested = object;
         // A value the write derives from the target's current one: a
         // select's bits merged into its parent, or a toggled event.
         std::optional<Value> prepared;
@@ -2641,33 +2761,36 @@ private:
                 != runtime::SystemVerilogVpiValueError::None) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
+            // value_p reports the released object itself (IEEE 1800-2023
+            // 38.34), so a select reports its own bits, not its parent's.
             if (arguments->value != nullptr) {
-                if (const auto current = object_value(object)) {
+                if (const auto current = object_value(requested)) {
                     (void)write_value(*current, *arguments->value);
                 }
             }
             return succeed(result);
         }
         // A put to a named event triggers it and ignores the value
-        // (IEEE 1800-2023 38.35); an event is a signal its triggers toggle.
-        if (target->kind == SystemVerilogVpiObjectKind::NamedEvent) {
-            const auto current = object_value(object);
-            Value toggled;
-            toggled.bits = PackedLogic4 { 1U,
-                current && value_bits(*current, 1U).get(0U) == Logic4::one
-                    ? Logic4::zero
-                    : Logic4::one };
-            prepared = std::move(toggled);
-        } else if (arguments->value == nullptr) {
+        // (IEEE 1800-2023 38.35); the put carries a one-bit trigger token.
+        const bool event
+            = target->kind == SystemVerilogVpiObjectKind::NamedEvent;
+        if (!event && arguments->value == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
-        const auto value = prepared ? prepared
-                                         : input_value(*arguments->value,
-                                               std::max<std::size_t>(target->type->width, 1U));
-        if (!value) {
-            return FSIM_VPI_STATUS_NOT_FOUND;
+        std::optional<runtime::SystemVerilogVpiStoredValue> stored;
+        if (event) {
+            stored.emplace();
+            stored->payload = PackedLogic4 { 1U, Logic4::one };
+        } else {
+            const auto value = prepared ? prepared
+                                        : input_value(*arguments->value,
+                                              std::max<std::size_t>(
+                                                  target->type->width, 1U));
+            if (!value) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            stored = stored_for(object, *value);
         }
-        auto stored = stored_for(object, *value);
         if (!stored) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
@@ -2687,7 +2810,7 @@ private:
                 : FSIM_VPI_STATUS_NOT_FOUND;
         }
         const auto delay = simulation_.systemverilog_vpi_time().convert_delay(
-            delay_of(*arguments->time));
+            delay_of(*arguments->time, object));
         if (!delay) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }

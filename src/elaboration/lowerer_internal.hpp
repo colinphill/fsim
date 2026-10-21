@@ -1978,7 +1978,8 @@ private:
         SignalId source,
         std::string_view attribute,
         runtime::SimulationTick duration,
-        frontend::SourceSpan span);
+        frontend::SourceSpan span,
+        std::optional<HirConstantSelection> selection = std::nullopt);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_signal_attribute(
         semantic::ExpressionId expression,
@@ -2171,11 +2172,30 @@ private:
         semantic::StatementId statement);
     [[nodiscard]] bool is_hir_vhdl_file_call(
         semantic::ExpressionId expression) const;
+    // The width and domain of a file call's result: BOOLEAN for ENDFILE
+    // and FILE_CANSEEK, an enumeration for FILE_OPEN, FILE_STATE and
+    // FILE_MODE, INTEGER otherwise (IEEE 1076-2019 5.5.2).
+    [[nodiscard]] std::pair<std::size_t, frontend::ValueDomain>
+    hir_vhdl_file_call_type(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::uint64_t>
     hir_vhdl_standard_enumeration_literal(
         semantic::ExpressionId expression) const;
+    // The position of a STD.REFLECTION TYPE_CLASS literal (CLASS_ARRAY and
+    // so on) that names no user declaration (IEEE 1076-2019 16.12.2).
+    [[nodiscard]] std::optional<std::uint64_t>
+    hir_vhdl_reflection_class_literal(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_file_call(
         semantic::ExpressionId expression);
+    // A FILE_SEEK, FILE_TRUNCATE, FILE_POSITION or other VHDL-2019 file
+    // operation on the file object held in `file`, as a 32-bit result; a
+    // missing amount is 0 and a missing origin FILE_ORIGIN_BEGIN (IEEE
+    // 1076-2019 5.5.2).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_file_position(
+        runtime::simir::FilePositionKind kind, RegisterId file,
+        semantic::ExpressionId file_expression,
+        std::optional<semantic::ExpressionId> amount,
+        std::optional<semantic::ExpressionId> origin);
     [[nodiscard]] bool is_hir_vhdl_file_statement(
         semantic::StatementId statement) const;
     [[nodiscard]] bool lower_hir_vhdl_file_statement(
@@ -3428,6 +3448,10 @@ private:
         frontend::SystemVerilogScalarKind scalar {
             frontend::SystemVerilogScalarKind::None
         };
+        // An unpacked open-array formal (IEEE 1800-2023 35.5.6.1): the
+        // actual's fixed array type; `width` is all its elements' bits,
+        // leftmost element most significant.
+        std::optional<runtime::simir::ContainerType> open_array;
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;

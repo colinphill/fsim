@@ -75,6 +75,13 @@ package vunit_shim_pkg is
   procedure check_equal(constant got : in signed; constant expected : in signed; constant msg : in string := "");
   procedure check_equal(constant got : in signed; constant expected : in integer; constant msg : in string := "");
   procedure check_equal(constant got : in integer; constant expected : in signed; constant msg : in string := "");
+
+  -- VUnit's run paths. Both are the simulation's work directory, which
+  -- holds a copy of each data file the testbench names.
+  function tb_path(constant cfg : string) return string;
+  function output_path(constant cfg : string) return string;
+  -- VUnit path_pkg join of two path parts.
+  function join(constant p1 : string; constant p2 : string) return string;
 end package;
 
 package body vunit_shim_pkg is
@@ -90,6 +97,21 @@ package body vunit_shim_pkg is
   function result(str : string) return string is
   begin
     return check_result_tag & str;
+  end function;
+
+  function tb_path(constant cfg : string) return string is
+  begin
+    return ".";
+  end function;
+
+  function output_path(constant cfg : string) return string is
+  begin
+    return ".";
+  end function;
+
+  function join(constant p1 : string; constant p2 : string) return string is
+  begin
+    return p1 & "/" & p2;
   end function;
 
   -- Each test_suite iteration runs the next test case: run() counts its

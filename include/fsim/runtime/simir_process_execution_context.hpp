@@ -199,7 +199,7 @@ public:
     [[nodiscard]] virtual std::string file_error(
         FileHandle, bool&);
     [[nodiscard]] virtual std::int32_t position_file(
-        FileHandle, FilePositionKind, std::int32_t, std::int32_t);
+        FileHandle, FilePositionKind, std::int32_t, std::int32_t, bool);
     virtual void flush_file(std::optional<FileHandle>);
 
     /// Allocation-free single-word access used by generated scalar/vector code.

@@ -35,4 +35,10 @@ struct PortActualResult {
     const semantic::SpecializedHirUnit& specialization,
     std::string_view child_path);
 
+// A packed integral variable port with no net type: it keeps its own
+// storage and drives a resolved actual as one source (IEEE 1800-2017 23.3.3).
+[[nodiscard]] bool is_simple_variable_output_port(
+    const semantic::sv::Declaration& declaration,
+    const semantic::sv::TypeReference& effective_type) noexcept;
+
 } // namespace fsim::elaboration::hierarchy_sv_ports_detail

@@ -2550,8 +2550,9 @@ private:
         return true;
     }
 
-    // A literal of SEVERITY_LEVEL, FILE_OPEN_KIND or FILE_OPEN_STATUS that
-    // no declaration claims (IEEE 1076-2008 16.3).
+    // A literal of SEVERITY_LEVEL, FILE_OPEN_KIND, FILE_OPEN_STATUS,
+    // FILE_ORIGIN_KIND or FILE_OPEN_STATE that no declaration claims (IEEE
+    // 1076-2019 16.3).
     [[nodiscard]] static std::optional<std::int64_t>
     vhdl_predefined_enumeration_ordinal(const vhdl::Expression& expression)
     {
@@ -2561,13 +2562,16 @@ private:
                     || !expression.referenced_name->overloads.empty()))) {
             return std::nullopt;
         }
-        static constexpr std::array<std::pair<std::string_view, int>, 11U>
+        static constexpr std::array<std::pair<std::string_view, int>, 17U>
             literals {{
                 { "note", 0 }, { "warning", 1 }, { "error", 2 },
                 { "failure", 3 }, { "read_mode", 0 }, { "write_mode", 1 },
-                { "append_mode", 2 }, { "open_ok", 0 },
-                { "status_error", 1 }, { "name_error", 2 },
-                { "mode_error", 3 },
+                { "append_mode", 2 }, { "read_write_mode", 3 },
+                { "open_ok", 0 }, { "status_error", 1 },
+                { "name_error", 2 }, { "mode_error", 3 },
+                { "file_origin_begin", 0 }, { "file_origin_current", 1 },
+                { "file_origin_end", 2 }, { "state_open", 0 },
+                { "state_closed", 1 },
             }};
         for (const auto& [name, ordinal] : literals) {
             if (support::equal_ignoring_ascii_case(expression.text, name)) {

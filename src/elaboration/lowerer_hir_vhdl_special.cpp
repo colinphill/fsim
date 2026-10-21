@@ -1480,6 +1480,7 @@ void Lowerer::load_hir_vhdl_protected_caches(
                 }
                 const auto mode_text = kind_name == "write_mode" ? "w"
                     : kind_name == "append_mode"                ? "a"
+                    : kind_name == "read_write_mode"            ? "r+"
                                                                  : "r";
                 if (path) {
                     const auto mode = allocate_string_register();

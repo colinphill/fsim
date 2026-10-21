@@ -73,6 +73,9 @@ void ApplicationTestFixture::write_vhdl_generic_top(
     const std::uint64_t narrow_value) {
   std::ofstream output(vhdl_generic_top_source);
   output << R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity vhdl_generic_top is
 end entity;
 

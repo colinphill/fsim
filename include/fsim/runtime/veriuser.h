@@ -195,6 +195,29 @@ typedef struct t_tfnodeinfo {
   PLI_INT32* node_handle;
 } s_tfnodeinfo, *p_tfnodeinfo;
 
+/* Kinds of user system tasks and functions in a veriusertfs table. */
+#define usertask 1
+#define USERTASK usertask
+#define userfunction 2
+#define USERFUNCTION userfunction
+#define userrealfunction 3
+#define USERREALFUNCTION userrealfunction
+
+/* One entry of a PLI 1.0 veriusertfs table; a zero type ends the table. */
+typedef struct t_tfcell {
+  PLI_INT16 type;
+  PLI_INT16 data;
+  PLI_INT32 (*checktf)(PLI_INT32 data, PLI_INT32 reason);
+  PLI_INT32 (*sizetf)(PLI_INT32 data, PLI_INT32 reason);
+  PLI_INT32 (*calltf)(PLI_INT32 data, PLI_INT32 reason);
+  PLI_INT32 (*misctf)(PLI_INT32 data, PLI_INT32 reason, PLI_INT32 paramvc);
+  PLI_BYTE8* tfname;
+  PLI_INT32 forwref;
+  PLI_BYTE8* tfveritool;
+  PLI_BYTE8* tferrmessage;
+  PLI_BYTE8 reserved[20];
+} s_tfcell, *p_tfcell;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -225,6 +248,7 @@ XXTERN PLI_BYTE8* tf_getinstance PROTO_PARAMS((void));
 XXTERN PLI_INT32 tf_getlongp
     PROTO_PARAMS((PLI_INT32* high_value, PLI_INT32 pnum));
 XXTERN PLI_INT32 tf_getlongtime PROTO_PARAMS((PLI_INT32* high_time));
+XXTERN PLI_INT32 tf_getlongsimtime PROTO_PARAMS((PLI_INT32* high_time));
 XXTERN PLI_INT32 tf_getnextlongtime
     PROTO_PARAMS((PLI_INT32* low_time, PLI_INT32* high_time));
 XXTERN PLI_INT32 tf_getp PROTO_PARAMS((PLI_INT32 pnum));
@@ -382,6 +406,10 @@ XXTERN PLI_BYTE8* tf_getroutine PROTO_PARAMS((void));
 XXTERN PLI_BYTE8* tf_igetroutine PROTO_PARAMS((PLI_BYTE8* instance));
 EETERN PLI_INT32 err_intercept
     PROTO_PARAMS((PLI_INT32 level, PLI_BYTE8* facility, PLI_BYTE8* code));
+
+/* Registers each entry of a veriusertfs table as a system task or function
+   through VPI; a VPI startup routine calls it while the module loads. */
+XXTERN void veriusertfs_register_table PROTO_PARAMS((p_tfcell table));
 
 PLI_VEXTERN PLI_DLLESPEC PLI_BYTE8* veriuser_version_str;
 PLI_VEXTERN PLI_DLLESPEC PLI_INT32 (*endofcompile_routines[])(void);

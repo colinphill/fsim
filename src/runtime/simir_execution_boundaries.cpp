@@ -1149,6 +1149,7 @@ void Interpreter::Impl::handle_boundary(
                 || origin->timeout != wait->timeout
                 || origin->timeout_result
                     != wait->timeout_result
+                || origin->timeout_source != wait->timeout_source
                 || origin->signals != wait->signals
                 || origin->edges != wait->edges) {
                 process.pc = instruction;
@@ -1214,10 +1215,31 @@ void Interpreter::Impl::handle_boundary(
                     *wait->timeout_origin,
                     wait->timeout_result);
             } else {
+                auto timeout = *wait->timeout;
+                if (wait->timeout_source) {
+                    // A runtime TIME timeout (IEEE 1076-2019 10.2); the
+                    // lowering has already rejected a negative value.
+                    WaitFor scale;
+                    scale.delay = 1U;
+                    scale.source = wait->timeout_source;
+                    scale.source_width = wait->timeout_source_width;
+                    scale.source_signed = true;
+                    try {
+                        const auto payload = process.executor
+                            ? process.executor->read_register(
+                                  *wait->timeout_source,
+                                  wait->timeout_source_width)
+                            : get_register(process, *wait->timeout_source);
+                        timeout = normalized_dynamic_wait_delay(scale, payload);
+                    } catch (const std::exception& error) {
+                        process.pc = instruction;
+                        fail(process, error.what());
+                    }
+                }
                 begin_wait_timeout(
                     process,
                     instruction,
-                    *wait->timeout,
+                    timeout,
                     wait->timeout_result);
             }
         } else {

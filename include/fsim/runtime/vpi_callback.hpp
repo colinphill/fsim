@@ -127,6 +127,10 @@ struct SystemVerilogVpiCallbackRegistration {
     std::optional<SystemVerilogVpiTimeValue> delay;
     std::uint64_t user_data { };
     SystemVerilogVpiCallback callback;
+    /// An AfterDelay callback with a nonzero delay runs before any event of
+    /// its time slot (cbAfterDelay, cbAtStartOfSimTime; IEEE 1800-2023
+    /// 38.36.2).
+    bool at_slot_start { };
 };
 
 struct SystemVerilogVpiCallbackRegistrationResult {

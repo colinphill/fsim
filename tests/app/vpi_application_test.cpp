@@ -1348,8 +1348,10 @@ Capture execute(
         == fsim::runtime::SystemVerilogVpiValueError::None);
     capture.released_at_ten
         = simulation.read_signal(*signal).to_msb_string();
+    // A released variable keeps its forced value until its next procedural
+    // assignment (IEEE 1800-2023 10.6.2, 38.34).
     assert(!simulation.signal_is_forced(*signal)
-        && capture.released_at_ten == next);
+        && capture.released_at_ten == forced);
 
     const auto stop = control.submit(
         { fsim::runtime::SystemVerilogVpiControlOperation::Stop,
@@ -1402,14 +1404,16 @@ Capture execute(
     assert(capture.finish.kind
             == SystemVerilogVpiCallbackKind::EndOfSimulation
         && capture.finish.time == 15);
-    if (capture.value_events.size() != 3) {
+    // The release at 10 keeps the forced value, so the next change is the
+    // assignment at 15.
+    if (capture.value_events.size() != 2) {
         std::cerr << "unexpected VPI value events:";
         for (const auto& event : capture.value_events) {
             std::cerr << ' ' << static_cast<unsigned>(event.kind) << '@'
                       << event.time << ':' << event.delta << '=' << event.value;
         }
         std::cerr << '\n';
-        assert(capture.value_events.size() == 3);
+        assert(capture.value_events.size() == 2);
     }
     assert(capture.value_events[0].kind
             == SystemVerilogVpiCallbackKind::ValueChange
@@ -1417,12 +1421,8 @@ Capture execute(
         && capture.value_events[0].time == 0);
     assert(capture.value_events[1].kind
             == SystemVerilogVpiCallbackKind::ValueChange
-        && capture.value_events[1].value == next
-        && capture.value_events[1].time == 10);
-    assert(capture.value_events[2].kind
-            == SystemVerilogVpiCallbackKind::ValueChange
-        && capture.value_events[2].value == late
-        && capture.value_events[2].time == 15);
+        && capture.value_events[1].value == late
+        && capture.value_events[1].time == 15);
     assert(capture.memory_events.size() == 2
         && capture.memory_events[0].time == 0
         && capture.memory_events[0].value

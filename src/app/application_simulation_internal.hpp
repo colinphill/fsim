@@ -667,6 +667,9 @@ struct Simulation::Impl {
         vpi_driver_bindings;
 
     std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_event_handles;
+    // The event a published named-event handle triggers (IEEE 1800-2023
+    // 38.35).
+    std::map<fsim_vpi_handle_v1, SignalId> vpi_event_signals;
 
     std::map<std::string, fsim_vpi_handle_v1, std::less<>>
         vpi_assertion_handles;

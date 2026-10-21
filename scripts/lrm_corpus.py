@@ -36,6 +36,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -671,6 +672,8 @@ VERILATOR_STANDARD_2023 = {
 }
 
 VERILATOR_NONSTANDARD = {
+    **{name: "an imported function calls an exported task; IEEE 1800-2023 35.8 makes that "
+       "never legal" for name in ("t_dpi_export", "t_dpi_export_noopt", "t_dpi_qw")},
     **{name: "expects a %p image of a class or virtual-interface handle, "
         "whose format is implementation-dependent (IEEE 1800-2017 21.2.1.7)"
        for name in ("t_class_param_pkg", "t_interface_virtual",
@@ -891,7 +894,6 @@ VERILATOR_NONSTANDARD = {
     # A synchronous drive targets a clockvar expression, not a
     # concatenation (IEEE 1800-2023 14.16); the test notes this.
     "t_clocking_drive_concat": "drives a concatenation of clockvars",
-    "t_opt_const_shortcut": "needs a Verilator C++ DPI companion file",
     # A variable may not be both continuously and procedurally assigned
     # (IEEE 1800-2017 6.5).
     "t_cover_toggle": "mixes continuous and procedural assignments to one "
@@ -916,8 +918,6 @@ VERILATOR_NONSTANDARD = {
     "t_link_default_type_param": "uses the Verilator $c extension",
     "t_timing_initial_always": "uses the Verilator $c extension",
     "t_sys_stacktrace": "uses the Verilator $stacktrace task",
-    "t_opt_const_no_expand": "needs a Verilator C++ DPI companion file",
-    "t_opt_const_no_opt": "needs a Verilator C++ DPI companion file",
     # A select applies to a name, not a method-call result
     # (IEEE 1800-2017 11.5.1).
     "t_bitsel_concat": "selects bits of a method-call result",
@@ -957,8 +957,6 @@ VERILATOR_NONSTANDARD = {
         "hexadecimal elements",
     "t_stream_bitqueue": "compares %p text against Verilator's "
         "hexadecimal elements",
-    "t_func_wide_out": "needs a Verilator C++ DPI companion file",
-    "t_wide_temp_while_cond": "needs a Verilator C++ DPI companion file",
     # A header package import is followed by a parameter or port list
     # (IEEE 1800-2017 A.1.2, footnote).
     "t_package_twodeep": "has a header package import without a port "
@@ -978,7 +976,6 @@ VERILATOR_NONSTANDARD = {
     # A top-level instance is a module, not a primitive (IEEE 1800-2017
     # 23.3.1).
     "t_udp_binary": "has only a primitive and no top-level module",
-    "t_func_wide_out_noinl": "needs a Verilator C++ DPI companion file",
     # A real associative-array index is not allowed (IEEE 1800-2017 7.8.5);
     # the test notes it covers a Verilator extension.
     "t_pattern_key_expr": "uses a real associative-array index",
@@ -1080,7 +1077,9 @@ VERILATOR_NONSTANDARD = {
     # Zero-delay loops, scheduling races and Verilator-specific evaluation.
     **{name: "needs a zero-delay always loop to terminate" for name in (
         "t_event_control_prev_name_collision", "t_opt_slice",
-        "t_opt_slice_no", "t_split_var_types", "t_timing_write_expr")},
+        "t_opt_slice_no", "t_split_var_types", "t_timing_write_expr",
+        "t_cover_line_cc", "t_cover_line_cc_vlt", "t_cover_line_sc",
+        "t_cover_line_trace")},
     **{name: "expects a process to wake on its own writes (not IEEE "
         "1800-2017 9.4.2)" for name in (
         "t_timing_sched", "t_scheduling_5", "t_finish_stops_nonfinal2")},
@@ -1135,7 +1134,8 @@ VERILATOR_NONSTANDARD = {
         "expressions (IEEE 1800-2017 A.2.1.2 list_of_port_identifiers)",
     **{name: "assigns the net words_i from an always_ff procedure; a "
         "procedural assignment's target is a variable (IEEE 1800-2023 10.4)"
-       for name in ("t_opt_const", "t_opt_const_dfg")},
+       for name in ("t_opt_const", "t_opt_const_dfg", "t_opt_const_no_expand",
+                    "t_opt_const_no_opt")},
     **{name: "the companion's non-Verilator branch gives the import "
         "dpic_final C++ linkage, so no C function implements it (IEEE "
         "1800-2023 35.5.1 links imports by their C name)"
@@ -1143,8 +1143,20 @@ VERILATOR_NONSTANDARD = {
     "t_vpi_const_type": "reads the integer property vpiConstType with "
         "vpi_get_str, which IEEE 1800-2023 38.12 defines for string "
         "properties only",
-    "t_vpi_param": "expects vpi_get(vpiLocalParam) on a parameter to raise an "
-        "error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters",
+    **{name: "expects vpi_get(vpiLocalParam) on a parameter to raise an "
+        "error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters"
+       for name in ("t_vpi_param", "t_vpi_public_params")},
+    **{name: "expects vpiName to keep an escaped identifier's backslash and "
+        "trailing space (\\mod.a ); neither is part of the identifier "
+        "(IEEE 1800-2023 5.6.1)"
+       for name in ("t_vpi_module", "t_vpi_module_dpi", "t_vpi_public_depth")},
+    "t_display_p_elab": "its non-Verilator branch compares the $sformatf(\"%p\") "
+        "image of a queue and an associative-array parameter with the "
+        "placeholder \"x\", which no assignment pattern image (IEEE 1800-2023 "
+        "21.2.1.6) equals",
+    "t_foreach_delete": "deletes queue elements inside a foreach loop over "
+        "that queue and counts the iterations; IEEE 1800-2023 12.7.3 leaves "
+        "the results undefined when the dimensions change during the loop",
     "t_vpi_escape": "expects Verilator's vpiFullName spelling "
         "'TOP.escaped_normal' and a 'top.' root for other simulators; IEEE "
         "1800-2023 37.3.1 gives vpiFullName as the full hierarchical name",
@@ -1176,27 +1188,42 @@ def unconditional_verilated_include(text: str) -> bool:
     return False
 
 
-def without_verilator_branches(text: str) -> str:
+def without_verilator_branches(text: str, defined: set[str] | None = None) -> str:
     """The source another simulator compiles: the text of `ifdef VERILATOR
-    branches (and `ifndef VERILATOR else branches) is dropped."""
+    branches (and `ifndef VERILATOR else branches) is dropped. With
+    `defined`, the macros in it are defined and any other macro the text
+    does not `define is not, so every conditional with such tests is
+    resolved; without it, other macros are unknown and their branches kept."""
+    known: dict[str, bool] = {"VERILATOR": False}
+    if defined is not None:
+        own = set(re.findall(r"`define\s+(\w+)", text))
+        for macro in re.findall(r"`(?:ifdef|ifndef|elsif)\s+(\w+)", text):
+            if macro in defined:
+                known[macro] = True
+            elif macro not in own:
+                known[macro] = False
     kept: list[str] = []
-    # One entry per open conditional: whether it is a VERILATOR test and
-    # whether its current branch is the Verilator-only one.
-    stack: list[tuple[bool, bool]] = []
+    # One entry per open conditional: whether one of its branches is known
+    # to be taken, and whether the current branch is known to be dropped.
+    stack: list[list[bool]] = []
     for line in text.splitlines():
         directive = re.match(r"\s*`(ifdef|ifndef|elsif|else|endif)\b\s*(\w*)", line)
         if directive:
             kind, macro = directive.groups()
-            if kind in ("ifdef", "ifndef"):
-                stack.append((macro == "VERILATOR",
-                              macro == "VERILATOR" and kind == "ifdef"))
-            elif kind in ("elsif", "else") and stack:
-                verilator, active = stack[-1]
-                stack[-1] = (verilator, verilator and kind == "else" and not active)
+            value = known.get(macro)
+            if kind == "ifdef":
+                stack.append([value is True, value is False])
+            elif kind == "ifndef":
+                stack.append([value is False, value is True])
+            elif kind == "elsif" and stack:
+                taken, _ = stack[-1]
+                stack[-1] = [taken or value is True, taken or value is False]
+            elif kind == "else" and stack:
+                stack[-1][1] = stack[-1][0]
             elif kind == "endif" and stack:
                 stack.pop()
             continue
-        if not any(active for _, active in stack):
+        if not any(dropped for _, dropped in stack):
             kept.append(line)
     return "\n".join(kept)
 
@@ -1252,6 +1279,8 @@ def verilator_cases(root: Path) -> list[Case]:
         if not scenario or not re.search(r"['\"]simulator(_st)?['\"]", scenario.group(1)):
             continue
         name = driver.stem
+        # `"t/" + test.name + ".cpp"` names the test's own companion.
+        source = re.sub(r"\btest\.name\b", repr(name), source)
         top_match = re.search(r"test\.top_filename\s*=\s*['\"]([^'\"]+)['\"]", source)
         top_file = tdir / f"{name}.v"
         if top_match:
@@ -1264,6 +1293,10 @@ def verilator_cases(root: Path) -> list[Case]:
         # A VPI test's companion (test.pli_filename, t/<name>.cpp) carries a
         # Verilator main and a standalone IS_VPI form other simulators load.
         pli_companion = tdir / f"{name}.cpp"
+        pli_match = re.search(
+            r"test\.pli_filename\s*=\s*['\"]([^'\"]+)['\"]", source)
+        if pli_match:
+            pli_companion = tdir.parent / pli_match.group(1)
         uses_pli = bool(re.search(r"make_pli\s*=\s*True|test\.pli_filename", source)) \
             and pli_companion.is_file()
         if re.search(r"\.(cpp|c|sv)['\"]", source) and "--exe" in source and not uses_pli:
@@ -1295,6 +1328,12 @@ def verilator_cases(root: Path) -> list[Case]:
         if uses_pli:
             companions.append(pli_companion)
         companions = list(dict.fromkeys(companions))
+        # A companion that implements the design's DPI-C imports is a DPI
+        # harness even when the driver never names DPI.
+        if companions and not foreign_harness and top_file.exists() \
+                and re.search(r'import\s+"DPI-C"', read_text(top_file)):
+            foreign_harness = True
+            skip = skip or "requires SystemC, PLI/VPI or DPI harness"
         foreign = None
         if companions and foreign_harness \
                 and skip == "requires SystemC, PLI/VPI or DPI harness":
@@ -1314,12 +1353,8 @@ def verilator_cases(root: Path) -> list[Case]:
         # Verilator extensions and behaviour it marks non-standard are outside
         # the IEEE LRMs (owner decision, 2026-10-12).
         out_of_scope = None
-        if top_file.exists():
-            verilog = read_text(top_file)
-            if VERILATOR_C_TASKS.search(without_verilator_branches(verilog)):
-                out_of_scope = "out of scope: Verilator $c extension"
-            elif name in VERILATOR_NONSTANDARD:
-                out_of_scope = "out of scope: " + VERILATOR_NONSTANDARD[name]
+        if top_file.exists() and name in VERILATOR_NONSTANDARD:
+            out_of_scope = "out of scope: " + VERILATOR_NONSTANDARD[name]
         # fails=test.vlt_all marks a Verilator-only diagnostic; other
         # simulators run the model, which may end in an unconditional $stop.
         verilator_only_failure = bool(re.search(
@@ -1385,6 +1420,14 @@ def verilator_cases(root: Path) -> list[Case]:
         for definition in definitions:
             if definition.split("=")[0] not in dropped_defines:
                 compile_args += ["-D", definition]
+        defined = {definition.split("=")[0] for definition in definitions
+                   if definition.split("=")[0] not in dropped_defines}
+        defined |= {"SIMULATOR", "TEST_OBJ_DIR", "TEST_DUMPFILE"}
+        if "VERILATOR_TIMING" in compile_args:
+            defined.add("VERILATOR_TIMING")
+        if top_file.exists() and not out_of_scope and VERILATOR_C_TASKS.search(
+                without_verilator_branches(read_text(top_file), defined)):
+            out_of_scope = "out of scope: Verilator $c extension"
         all_run_flags = python_literal_list(source, "all_run_flags") or []
         plusargs += [f for f in all_run_flags if f.startswith("+")]
         top_text = read_text(top_file)
@@ -1494,6 +1537,7 @@ def verilator_cases(root: Path) -> list[Case]:
         commands = [Command("compile", library_args + ["--library", library] + files)
                     for library, files in library_files.items()]
         foreign_load: list[str] = []
+        host: Command | None = None
         if foreign:
             # The companions build as one shared library against fsim's
             # standard headers; the multi-simulator VPI modules select their
@@ -1507,15 +1551,33 @@ def verilator_cases(root: Path) -> list[Case]:
                 build += ["-DIS_VPI", "-DUSE_VPI_NOT_DPI", "-DVL_SNPRINTF=snprintf"]
             else:
                 build += ["-I{repo}/scripts/lrm_corpus_include"]
-                build += ["-D" + simulator for simulator in DPI_COMPANION_SIMULATORS
+                tested = [simulator for simulator in DPI_COMPANION_SIMULATORS + ("VCS",)
                           if re.search(r"defined\s*\(\s*" + simulator + r"\s*\)|#\s*ifdef\s+"
-                                       + simulator + r"\b", harness)] or ["-DCADENCE"]
+                                       + simulator + r"\b", harness)]
+                # VCS's branch includes its generated header, vc_hdrs.h
+                # (here the compile's --dpi-header output, one directory up
+                # from obj_dir), and uses the IEEE 1800-2023 Annex I
+                # svLogicVecVal fields (aval/bval), so it is preferred.
+                build += ["-DVCS", "-Iobj_dir"] if "VCS" in tested else (
+                    ["-D" + simulator for simulator in tested] or ["-DCADENCE"])
             build += [str(path) for path in companions]
             build += ["{fsim_dir}/libfsim_tf.so.3", "-Wl,-rpath,{fsim_dir}"]
-            commands.append(Command("host", build))
+            if foreign == "dpi":
+                # The generated prototypes give C++ companions C linkage
+                # (IEEE 1800-2023 35.5.1); a companion whose own declarations
+                # conflict with them builds without.
+                compile_args += ["--dpi-header", "fsim_dpi.h"]
+                plain = " ".join(shlex.quote(arg) for arg in build)
+                with_header = " ".join(shlex.quote(arg) for arg in
+                                       build[:1] + ["-include", "fsim_dpi.h"] + build[1:])
+                host = Command("host", ["sh", "-c", f"{with_header} || {plain}"])
+            else:
+                commands.append(Command("host", build))
             foreign_load = (["--vpi", library] if foreign == "vpi"
                             else ["--sv-lib", library])
         commands.append(Command("compile", compile_args))
+        if host:
+            commands.append(host)
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
         executes = "test.execute(" in source
@@ -1563,6 +1625,7 @@ def verilator_cases(root: Path) -> list[Case]:
                               r"test\.execute\([^)]*check_finished\s*=\s*True",
                               source, re.S))},
             writes=([("verilator_shell.sv", shell)] if shell else [])
+            + ([("vc_hdrs.h", '#include "fsim_dpi.h"\n')] if foreign == "dpi" else [])
             + [("obj_dir/.keep", "")],
             skip=skip,
             out_of_scope=out_of_scope,
@@ -1603,6 +1666,12 @@ IVTEST_VPI_NONSTANDARD = {
     "br_ml20191013": "registers $pow over the built-in math function; IEEE 1800-2023 "
         "20.8.2 reserves it",
     "ro_synch": "gold holds Icarus's error message text for a read-only synch write",
+    "pr723": "gold holds Icarus's $fclose and $fdisplay warning text and its "
+        "descriptor numbering (IEEE 1800-2023 21.3.1 leaves the values to the tool)",
+    **{name: "gold reports the whole variable's value for a value-change callback on a "
+       "part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value"
+       for name in ("value_change_cb1", "value_change_cb2", "value_change_cb3",
+                    "value_change_cb4")},
     "ports_params": "gold reports Icarus's vpiConstType for typed time parameters",
     "memmon": "value-change callbacks on a whole array with cb->index per word are "
         "an Icarus extension (IEEE 1800-2023 38.36.1 places them on array members)",
@@ -1652,8 +1721,6 @@ def ivtest_vpi_cases(base: Path) -> list[Case]:
         skip = None
         if test_type == "NI":
             skip = "ivtest type NI"
-        elif test_type == "PLI1":
-            skip = "needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G)"
         elif not source.exists() or not all(p.exists() for p in sources):
             skip = "source not present"
         elif not IVTEST_VPI_LOADER:
@@ -2109,6 +2176,22 @@ def vests_group(directory: str, relative: str) -> str:
 
 # nvc cases that need extensions or expect behavior contrary to the LRM.
 NVC_NONSTANDARD = {
+    **{name: "declares a module-body parameter without a default value; "
+        "IEEE 1800-2023 6.20.1 allows omitting the default only within a "
+        "parameter_port_list"
+       for name in ("mixed4", "mixed5")},
+    **{name: "binds a VHDL component to a Verilog user-defined primitive; "
+        "cross-language default binding covers design units (modules), and "
+        "neither IEEE 1076 nor IEEE 1800 defines a UDP as a binding target"
+       for name in ("mixed2", "mixed3")},
+    **{name: "expects nvc's mapping of a Verilog x to std_logic 'U'; neither "
+        "IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value "
+        "mapping, and fsim maps x to 'X' (the value of the same name)"
+       for name in ("mixed1", "mixed7", "issue1294")},
+    **{name: "counts nvc's delta cycles for a SystemVerilog net crossing into "
+        "VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 "
+        "14.7.5 delta cycles have no standard cross-language mapping"
+       for name in ("mixed6", "mixed9", "vlog29", "issue1044", "issue1516")},
     **{name: "maps an unconstrained out port through a formal conversion "
         "function whose parameter subtype is unconstrained; it shall define "
         "the index constraint (IEEE 1076-2008 5.3.2.2)"
@@ -2161,6 +2244,10 @@ NVC_NONSTANDARD = {
     "integer3": "asserts nvc's repeated range evaluation count, which the "
         "test notes should be 1",
     "reflect2": "documents nvc reflection bounds the test calls incorrect",
+    "reflect1": "applies 'REFLECT to the enumeration literal TRUE; IEEE "
+        "1076-2019 16.2 defines O'REFLECT only for an object prefix",
+    "reflect5": "expects nvc's 1-based physical unit index (unit_index(\"ns\") "
+        "= 3); IEEE 1076-2019 16.12.3.6 gives the primary unit index zero",
     "protected13": "asserts a 'PATH_NAME of a protected-type variable "
         "that the test notes the LRM does not specify",
     # Owner decision (Batch 81): VHDL integer types stay 32-bit; an
@@ -2186,7 +2273,7 @@ NVC_NONSTANDARD = {
 
 NVC_SKIP_FLAGS = {
     "vhpi", "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
-    "dump-arrays", "export", "define", "H", "exit", "mixed",
+    "dump-arrays", "export", "define", "H", "exit",
 }
 
 # This source is legal VHDL-93, but its function returns a record aggregate
@@ -2213,6 +2300,7 @@ def nvc_cases(root: Path) -> list[Case]:
         stop_time = None
         skip = None
         verilog = False
+        mixed = False
         kinds = set()
         for flag in flags:
             key, _, value = flag.partition("=")
@@ -2222,6 +2310,11 @@ def nvc_cases(root: Path) -> list[Case]:
                 kinds.add(key)
             elif key == "verilog":
                 verilog = True
+            elif key == "mixed":
+                # A VHDL top instantiating a same-named Verilog module through
+                # a component declaration (default binding across languages,
+                # docs/cross-language-semantics.md).
+                mixed = True
             elif key == "stop-time":
                 stop_time = value
             elif key.startswith("guut."):
@@ -2263,6 +2356,19 @@ def nvc_cases(root: Path) -> list[Case]:
         if not source.exists():
             skip = skip or "source not present"
         compile_args.append(str(source))
+        commands = [Command("compile", compile_args)]
+        if mixed:
+            # nvc analyses name.v (or name.sv) with the VHDL file; fsim
+            # compiles each language separately into the same library.
+            module_source = next(
+                (base / f"{name}{ext}" for ext in (".sv", ".v")
+                 if (base / f"{name}{ext}").exists()), None)
+            if module_source is None:
+                skip = skip or "source not present"
+            else:
+                commands.insert(0, Command("compile", ["compile", "-q"]
+                    + standard_args("systemverilog", "2017")
+                    + [str(module_source)]))
         elab = ["elaborate", "-q", "--no-aot", "--top", top]
         for generic in generics:
             elab += ["--generic", generic]
@@ -2273,9 +2379,10 @@ def nvc_cases(root: Path) -> list[Case]:
         cases.append(Case(
             suite="nvc",
             id=name,
-            group=("verilog" if verilog else f"vhdl-{standard}"),
-            commands=[Command("compile", compile_args), Command("elaborate", elab),
-                      Command("simulate", sim)],
+            group=("verilog" if verilog else
+                   f"mixed-{standard}" if mixed else f"vhdl-{standard}"),
+            commands=commands + [Command("elaborate", elab),
+                                 Command("simulate", sim)],
             expect="fail" if (
                 "fail" in kinds or name in NVC_EXPECTED_RUNTIME_ERRORS
             ) else "pass",
@@ -2365,6 +2472,10 @@ def vhdl_compliance_cases(root: Path) -> list[Case]:
                     "--generic", "runner_cfg=enabled_test_cases : __all__,output path : .,"
                     "active python runner : false"]
             sim = ["simulate", "--engine", "{engine}", "--file-root", "."]
+            # Data files the testbench names sit beside it (tb_path).
+            data = [(str(path), path.name) for path in sorted(source.parent.iterdir())
+                    if path.is_file() and path.suffix != ".vhd"
+                    and f'"{path.name}"' in text]
             cases.append(Case(
                 suite="vhdl-compliance",
                 id=f"vhdl_{standard}/{source.name}",
@@ -2373,6 +2484,7 @@ def vhdl_compliance_cases(root: Path) -> list[Case]:
                           Command("elaborate", elab), Command("simulate", sim)],
                 checker="vunit",
                 checker_data={"tests": tests},
+                copies=data,
                 env={"VHDL_TEST": "hello world", "TOOL_NAME": "do not use this"},
                 skip=VHDL_COMPLIANCE_SKIP.get(f"vhdl_{standard}/{source.name}"),
             ))

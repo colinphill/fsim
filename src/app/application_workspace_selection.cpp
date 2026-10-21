@@ -421,8 +421,12 @@ namespace {
                 if (instance.component) {
                     // A selected component name may be package.member, not
                     // library.entity. Its default-bound entity is searched
-                    // from the owning architecture's library.
+                    // from the owning architecture's library. Default binding
+                    // resolves the name across languages
+                    // (docs/cross-language-semantics.md), so a same-named
+                    // SystemVerilog module is loaded too.
                     target.library = library;
+                    target.language.clear();
                 } else {
                     if (workspace_name_equal(target.library, "work", "vhdl")) {
                         target.library = library;

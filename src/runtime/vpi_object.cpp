@@ -113,6 +113,8 @@ std::vector<Observer> snapshot_observers(
         case SystemVerilogVpiObjectKind::Task:
         case SystemVerilogVpiObjectKind::Function:
         case SystemVerilogVpiObjectKind::Method:
+        case SystemVerilogVpiObjectKind::Begin:
+        case SystemVerilogVpiObjectKind::Fork:
         case SystemVerilogVpiObjectKind::Covergroup:
             return true;
         default:
@@ -213,14 +215,18 @@ std::vector<Observer> snapshot_observers(
             return false;
         }
         switch (kind) {
+        // An input port that is a net takes puts like any net (IEEE
+        // 1800-2023 38.34); a variable input stays read-only.
         case SystemVerilogVpiObjectKind::Port:
             return type.direction == SystemVerilogVpiDirection::Output
-                || type.direction == SystemVerilogVpiDirection::Inout;
+                || type.direction == SystemVerilogVpiDirection::Inout
+                || type.net_kind != SystemVerilogVpiNetKind::None;
         case SystemVerilogVpiObjectKind::Net:
         case SystemVerilogVpiObjectKind::Variable:
         case SystemVerilogVpiObjectKind::Memory:
         case SystemVerilogVpiObjectKind::Array:
         case SystemVerilogVpiObjectKind::ClassProperty:
+        case SystemVerilogVpiObjectKind::NamedEvent:
             return true;
         default:
             return false;
@@ -1375,7 +1381,11 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::deposit_value(
     if (!validate_systemverilog_vpi_stored_value(*record.type, value)) {
         return SystemVerilogVpiValueError::TypeMismatch;
     }
-    const bool changed = !record.forced_value
+    // A trigger token only reaches the state observers; an event keeps no
+    // value to publish or read back.
+    const bool event = record.type->category
+        == SystemVerilogVpiValueCategory::Event;
+    const bool changed = !event && !record.forced_value
         && (!record.value || *record.value != value);
     if (changed && !value_observers_.empty()) {
         published = value;
@@ -1388,7 +1398,9 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::deposit_value(
         state_observers = snapshot_observers(value_state_observers_);
     }
     previous_value = record.value;
-    record.value = std::move(value);
+    if (!event) {
+        record.value = std::move(value);
+    }
     lock.unlock();
     if (state_update) {
         const auto state_error
@@ -1490,6 +1502,12 @@ SystemVerilogVpiObjectRegistry::release_forced_value(
     if (!record.forced_value) {
         return SystemVerilogVpiValueError::NotForced;
     }
+    // A released variable keeps its forced value until its next assignment;
+    // a net returns to its drivers (IEEE 1800-2023 10.6.2, 38.34).
+    auto previous_value = record.value;
+    if (record.kind == SystemVerilogVpiObjectKind::Variable) {
+        record.value = record.forced_value;
+    }
     const bool changed = record.value && *record.forced_value != *record.value;
     if (changed && !value_observers_.empty()) {
         published = record.value;
@@ -1510,6 +1528,7 @@ SystemVerilogVpiObjectRegistry::release_forced_value(
         if (state_error != SystemVerilogVpiValueError::None) {
             std::scoped_lock rollback_lock { mutex_ };
             records_[slot].forced_value = std::move(previous_forced_value);
+            records_[slot].value = std::move(previous_value);
             return state_error;
         }
     }

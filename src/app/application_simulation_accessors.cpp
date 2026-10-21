@@ -26,6 +26,64 @@ const semantic::design::DesignIr& Simulation::design_ir() const noexcept
     return impl_->built.design_ir;
 }
 
+std::optional<std::pair<int, int>>
+Simulation::systemverilog_instance_time_scale(const std::string_view path) const
+{
+    const auto& built = impl_->built;
+    const auto instance = std::ranges::find_if(
+        built.design_ir.instances(), [&](const auto& candidate) {
+            return built.design_ir.path(candidate.path) == path;
+        });
+    if (instance == built.design_ir.instances().end()
+        || !instance->specialization.valid()
+        || instance->specialization.value()
+            >= built.design_ir.specializations().size()) {
+        return std::nullopt;
+    }
+    const auto& specialization = built.design_ir.specializations().at(
+        instance->specialization.value());
+    if (!specialization.unit.valid()
+        || specialization.unit.value() >= built.semantics.units().size()) {
+        return std::nullopt;
+    }
+    const auto& semantic_unit
+        = built.semantics.units().at(specialization.unit.value());
+    const auto unit = std::ranges::find_if(built.systemverilog_hir.units(),
+        [&](const semantic::sv::Unit& candidate) {
+            return candidate.library == semantic_unit.library
+                && candidate.name == semantic_unit.name;
+        });
+    if (unit == built.systemverilog_hir.units().end()) {
+        return std::nullopt;
+    }
+    // `1us`, `10 ns` or `100ps`: the power of ten of a time literal.
+    const auto exponent = [](std::string_view spelling) -> std::optional<int> {
+        int digits { };
+        while (!spelling.empty() && (spelling.front() == '1' || spelling.front() == '0')) {
+            digits += spelling.front() == '0' ? 1 : 0;
+            spelling.remove_prefix(1U);
+        }
+        while (!spelling.empty() && spelling.front() == ' ') {
+            spelling.remove_prefix(1U);
+        }
+        static constexpr std::array<std::pair<std::string_view, int>, 6> units { {
+            { "s", 0 }, { "ms", -3 }, { "us", -6 }, { "ns", -9 }, { "ps", -12 },
+            { "fs", -15 } } };
+        for (const auto& [suffix, power] : units) {
+            if (spelling == suffix) {
+                return power + digits;
+            }
+        }
+        return std::nullopt;
+    };
+    const auto time_unit = exponent(unit->compilation.time_unit);
+    const auto time_precision = exponent(unit->compilation.time_precision);
+    if (!time_unit || !time_precision) {
+        return std::nullopt;
+    }
+    return std::pair { *time_unit, *time_precision };
+}
+
 const semantic::vhdl::Hir& Simulation::vhdl_hir() const noexcept
 {
     return impl_->built.vhdl_hir;

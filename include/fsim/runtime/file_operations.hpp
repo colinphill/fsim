@@ -239,13 +239,33 @@ struct FileBinaryRead {
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
 };
 
+// position, size, truncate, state, mode and canseek are the VHDL
+// FILE_POSITION, FILE_SIZE, FILE_TRUNCATE, FILE_STATE, FILE_MODE and
+// FILE_CANSEEK operations (IEEE 1076-2019 5.5.2).
 enum class FilePositionKind : std::uint8_t { seek,
     tell,
-    rewind };
+    rewind,
+    position,
+    size,
+    truncate,
+    state,
+    mode,
+    canseek };
 struct FilePosition {
     std::uint32_t destination { }, handle { }, offset { }, origin { };
     FilePositionKind kind { FilePositionKind::tell };
+    // A VHDL typed file holds one element per line, and its positions and
+    // sizes count elements (IEEE 1076-2019 5.5.2).
+    bool lines { };
 };
+// Whether the operation reads its offset and origin registers.
+[[nodiscard]] constexpr bool file_position_uses_operands(
+    const FilePositionKind kind) noexcept
+{
+    return kind == FilePositionKind::seek
+        || kind == FilePositionKind::position
+        || kind == FilePositionKind::truncate;
+}
 struct FileFlush {
     std::uint32_t handle { };
     bool all { };

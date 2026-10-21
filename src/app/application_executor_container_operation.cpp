@@ -398,12 +398,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const auto result = state.context->position_file(
                 checked_file_handle(handle.aval, handle.bval),
                 position->kind,
-                position->kind == runtime::simir::FilePositionKind::seek
+                runtime::simir::file_position_uses_operands(position->kind)
                     ? known(input0_aval, input0_bval)
                     : 0,
-                position->kind == runtime::simir::FilePositionKind::seek
+                runtime::simir::file_position_uses_operands(position->kind)
                     ? known(input1_aval, input1_bval)
-                    : 0);
+                    : 0,
+                position->lines);
             *result_aval = static_cast<std::uint32_t>(result);
             return 0;
         }

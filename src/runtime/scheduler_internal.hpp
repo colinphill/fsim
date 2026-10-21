@@ -1401,6 +1401,11 @@ struct Scheduler::Impl {
     std::shared_ptr<CancellationSlots> cancel_slots
         = std::make_shared<CancellationSlots>();
     SlotStartHook slot_start_hook;
+    using SlotStartHookEntry
+        = std::pair<SlotStartHookToken, std::shared_ptr<const SlotStartHook>>;
+    std::vector<SlotStartHookEntry> slot_start_hooks;
+    std::vector<std::shared_ptr<const SlotStartHook>> slot_start_hook_snapshot;
+    SlotStartHookToken next_slot_start_hook_token { 1U };
     void* runtime_slot_quiet_context { };
     RuntimeSlotQuietHook runtime_slot_quiet_hook { };
     std::shared_ptr<const SafePointHook> safe_point_hook;

@@ -2216,12 +2216,12 @@ scheduler.
 | `FSIM-ELAB-VHFILE-001` | error | A VHDL scope declares the same file object more than once. |
 | `FSIM-ELAB-VHFILE-002` | error | A VHDL file object has no visible retained file type. |
 | `FSIM-ELAB-VHFILE-003` | error | A VHDL file declaration logical name is not a string expression. |
-| `FSIM-ELAB-VHFILE-004` | error | A VHDL file open kind is not the supported static `read_mode`, `write_mode`, or `append_mode` value. |
-| `FSIM-ELAB-VHFILE-005` | error | A VHDL file operation does not name a visible whole file object. |
+| `FSIM-ELAB-VHFILE-004` | error | A VHDL file open kind is not the supported static `read_mode`, `write_mode`, `append_mode`, or `read_write_mode` value. |
+| `FSIM-ELAB-VHFILE-005` | error | A VHDL file operation does not name a visible whole file object, or `file_rewind`, `file_seek` or `file_truncate` has invalid actuals. |
 | `FSIM-ELAB-VHFILE-006` | error | `file_close` does not have exactly one file-object actual. |
 | `FSIM-ELAB-VHFILE-007` | error | `file_open` has an invalid actual count or non-string logical name. |
 | `FSIM-ELAB-VHFILE-008` | error | Status-form `file_open` does not have a writable `file_open_status` actual. |
-| `FSIM-ELAB-VHFILE-009` | error | `endfile` does not have exactly one visible whole file-object actual. |
+| `FSIM-ELAB-VHFILE-009` | error | `endfile`, `file_state`, `file_mode`, `file_size` or `file_canseek` does not have exactly one visible whole file-object actual, or `file_position` has more than a file and an origin. |
 | `FSIM-ELAB-VHFILE-010` | error | Direct VHDL file `read` or `write` does not have exactly one value actual (and, for `read`, an optional LENGTH). |
 | `FSIM-ELAB-VHFILE-011` | error | Direct VHDL file I/O uses an element type without a text image: a multivalued logic, access or file element, or a composite of one. |
 | `FSIM-ELAB-VHFILE-012` | error | Direct VHDL file `read` does not target a writable variable of the file element type. |

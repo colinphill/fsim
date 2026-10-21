@@ -135,6 +135,9 @@ struct Invocation {
   bool coverage_partial_merge{false};
   // `compile --preprocess-only`: run the Verilog preprocessor and stop.
   bool preprocess_only{false};
+  // `compile --dpi-header PATH`: write the C prototypes of the DPI-C
+  // imports and exports (IEEE 1800-2023 35, Annex H).
+  std::optional<std::filesystem::path> dpi_header;
   std::optional<std::string> coverage_report_format;
   std::vector<CoverageThreshold> coverage_thresholds;
   std::optional<std::filesystem::path> tcl_script;

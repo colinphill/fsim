@@ -1781,6 +1781,12 @@ private:
         };
         frontend::SourceSpan declaration_source;
         PackedLogic4 initial;
+        // A SystemVerilog variable port keeps its own storage; it drives a
+        // resolved actual as one source instead of aliasing it.
+        bool variable_output { };
+        // A SystemVerilog net port: with no driver its value is z (IEEE
+        // 1800-2017 6.6), which it contributes to a resolved actual.
+        bool systemverilog_net { };
     };
 
     std::optional<SignalId> connect_compiled_boundary_port(

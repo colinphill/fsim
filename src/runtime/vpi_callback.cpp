@@ -139,6 +139,10 @@ struct SystemVerilogVpiCallbackManager::Impl {
     Scheduler* scheduler { };
     SystemVerilogVpiTimeService* time_service { };
     SystemVerilogVpiObservationPrepareHook prepare_observation;
+    Scheduler::SlotStartHookToken slot_start_hook { };
+    /// Callbacks that run when a slot at or after the given tick starts:
+    /// cbNextSimTime and slot-start delays (IEEE 1800-2023 38.36.2).
+    std::vector<std::pair<std::uint64_t, SimulationTick>> slot_start_waiting;
     mutable std::mutex mutex;
     std::map<std::uint64_t, Record> records;
     std::map<fsim_vpi_handle_v1, std::vector<std::uint64_t>>
@@ -277,6 +281,27 @@ namespace {
         return true;
     }
 
+    void dispatch_slot_start(
+        const std::shared_ptr<SystemVerilogVpiCallbackManager::Impl>& state,
+        const SimulationTick now)
+    {
+        std::vector<std::uint64_t> due;
+        {
+            std::scoped_lock lock { state->mutex };
+            std::erase_if(state->slot_start_waiting, [&](const auto& entry) {
+                if (entry.second > now) {
+                    return false;
+                }
+                due.push_back(entry.first);
+                return true;
+            });
+        }
+        std::ranges::sort(due);
+        for (const auto id : due) {
+            dispatch_callback(state, id, std::nullopt);
+        }
+    }
+
     bool checked_stable_order(
         const SystemVerilogVpiCallbackManager::Impl& state,
         const std::uint64_t id,
@@ -377,6 +402,12 @@ SystemVerilogVpiCallbackManager::SystemVerilogVpiCallbackManager(
     if (observer) {
         impl_->observer = *observer;
     }
+    impl_->slot_start_hook = scheduler.add_slot_start_hook(
+        [weak](Scheduler& owner) {
+            if (const auto state = weak.lock()) {
+                dispatch_slot_start(state, owner.now());
+            }
+        });
 }
 
 SystemVerilogVpiCallbackManager::~SystemVerilogVpiCallbackManager()
@@ -387,6 +418,7 @@ SystemVerilogVpiCallbackManager::~SystemVerilogVpiCallbackManager()
     if (impl_->observer != 0U) {
         (void)impl_->registry->remove_value_observer(impl_->observer);
     }
+    impl_->scheduler->remove_slot_start_hook(impl_->slot_start_hook);
     std::scoped_lock lock { impl_->mutex };
     for (auto& [id, record] : impl_->records) {
         (void)id;
@@ -485,14 +517,6 @@ SystemVerilogVpiCallbackManager::register_callback(
             }
             scheduled_delay = converted.ticks;
         }
-    } else if (registration.kind
-        == SystemVerilogVpiCallbackKind::NextTime) {
-        const auto next = impl_->scheduler->next_pending_time();
-        if (!next || *next < impl_->scheduler->now()) {
-            return registration_failure(
-                SystemVerilogVpiCallbackError::NoFutureTime);
-        }
-        scheduled_delay = *next - impl_->scheduler->now();
     }
 
     // Preparation may query the manager or materialize host state. It must
@@ -561,7 +585,22 @@ SystemVerilogVpiCallbackManager::register_callback(
 
     const std::weak_ptr<Impl> weak = impl_;
     try {
-        if (registration.kind
+        // cbNextSimTime waits for the next slot to start, which need not be
+        // queued yet; a slot-start delay also creates its slot.
+        if (registration.kind == SystemVerilogVpiCallbackKind::NextTime
+            || (registration.kind == SystemVerilogVpiCallbackKind::AfterDelay
+                && registration.at_slot_start && scheduled_delay != 0U)) {
+            const auto now = impl_->scheduler->now();
+            if (registration.kind == SystemVerilogVpiCallbackKind::NextTime) {
+                impl_->slot_start_waiting.emplace_back(id, now + 1U);
+            } else {
+                impl_->slot_start_waiting.emplace_back(id, now + scheduled_delay);
+                position->second.scheduler_handle
+                    = impl_->scheduler->schedule_after_cancelable(
+                        scheduled_delay, SchedulerPhase::active, stable_order,
+                        [](Scheduler&) { });
+            }
+        } else if (registration.kind
             == SystemVerilogVpiCallbackKind::AfterDelay) {
             const auto timed = impl_->time_service->schedule(
                 *registration.delay,
@@ -636,6 +675,9 @@ SystemVerilogVpiCallbackManager::remove_callback(
         }
         scheduler_handle = found->second.scheduler_handle;
         timed_handle = found->second.timed_handle;
+        std::erase_if(impl_->slot_start_waiting, [&](const auto& entry) {
+            return entry.first == handle.id;
+        });
     }
 
     if (timed_handle) {

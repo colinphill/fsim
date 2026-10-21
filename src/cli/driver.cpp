@@ -664,6 +664,7 @@ namespace {
             << "  -I, --include PATH       Add a direct-source include directory\n"
             << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
             << "      --preprocess-only    compile: run the Verilog preprocessor and stop\n"
+            << "      --dpi-header PATH    compile: write the DPI-C import/export C prototypes\n"
             << "      --verbosity quiet|normal|verbose\n"
             << "                           Compile/elaborate/library detail (default: normal)\n"
             << "  -q, --quiet              Suppress command progress\n"
@@ -936,6 +937,7 @@ namespace {
             "--sdf-root",
             "--sdf-cell",
             "--sdf-report-limit",
+            "--dpi-header",
             "--trace",
             "--trace-output",
             "--trace-format",
@@ -1413,6 +1415,13 @@ std::optional<Invocation> parse_arguments(
                 invocation.coverage_partial_merge = true;
             } else if (argument == "--preprocess-only") {
                 invocation.preprocess_only = true;
+            } else if (is_option(argument, "", "--dpi-header")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--dpi-header", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                invocation.dpi_header = fsim::support::path_from_utf8(*value);
             } else if (is_option(argument, "", "--format")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--format", diagnostics);

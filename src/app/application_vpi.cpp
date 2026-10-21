@@ -8,9 +8,11 @@
 #include <bit>
 #include <charconv>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <set>
+#include <unordered_map>
 #include <variant>
 
 namespace fsim::app::application_detail {
@@ -796,7 +798,13 @@ namespace {
                       ? signal.type_name
                       : signal.systemverilog_net_type)
             : runtime::SystemVerilogVpiNetKind::None;
-        if (kind == runtime::SystemVerilogVpiObjectKind::Net
+        // An input or inout port is a net whatever drives the collapsed
+        // signal it shares (IEEE 1800-2023 23.2.2.3, 37.15).
+        if ((kind == runtime::SystemVerilogVpiObjectKind::Net
+                || (kind == runtime::SystemVerilogVpiObjectKind::Port
+                    && (direction == runtime::SystemVerilogVpiDirection::Input
+                        || direction
+                            == runtime::SystemVerilogVpiDirection::Inout)))
             && result.net_kind == runtime::SystemVerilogVpiNetKind::None) {
             result.net_kind = runtime::SystemVerilogVpiNetKind::Wire;
         }
@@ -1065,6 +1073,103 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> instance_paths;
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> published_scopes;
     std::set<std::uint32_t> visiting_instances;
+    // Task, function, and named block scopes of an instance (IEEE 1800-2023
+    // 37.42, 37.43): published after the instance and before its children,
+    // in source order. A function's implicit return variable is not a
+    // separate VPI object.
+    std::set<std::string, std::less<>> function_scope_paths;
+    std::unordered_map<std::uint32_t, const semantic::sv::Statement*>
+        hir_statements;
+    std::unordered_map<std::uint32_t, const semantic::sv::Process*>
+        hir_processes;
+    for (const auto& statement : project.systemverilog_hir.statements()) {
+        hir_statements.emplace(statement.id.value(), &statement);
+    }
+    for (const auto& process : project.systemverilog_hir.processes()) {
+        hir_processes.emplace(process.id.value(), &process);
+    }
+    const auto publish_callable_scopes = [&](const semantic::sv::Unit& unit,
+                                             const std::string& instance_path,
+                                             const fsim_vpi_handle_v1 parent,
+                                             const runtime::SystemVerilogVpiTypeInfo& type) {
+        const auto publish_scope = [&](const runtime::SystemVerilogVpiObjectKind kind,
+                                       const std::string& name,
+                                       const std::string& path,
+                                       const fsim_vpi_handle_v1 owner) {
+            if (published_scopes.contains(path) || instance_paths.contains(path)) {
+                return std::optional<fsim_vpi_handle_v1> { };
+            }
+            runtime::SystemVerilogVpiObjectDescriptor scope;
+            scope.kind = kind;
+            scope.parent = owner;
+            scope.name = name;
+            auto scope_type = type;
+            scope_type.is_cell = false;
+            scope.type = scope_type;
+            const auto handle = create_checked(
+                *result.registry, std::move(scope), path);
+            published_scopes.emplace(path, handle);
+            return std::optional { handle };
+        };
+        std::function<void(const std::vector<semantic::StatementId>&,
+            const std::string&, fsim_vpi_handle_v1)> blocks;
+        blocks = [&](const std::vector<semantic::StatementId>& statements,
+                     const std::string& path, const fsim_vpi_handle_v1 owner) {
+            for (const auto id : statements) {
+                const auto found = hir_statements.find(id.value());
+                if (found == hir_statements.end()) {
+                    continue;
+                }
+                const auto& statement = *found->second;
+                auto nested_path = path;
+                auto nested_owner = owner;
+                if ((statement.kind == semantic::sv::StatementKind::block
+                        || statement.kind == semantic::sv::StatementKind::fork)
+                    && !statement.label.empty()) {
+                    nested_path = path + "." + statement.label;
+                    if (const auto handle = publish_scope(
+                            statement.kind == semantic::sv::StatementKind::block
+                                ? runtime::SystemVerilogVpiObjectKind::Begin
+                                : runtime::SystemVerilogVpiObjectKind::Fork,
+                            statement.label, nested_path, owner)) {
+                        nested_owner = *handle;
+                    }
+                }
+                blocks(statement.statements, nested_path, nested_owner);
+                blocks(statement.else_statements, nested_path, nested_owner);
+            }
+        };
+        for (const auto declaration_id : unit.declarations) {
+            const auto* const declaration
+                = project.systemverilog_hir.find_declaration(declaration_id);
+            if (declaration == nullptr || declaration->name.empty()
+                || (declaration->form != semantic::sv::DeclarationForm::task
+                    && declaration->form
+                        != semantic::sv::DeclarationForm::function)) {
+                continue;
+            }
+            const auto path = instance_path + "." + declaration->name;
+            const auto function
+                = declaration->form == semantic::sv::DeclarationForm::function;
+            const auto handle = publish_scope(function
+                    ? runtime::SystemVerilogVpiObjectKind::Function
+                    : runtime::SystemVerilogVpiObjectKind::Task,
+                declaration->name, path, parent);
+            if (!handle) {
+                continue;
+            }
+            if (function) {
+                function_scope_paths.insert(path);
+            }
+            blocks(declaration->statements, path, *handle);
+        }
+        for (const auto process_id : unit.processes) {
+            const auto found = hir_processes.find(process_id.value());
+            if (found != hir_processes.end()) {
+                blocks(found->second->statements, instance_path, parent);
+            }
+        }
+    };
     const auto publish_instance = [&](const auto& self,
                                       const auto& instance)
         -> fsim_vpi_handle_v1 {
@@ -1187,6 +1292,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         runtime::SystemVerilogVpiTypeInfo scope_type;
         scope_type.language = profile->second;
+        if (const auto unit = std::ranges::find(
+                project.systemverilog_hir.units(), specialization.unit,
+                &semantic::sv::Unit::id);
+            unit != project.systemverilog_hir.units().end()) {
+            scope_type.is_cell = unit->compilation.cell;
+        }
         apply_vpi_unit_provenance(scope_type, project, unit_identity);
         descriptor.type = scope_type;
         const auto handle = create_checked(
@@ -1194,6 +1305,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         visiting_instances.erase(instance.id.value());
         instances.emplace(instance.id.value(), handle);
         instance_paths.emplace(instance_path, handle);
+        if (const auto unit = std::ranges::find(
+                project.systemverilog_hir.units(), specialization.unit,
+                &semantic::sv::Unit::id);
+            unit != project.systemverilog_hir.units().end()) {
+            publish_callable_scopes(*unit, instance_path, handle, scope_type);
+        }
         return handle;
     };
     for (const auto& instance : project.design_ir.instances()) {
@@ -1588,6 +1705,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto path = occurrence_path(
             project.design_ir.path(instance.path),
             project.design_ir.path(object.path));
+        if (function_scope_paths.contains(path)) {
+            continue;
+        }
         // Runtime signal aliases used to connect a selected memory word are
         // implementation details. The Memory and its bound word children are
         // the canonical VPI hierarchy for the declaration.

@@ -6,6 +6,8 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <system_error>
@@ -644,8 +646,22 @@ std::int32_t Interpreter::Impl::position_file(
     const FileHandle handle,
     const FilePositionKind kind,
     std::int32_t offset,
-    std::int32_t origin)
+    std::int32_t origin,
+    const bool lines)
 {
+    if (kind == FilePositionKind::state) {
+        // STATE_OPEN is 0 and STATE_CLOSED 1 (IEEE 1076-2019 16.3).
+        const auto found = handle == 0 ? files.end() : files.find(handle);
+        return found == files.end() || found->second.closed
+                || !found->second.stream
+            ? 1
+            : 0;
+    }
+    if (kind >= FilePositionKind::position
+        || (lines && kind == FilePositionKind::seek)) {
+        return position_vhdl_file(
+            process, handle, kind, offset, origin, lines);
+    }
     auto& file = checked_file(process, handle);
     // $ferror reports the most recent operation (IEEE 1800-2017 21.3.7).
     if (&file != &invalid_systemverilog_file) {
@@ -689,8 +705,120 @@ std::int32_t Interpreter::Impl::position_file(
         file.stream->seekg(offset, direction);
     else
         file.stream->seekp(offset, direction);
-    if (!file.stream->good())
+    if (!file.stream->good()) {
+        if (file.vhdl)
+            throw std::runtime_error { "failed to seek VHDL file" };
         return fail("failed to seek SystemVerilog file");
+    }
+    return 0;
+}
+
+std::int32_t Interpreter::Impl::position_vhdl_file(
+    const ProcessId process,
+    const FileHandle handle,
+    const FilePositionKind kind,
+    const std::int32_t offset,
+    const std::int32_t origin,
+    const bool lines)
+{
+    // Each is an error on a file that is not open (IEEE 1076-2019 5.5.2).
+    auto& file = checked_file(process, handle);
+    const auto fail = [](const std::string_view message) -> std::int32_t {
+        throw std::runtime_error { std::string { message } };
+    };
+    const auto checked = [&](const std::int64_t value) {
+        if (value < 0 || value > std::numeric_limits<std::int32_t>::max())
+            fail("VHDL file position exceeds the INTEGER range");
+        return static_cast<std::int32_t>(value);
+    };
+    if (kind == FilePositionKind::canseek)
+        return 1;
+    if (kind == FilePositionKind::mode) {
+        // FILE_OPEN_KIND: READ_MODE, WRITE_MODE, APPEND_MODE,
+        // READ_WRITE_MODE (16.3).
+        if (file.mode.starts_with("a"))
+            return 2;
+        if (file.mode.find('+') != std::string::npos)
+            return 3;
+        return file.mode.starts_with("w") ? 1 : 0;
+    }
+    file.stream->clear();
+    if (file.writable)
+        file.stream->flush();
+    const auto byte_position = position_file(
+        process, handle, FilePositionKind::tell, 0, 0);
+    if (byte_position < 0)
+        fail("failed to query VHDL file position");
+    // Element starts: byte offsets, one per element, then the file size.
+    // A typed file holds one element per line; other files one per byte.
+    std::vector<std::int64_t> starts;
+    std::error_code error;
+    const auto size_bytes = std::filesystem::file_size(file.path, error);
+    if (error)
+        fail("failed to query VHDL file size");
+    if (lines) {
+        std::ifstream content { file.path, std::ios::binary };
+        std::int64_t at { };
+        bool line_open { };
+        for (char character; content.get(character); ++at) {
+            if (!line_open) {
+                starts.push_back(at);
+                line_open = true;
+            }
+            if (character == '\n')
+                line_open = false;
+        }
+    }
+    const auto byte_size = static_cast<std::int64_t>(size_bytes);
+    const auto size = lines
+        ? static_cast<std::int64_t>(starts.size())
+        : byte_size;
+    const auto element_of = [&](const std::int64_t byte) -> std::int64_t {
+        if (!lines)
+            return byte;
+        return std::ranges::upper_bound(starts, byte - 1) - starts.begin();
+    };
+    const auto byte_of = [&](const std::int64_t element) -> std::int64_t {
+        if (!lines)
+            return element;
+        return element < size ? starts[static_cast<std::size_t>(element)]
+                              : byte_size;
+    };
+    if (kind == FilePositionKind::size)
+        return checked(size);
+    const auto position = element_of(byte_position);
+    // FILE_ORIGIN_KIND: FILE_ORIGIN_BEGIN, FILE_ORIGIN_CURRENT,
+    // FILE_ORIGIN_END (16.3).
+    if (origin < 0 || origin > 2)
+        fail("VHDL file origin must be FILE_ORIGIN_BEGIN, "
+             "FILE_ORIGIN_CURRENT or FILE_ORIGIN_END");
+    if (kind == FilePositionKind::position) {
+        return checked(origin == 0 ? position
+                : origin == 1      ? 0
+                                   : size - position);
+    }
+    const auto base = origin == 0 ? 0 : origin == 1 ? position : size;
+    const auto target = base + offset;
+    if (kind == FilePositionKind::seek) {
+        if (target < 0 || target > size)
+            fail("FILE_SEEK moves outside the file");
+        return position_file(process, handle, FilePositionKind::seek,
+            checked(byte_of(target)), 0);
+    }
+    if (!file.writable)
+        fail("FILE_TRUNCATE on a file opened in READ_MODE");
+    if (target < 0)
+        fail("FILE_TRUNCATE size is negative");
+    if (lines && target > size)
+        fail("FILE_TRUNCATE cannot add elements to a typed file");
+    const auto resized = byte_of(target);
+    std::filesystem::resize_file(
+        file.path, static_cast<std::uintmax_t>(resized), error);
+    if (error)
+        fail("failed to resize VHDL file");
+    // Discard buffered input and keep the position within the file.
+    (void)position_file(process, handle, FilePositionKind::seek,
+        checked(std::min<std::int64_t>(byte_position, resized)), 0);
     return 0;
 }
 
@@ -1270,12 +1398,13 @@ void Interpreter::Impl::execute_file(
             process.id,
             known_file_handle(process, operation.handle),
             operation.kind,
-            operation.kind == FilePositionKind::seek
+            file_position_uses_operands(operation.kind)
                 ? known_integer(operation.offset)
                 : 0,
-            operation.kind == FilePositionKind::seek
+            file_position_uses_operands(operation.kind)
                 ? known_integer(operation.origin)
-                : 0);
+                : 0,
+            operation.lines);
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
             32, static_cast<std::uint32_t>(result), 0);
         ++process.pc;

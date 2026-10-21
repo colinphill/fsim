@@ -4394,12 +4394,21 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process, FileHandle handle);
     [[nodiscard]] std::string file_error(
         ProcessId process, FileHandle handle, bool& has_error);
+    // lines: a VHDL typed file, whose units are its lines.
     [[nodiscard]] std::int32_t position_file(
         ProcessId process,
         FileHandle handle,
         FilePositionKind kind,
         std::int32_t offset,
-        std::int32_t origin);
+        std::int32_t origin,
+        bool lines = false);
+    [[nodiscard]] std::int32_t position_vhdl_file(
+        ProcessId process,
+        FileHandle handle,
+        FilePositionKind kind,
+        std::int32_t offset,
+        std::int32_t origin,
+        bool lines);
     void flush_file(ProcessId process, std::optional<FileHandle> handle);
     [[nodiscard]] FileHandle known_file_handle(
         ProcessState&, RegisterId);
@@ -5027,11 +5036,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] PackedLogic4 apply_force(
         SignalId signal_id, PackedLogic4 value) const;
 
+    // origin is the forcing process's, so the fanout follows its update
+    // like a blocking assignment's (IEEE 1800-2023 10.6.2, 4.4).
     void force_slice(
-        SignalId signal_id, PackedLogic4 value, std::size_t offset);
+        SignalId signal_id, PackedLogic4 value, std::size_t offset,
+        SignalChangeOrigin origin = { });
 
     void release_slice(
-        SignalId signal_id, std::size_t offset, std::size_t width);
+        SignalId signal_id, std::size_t offset, std::size_t width,
+        SignalChangeOrigin origin = { });
 
     [[nodiscard]] PackedLogic4 apply_driver_force(
         SignalId signal_id,
@@ -5050,6 +5063,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void release_driver_slice(
         ProcessId process, SignalId signal_id,
         std::size_t offset, std::size_t width);
+
+    // A process's force or release: immediate for SystemVerilog, scheduled
+    // for the update phase for VHDL (IEEE 1076-2019 10.5.2.1, 14.7.5.3).
+    void force_slice_from_process(ProcessId process, SignalId signal_id,
+        PackedLogic4 value, std::size_t offset, bool driving_value);
+    void release_slice_from_process(ProcessId process, SignalId signal_id,
+        std::size_t offset, std::size_t width, bool driving_value);
 
     void commit(
         SignalId signal_id,

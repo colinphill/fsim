@@ -562,6 +562,39 @@ void Scheduler::set_slot_start_hook(SlotStartHook hook)
     impl_->slot_start_hook = std::move(hook);
 }
 
+Scheduler::SlotStartHookToken Scheduler::add_slot_start_hook(
+    SlotStartHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("slot-start observer cannot be empty");
+    }
+    if (impl_->next_slot_start_hook_token == 0U) {
+        throw std::overflow_error("slot-start observer token space exhausted");
+    }
+    const auto token = impl_->next_slot_start_hook_token;
+    auto callback = std::make_shared<const SlotStartHook>(std::move(hook));
+    impl_->slot_start_hooks.emplace_back(token, std::move(callback));
+    ++impl_->next_slot_start_hook_token;
+    return token;
+}
+
+void Scheduler::remove_slot_start_hook(const SlotStartHookToken token) noexcept
+{
+    if (token == 0U) {
+        return;
+    }
+    const auto found = std::find_if(
+        impl_->slot_start_hooks.begin(),
+        impl_->slot_start_hooks.end(),
+        [token](const auto& entry) { return entry.first == token; });
+    if (found == impl_->slot_start_hooks.end()) {
+        return;
+    }
+    auto removed = std::move(found->second);
+    impl_->slot_start_hooks.erase(found);
+    removed.reset();
+}
+
 void Scheduler::set_runtime_slot_quiet_hook(
     void* context, const RuntimeSlotQuietHook hook)
 {

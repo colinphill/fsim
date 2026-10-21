@@ -679,6 +679,26 @@ using namespace runtime::simir;
                             index,
                             "WaitOn timeout rearm requires a result register");
                     }
+                    if (operation.timeout_source) {
+                        if (!operation.timeout
+                            || *operation.timeout != 0
+                            || operation.timeout_source_width == 0
+                            || operation.timeout_source_width > 64) {
+                            reject(
+                                process,
+                                index,
+                                "WaitOn runtime timeout metadata is invalid");
+                        }
+                        record_use(*operation.timeout_source, index);
+                        constrain_width(
+                            *operation.timeout_source,
+                            operation.timeout_source_width, index);
+                    } else if (operation.timeout_source_width != 0) {
+                        reject(
+                            process,
+                            index,
+                            "static WaitOn timeout has a source width");
+                    }
                     if (operation.timeout_result) {
                         record_definition(
                             *operation.timeout_result, index);
@@ -701,6 +721,8 @@ using namespace runtime::simir;
                                 != operation.timeout
                             || origin->timeout_result
                                 != operation.timeout_result
+                            || origin->timeout_source
+                                != operation.timeout_source
                             || origin->signals
                                 != operation.signals
                             || origin->edges

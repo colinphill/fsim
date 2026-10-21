@@ -848,8 +848,10 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                 } else if constexpr (
                     std::is_same_v<Type, WaitOn>) {
                     known = true;
-                    used = value.timeout_result
-                        && *value.timeout_result == register_id;
+                    used = (value.timeout_result
+                               && *value.timeout_result == register_id)
+                        || (value.timeout_source
+                            && *value.timeout_source == register_id);
                 } else if constexpr (
                     std::is_same_v<Type, WaitOrder>) {
                     known = true;

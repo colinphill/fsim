@@ -561,7 +561,7 @@ void test_display(
     assert(!reference.output[5].newline);
     assert(reference.output[5].time == 0);
     assert(reference.output[5].delta == 0);
-    assert(reference.output[6].text == "h=x");
+    assert(reference.output[6].text == "h=X");
     assert(reference.output[6].newline);
     assert(reference.output[6].time == 0);
     assert(reference.output[7].text == "o=245");
@@ -1058,9 +1058,10 @@ end architecture;
             // Decimal values without an explicit field width are padded to
             // the width of their largest magnitude (IEEE 1800-2017
             // 21.2.1.3): 78 digits for 257 bits, 1234 for 4097 bits.
+            // A hex digit with only some bits x prints X (21.2.1.5).
             output.str().find(
                 std::string { "first\t+line\nembedded \"quote\" \\ A\n"
-                              " 42\n  -1\nq=%:10xz!\n[10xz]h=x\no=245\n"
+                              " 42\n  -1\nq=%:10xz!\n[10xz]h=X\no=245\n"
                               "d=165\ns=  -1\nu= X\nc=A\ntext=test\n"
                               "compact=a5\n"
                               "upper=a5\nwidth=    a5\nleft=a5    !\n"

@@ -930,6 +930,7 @@ endif()
       src/elaboration/lowerer_driver_regions.cpp
       src/elaboration/lowerer_hir_capability.cpp
       src/elaboration/lowerer_hir_callable.cpp
+      src/elaboration/dpi_c_type.cpp
       src/elaboration/lowerer_hir_container.cpp
       src/elaboration/lowerer_hir_value_path.cpp
       src/elaboration/lowerer_hir_vhdl_shape.cpp

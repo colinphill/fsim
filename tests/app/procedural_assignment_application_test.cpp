@@ -308,24 +308,28 @@ void verify_reference(const Capture& capture) {
       changes_for(capture, "procedural_assignments.event_nba")
       == std::vector<TimedValue>{{"1", 3}}));
   assert((
+      // The right-hand side is evaluated before the event control
+      // (IEEE 1800-2023 9.4.5), after the first initial set source.
       changes_for(capture, "procedural_assignments.wildcard_nba")
-      == std::vector<TimedValue>{{"0", 4}}));
+      == std::vector<TimedValue>{{"1", 4}}));
+  // Nonblocking updates in one slot are separate update events applied in
+  // order (IEEE 1800-2023 10.4.2), so the change hook sees each value.
   assert((
       changes_for(capture, "procedural_assignments.same_slot")
-      == std::vector<TimedValue>{{"1", 0}}));
+      == std::vector<TimedValue>{{"0", 0}, {"1", 0}}));
   assert((
       changes_for(capture, "procedural_assignments.overlap")
-      == std::vector<TimedValue>{{"1110", 0}}));
+      == std::vector<TimedValue>{{"1010", 0}, {"1110", 0}}));
   assert((
       changes_for(
           capture, "procedural_assignments.reverse_overlap")
-      == std::vector<TimedValue>{{"1010", 0}}));
+      == std::vector<TimedValue>{{"X11X", 0}, {"1010", 0}}));
   assert((
       changes_for(capture, "procedural_assignments.zero_slot")
-      == std::vector<TimedValue>{{"1", 0}}));
+      == std::vector<TimedValue>{{"0", 0}, {"1", 0}}));
   assert((
       changes_for(capture, "procedural_assignments.cross_slot")
-      == std::vector<TimedValue>{{"1", 0}}));
+      == std::vector<TimedValue>{{"0", 0}, {"1", 0}}));
   assert((
       changes_for(capture, "procedural_assignments.inactive_nba")
       == std::vector<TimedValue>{
@@ -333,14 +337,14 @@ void verify_reference(const Capture& capture) {
   assert((
       changes_for(
           capture, "procedural_assignments.equal_deadline")
-      == std::vector<TimedValue>{{"1", 6}}));
+      == std::vector<TimedValue>{{"0", 6}, {"1", 6}}));
   assert((
       changes_for(capture, "procedural_assignments.delayed_word_target")
-      == std::vector<TimedValue>{{"00100010", 2}}));
+      == std::vector<TimedValue>{{"00010001", 2}, {"00100010", 2}}));
   assert((
       changes_for(capture, "procedural_assignments.delayed_slice_target")
       == std::vector<TimedValue>{
-          {"00000000", 0}, {"10100101", 2}}));
+          {"00000000", 0}, {"00000101", 2}, {"10100101", 2}}));
   assert((
       changes_for(capture, "procedural_assignments.local_result")
       == std::vector<TimedValue>{{"1", 2}}));
@@ -378,22 +382,24 @@ void verify_reference(const Capture& capture) {
          == "00000000000000000000000000000001");
   assert(final_value("procedural_assignments.force_first") == "1110");
   assert(final_value("procedural_assignments.force_masked") == "0111");
-  assert(final_value("procedural_assignments.force_partial") == "0011");
-  assert(final_value("procedural_assignments.force_released") == "0001");
-  assert(final_value("procedural_assignments.forced_selected") == "0001");
+  // A released variable keeps its forced value until the next procedural
+  // assignment (IEEE 1800-2023 10.6.2).
+  assert(final_value("procedural_assignments.force_partial") == "0111");
+  assert(final_value("procedural_assignments.force_released") == "0111");
+  assert(final_value("procedural_assignments.forced_selected") == "0111");
   assert(final_value("procedural_assignments.whole_masked") == "1010");
-  assert(final_value("procedural_assignments.whole_released") == "0101");
-  assert(final_value("procedural_assignments.forced_whole") == "0101");
+  assert(final_value("procedural_assignments.whole_released") == "1010");
+  assert(final_value("procedural_assignments.forced_whole") == "1010");
   assert(final_value("procedural_assignments.chained_target")
          == "00110000");
   assert(final_value("procedural_assignments.delayed_compound") == "0010");
-  assert(final_value("procedural_assignments.event_compound") == "0011");
-  assert(final_value("procedural_assignments.event_vector") == "0000");
-  assert(final_value("procedural_assignments.dynamic_forced") == "0001");
+  // event_compound and event_vector use `+= @(...)`, which the
+  // operator_assignment grammar does not allow (A.6.2); not asserted.
+  assert(final_value("procedural_assignments.dynamic_forced") == "0101");
   assert(
       final_value("procedural_assignments.dynamic_force_masked") == "0101");
   assert(
-      final_value("procedural_assignments.dynamic_force_released") == "0001");
+      final_value("procedural_assignments.dynamic_force_released") == "0101");
   assert(final_value("procedural_assignments.edge_positive") == "1");
   assert(final_value("procedural_assignments.edge_negative") == "1");
   assert(final_value("procedural_assignments.edge_mixed_state") == "11");
@@ -417,7 +423,7 @@ void verify_reference(const Capture& capture) {
       == "00101000");
   assert(final_value("procedural_assignments.concat_blocking") == "10101011");
   assert(final_value("procedural_assignments.concat_forced") == "00111100");
-  assert(final_value("procedural_assignments.concat_released") == "01010101");
+  assert(final_value("procedural_assignments.concat_released") == "00111100");
   assert(final_value("procedural_assignments.concat_initial") == "10010110");
   assert(final_value("procedural_assignments.concat_reactive") == "01101001");
   assert(final_value("procedural_assignments.concat_deassigned") == "01101001");
@@ -450,7 +456,7 @@ void verify_reference(const Capture& capture) {
       != std::string::npos);
   assert(
       capture.debugger.find(
-          "procedural_assignments.force_partial = 0011")
+          "procedural_assignments.force_partial = 0111")
       != std::string::npos);
   assert(
       capture.debugger.find(
@@ -484,11 +490,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 30);
+  assert(cold.compiled_processes == 34);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 30);
+  assert(warm.compiled_processes == 34);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else

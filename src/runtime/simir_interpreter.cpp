@@ -3536,11 +3536,13 @@ RunResult Interpreter::finish()
     return result;
 }
 
-void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value)
+void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
+    const ProcessSchedulingDomain origin_domain)
 {
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->invalidate_fused_static_cohorts();
-    impl_->commit(signal, std::move(value));
+    impl_->commit(signal, std::move(value),
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
 
 void Interpreter::deposit_scalar_signal(
@@ -3559,7 +3561,8 @@ void Interpreter::deposit_scalar_signal(
     deposit_signal(signal, encoded.value);
 }
 
-void Interpreter::force_signal(SignalId signal, PackedLogic4 value)
+void Interpreter::force_signal(SignalId signal, PackedLogic4 value,
+    const ProcessSchedulingDomain origin_domain)
 {
     if (impl_->package_static_initialization_active) {
         throw std::logic_error {
@@ -3571,7 +3574,8 @@ void Interpreter::force_signal(SignalId signal, PackedLogic4 value)
     if (width != value.width()) {
         throw std::invalid_argument("SimIR signal force width mismatch");
     }
-    impl_->force_slice(signal, std::move(value), 0);
+    impl_->force_slice(signal, std::move(value), 0,
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
 
 void Interpreter::force_scalar_signal(
@@ -3590,7 +3594,8 @@ void Interpreter::force_scalar_signal(
     force_signal(signal, encoded.value);
 }
 
-void Interpreter::release_signal(SignalId signal)
+void Interpreter::release_signal(SignalId signal,
+    const ProcessSchedulingDomain origin_domain)
 {
     if (impl_->package_static_initialization_active) {
         throw std::logic_error {
@@ -3599,7 +3604,8 @@ void Interpreter::release_signal(SignalId signal)
     }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto width = impl_->get_signal(signal).initial_value.width();
-    impl_->release_slice(signal, 0, width);
+    impl_->release_slice(signal, 0, width,
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
 
 void Interpreter::force_signal_slice(

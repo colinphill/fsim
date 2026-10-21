@@ -354,7 +354,8 @@ void add_semantic_value(CacheKeyBuilder& builder, const Value& value)
             value.rounding_quantum));
     } else if constexpr (std::is_same_v<Type, runtime::simir::WaitOn>) {
         add_semantic_value(builder, std::tie(value.signals, value.edges,
-            value.timeout, value.timeout_result, value.timeout_origin));
+            value.timeout, value.timeout_result, value.timeout_origin,
+            value.timeout_source, value.timeout_source_width));
     } else if constexpr (std::is_same_v<Type, runtime::simir::DebugPoint>) {
         add_semantic_value(builder,
             std::tie(value.kind, value.source, value.scope));

@@ -13992,9 +13992,17 @@ HierarchyBuilder::connect_compiled_boundary_port(
             connection_source);
         return std::nullopt;
     }
+    // Every process writing a SystemVerilog variable updates one object, so
+    // the port is a single source of a resolved actual (IEEE 1076-2019
+    // 14.7.3.2, IEEE 1800-2017 23.3.3); aliasing it would make each writer
+    // its own driver.
+    const bool variable_output_adapter = port.variable_output
+        && port.direction == frontend::PortDirection::Output
+        && native_resolution(actual_info) != ResolutionKind::none;
     const bool needs_adapter = adaptable_direction
         && (width_changed || signedness_changed
-            || boolean_boundary || integer_boundary);
+            || boolean_boundary || integer_boundary
+            || variable_output_adapter);
     if (port.direction == frontend::PortDirection::Inout
         && (binding == nullptr || !binding->resolver)) {
         report(
@@ -14197,6 +14205,35 @@ HierarchyBuilder::connect_compiled_boundary_port(
                 adapter.id);
         }
         design_.append_process_record(std::move(adapter));
+    }
+    // The aliased SystemVerilog net keeps a z source so that, undriven, the
+    // resolved actual reads z rather than its VHDL default (IEEE 1800-2017
+    // 6.6); z is the identity of both wire and std_logic resolution.
+    if (port.systemverilog_net && produces_output && !needs_adapter
+        && port.domain == frontend::ValueDomain::Logic4
+        && native_resolution(actual_info) != ResolutionKind::none) {
+        Process undriven;
+        undriven.id = static_cast<ProcessId>(design_.process_count());
+        undriven.name = path + "." + port.name + "$boundary_net_z";
+        undriven.register_count = 1;
+        undriven.register_value_kinds = {
+            value_kind(frontend::ValueDomain::Logic4),
+        };
+        undriven.operations.emplace_back(LoadConstant {
+            0, PackedLogic4(actual_info.width, Logic4::z) });
+        undriven.operations.emplace_back(WriteUpdate { actual, 0 });
+        undriven.operations.emplace_back(Halt { });
+        undriven.driver_regions.push_back(Process::DriverRegion {
+            actual,
+            0,
+            static_cast<std::uint32_t>(actual_info.width),
+            true,
+        });
+        if (!design_.specializations_.empty()) {
+            design_.specializations_.back().processes.push_back(
+                undriven.id);
+        }
+        design_.append_process_record(std::move(undriven));
     }
 
     design_.boundary_conversions_.push_back(BoundaryConversionInfo {
@@ -18642,7 +18679,11 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     *compiled_, binding.source));
             return std::nullopt;
         }
-        if (width && *width != 0U
+        // A null array input port has no element to drive (IEEE 1076-2019
+        // 5.3.2.2); its expression actual only needs a placeholder signal.
+        const bool null_input = width && *width == 0U && accepts_input
+            && !produces_output;
+        if (width && (*width != 0U || null_input)
             && *width
                 <= std::numeric_limits<std::uint32_t>::max()
             && compiled_vhdl_scalar_domain(domain)
@@ -18788,7 +18829,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             design_.signals_.push_back(
                 runtime::simir::Signal {
                     constant_name,
-                    value
+                    null_input
+                        ? PackedLogic4 { 0U, Logic4::x }
+                        : value
                         ? compiled_vhdl_integral_value(
                               *value, domain, *width)
                         : static_value
@@ -18815,6 +18858,16 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             design_.signal_by_name_.emplace(
                 constant_name, id);
             actual_signal = id;
+            if (null_input) {
+                return CompiledVhdlPortActual {
+                    id,
+                    std::move(actual_hir_type_identity),
+                    std::move(actual_hir_type),
+                    std::move(actual_hir_subtype),
+                    std::move(actual_hir_declaration),
+                    std::move(actual_hir_scope),
+                };
+            }
             Lowerer actual_lowerer {
                 design_,
                 working_signals,
@@ -28205,9 +28258,36 @@ HierarchyBuilder::materialize_compiled_vhdl_systemverilog_port_mappings(
                 compiled_source_span(*compiled_, association.source));
             return result;
         }
-        const auto expression
+        auto expression
             = context.parent_specialization.find_expression(
                 *association.expression);
+        // A type conversion of a signal name actual for an input port
+        // (IEEE 1076-2019 6.5.7.1) between closely related arrays keeps
+        // each element value (9.3.6), so the port reads the named signal.
+        if (expression && expression->vhdl != nullptr
+            && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::call
+            && expression->vhdl->operands.size() == 1U
+            && expression->vhdl->referenced_name
+            && compiled_port_direction(formal_declaration.direction)
+                == frontend::PortDirection::Input) {
+            const auto operand
+                = context.parent_specialization.find_expression(
+                    expression->vhdl->operands.front());
+            const semantic::CompiledDesignResolver conversion_resolver {
+                context.parent_specialization
+            };
+            if (operand && operand->vhdl != nullptr
+                && operand->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name
+                && conversion_resolver
+                       .resolve_vhdl_callables(
+                           *expression->vhdl->referenced_name,
+                           expression->vhdl->scope)
+                       .candidates.empty()) {
+                expression = operand;
+            }
+        }
         std::string actual_name;
         if (expression && expression->vhdl != nullptr
             && expression->vhdl->kind
@@ -28434,6 +28514,10 @@ HierarchyBuilder::materialize_compiled_vhdl_systemverilog_port_mappings(
         }
         port.direction = compiled_port_direction(
             formal_declaration.direction);
+        port.variable_output = hierarchy_sv_ports_detail::
+            is_simple_variable_output_port(
+                formal_declaration, layout->second);
+        port.systemverilog_net = !port.variable_output;
         port.declaration_source = compiled_source_span(
             *compiled_, formal_declaration.source);
         port.initial = PackedLogic4 {

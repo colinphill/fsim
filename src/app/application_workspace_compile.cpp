@@ -3,6 +3,7 @@
 #include "application_workspace_internal.hpp"
 
 #include "fsim/artifact/object.hpp"
+#include "fsim/elaboration/dpi_c_type.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <set>
@@ -681,6 +683,16 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     }
     auto checked = release_compiled_project(std::move(*checked_workspace));
     checked_workspace.reset();
+    if (invocation.dpi_header) {
+        std::ofstream header { *invocation.dpi_header, std::ios::binary };
+        header << elaboration::systemverilog_dpi_header(
+            checked.systemverilog_hir);
+        if (!header) {
+            workspace_error(diagnostics, "cannot write DPI header '"
+                    + fsim::support::path_to_utf8(*invocation.dpi_header) + "'");
+            return 1;
+        }
+    }
     const auto supporting = supporting_libraries(checked);
     std::vector<semantic::CompiledObjectSelection> selections;
     selections.reserve(groups->size());

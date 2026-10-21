@@ -92,6 +92,23 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
             if (impl_->slot_start_hook) {
                 impl_->slot_start_hook(*this);
             }
+            if (!impl_->slot_start_hooks.empty()) {
+                auto& snapshot = impl_->slot_start_hook_snapshot;
+                snapshot.clear();
+                for (const auto& [token, hook] : impl_->slot_start_hooks) {
+                    (void)token;
+                    snapshot.push_back(hook);
+                }
+                try {
+                    for (const auto& hook : snapshot) {
+                        (*hook)(*this);
+                    }
+                } catch (...) {
+                    snapshot.clear();
+                    throw;
+                }
+                snapshot.clear();
+            }
         }
 
         auto& slot = *impl_->current;

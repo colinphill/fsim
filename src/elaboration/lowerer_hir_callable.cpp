@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/elaboration/dpi_c_type.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_structure_image.hpp"
@@ -476,153 +477,6 @@ namespace {
     {
         return (std::uint64_t { 1U } << 61U)
             | declaration.value();
-    }
-
-    struct DpiPackedType {
-        std::size_t width { };
-        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
-        bool signed_value { };
-        bool string { };
-        // The C type of the value (IEEE 1800-2023 Annex H.7.4): c s i l
-        // for byte, shortint, int and longint (upper case when unsigned),
-        // b svBit, g svLogic, d double, f float, p chandle, z string, B an
-        // svBitVecVal vector, V an svLogicVecVal vector.
-        char code { };
-        frontend::SystemVerilogScalarKind scalar {
-            frontend::SystemVerilogScalarKind::None
-        };
-    };
-
-    std::optional<std::uint64_t> dpi_decimal_token(
-        const std::string_view text)
-    {
-        std::uint64_t value { };
-        const auto result = std::from_chars(
-            text.data(), text.data() + text.size(), value);
-        return result.ec == std::errc { }
-                && result.ptr == text.data() + text.size()
-            ? std::optional<std::uint64_t> { value }
-            : std::nullopt;
-    }
-
-    std::optional<DpiPackedType> dpi_packed_type(
-        const std::span<const semantic::sv::SourceToken> tokens)
-    {
-        DpiPackedType result;
-        std::string_view base;
-        bool explicit_signed { };
-        bool explicit_unsigned { };
-        std::size_t packed_width = 1U;
-        for (std::size_t index = 0U; index < tokens.size(); ++index) {
-            const auto text = std::string_view { tokens[index].text };
-            if (text == "signed") {
-                explicit_signed = true;
-                continue;
-            }
-            if (text == "unsigned") {
-                explicit_unsigned = true;
-                continue;
-            }
-            if (text == "[") {
-                if (index + 4U >= tokens.size()
-                    || tokens[index + 2U].text != ":"
-                    || tokens[index + 4U].text != "]") {
-                    return std::nullopt;
-                }
-                const auto left = dpi_decimal_token(tokens[index + 1U].text);
-                const auto right = dpi_decimal_token(tokens[index + 3U].text);
-                if (!left || !right) {
-                    return std::nullopt;
-                }
-                const auto extent = *left >= *right
-                    ? *left - *right + 1U
-                    : *right - *left + 1U;
-                if (extent == 0U
-                    || extent > std::numeric_limits<std::size_t>::max()
-                    || packed_width
-                        > std::numeric_limits<std::size_t>::max()
-                            / static_cast<std::size_t>(extent)) {
-                    return std::nullopt;
-                }
-                packed_width *= static_cast<std::size_t>(extent);
-                index += 4U;
-                continue;
-            }
-            if (text == "bit" || text == "logic" || text == "reg"
-                || text == "byte" || text == "shortint" || text == "int"
-                || text == "integer" || text == "longint" || text == "time"
-                || text == "chandle" || text == "shortreal"
-                || text == "real" || text == "realtime" || text == "string") {
-                if (!base.empty()) {
-                    return std::nullopt;
-                }
-                base = text;
-                continue;
-            }
-            return std::nullopt;
-        }
-        if (base.empty() || (explicit_signed && explicit_unsigned)) {
-            return std::nullopt;
-        }
-        result.string = base == "string";
-        if (result.string) {
-            result.code = 'z';
-            return packed_width == 1U && !explicit_signed
-                    && !explicit_unsigned
-                ? std::optional<DpiPackedType> { result }
-                : std::nullopt;
-        }
-        const bool ranged = packed_width != 1U
-            || std::ranges::any_of(tokens, [](const auto& token) {
-                   return token.text == "[";
-               });
-        if (ranged && base != "bit" && base != "logic" && base != "reg") {
-            return std::nullopt;
-        }
-        result.code = base == "byte" ? 'c'
-            : base == "shortint"     ? 's'
-            : base == "int"          ? 'i'
-            : base == "longint"      ? 'l'
-            : base == "real" || base == "realtime" ? 'd'
-            : base == "shortreal"    ? 'f'
-            : base == "chandle"      ? 'p'
-            : base == "integer" || base == "time" ? 'V'
-            : base == "bit"          ? (ranged ? 'B' : 'b')
-                                     : (ranged ? 'V' : 'g');
-        if (explicit_unsigned
-            && (result.code == 'c' || result.code == 's' || result.code == 'i'
-                || result.code == 'l')) {
-            result.code = static_cast<char>(result.code - 'a' + 'A');
-        }
-        result.scalar = result.code == 'd' ? frontend::SystemVerilogScalarKind::Real
-            : result.code == 'f' ? frontend::SystemVerilogScalarKind::ShortReal
-            : result.code == 'p' ? frontend::SystemVerilogScalarKind::Chandle
-                                 : frontend::SystemVerilogScalarKind::None;
-        const auto base_width = base == "byte" ? 8U
-            : base == "shortint" ? 16U
-            : base == "int" || base == "integer" || base == "shortreal"
-                ? 32U
-            : base == "longint" || base == "time" || base == "chandle"
-                    || base == "real" || base == "realtime"
-                ? 64U
-                : 1U;
-        if (packed_width > std::numeric_limits<std::size_t>::max()
-                / base_width) {
-            return std::nullopt;
-        }
-        result.width = packed_width * base_width;
-        result.domain = base == "logic" || base == "reg"
-                || base == "integer" || base == "time"
-            ? frontend::ValueDomain::Logic4
-            : base == "byte" || base == "shortint" || base == "int"
-                    || base == "longint"
-                ? frontend::ValueDomain::Integer
-                : frontend::ValueDomain::Bit2;
-        const auto implicitly_signed = base == "byte" || base == "shortint"
-            || base == "int" || base == "integer" || base == "longint";
-        result.signed_value = explicit_signed
-            || (!explicit_unsigned && implicitly_signed);
-        return result;
     }
 
     frontend::ValueDomain callable_vhdl_domain(
@@ -14596,7 +14450,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     } else {
         // A function result is a small value, never a vector or a string
         // here (IEEE 1800-2023 35.5.5).
-        const auto type = dpi_packed_type(declaration.return_type_tokens);
+        const auto type = dpi_c_type(declaration.return_type_tokens);
         if (!type || type->string || type->code == 'B' || type->code == 'V'
             || type->width == 0U
             || type->width > std::numeric_limits<std::uint32_t>::max()) {
@@ -14615,10 +14469,20 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     result.actuals.reserve(actuals.size());
     for (std::size_t index = 0U; index < actuals.size(); ++index) {
         const auto& formal = declaration.formals[index];
-        if (!formal.dimension_tokens.empty()) {
-            return std::nullopt;
+        // Unpacked dimensions of a formal are open (`[]`); the actual is a
+        // fixed-size array of the same rank and element type (IEEE
+        // 1800-2023 35.5.6.1, H.12).
+        std::size_t open_rank { };
+        for (std::size_t token = 0U; token < formal.dimension_tokens.size();
+             token += 2U) {
+            if (token + 1U >= formal.dimension_tokens.size()
+                || formal.dimension_tokens[token].text != "["
+                || formal.dimension_tokens[token + 1U].text != "]") {
+                return std::nullopt;
+            }
+            ++open_rank;
         }
-        const auto type = dpi_packed_type(formal.type_tokens);
+        const auto type = dpi_c_type(formal.type_tokens);
         const auto direction = class_method_direction(formal.direction);
         if (!type || direction == frontend::PortDirection::Unknown
             || direction == frontend::PortDirection::Ref
@@ -14638,10 +14502,62 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             type->domain,
             type->signed_value,
             type->scalar,
+            std::nullopt,
         });
         if (type->string) {
             result.actuals.back().width = 0U;
             result.actuals.back().domain = frontend::ValueDomain::String;
+        }
+        if (open_rank != 0U) {
+            if (type->string || type->code == 'd' || type->code == 'f'
+                || type->code == 'p') {
+                return std::nullopt;
+            }
+            auto array = hir_static_container_expression_type(actuals[index]);
+            if (!array || !array->fixed || array->queue || array->associative
+                || array->element_kind != ContainerElementKind::Packed
+                || array->dimensions.size() != open_rank
+                || array->element_width != type->width) {
+                return std::nullopt;
+            }
+            std::uint64_t elements = 1U;
+            for (const auto& [left, right] : array->dimensions) {
+                elements *= static_cast<std::uint64_t>(left >= right
+                        ? static_cast<std::int64_t>(left) - right + 1
+                        : static_cast<std::int64_t>(right) - left + 1);
+                if (elements > (std::uint64_t { 1 } << 24U)) {
+                    return std::nullopt;
+                }
+            }
+            const auto bits = elements * type->width;
+            if (bits == 0U || bits > (std::uint64_t { 1 } << 24U)) {
+                return std::nullopt;
+            }
+            auto& open = result.actuals.back();
+            open.width = static_cast<std::size_t>(bits);
+            open.domain = array->two_state ? frontend::ValueDomain::Bit2
+                                           : frontend::ValueDomain::Logic4;
+            open.signed_value = false;
+            open.scalar = frontend::SystemVerilogScalarKind::None;
+            if (!arguments.empty()) {
+                arguments += ',';
+            }
+            // `A`, the element code (and a vector's width), then each
+            // unpacked dimension's `/left/right`.
+            if (direction != frontend::PortDirection::Input) {
+                arguments += '&';
+            }
+            arguments += 'A';
+            arguments += type->code;
+            if (type->code == 'B' || type->code == 'V') {
+                arguments += std::to_string(type->width);
+            }
+            for (const auto& [left, right] : array->dimensions) {
+                arguments += '/' + std::to_string(left) + '/'
+                    + std::to_string(right);
+            }
+            open.open_array = std::move(*array);
+            continue;
         }
         // Outputs and inouts pass by reference; vectors always do
         // (IEEE 1800-2023 H.8.7 to H.8.10).
@@ -14713,6 +14629,9 @@ bool Lowerer::can_lower_hir_dpi_function_call(
         return false;
     }
     for (const auto& actual : profile->actuals) {
+        if (actual.open_array) {
+            continue;
+        }
         if (callable_copy_in(actual.direction)) {
             const auto lowerable = actual.domain
                     == frontend::ValueDomain::String
@@ -17331,7 +17250,43 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     for (const auto& actual : profile.actuals) {
         const auto string = actual.domain == frontend::ValueDomain::String;
         RegisterId storage { };
-        if (string) {
+        if (actual.open_array) {
+            // The array's elements as one packed value, leftmost element
+            // most significant (IEEE 1800-2023 H.12.1).
+            storage = allocate_register(actual.width, actual.domain);
+            if (callable_copy_in(actual.direction)) {
+                const auto value
+                    = lower_hir_static_container_value(actual.expression);
+                if (!value) {
+                    return std::nullopt;
+                }
+                ContainerType bit_queue;
+                bit_queue.element_kind = ContainerElementKind::Packed;
+                bit_queue.element_width = 1U;
+                bit_queue.queue = true;
+                const auto bits = allocate_container_register(bit_queue);
+                ContainerBitstream clear;
+                clear.operation = ContainerBitstreamOperation::clear;
+                clear.bits = bits;
+                process_.operations.emplace_back(clear);
+                ContainerBitstream append;
+                append.operation = ContainerBitstreamOperation::append_container;
+                append.bits = bits;
+                append.container = value->value;
+                process_.operations.emplace_back(append);
+                ContainerBitstream extract;
+                extract.operation = ContainerBitstreamOperation::to_value;
+                extract.bits = bits;
+                extract.value = storage;
+                extract.slice = static_cast<std::uint32_t>(actual.width);
+                process_.operations.emplace_back(extract);
+            } else {
+                process_.operations.emplace_back(LoadConstant {
+                    storage,
+                    callable_default_value(actual.width, actual.domain),
+                });
+            }
+        } else if (string) {
             const auto value = callable_copy_in(actual.direction)
                 ? lower_hir_string_expression(actual.expression)
                 : std::optional<StringRegisterId> { };
@@ -17403,6 +17358,32 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         index < profile.actuals.size(); ++index) {
         const auto& actual = profile.actuals[index];
         if (!class_method_copy_out(actual.direction)) {
+            continue;
+        }
+        if (actual.open_array) {
+            ContainerType bit_queue;
+            bit_queue.element_kind = ContainerElementKind::Packed;
+            bit_queue.element_width = 1U;
+            bit_queue.queue = true;
+            const auto bits = allocate_container_register(bit_queue);
+            const auto array = allocate_container_register(*actual.open_array);
+            ContainerBitstream clear;
+            clear.operation = ContainerBitstreamOperation::clear;
+            clear.bits = bits;
+            process_.operations.emplace_back(clear);
+            ContainerBitstream append;
+            append.operation = ContainerBitstreamOperation::append_value;
+            append.bits = bits;
+            append.value = actuals[index];
+            process_.operations.emplace_back(append);
+            ContainerBitstream unpack;
+            unpack.operation = ContainerBitstreamOperation::to_container;
+            unpack.bits = bits;
+            unpack.container = array;
+            process_.operations.emplace_back(unpack);
+            if (!lower_hir_container_copy_out(actual.expression, array)) {
+                return std::nullopt;
+            }
             continue;
         }
         const auto copied = actual.domain == frontend::ValueDomain::String
@@ -17532,8 +17513,14 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
             return std::nullopt;
         }
         actuals.push_back(*value);
+        // `e:r:` marks a real-typed value carried as its IEEE 754 bits, so
+        // the service reports it as a real (IEEE 1800-2023 38.15).
         actual_names.push_back(
-            std::string { hir_expression_signed(*argument) ? "e:s:" : "e:u:" }
+            std::string { frontend::is_real_scalar_kind(
+                              hir_systemverilog_scalar_kind(*argument))
+                    ? "e:r:"
+                    : hir_expression_signed(*argument) ? "e:s:"
+                                                       : "e:u:" }
             + source.text);
     }
     const std::vector<std::uint8_t> directions(actuals.size(),

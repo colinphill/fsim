@@ -2134,6 +2134,25 @@ void Simulation::Impl::require_vpi_value(
             }
             return runtime::SystemVerilogVpiValueError::None;
         }
+        // A put to a named event triggers it; the value is ignored
+        // (IEEE 1800-2023 38.35).
+        if (const auto event = vpi_event_signals.find(update.object);
+            event != vpi_event_signals.end()) {
+            if (update.forced_value) {
+                return runtime::SystemVerilogVpiValueError::ReadOnly;
+            }
+            const auto current
+                = interpreter->stored_signal_value_snapshot(event->second);
+            auto toggled = current;
+            if (toggled.width() != 0U) {
+                toggled.set(0U, current.get(0U) == runtime::Logic4::one
+                        ? runtime::Logic4::zero
+                        : runtime::Logic4::one);
+            }
+            interpreter->deposit_signal(event->second, std::move(toggled),
+                runtime::simir::ProcessSchedulingDomain::systemverilog);
+            return runtime::SystemVerilogVpiValueError::None;
+        }
         const auto signal = vpi_handle_signals.find(update.object);
         if (signal == vpi_handle_signals.end()) {
             return runtime::SystemVerilogVpiValueError::None;
@@ -2168,7 +2187,8 @@ void Simulation::Impl::require_vpi_value(
         }
         if (interpreter->stored_signal_value_snapshot(signal->second)
             != stored) {
-            interpreter->deposit_signal(signal->second, stored);
+            interpreter->deposit_signal(signal->second, stored,
+                runtime::simir::ProcessSchedulingDomain::systemverilog);
         }
         if (update.forced_value) {
             const auto forced = systemverilog_vpi_packed_value(
@@ -2178,12 +2198,14 @@ void Simulation::Impl::require_vpi_value(
             if (!interpreter->signal_is_forced(signal->second)
                 || interpreter->signal_value_snapshot(signal->second)
                     != forced) {
-                interpreter->force_signal(signal->second, forced);
+                interpreter->force_signal(signal->second, forced,
+                    runtime::simir::ProcessSchedulingDomain::systemverilog);
             }
             vpi_forced_signals.insert(signal->second);
         } else {
             if (interpreter->signal_is_forced(signal->second)) {
-                interpreter->release_signal(signal->second);
+                interpreter->release_signal(signal->second,
+                    runtime::simir::ProcessSchedulingDomain::systemverilog);
             }
             vpi_forced_signals.erase(signal->second);
         }

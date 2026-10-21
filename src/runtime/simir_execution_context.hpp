@@ -161,7 +161,8 @@ struct Interpreter::Impl::ExecutionContext final
         const FileHandle handle,
         const FilePositionKind kind,
         const std::int32_t offset,
-        const std::int32_t origin) override;
+        const std::int32_t origin,
+        const bool lines) override;
     void flush_file(const std::optional<FileHandle> handle) override;
     [[nodiscard]] Logic9Word
     read_signal_logic9_word(const SignalId signal) const override;

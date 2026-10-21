@@ -10,10 +10,10 @@ Exclusions never count as closures.
 
 | suite | not run | out of scope |
 |---|---:|---:|
-| verilator | 85 | 277 |
-| ivtest | 29 | 294 |
+| verilator | 70 | 271 |
+| ivtest | 20 | 299 |
 | vests | 2 | 0 |
-| nvc | 254 | 0 |
+| nvc | 251 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## verilator
@@ -58,6 +58,10 @@ Exclusions never count as closures.
 | `t_constraint_dist_randmode_unsup` | out of scope | expects a Verilator unsupported-feature error for legal code |
 | `t_constraint_dist_weight` | out of scope | expects randomize to succeed with only zero-weight dist values; zero weights are constraints, so it fails (IEEE 1800-2017 18.5.4) |
 | `t_cover_fsm_sel_assign` | out of scope | uses a Verilator metacomment |
+| `t_cover_line_cc` | out of scope | needs a zero-delay always loop to terminate |
+| `t_cover_line_cc_vlt` | out of scope | needs a zero-delay always loop to terminate |
+| `t_cover_line_sc` | out of scope | needs a zero-delay always loop to terminate |
+| `t_cover_line_trace` | out of scope | needs a zero-delay always loop to terminate |
 | `t_cover_per_instance_inline` | not run | top file not present |
 | `t_cover_per_instance_noinline` | not run | top file not present |
 | `t_cover_sequence` | out of scope | expects Verilator's extra end-of-match count; the case notes other simulators count 95 |
@@ -73,37 +77,32 @@ Exclusions never count as closures.
 | `t_disable_within_task_unsup` | not run | lint-only test |
 | `t_display` | out of scope | uses the left-justify format flag (%-d, %-0d), which IEEE 1800-2023 21.2.1.3 does not define |
 | `t_display_enum_format` | out of scope | calls $sformatf in a constant expression |
-| `t_display_merge` | out of scope | Verilator $c extension |
 | `t_display_noopt` | out of scope | uses the left-justify format flag (%-d, %-0d), which IEEE 1800-2023 21.2.1.3 does not define |
-| `t_display_p_elab` | out of scope | Verilator $c extension |
+| `t_display_p_elab` | out of scope | its non-Verilator branch compares the $sformatf("%p") image of a queue and an associative-array parameter with the placeholder "x", which no assignment pattern image (IEEE 1800-2023 21.2.1.6) equals |
 | `t_display_pattern_format` | out of scope | uses the \r escape (not in IEEE 1800-2017 Table 5-1) |
 | `t_display_string` | out of scope | calls $sformatf in a constant function |
 | `t_display_string_noopt` | out of scope | calls $sformatf in a constant function |
 | `t_display_time` | out of scope | calls $timeformat with one to three or empty arguments; IEEE 1800-2017 20.4.2 requires all four or none |
 | `t_dpi_accessors` | not run | needs the Verilator C++ model API |
-| `t_dpi_arg_inout_type` | not run | requires SystemC, PLI/VPI or DPI harness |
-| `t_dpi_arg_inout_unpack` | not run | requires SystemC, PLI/VPI or DPI harness |
-| `t_dpi_arg_input_type` | not run | requires SystemC, PLI/VPI or DPI harness |
-| `t_dpi_arg_input_unpack` | not run | requires SystemC, PLI/VPI or DPI harness |
-| `t_dpi_arg_output_type` | not run | requires SystemC, PLI/VPI or DPI harness |
-| `t_dpi_arg_output_unpack` | not run | requires SystemC, PLI/VPI or DPI harness |
 | `t_dpi_context` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_context_noopt` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_decl` | not run | needs the Verilator C++ model API |
 | `t_dpi_display` | out of scope | Verilator $c extension |
+| `t_dpi_export` | out of scope | an imported function calls an exported task; IEEE 1800-2023 35.8 makes that never legal |
 | `t_dpi_export_context2_bad` | not run | needs the Verilator C++ model API |
 | `t_dpi_export_context_bad` | not run | needs the Verilator C++ model API |
+| `t_dpi_export_noopt` | out of scope | an imported function calls an exported task; IEEE 1800-2023 35.8 makes that never legal |
 | `t_dpi_export_scope_bad` | not run | needs the Verilator C++ model API |
 | `t_dpi_export_scope_flat` | not run | needs the Verilator C++ model API |
 | `t_dpi_import` | out of scope | declares pure void functions with output formals; only nonvoid functions without output or inout formals can be pure (IEEE 1800-2023 35.5.2) |
 | `t_dpi_import_hdr_only` | not run | requires SystemC, PLI/VPI or DPI harness |
 | `t_dpi_inline_new` | not run | needs the Verilator C++ model API |
 | `t_dpi_lib` | out of scope | reads 40-bit part-selects with svGetPartselBit and svGetPartselLogic, which IEEE 1800-2023 H.10.1.2 limits to w <= 32 |
-| `t_dpi_result_type` | not run | requires SystemC, PLI/VPI or DPI harness |
+| `t_dpi_qw` | out of scope | an imported function calls an exported task; IEEE 1800-2023 35.8 makes that never legal |
 | `t_dpi_sys` | out of scope | calls imports named with escaped identifiers such as \$dpii_sys as system tasks, which only Verilator supports (the test `error's for other simulators) |
 | `t_dpi_vams` | not run | needs the Verilator C++ model API |
 | `t_dpi_var` | not run | needs the Verilator C++ model API |
-| `t_dpi_var_vlt` | not run | requires a C++ harness |
+| `t_dpi_var_vlt` | not run | needs the Verilator C++ model API |
 | `t_dynarray` | out of scope | compares %p text against Verilator's hexadecimal elements |
 | `t_dynarray_concat` | out of scope | compares %p text against Verilator's hexadecimal elements |
 | `t_dynarray_method` | out of scope | compares %p text against Verilator's hexadecimal elements |
@@ -128,34 +127,30 @@ Exclusions never count as closures.
 | `t_force_complex_sel_unsup` | not run | lint-only test |
 | `t_force_mid` | not run | needs the Verilator C++ model API |
 | `t_force_readwrite_unsup` | not run | lint-only test |
-| `t_forceable_net_cmt` | not run | requires a C++ harness |
-| `t_forceable_net_cmt_trace` | not run | requires a C++ harness |
-| `t_forceable_net_vlt` | not run | requires a C++ harness |
-| `t_forceable_net_vlt_trace` | not run | requires a C++ harness |
-| `t_forceable_unpacked_cmt` | not run | requires a C++ harness |
-| `t_forceable_unpacked_vlt` | not run | requires a C++ harness |
-| `t_forceable_var_cmt` | not run | requires a C++ harness |
-| `t_forceable_var_cmt_trace` | not run | requires a C++ harness |
-| `t_forceable_var_vlt` | not run | requires a C++ harness |
-| `t_forceable_var_vlt_trace` | not run | requires a C++ harness |
+| `t_forceable_net_cmt` | not run | needs the Verilator C++ model API |
+| `t_forceable_net_cmt_trace` | not run | needs the Verilator C++ model API |
+| `t_forceable_net_vlt` | not run | needs the Verilator C++ model API |
+| `t_forceable_net_vlt_trace` | not run | needs the Verilator C++ model API |
+| `t_forceable_unpacked_cmt` | not run | needs the Verilator C++ model API |
+| `t_forceable_unpacked_vlt` | not run | needs the Verilator C++ model API |
+| `t_forceable_var_cmt` | not run | needs the Verilator C++ model API |
+| `t_forceable_var_cmt_trace` | not run | needs the Verilator C++ model API |
+| `t_forceable_var_vlt` | not run | needs the Verilator C++ model API |
+| `t_forceable_var_vlt_trace` | not run | needs the Verilator C++ model API |
 | `t_forceable_writemem` | out of scope | needs the Verilator forceable metacomment |
-| `t_foreach_delete` | out of scope | Verilator $c extension |
+| `t_foreach_delete` | out of scope | deletes queue elements inside a foreach loop over that queue and counts the iterations; IEEE 1800-2023 12.7.3 leaves the results undefined when the dimensions change during the loop |
 | `t_foreach_sideeff_uvm` | out of scope | names the foreach array through a loop-variable select (blks[i].reg_files), not a constant bit-select (IEEE 1800-2023 A.9.3) |
 | `t_fork_finish` | out of scope | Verilator $c extension |
 | `t_fourstate_fourstate_hier_unsup` | not run | lint-only test |
 | `t_fourstate_fourstate_unsup` | not run | lint-only test |
 | `t_fourstate_no_fourstate` | out of scope | depends on a Verilator command-line flag |
-| `t_func_call_super_arg` | out of scope | Verilator $c extension |
+| `t_func_call_super_arg` | out of scope | uses the Verilator $c extension |
 | `t_func_public` | out of scope | Verilator $c extension |
-| `t_func_public_trace` | out of scope | Verilator $c extension |
 | `t_func_purification` | out of scope | Verilator $c extension |
 | `t_func_ref` | out of scope | uses ref formals of a static subroutine (IEEE 1800-2017 13.5.2) |
 | `t_func_ref_arg` | out of scope | uses ref formals of a static subroutine (IEEE 1800-2017 13.5.2) |
 | `t_func_ref_noinline` | out of scope | uses ref formals of a static subroutine (IEEE 1800-2017 13.5.2) |
-| `t_func_return_init` | out of scope | Verilator $c extension |
 | `t_func_under` | out of scope | declares a local with its function's name (IEEE 1800-2017 13.4) |
-| `t_func_wide_out` | out of scope | needs a Verilator C++ DPI companion file |
-| `t_func_wide_out_noinl` | out of scope | needs a Verilator C++ DPI companion file |
 | `t_gate_basic` | out of scope | gives an n-input gate three delays (IEEE 1800-2017 28.3) |
 | `t_gate_basic_timing` | out of scope | gives an n-input gate three delays (IEEE 1800-2017 28.3) |
 | `t_gate_chained` | not run | top file not present |
@@ -164,9 +159,7 @@ Exclusions never count as closures.
 | `t_hier_block_cmake` | out of scope | uses Verilator directives |
 | `t_hier_block_struct` | out of scope | connects an unpacked-array concatenation to an output port; it may only be the source of an assignment-like context (IEEE 1800-2017 10.10) |
 | `t_hier_block_struct_nohier` | out of scope | connects an unpacked-array concatenation to an output port; it may only be the source of an assignment-like context (IEEE 1800-2017 10.10) |
-| `t_if_deep` | out of scope | Verilator $c extension |
 | `t_infinite_recursion` | not run | lint-only test |
-| `t_inst_ccall` | out of scope | Verilator $c extension |
 | `t_interface_ar3` | out of scope | connects a reversed slice to an instance array and expects index-matched elements; elements match left index to left index (IEEE 1800-2017 23.3.3.5) |
 | `t_interface_array_class_new` | out of scope | assigns an array of interface instances to a virtual-interface array (IEEE 1800-2023 25.9) |
 | `t_interface_array_virtual` | out of scope | assigns an array of interface instances to a virtual-interface array (IEEE 1800-2023 25.9) |
@@ -175,13 +168,10 @@ Exclusions never count as closures.
 | `t_interface_gen5_noinl` | out of scope | declares a bare begin-end block in a generate region |
 | `t_interface_generic2` | out of scope | connects a constant to a port that defaults to inout; an inout connects only to a net (IEEE 1800-2017 23.2.2.3, 23.3.3.3) |
 | `t_interface_generic_iface_param_genblock` | out of scope | reads localparams declared in generate blocks without the block name; a generate block's names are reached through its block name (IEEE 1800-2017 27.6) |
-| `t_interface_inout_tristate` | out of scope | Verilator $c extension |
 | `t_interface_input_port_assign` | out of scope | depends on the order of same-time-step processes |
 | `t_interface_input_port_assign_noinl` | out of scope | depends on the order of same-time-step processes |
 | `t_interface_modport_expr_array` | out of scope | writes a modport input port (IEEE 1800-2017 25.5, 23.3.3.2) |
 | `t_interface_modport_expr_bad` | out of scope | names an undeclared scope in a modport expression (nonexist.sig) yet expects other simulators to run it (IEEE 1800-2017 23.8) |
-| `t_interface_tristate_plain_xhier` | out of scope | Verilator $c extension |
-| `t_interface_tristate_plain_xhier_noinl` | out of scope | Verilator $c extension |
 | `t_interface_virtual` | out of scope | expects a %p image of a class or virtual-interface handle, whose format is implementation-dependent (IEEE 1800-2017 21.2.1.7) |
 | `t_interface_virtual_inl` | out of scope | expects a %p image of a class or virtual-interface handle, whose format is implementation-dependent (IEEE 1800-2017 21.2.1.7) |
 | `t_interface_virtual_timing` | out of scope | Verilator $c extension |
@@ -190,9 +180,8 @@ Exclusions never count as closures.
 | `t_langext_2017ext` | out of scope | procedurally assigns an output port declared with an implicit data type, which is a net (IEEE 1800-2017 23.2.2.3) |
 | `t_langext_2023ext` | out of scope | procedurally assigns an output port declared with an implicit data type, which is a net (IEEE 1800-2017 23.2.2.3) |
 | `t_langext_4` | out of scope | procedurally assigns an output port declared with an implicit data type, which is a net (IEEE 1800-2017 23.2.2.3) |
-| `t_link_default_type_param` | out of scope | Verilator $c extension |
+| `t_link_default_type_param` | out of scope | uses the Verilator $c extension |
 | `t_lint_assigneqexpr` | out of scope | uses an assignment operator in a continuous assignment expression |
-| `t_math_cond_short_circuit` | out of scope | Verilator $c extension |
 | `t_math_eq` | out of scope | depends on the order of same-time-step processes |
 | `t_math_pow3` | out of scope | keeps a power operand signed in an unsigned comparison |
 | `t_math_pow6` | out of scope | initializes output net ports with nonconstant expressions (IEEE 1800-2017 A.2.1.2 list_of_port_identifiers) |
@@ -208,13 +197,11 @@ Exclusions never count as closures.
 | `t_notiming_off` | not run | lint-only test |
 | `t_opt_const` | out of scope | assigns the net words_i from an always_ff procedure; a procedural assignment's target is a variable (IEEE 1800-2023 10.4) |
 | `t_opt_const_dfg` | out of scope | assigns the net words_i from an always_ff procedure; a procedural assignment's target is a variable (IEEE 1800-2023 10.4) |
-| `t_opt_const_no_expand` | out of scope | needs a Verilator C++ DPI companion file |
-| `t_opt_const_no_opt` | out of scope | needs a Verilator C++ DPI companion file |
-| `t_opt_const_shortcut` | out of scope | needs a Verilator C++ DPI companion file |
+| `t_opt_const_no_expand` | out of scope | assigns the net words_i from an always_ff procedure; a procedural assignment's target is a variable (IEEE 1800-2023 10.4) |
+| `t_opt_const_no_opt` | out of scope | assigns the net words_i from an always_ff procedure; a procedural assignment's target is a variable (IEEE 1800-2023 10.4) |
 | `t_opt_dead` | not run | needs the Verilator C++ model API |
 | `t_opt_dedupe_clk_gate` | out of scope | gives always_latch an event control (IEEE 1800-2017 9.2.2.3) |
 | `t_opt_dedupe_clk_gate_off` | out of scope | gives always_latch an event control (IEEE 1800-2017 9.2.2.3) |
-| `t_opt_localize_deep` | out of scope | Verilator $c extension |
 | `t_opt_simulate_array` | out of scope | uses an unnamed module-level begin-end block |
 | `t_opt_slice` | out of scope | needs a zero-delay always loop to terminate |
 | `t_opt_slice_no` | out of scope | needs a zero-delay always loop to terminate |
@@ -235,7 +222,6 @@ Exclusions never count as closures.
 | `t_preproc_str_undef` | out of scope | uses an undefined macro (IEEE 1800-2017 22.5.1) |
 | `t_process_notiming` | not run | lint-only test |
 | `t_process_rand` | out of scope | expects set_randstate to replay $random; process RNG stability covers $urandom and randomize, not $random (IEEE 1800-2017 18.14, 20.14.1) |
-| `t_process_self_srand` | out of scope | Verilator $c extension |
 | `t_property_abort_implication` | out of scope | expects Verilator's sync_reject_on failure counts (IEEE 1800-2017 16.12.14) |
 | `t_property_if_else` | out of scope | depends on the order of same-time-step processes |
 | `t_property_range_ring` | out of scope | expects a consequent failure at the tick after its last possible start; it fails when no match remains (IEEE 1800-2017 16.12.6) |
@@ -300,8 +286,6 @@ Exclusions never count as closures.
 | `t_sys_psprintf` | out of scope | calls $psprintf, a Verilator extension; the LRM string formatting function is $sformatf (IEEE 1800-2017 21.3.3) |
 | `t_sys_readmem` | out of scope | its memory file has a '#' comment line, a Verilator extension; a $readmem file holds only white space, // and /* */ comments, addresses and numbers (IEEE 1800-2017 21.4.3) |
 | `t_sys_readmem_eof` | out of scope | reads a file the Verilator driver generates |
-| `t_sys_sformat` | out of scope | Verilator $c extension |
-| `t_sys_sformat_noopt` | out of scope | Verilator $c extension |
 | `t_sys_stacktrace` | out of scope | uses the Verilator $stacktrace task |
 | `t_sys_system` | out of scope | expects an implementation-defined $system result |
 | `t_sys_writemem` | out of scope | reads the same '#'-commented memory file as t_sys_readmem (IEEE 1800-2017 21.4.3) |
@@ -310,7 +294,7 @@ Exclusions never count as closures.
 | `t_timescale_nobackwards` | out of scope | expects Verilator's default 1ps/1ps time unit; the default is implementation-specific (IEEE 1800-2017 3.14.2.3) |
 | `t_timescale_udp` | out of scope | declares a sequential UDP (reg output) with combinational table rows, and reads an undeclared name (IEEE 1800-2017 29.3, 6.10) |
 | `t_timescale_unit` | out of scope | declares timeunit after other module items (IEEE 1800-2017 3.14.2.3) |
-| `t_timing_initial_always` | out of scope | Verilator $c extension |
+| `t_timing_initial_always` | out of scope | uses the Verilator $c extension |
 | `t_timing_intra_assign` | out of scope | mixes continuous assignments to val[1] and val[2] with procedural writes through a variable index, whose longest static prefix is val (IEEE 1800-2017 6.5, 11.5.3) |
 | `t_timing_intra_assign_nolocalize` | out of scope | mixes continuous assignments to val[1] and val[2] with procedural writes through a variable index, whose longest static prefix is val (IEEE 1800-2017 6.5, 11.5.3) |
 | `t_timing_long` | not run | top file not present |
@@ -360,27 +344,22 @@ Exclusions never count as closures.
 | `t_vlt_timing` | out of scope | depends on a Verilator configuration file |
 | `t_vpi_const_type` | out of scope | reads the integer property vpiConstType with vpi_get_str, which IEEE 1800-2023 38.12 defines for string properties only |
 | `t_vpi_dump` | not run | needs the Verilator C++ model API |
-| `t_vpi_dump_missing_scopes` | not run | requires a C++ harness |
-| `t_vpi_dump_no_inline` | not run | requires a C++ harness |
+| `t_vpi_dump_missing_scopes` | not run | needs the Verilator C++ model API |
+| `t_vpi_dump_no_inline` | not run | needs the Verilator C++ model API |
 | `t_vpi_escape` | out of scope | expects Verilator's vpiFullName spelling 'TOP.escaped_normal' and a 'top.' root for other simulators; IEEE 1800-2023 37.3.1 gives vpiFullName as the full hierarchical name |
 | `t_vpi_force` | not run | needs the Verilator C++ model API |
 | `t_vpi_forceable_bad` | not run | needs the Verilator C++ model API |
-| `t_vpi_forceable_var` | not run | requires a C++ harness |
-| `t_vpi_get_public_rw_switch` | not run | requires a C++ harness |
-| `t_vpi_module` | out of scope | Verilator $c extension |
-| `t_vpi_module_dpi` | not run | requires a C++ harness |
+| `t_vpi_module` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
+| `t_vpi_module_dpi` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_param` | out of scope | expects vpi_get(vpiLocalParam) on a parameter to raise an error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters |
-| `t_vpi_public_depth` | out of scope | Verilator $c extension |
-| `t_vpi_public_depth_off` | not run | requires a C++ harness |
-| `t_vpi_public_off` | not run | requires a C++ harness |
-| `t_vpi_public_params` | not run | requires a C++ harness |
+| `t_vpi_public_depth` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
+| `t_vpi_public_depth_off` | out of scope | Verilator $c extension |
+| `t_vpi_public_off` | out of scope | Verilator $c extension |
+| `t_vpi_public_params` | out of scope | expects vpi_get(vpiLocalParam) on a parameter to raise an error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters |
 | `t_vpi_sc` | not run | needs the Verilator C++ model API |
 | `t_vpi_time_cb` | not run | needs the Verilator C++ model API |
 | `t_vpi_unimpl` | not run | needs the Verilator C++ model API |
-| `t_vpi_var2` | not run | requires a C++ harness |
-| `t_vpi_var3` | not run | requires a C++ harness |
 | `t_wait_iface_vif` | out of scope | expects an always @* block to run without an event |
-| `t_wide_temp_while_cond` | out of scope | needs a Verilator C++ DPI companion file |
 | `t_wrapper_multicontext` | not run | needs the Verilator C++ model API |
 
 ## ivtest
@@ -680,7 +659,6 @@ Exclusions never count as closures.
 | `v2005_math` | out of scope | Icarus syntax extension |
 | `vcd-dup` | out of scope | compares array-word VCD output with Icarus |
 | `vpi_br_gh1041` | out of scope | Icarus syntax extension |
-| `vpi_br_gh141` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
 | `vpi_br_gh169a` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_br_gh169b` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_br_gh59` | out of scope | gold prints zz for a conditional with a z condition and z operands; IEEE 1800-2023 11.4.11 Table 11-20 gives x |
@@ -692,21 +670,18 @@ Exclusions never count as closures.
 | `vpi_genblk_direct` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_genblk_named` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_genblk_unnamed` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
-| `vpi_getp` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
-| `vpi_hello_tf` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
 | `vpi_memmon` | out of scope | value-change callbacks on a whole array with cb->index per word are an Icarus extension (IEEE 1800-2023 38.36.1 places them on array members) |
-| `vpi_mipname` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
 | `vpi_myscope` | out of scope | uses vpi_handle(vpiScope, NULL), an Icarus extension (IEEE 1800-2023 37.42 accesses only the calling system task or function with a NULL reference) |
-| `vpi_myscope2` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
 | `vpi_poke_escaped` | out of scope | uses vpi_handle(vpiScope, NULL), an Icarus extension (IEEE 1800-2023 37.42 accesses only the calling system task or function with a NULL reference) |
 | `vpi_ports_params` | out of scope | gold reports Icarus's vpiConstType for typed time parameters |
 | `vpi_pr2966059` | not run | ivtest type NI |
 | `vpi_pr2971220` | out of scope | gold holds the file name as given on Icarus's command line |
-| `vpi_pr521` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
-| `vpi_putp` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
-| `vpi_putp2` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
+| `vpi_pr723` | out of scope | gold holds Icarus's $fclose and $fdisplay warning text and its descriptor numbering (IEEE 1800-2023 21.3.1 leaves the values to the tool) |
 | `vpi_ro_synch` | out of scope | gold holds Icarus's error message text for a read-only synch write |
-| `vpi_timescale` | not run | needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G) |
+| `vpi_value_change_cb1` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
+| `vpi_value_change_cb2` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
+| `vpi_value_change_cb3` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
+| `vpi_value_change_cb4` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
 | `writemem-error` | out of scope | Icarus diagnostic in gold output |
 | `z1` | out of scope | gives a module instance an unparenthesized parameter value (IEEE 1364-2005 A.4.1.1) |
 | `z2` | out of scope | gives a module instance an unparenthesized parameter value (IEEE 1364-2005 A.4.1.1) |
@@ -793,7 +768,7 @@ Exclusions never count as closures.
 | `integer3` | not run | asserts nvc's repeated range evaluation count, which the test notes should be 1 |
 | `issue1030` | not run | nvc-specific test kind wave |
 | `issue1035` | not run | nvc-specific test kind vhpi |
-| `issue1044` | not run | nvc-specific test kind mixed |
+| `issue1044` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `issue1045` | not run | nvc-specific test kind vhpi |
 | `issue1057` | not run | nvc-specific test kind vhpi |
 | `issue1060` | not run | nvc-specific test kind vhpi |
@@ -805,9 +780,8 @@ Exclusions never count as closures.
 | `issue1218` | not run | uses nvc's own library packages |
 | `issue1233` | not run | nvc-specific test kind vhpi |
 | `issue1240` | not run | nvc-specific test kind vhpi |
-| `issue1285` | not run | nvc-specific test kind mixed |
 | `issue1287` | not run | nvc-specific test kind shell |
-| `issue1294` | not run | nvc-specific test kind mixed |
+| `issue1294` | not run | expects nvc's mapping of a Verilog x to std_logic 'U'; neither IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value mapping, and fsim maps x to 'X' (the value of the same name) |
 | `issue1301` | not run | nvc-specific test kind vhpi |
 | `issue1359` | not run | nvc-specific test kind shell |
 | `issue1362` | not run | nvc-specific test kind wave |
@@ -825,7 +799,7 @@ Exclusions never count as closures.
 | `issue1494` | not run | nvc-specific test kind cover |
 | `issue1505` | not run | nvc-specific test kind vhpi |
 | `issue1512` | not run | nvc-specific test kind cover |
-| `issue1516` | not run | nvc-specific test kind mixed |
+| `issue1516` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `issue1517` | not run | nvc-specific test kind cover |
 | `issue1579` | not run | nvc-specific test kind vhpi |
 | `issue1581` | not run | nvc-specific test kind exit |
@@ -893,15 +867,14 @@ Exclusions never count as closures.
 | `libdir4` | not run | nvc-specific test kind shell |
 | `libdir5` | not run | nvc-specific test kind shell |
 | `link3` | not run | nvc-specific test kind shell |
-| `mixed1` | not run | nvc-specific test kind mixed |
-| `mixed2` | not run | nvc-specific test kind mixed |
-| `mixed3` | not run | nvc-specific test kind mixed |
-| `mixed4` | not run | nvc-specific test kind mixed |
-| `mixed5` | not run | nvc-specific test kind mixed |
-| `mixed6` | not run | nvc-specific test kind mixed |
-| `mixed7` | not run | nvc-specific test kind mixed |
-| `mixed8` | not run | nvc-specific test kind mixed |
-| `mixed9` | not run | nvc-specific test kind mixed |
+| `mixed1` | not run | expects nvc's mapping of a Verilog x to std_logic 'U'; neither IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value mapping, and fsim maps x to 'X' (the value of the same name) |
+| `mixed2` | not run | binds a VHDL component to a Verilog user-defined primitive; cross-language default binding covers design units (modules), and neither IEEE 1076 nor IEEE 1800 defines a UDP as a binding target |
+| `mixed3` | not run | binds a VHDL component to a Verilog user-defined primitive; cross-language default binding covers design units (modules), and neither IEEE 1076 nor IEEE 1800 defines a UDP as a binding target |
+| `mixed4` | not run | declares a module-body parameter without a default value; IEEE 1800-2023 6.20.1 allows omitting the default only within a parameter_port_list |
+| `mixed5` | not run | declares a module-body parameter without a default value; IEEE 1800-2023 6.20.1 allows omitting the default only within a parameter_port_list |
+| `mixed6` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
+| `mixed7` | not run | expects nvc's mapping of a Verilog x to std_logic 'U'; neither IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value mapping, and fsim maps x to 'X' (the value of the same name) |
+| `mixed9` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `null1` | not run | asserts nvc's normalized null-range index bounds, which the test notes differ from the LRM |
 | `open1` | not run | leaves i0(1) of an individually associated port unassociated; every scalar subelement shall be associated exactly once (IEEE 1076-2019 6.5.7.1) |
 | `order2` | not run | nvc-specific test kind shell |
@@ -919,14 +892,15 @@ Exclusions never count as closures.
 | `psl7` | not run | declares a PSL default clock among concurrent statements |
 | `rand1` | not run | uses nvc's own library packages |
 | `real14` | not run | copy of ivtest itor_rtoi; expects results the test notes are not defined by the standard (IEEE 1800-2017 20.5) |
+| `reflect1` | not run | applies 'REFLECT to the enumeration literal TRUE; IEEE 1076-2019 16.2 defines O'REFLECT only for an object prefix |
 | `reflect2` | not run | documents nvc reflection bounds the test calls incorrect |
+| `reflect5` | not run | expects nvc's 1-based physical unit index (unit_index("ns") = 3); IEEE 1076-2019 16.12.3.6 gives the primary unit index zero |
 | `shared4` | not run | nvc-specific test kind relax |
 | `shuffle1` | not run | nvc --shuffle process order |
 | `siginit1` | not run | nvc-specific test kind plugin |
 | `siginit2` | not run | nvc-specific test kind plugin |
 | `siginit3` | not run | nvc-specific test kind plugin |
 | `signal28` | not run | nvc-specific test kind relaxed |
-| `signed1` | not run | nvc-specific test kind mixed |
 | `stdenv1` | not run | nvc option $FOO=123 |
 | `tcl1` | not run | nvc-specific test kind tcl |
 | `tcl2` | not run | nvc-specific test kind tcl |
@@ -934,7 +908,6 @@ Exclusions never count as closures.
 | `tcl4` | not run | nvc-specific test kind tcl |
 | `tcl5` | not run | nvc-specific test kind tcl |
 | `textio4` | not run | expects READ of a BIT_VECTOR to read past embedded spaces; a character that cannot be part of the value ends the read (IEEE 1076-2008 16.4) |
-| `timescale1` | not run | nvc-specific test kind mixed |
 | `toplevel3` | not run | hierarchical generic override |
 | `vhpi1` | not run | nvc-specific test kind vhpi |
 | `vhpi10` | not run | nvc-specific test kind vhpi |
@@ -958,8 +931,7 @@ Exclusions never count as closures.
 | `vhpi8` | not run | nvc-specific test kind vhpi |
 | `vhpi9` | not run | nvc-specific test kind vhpi |
 | `view7` | not run | leaves subelement p.y of an individually associated port unassociated; every scalar subelement shall be associated exactly once (IEEE 1076-2019 6.5.7.1) |
-| `vlog1` | not run | nvc-specific test kind mixed |
-| `vlog29` | not run | nvc-specific test kind mixed |
+| `vlog29` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `wait24` | not run | uses nvc's own library packages |
 | `wave1` | not run | nvc-specific test kind wave |
 | `wave10` | not run | nvc-specific test kind wave |

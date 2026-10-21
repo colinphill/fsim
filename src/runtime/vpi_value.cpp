@@ -134,8 +134,14 @@ bool validate_systemverilog_vpi_stored_value(
                 || (logic && !logic->is_logic9()
                     && logic->width() == 64U));
     }
+    // A put to a named event carries a one-bit trigger token; the event
+    // itself has no value (IEEE 1800-2023 38.35).
+    case SystemVerilogVpiValueCategory::Event: {
+      const auto* logic = std::get_if<PackedLogic4>(&value.payload);
+      return logic && !logic->is_logic9() && logic->width() == 1U
+          && type.width == 0U && !value.strength;
+    }
     case SystemVerilogVpiValueCategory::None:
-    case SystemVerilogVpiValueCategory::Event:
       return false;
   }
   return false;

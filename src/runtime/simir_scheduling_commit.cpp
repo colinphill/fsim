@@ -724,7 +724,8 @@ void Interpreter::Impl::update_container_alias_force(
 void Interpreter::Impl::force_slice(
     const SignalId signal_id,
     PackedLogic4 value,
-    const std::size_t offset)
+    const std::size_t offset,
+    const SignalChangeOrigin origin)
 {
     if (package_static_initialization_active) {
         throw std::logic_error {
@@ -773,7 +774,7 @@ void Interpreter::Impl::force_slice(
                 force_slice(
                     alias.signal,
                     value.extract_bits(begin - offset, finish - begin),
-                    begin - base);
+                    begin - base, origin);
             }
         } catch (...) {
             finish_aggregate_signal_batch(signal_id);
@@ -801,7 +802,9 @@ void Interpreter::Impl::force_slice(
     refresh_direct_single_driver_route(signal_id);
     auto effective = apply_force(signal_id, driven_values[signal_id]);
     const bool current_changed = signal.initial_value != effective;
-    publish(signal_id, std::move(effective));
+    publish_normalized(signal_id,
+        normalize_signal_value(signal_id, std::move(effective)), true,
+        origin);
     if (current_changed && signal_container_element_aliases[signal_id]) {
         // Force changes the logical element without changing its stored driver.
         publish_container_signal_aliases(signal_id, { }, false);
@@ -813,7 +816,8 @@ void Interpreter::Impl::force_slice(
 void Interpreter::Impl::release_slice(
     const SignalId signal_id,
     const std::size_t offset,
-    const std::size_t width)
+    const std::size_t width,
+    const SignalChangeOrigin origin)
 {
     if (package_static_initialization_active) {
         throw std::logic_error {
@@ -859,7 +863,8 @@ void Interpreter::Impl::release_slice(
                 if (begin >= finish) {
                     continue;
                 }
-                release_slice(alias.signal, begin - base, finish - begin);
+                release_slice(alias.signal, begin - base, finish - begin,
+                    origin);
             }
         } catch (...) {
             finish_aggregate_signal_batch(signal_id);
@@ -886,7 +891,9 @@ void Interpreter::Impl::release_slice(
     refresh_direct_single_driver_route(signal_id);
     auto effective = apply_force(signal_id, driven_values[signal_id]);
     const bool current_changed = signal.initial_value != effective;
-    publish(signal_id, std::move(effective));
+    publish_normalized(signal_id,
+        normalize_signal_value(signal_id, std::move(effective)), true,
+        origin);
     if (current_changed && signal_container_element_aliases[signal_id]) {
         // Force changes the logical element without changing its stored driver.
         publish_container_signal_aliases(signal_id, { }, false);
@@ -1189,6 +1196,70 @@ void Interpreter::Impl::release_driver_slice(
     }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
+}
+
+void Interpreter::Impl::force_slice_from_process(const ProcessId process,
+    const SignalId signal_id, PackedLogic4 value, const std::size_t offset,
+    const bool driving_value)
+{
+    const auto apply = [this, process, signal_id, driving_value](
+                           PackedLogic4 forced, const std::size_t at) {
+        if (driving_value) {
+            force_driver_slice(process, signal_id, std::move(forced), at);
+        } else {
+            force_slice(signal_id, std::move(forced), at);
+        }
+    };
+    if (processes.scheduling_domain(process)
+        == ProcessSchedulingDomain::systemverilog) {
+        if (driving_value) {
+            apply(std::move(value), offset);
+        } else {
+            force_slice(signal_id, std::move(value), offset,
+                capture_signal_change_origin(process));
+        }
+        return;
+    }
+    // A VHDL force only schedules; the drivers take it in this cycle's
+    // update (IEEE 1076-2019 10.5.2.1, 14.7.5.3 c).
+    const auto width = get_signal(signal_id).initial_value.width();
+    if (offset > width || value.width() > width - offset) {
+        throw std::invalid_argument { "SimIR force slice is out of range" };
+    }
+    scheduler.schedule(SchedulerPhase::update, process,
+        [apply, offset, value = std::move(value)](Scheduler&) mutable {
+            apply(std::move(value), offset);
+        });
+}
+
+void Interpreter::Impl::release_slice_from_process(const ProcessId process,
+    const SignalId signal_id, const std::size_t offset,
+    const std::size_t width, const bool driving_value)
+{
+    const auto apply = [this, process, signal_id, offset, width,
+                           driving_value] {
+        if (driving_value) {
+            release_driver_slice(process, signal_id, offset, width);
+        } else {
+            release_slice(signal_id, offset, width);
+        }
+    };
+    if (processes.scheduling_domain(process)
+        == ProcessSchedulingDomain::systemverilog) {
+        if (driving_value) {
+            apply();
+        } else {
+            release_slice(signal_id, offset, width,
+                capture_signal_change_origin(process));
+        }
+        return;
+    }
+    const auto signal_width = get_signal(signal_id).initial_value.width();
+    if (offset > signal_width || width > signal_width - offset) {
+        throw std::invalid_argument { "SimIR release slice is out of range" };
+    }
+    scheduler.schedule(SchedulerPhase::update, process,
+        [apply](Scheduler&) { apply(); });
 }
 
 bool Interpreter::Impl::update_container_alias_driver_force(

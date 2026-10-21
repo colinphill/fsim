@@ -848,6 +848,12 @@ public:
 
   /// Observe a newly loaded simulation time slot before any phase executes.
   void set_slot_start_hook(SlotStartHook hook);
+  using SlotStartHookToken = std::uint64_t;
+  /// Add a slot-start observer that runs after the hook above. An observer
+  /// may schedule work into the new slot; registry changes during dispatch
+  /// take effect at the next slot.
+  [[nodiscard]] SlotStartHookToken add_slot_start_hook(SlotStartHook hook);
+  void remove_slot_start_hook(SlotStartHookToken token) noexcept;
   /// Install an allocation-free runtime callback for a fully drained slot.
   /// The callback cannot throw and must not schedule or reenter this scheduler.
   void set_runtime_slot_quiet_hook(

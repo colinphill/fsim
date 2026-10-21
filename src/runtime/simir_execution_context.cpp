@@ -603,8 +603,9 @@ void Interpreter::Impl::ExecutionContext::write_file_formatted(
     const FileHandle handle,
     const FilePositionKind kind,
     const std::int32_t offset,
-    const std::int32_t origin){
-    return owner.position_file(process, handle, kind, offset, origin);
+    const std::int32_t origin,
+    const bool lines){
+    return owner.position_file(process, handle, kind, offset, origin, lines);
 }
 
 void Interpreter::Impl::ExecutionContext::flush_file(const std::optional<FileHandle> handle){
@@ -689,29 +690,30 @@ void Interpreter::Impl::ExecutionContext::force_signal_slice(
     const SignalId signal,
     PackedLogic4 value,
     const std::size_t offset){
-    owner.force_slice(signal, std::move(value), offset);
+    owner.force_slice_from_process(
+        process, signal, std::move(value), offset, false);
 }
 
 void Interpreter::Impl::ExecutionContext::release_signal_slice(
     const SignalId signal,
     const std::size_t offset,
     const std::size_t width){
-    owner.release_slice(signal, offset, width);
+    owner.release_slice_from_process(process, signal, offset, width, false);
 }
 
 void Interpreter::Impl::ExecutionContext::force_driver_signal_slice(
     const SignalId signal,
     PackedLogic4 value,
     const std::size_t offset){
-    owner.force_driver_slice(
-        process, signal, std::move(value), offset);
+    owner.force_slice_from_process(
+        process, signal, std::move(value), offset, true);
 }
 
 void Interpreter::Impl::ExecutionContext::release_driver_signal_slice(
     const SignalId signal,
     const std::size_t offset,
     const std::size_t width){
-    owner.release_driver_slice(process, signal, offset, width);
+    owner.release_slice_from_process(process, signal, offset, width, true);
 }
 
 void Interpreter::Impl::ExecutionContext::write_update(

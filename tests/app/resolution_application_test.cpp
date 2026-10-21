@@ -212,7 +212,7 @@ Capture run_once(
     capture.cache = simulation.native_cache_statistics();
 
     std::ostringstream vcd_output;
-    fsim::runtime::VcdWriter vcd(vcd_output, "1ps", 64);
+    fsim::runtime::VcdWriter vcd(vcd_output, "1fs", 64);
     const auto vcd_signal = vcd.declare_signal("resolved_top.shared", 1);
     vcd.begin(simulation.now());
     vcd.change(vcd_signal, simulation.read_signal(*shared));
@@ -253,11 +253,13 @@ void verify_mode(
     const auto warm = run_once(config, fsim::app::SimulationEngine::compiled);
 
     assert(reference.result.status == fsim::runtime::RunStatus::stopped);
-    assert(reference.result.time == 6000);
+    // The design has a VHDL unit, so the auto resolution is 1 fs. The VHDL
+    // 'Z' at 3 ns lands one delta later (IEEE 1076-2019 14.7.5).
+    assert(reference.result.time == 6'000'000);
     if (reference.changes
         != std::vector<Change> {
-            { "1", 3000, 0 },
-            { "Z", 5000, 0 },
+            { "1", 3'000'000, 1 },
+            { "Z", 5'000'000, 0 },
         }) {
         for (const auto& change : reference.changes) {
             std::cerr << "change " << change.value << " @ "
@@ -268,8 +270,8 @@ void verify_mode(
     assert((
         reference.changes
         == std::vector<Change> {
-            { "1", 3000, 0 },
-            { "Z", 5000, 0 },
+            { "1", 3'000'000, 1 },
+            { "Z", 5'000'000, 0 },
         }));
     assert(reference.final_value == "Z");
     std::vector<std::string> driver_values;
@@ -280,10 +282,10 @@ void verify_mode(
     std::ranges::sort(driver_values);
     assert((
         driver_values == std::vector<std::string> { "Z", "Z" }));
-    assert(reference.vcd.find("$timescale 1ps $end")
+    assert(reference.vcd.find("$timescale 1fs $end")
         != std::string::npos);
-    assert(reference.vcd.find("#3000") != std::string::npos);
-    assert(reference.vcd.find("#5000") != std::string::npos);
+    assert(reference.vcd.find("#3000000") != std::string::npos);
+    assert(reference.vcd.find("#5000000") != std::string::npos);
 
     for (const auto* actual : { &cold, &warm }) {
         assert(reference.result.status == actual->result.status);
@@ -503,6 +505,9 @@ endmodule
             && restored_topology->switch_source
             && restored_topology->switch_target
             && restored_topology->switch_control);
+        // Copy the ids before the restored design moves into the simulation.
+        const auto restored_control = *restored_topology->switch_control;
+        const auto restored_target = *restored_topology->switch_target;
         project->design = std::move(*restored);
         fsim::app::Simulation simulation {
             std::move(*project), config.run.max_deltas, engine
@@ -529,8 +534,8 @@ endmodule
         const auto conditional_signal = read("conditional_right");
         const auto control_signal = read("switch_control");
         const auto chain_signal = read("chain_right");
-        assert(control_signal == *restored_topology->switch_control);
-        assert(conditional_signal == *restored_topology->switch_target);
+        assert(control_signal == restored_control);
+        assert(conditional_signal == restored_target);
         StrengthCapture capture;
         std::ostringstream vcd_output;
         fsim::runtime::VcdWriter vcd(vcd_output, "1ps", 64);
@@ -1628,7 +1633,8 @@ end architecture;
     config.base_directory = directory;
     config.project.name = "mixed-boundary-timing";
     config.project.top = "sv:work.mixed_timing_top";
-    config.project.time_resolution = "auto";
+    // Auto picks 1 fs for designs with VHDL units; these ticks are in ps.
+    config.project.time_resolution = "1ps";
     config.build.optimization = optimization;
     config.build.cache_path = directory
         / (optimization == fsim::project::Optimization::o0
@@ -1841,24 +1847,27 @@ end architecture;
             std::string, fsim::runtime::SimulationTick>> {
             { "00000000", 3 }, { "00000001", 12 },
             { "0000000Z", 24 } }));
+    // Each nonblocking update is its own update event (IEEE 1800-2023
+    // 10.4.2). Delta placement across the SV/VHDL boundary is fsim's own;
+    // the SV leaf's port value reaches the VHDL signal in the same delta.
+    // $strobe output carries the time slot's last delta.
     assert((observed_with_delta(names[8])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "00", 0, 0 }, { "01", 0, 0 }, { "11", 0, 0 } }));
+            { "00", 0, 0 }, { "01", 0, 0 }, { "10", 0, 0 },
+            { "11", 0, 0 } }));
     assert((observed_with_delta(names[7])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "00XX", 0, 0 }, { "0011", 0, 1 } }));
+            { "0011", 0, 0 } }));
     assert((observed_with_delta(names[5])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "000000XX", 0, 1 },
-            { "00000011", 0, 2 } }));
+            { "0000XXXX", 0, 0 }, { "00000011", 0, 1 } }));
     assert((observed_with_delta(names[6])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "000000XX", 0, 2 },
-            { "00000011", 0, 3 } }));
+            { "0000XXXX", 0, 0 }, { "00000011", 0, 2 } }));
     assert((observed_with_delta(names[9])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
@@ -1890,7 +1899,7 @@ end architecture;
         != std::string::npos);
     assert(reference.vcd.find("$timescale 1ps $end")
         != std::string::npos);
-    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 0 } }));
+    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 17 } }));
     assert(reference.final_values[9] == "00000011");
     assert(reference.final_values[10] == "00000011");
     for (const auto* actual : { &cold, &warm }) {

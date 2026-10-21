@@ -1980,6 +1980,11 @@ Simulation::Impl::Impl(
         vpi_handle_signals = std::move(published_vpi.handles);
         vpi_driver_bindings = std::move(published_vpi.drivers);
         vpi_event_handles = std::move(published_vpi.events);
+        for (const auto& [signal, handles] : vpi_event_handles) {
+            for (const auto handle : handles) {
+                vpi_event_signals.emplace(handle, signal);
+            }
+        }
         vpi_assertion_handles = std::move(published_vpi.assertions);
         vpi_scalar_kinds = std::move(published_vpi.scalar_kinds);
         vpi_categories = std::move(published_vpi.categories);

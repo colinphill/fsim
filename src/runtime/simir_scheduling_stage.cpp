@@ -3248,6 +3248,7 @@ bool Interpreter::Impl::publish_region_internal_value(
         scheduler.note_signal_transaction(signal);
         signal_transactions[signal]
             = std::pair { scheduler.now(), scheduler.delta() + 1U };
+        note_selected_signal_transaction(signal);
     }
     if (changed) {
         if (narrow_word && deferred_role_mutation == nullptr) {

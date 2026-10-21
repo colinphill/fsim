@@ -975,7 +975,8 @@ namespace codec_detail {
     {
         return std::tie(
             value.signals, value.edges, value.timeout, value.timeout_result,
-            value.timeout_origin);
+            value.timeout_origin, value.timeout_source,
+            value.timeout_source_width);
     }
 
     template <typename T>

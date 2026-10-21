@@ -5,6 +5,9 @@
 
 #include "fsim/frontend/input_format.hpp"
 #include "fsim/frontend/output_format.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
+
+#include <array>
 
 namespace fsim::elaboration {
 namespace {
@@ -124,7 +127,36 @@ namespace {
         || simple == "hwrite" || simple == "hex_write"
         || simple == "owrite" || simple == "octal_write"
         || simple == "readline" || simple == "writeline"
-        || simple == "tee" || simple == "flush";
+        || simple == "tee" || simple == "flush"
+        || simple == "file_rewind" || simple == "file_seek"
+        || simple == "file_truncate";
+}
+
+// The VHDL-2019 file functions other than ENDFILE (IEEE 1076-2019 5.5.2);
+// FILE_OPEN is also an impure function.
+[[nodiscard]] std::optional<FilePositionKind> vhdl_file_function_kind(
+    const std::string_view simple) noexcept
+{
+    return simple == "file_state" ? std::optional { FilePositionKind::state }
+        : simple == "file_mode"   ? std::optional { FilePositionKind::mode }
+        : simple == "file_position"
+        ? std::optional { FilePositionKind::position }
+        : simple == "file_size" ? std::optional { FilePositionKind::size }
+        : simple == "file_canseek"
+        ? std::optional { FilePositionKind::canseek }
+        : std::nullopt;
+}
+
+// The mode string a FILE_OPEN_KIND literal opens with (IEEE 1076-2019
+// 5.5.2, 16.3).
+[[nodiscard]] std::string_view vhdl_file_open_mode(
+    const std::string_view kind) noexcept
+{
+    return kind == "read_mode"   ? std::string_view { "r" }
+        : kind == "write_mode"   ? std::string_view { "w" }
+        : kind == "append_mode"  ? std::string_view { "a" }
+        : kind == "read_write_mode" ? std::string_view { "r+" }
+                                    : std::string_view { };
 }
 
 } // namespace
@@ -322,6 +354,20 @@ bool Lowerer::is_hir_vhdl_file_call(
     if (vhdl_simple_name(name) == "endfile") {
         return true;
     }
+    if ((vhdl_file_function_kind(vhdl_simple_name(name))
+            || vhdl_simple_name(name) == "file_open")
+        && !expression->vhdl->operands.empty()) {
+        const auto file = hir_referenced_declaration(
+            expression->vhdl->operands.front());
+        const auto declaration = file
+            ? specialized_hir_unit_->find_declaration(*file)
+            : std::nullopt;
+        return declaration && declaration->vhdl != nullptr
+            && (declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::file
+                || declaration->vhdl->object_class
+                    == semantic::vhdl::ObjectClass::file);
+    }
     if (expression->vhdl->referenced_name
         || expression->vhdl->operands.size() != 1U) {
         return false;
@@ -336,6 +382,32 @@ bool Lowerer::is_hir_vhdl_file_call(
                 == semantic::vhdl::DeclarationForm::file
             || declaration->vhdl->object_class
                 == semantic::vhdl::ObjectClass::file);
+}
+
+std::pair<std::size_t, frontend::ValueDomain>
+Lowerer::hir_vhdl_file_call_type(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    const auto name = expression && expression->vhdl != nullptr
+            && expression->vhdl->referenced_name
+        ? expression->vhdl->referenced_name->text()
+        : expression && expression->vhdl != nullptr
+        ? std::string_view { expression->vhdl->text }
+        : std::string_view { };
+    const auto simple = vhdl_simple_name(name);
+    const auto kind = vhdl_file_function_kind(simple);
+    if (simple == "file_open" || kind == FilePositionKind::state
+        || kind == FilePositionKind::mode) {
+        return { 2U, frontend::ValueDomain::Bit2 };
+    }
+    if (kind == FilePositionKind::position
+        || kind == FilePositionKind::size) {
+        return { 32U, frontend::ValueDomain::Integer };
+    }
+    return { 1U, frontend::ValueDomain::Boolean };
 }
 
 std::optional<std::uint64_t>
@@ -359,8 +431,13 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
             || name == "mode_error"
         ? std::string_view { "file_open_status" }
         : name == "read_mode" || name == "write_mode"
-                || name == "append_mode"
+                || name == "append_mode" || name == "read_write_mode"
         ? std::string_view { "file_open_kind" }
+        : name == "file_origin_begin" || name == "file_origin_current"
+                || name == "file_origin_end"
+        ? std::string_view { "file_origin_kind" }
+        : name == "state_open" || name == "state_closed"
+        ? std::string_view { "file_open_state" }
         : name == "note" || name == "warning" || name == "error"
                 || name == "failure"
         ? std::string_view { "severity_level" }
@@ -419,19 +496,51 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
     // Keep their language-defined ordinals available to all HIR lowering,
     // including severity_level variables used by report/assert statements.
     if (name == "open_ok" || name == "read_mode" || name == "note"
-        || name == "right") {
+        || name == "right" || name == "file_origin_begin"
+        || name == "state_open") {
         return 0U;
     }
     if (name == "status_error" || name == "write_mode"
-        || name == "warning" || name == "left") {
+        || name == "warning" || name == "left"
+        || name == "file_origin_current" || name == "state_closed") {
         return 1U;
     }
     if (name == "name_error" || name == "append_mode"
-        || name == "error") {
+        || name == "error" || name == "file_origin_end") {
         return 2U;
     }
-    if (name == "mode_error" || name == "failure") {
+    if (name == "mode_error" || name == "failure"
+        || name == "read_write_mode") {
         return 3U;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> Lowerer::hir_vhdl_reflection_class_literal(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || (expression->vhdl->referenced_name
+            && (expression->vhdl->referenced_name->selected
+                || !expression->vhdl->referenced_name->overloads.empty()))) {
+        return std::nullopt;
+    }
+    constexpr auto literals = std::to_array<std::string_view>({
+        "class_enumeration", "class_integer", "class_floating",
+        "class_physical", "class_record", "class_array", "class_access",
+        "class_file", "class_protected",
+    });
+    const auto name = vhdl_simple_name(expression->vhdl->text);
+    for (std::size_t index = 0U; index < literals.size(); ++index) {
+        if (support::same_vhdl_identifier(name, literals[index])) {
+            return index;
+        }
     }
     return std::nullopt;
 }
@@ -448,6 +557,91 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_call(
         : expression && expression->vhdl != nullptr
         ? std::string_view { expression->vhdl->text }
         : std::string_view { };
+    if (expression && expression->vhdl != nullptr
+        && !expression->vhdl->operands.empty()
+        && (vhdl_file_function_kind(vhdl_simple_name(name))
+            || vhdl_simple_name(name) == "file_open")) {
+        const auto simple = vhdl_simple_name(name);
+        const auto& operands = expression->vhdl->operands;
+        const auto span = hir_source_span(expression->vhdl->source);
+        const auto file = hir_referenced_declaration(operands.front());
+        const auto binding = file
+            ? hir_runtime_binding(*file, hir_process_scope_, true)
+            : std::nullopt;
+        if (!binding || binding->kind != HirRuntimeBindingKind::local
+            || !binding->local) {
+            report("FSIM-ELAB-VHFILE-005",
+                "VHDL file operation requires a whole file object", span);
+            return std::nullopt;
+        }
+        if (simple == "file_open") {
+            // The impure function form returns the FILE_OPEN_STATUS.
+            const auto kind_expression = operands.size() > 2U
+                ? specialized_hir_unit_->find_expression(operands[2])
+                : std::nullopt;
+            const auto mode_text = vhdl_file_open_mode(
+                kind_expression && kind_expression->vhdl != nullptr
+                    ? vhdl_simple_name(kind_expression->vhdl->text)
+                    : std::string_view { "read_mode" });
+            if (operands.size() < 2U || operands.size() > 3U
+                || mode_text.empty()
+                || !hir_expression_is_string(
+                    operands[1], hir_process_scope_)) {
+                report("FSIM-ELAB-VHFILE-007",
+                    "file_open requires a file object, string logical "
+                    "name, and optional file_open_kind",
+                    span);
+                return std::nullopt;
+            }
+            const auto path = lower_hir_string_expression(operands[1]);
+            if (!path) {
+                return std::nullopt;
+            }
+            const auto mode = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant {
+                mode, std::string { mode_text } });
+            const auto status = allocate_register(
+                2U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(FileOpen {
+                *binding->local, *path, mode, status, true });
+            return status;
+        }
+        const auto kind = *vhdl_file_function_kind(simple);
+        if (operands.size()
+            > (kind == FilePositionKind::position ? 2U : 1U)) {
+            report("FSIM-ELAB-VHFILE-009",
+                std::string { simple }
+                    + " takes one file object"
+                    + (kind == FilePositionKind::position
+                            ? " and an optional FILE_ORIGIN_KIND"
+                            : ""),
+                span);
+            return std::nullopt;
+        }
+        const auto result = lower_hir_vhdl_file_position(kind,
+            *binding->local, operands.front(), std::nullopt,
+            operands.size() > 1U ? std::optional { operands[1] }
+                                 : std::nullopt);
+        if (!result) {
+            return std::nullopt;
+        }
+        // FILE_OPEN_STATE and FILE_OPEN_KIND are enumerations and
+        // FILE_CANSEEK a BOOLEAN; FILE_POSITION and FILE_SIZE INTEGER.
+        const auto narrow = kind == FilePositionKind::canseek ? 1U
+            : kind == FilePositionKind::state
+                || kind == FilePositionKind::mode
+            ? 2U
+            : 0U;
+        if (narrow == 0U) {
+            return result;
+        }
+        const auto destination = allocate_register(narrow,
+            narrow == 1U ? frontend::ValueDomain::Boolean
+                         : frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            Extract { destination, *result, 0U, narrow });
+        return destination;
+    }
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->operands.size() != 1U) {
         return std::nullopt;
@@ -486,6 +680,62 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_call(
         1U, frontend::ValueDomain::Boolean);
     process_.operations.emplace_back(FileEndOfFile {
         destination, *binding->local, true });
+    return destination;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_file_position(
+    const FilePositionKind kind,
+    const RegisterId file,
+    const semantic::ExpressionId file_expression,
+    const std::optional<semantic::ExpressionId> amount,
+    const std::optional<semantic::ExpressionId> origin)
+{
+    // The unit is the file's element, or the element of an unconstrained
+    // array element type (5.5.2). TEXT and other files of unconstrained
+    // arrays count characters; other typed files hold one element per line.
+    bool lines { };
+    const auto declaration_id = hir_target_declaration(file_expression);
+    const auto declaration = declaration_id
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    const auto subtype = declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->subtype
+        ? hir_effective_vhdl_subtype(*declaration->vhdl->subtype)
+        : std::nullopt;
+    const auto type = subtype && subtype->type_mark.target.valid()
+        ? specialized_hir_unit_->find_type(subtype->type_mark.target)
+        : std::nullopt;
+    if (type && type->vhdl != nullptr
+        && type->vhdl->form == semantic::vhdl::TypeForm::file
+        && type->vhdl->element_subtype
+        && vhdl_simple_name(type->vhdl->name) != "text") {
+        const auto element
+            = hir_effective_vhdl_subtype(*type->vhdl->element_subtype);
+        lines = element
+            && element->domain != semantic::vhdl::ValueDomain::string
+            && !element->unconstrained;
+    }
+    const auto integer = [&](const std::optional<semantic::ExpressionId>
+                                 expression) -> std::optional<RegisterId> {
+        if (!expression) {
+            return load_constant(unsigned_value(0U, 32U),
+                frontend::ValueDomain::Integer);
+        }
+        const auto value = lower_hir_expression(*expression, 32U);
+        if (!value) {
+            return std::nullopt;
+        }
+        return resize_register(*value, 32U, false);
+    };
+    const auto offset = integer(amount);
+    const auto start = integer(origin);
+    if (!offset || !start) {
+        return std::nullopt;
+    }
+    const auto destination = allocate_register(
+        32U, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(FilePosition {
+        destination, file, *offset, *start, kind, lines });
     return destination;
 }
 
@@ -3236,9 +3486,34 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 });
     }
     const auto file = file_actual(status_form ? 1U : 0U);
-    if ((name == "file_open" || name == "file_close") && !file) {
+    const bool positioning = name == "file_rewind" || name == "file_seek"
+        || name == "file_truncate";
+    if ((name == "file_open" || name == "file_close" || positioning)
+        && !file) {
         return fail("FSIM-ELAB-VHFILE-005",
             "VHDL file operation requires a whole file object");
+    }
+    if (positioning) {
+        // IEEE 1076-2019 5.5.2.
+        const auto rewind = name == "file_rewind";
+        const auto amount = rewind
+            ? std::nullopt
+            : actual(name == "file_seek" ? "offset" : "size", 1U);
+        const auto origin = rewind ? std::nullopt : actual("origin", 2U);
+        if (rewind ? call.procedure_arguments.size() != 1U
+                   : !amount || call.procedure_arguments.size() > 3U) {
+            return fail("FSIM-ELAB-VHFILE-005",
+                std::string { name }
+                    + (rewind ? " requires exactly one file object"
+                              : " requires a file object, an INTEGER, and "
+                                "an optional FILE_ORIGIN_KIND"));
+        }
+        return lower_hir_vhdl_file_position(rewind
+                    ? FilePositionKind::rewind
+                    : name == "file_seek" ? FilePositionKind::seek
+                                          : FilePositionKind::truncate,
+                   *file->second.local, file->first, amount, origin)
+            .has_value();
     }
     if (name == "file_close") {
         if (call.procedure_arguments.size() != 1U) {
@@ -3273,17 +3548,11 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             ? std::string_view { kind_expression->vhdl->text }
             : std::string_view { "read_mode" };
         kind_name = vhdl_simple_name(kind_name);
-        const auto mode_text = kind_name == "read_mode"
-            ? std::string_view { "r" }
-            : kind_name == "write_mode"
-            ? std::string_view { "w" }
-            : kind_name == "append_mode"
-            ? std::string_view { "a" }
-            : std::string_view { };
+        const auto mode_text = vhdl_file_open_mode(kind_name);
         if (mode_text.empty()) {
             return fail("FSIM-ELAB-VHFILE-004",
                 "VHDL file open kind must be read_mode, write_mode, "
-                "or append_mode");
+                "append_mode, or read_write_mode");
         }
         std::optional<RegisterId> status;
         if (status_form) {

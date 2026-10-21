@@ -823,6 +823,10 @@ public:
     systemverilog_vpi_objects() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiObjectRegistry&
     systemverilog_vpi_objects() const noexcept;
+    /// Time unit and precision exponents of the Verilog/SystemVerilog
+    /// instance at `path` (IEEE 1800-2023 3.14.2), if it is one.
+    [[nodiscard]] std::optional<std::pair<int, int>>
+    systemverilog_instance_time_scale(std::string_view path) const;
     [[nodiscard]] runtime::SystemVerilogVpiTimeService&
     systemverilog_vpi_time() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiTimeService&

@@ -141,6 +141,8 @@ struct SystemVerilogVpiTypeInfo {
     std::uint32_t width { };
     bool is_signed { };
     bool is_constant { };
+    // A `celldefine module instance (IEEE 1800-2023 37.10 vpiCellInstance).
+    bool is_cell { };
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> descriptor;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
     std::optional<std::uint32_t> semantic_unit_id;

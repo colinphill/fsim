@@ -23652,13 +23652,30 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && input.delay->additional.empty()
             ? delay_magnitude(input.delay->primary)
             : std::optional<runtime::SimulationTick> { };
+        // A runtime TIME timeout; TIME values are already counts of the
+        // resolution limit.
+        std::optional<RegisterId> timeout_source;
+        const auto runtime_timeout_wait = [&] {
+            WaitFor wait;
+            wait.delay = 1U;
+            wait.source = *timeout_source;
+            wait.source_width = static_cast<std::uint32_t>(
+                register_width(*timeout_source));
+            wait.source_signed = true;
+            return wait;
+        };
+        const auto apply_timeout = [&](WaitOn& wait) {
+            wait.timeout = timeout.value_or(0U);
+            if (timeout_source) {
+                wait.timeout_source = *timeout_source;
+                wait.timeout_source_width = static_cast<std::uint32_t>(
+                    register_width(*timeout_source));
+            }
+        };
         if (input.delay && !timeout && input.delay->additional.empty()
-            && input.delay->primary.expression && !input.condition
-            && input.sensitivities.empty()
+            && input.delay->primary.expression
             && !specialized_hir_unit_->evaluate_integral_expression(
                 *input.delay->primary.expression)) {
-            // `wait for T` with a runtime TIME value; TIME values are
-            // already counts of the resolution limit.
             const auto duration = lower_hir_expression(
                 *input.delay->primary.expression, 64U);
             if (!duration) {
@@ -23693,16 +23710,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 static_cast<InstructionIndex>(process_.operations.size()),
                 UnknownBranchPolicy::when_false,
             };
-            WaitFor wait;
-            wait.delay = 1U;
-            wait.source = *duration;
-            wait.source_width = static_cast<std::uint32_t>(
-                register_width(*duration));
-            wait.source_signed = true;
-            process_.operations.emplace_back(wait);
-            return true;
+            timeout_source = *duration;
+            if (!input.condition && input.sensitivities.empty()) {
+                process_.operations.emplace_back(runtime_timeout_wait());
+                return true;
+            }
         }
-        if (input.delay && !timeout) {
+        if (input.delay && !timeout && !timeout_source) {
             report(
                 "FSIM-ELAB-VHTIME-001",
                 "a VHDL wait timeout requires a nonnegative locally static "
@@ -23742,6 +23756,39 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     waited_signals.push_back(*denoted);
                     whole_signals.push_back(*denoted);
                     continue;
+                }
+                // S'TRANSACTION is a signal of its own that toggles on each
+                // transaction on S (IEEE 1076-2019 16.2.4); the wait resumes
+                // on its events, not on events of S (10.2). Its implicit
+                // driver toggles it one delta late, so for the whole of S
+                // the wait stays on S's own events, which resume in the
+                // cycle S is updated (14.7.3.4).
+                if (sensitivity.expression) {
+                    if (const auto attribute
+                        = hir_vhdl_signal_attribute_profile(
+                            *sensitivity.expression, hir_process_scope_);
+                        attribute
+                        && attribute->kind
+                            == HirVhdlSignalAttributeKind::transaction) {
+                        if (!attribute->selection
+                            || attribute->selection->width
+                                >= design_.signal_info_[attribute->signal]
+                                       .width) {
+                            waited_signals.push_back(attribute->signal);
+                            whole_signals.push_back(attribute->signal);
+                            continue;
+                        }
+                        const auto derived = vhdl_implicit_signal_attribute(
+                            attribute->signal, "transaction", 0U,
+                            hir_source_span(sensitivity.source),
+                            attribute->selection);
+                        if (!derived) {
+                            return true;
+                        }
+                        waited_signals.push_back(*derived);
+                        whole_signals.push_back(*derived);
+                        continue;
+                    }
                 }
                 if (!sensitivity.signal.empty() && sensitivity.expression) {
                     signal = hir_named_signal(
@@ -23805,7 +23852,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             auto duplicate = std::ranges::unique(waited_signals);
             waited_signals.erase(duplicate.begin(), duplicate.end());
             if (waited_signals.empty()) {
-                if (input.delay) {
+                if (timeout_source) {
+                    process_.operations.emplace_back(runtime_timeout_wait());
+                } else if (input.delay) {
                     process_.operations.emplace_back(WaitFor { *timeout });
                 } else {
                     process_.operations.emplace_back(WaitForever { });
@@ -23821,7 +23870,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.size());
             WaitOn wait { waited_signals };
             if (input.delay) {
-                wait.timeout = *timeout;
+                apply_timeout(wait);
                 wait.timeout_result = timed_out;
             }
             process_.operations.emplace_back(std::move(wait));
@@ -23916,7 +23965,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 if (added) {
                     WaitOn first_wait { waited_signals };
                     if (input.delay) {
-                        first_wait.timeout = *timeout;
+                        apply_timeout(first_wait);
                         first_wait.timeout_result = timed_out;
                     }
                     process_.operations[wait_start] = std::move(first_wait);
@@ -23934,7 +23983,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.size());
             WaitOn repeated_wait { std::move(waited_signals) };
             if (input.delay) {
-                repeated_wait.timeout = *timeout;
+                apply_timeout(repeated_wait);
                 repeated_wait.timeout_result = timed_out;
                 repeated_wait.timeout_origin = wait_start;
             }

@@ -15,6 +15,11 @@
 #include <limits>
 #include <string>
 
+// Output outside a TF call goes through VPI (both live in libfsim_tf).
+extern "C" PLI_INT32 vpi_vprintf(PLI_BYTE8* format, va_list arguments);
+extern "C" PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8* format,
+                                     va_list arguments);
+
 namespace {
 
 thread_local fsim_tf_call_context_v3* current_call_context{};
@@ -290,8 +295,10 @@ PLI_INT32 append_delay(const uint64_t ticks) {
 }
 
 PLI_INT32 append_synchronization(const uint32_t kind) {
+  // A checktf routine may also ask for synchronization before simulation.
   if (current_call_context == nullptr ||
-      !writable_phase(current_call_context->phase) ||
+      (!writable_phase(current_call_context->phase) &&
+       current_call_context->phase != FSIM_TF_CALL_PHASE_CHECK) ||
       (kind != FSIM_TF_SYNCHRONIZATION_READ_WRITE &&
        kind != FSIM_TF_SYNCHRONIZATION_READ_ONLY) ||
       current_call_context->synchronization_count >=
@@ -580,7 +587,22 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL fsim_tf_call_context_enter_v3(
             FSIM_TF_SYNCHRONIZATION_MAX_REQUESTS ||
         context->synchronization_reserved != 0 ||
         context->synchronization_kinds == nullptr)) ||
+      (context->phase == FSIM_TF_CALL_PHASE_CHECK &&
+       (context->synchronization_count != 0 ||
+        context->synchronization_capacity >
+            FSIM_TF_SYNCHRONIZATION_MAX_REQUESTS ||
+        context->synchronization_reserved != 0 ||
+        (context->synchronization_capacity == 0) !=
+            (context->synchronization_kinds == nullptr) ||
+        (context->synchronization_kinds != nullptr &&
+         fsim::runtime::validate_tf_native_pointer(
+             context->synchronization_kinds,
+             static_cast<std::size_t>(context->synchronization_capacity) *
+                 sizeof(*context->synchronization_kinds),
+             fsim::runtime::TfNativePointerAccess::Write) !=
+             fsim::runtime::TfContainmentError::None))) ||
       (!runtime_phase(context->phase) &&
+       context->phase != FSIM_TF_CALL_PHASE_CHECK &&
        (context->synchronization_count != 0 ||
         context->synchronization_capacity != 0 ||
         context->synchronization_reserved != 0 ||
@@ -667,15 +689,23 @@ fsim_tf_current_call_context_v3(void) {
 void io_mcdprintf(const PLI_INT32 mcd, PLI_BYTE8* const format, ...) {
   va_list arguments;
   va_start(arguments, format);
-  (void)format_control(FSIM_TF_CONTROL_OUTPUT, mcd, 0, nullptr, nullptr,
-                       format, arguments);
+  if (current_call_context == nullptr) {
+    (void)vpi_mcd_vprintf(static_cast<PLI_UINT32>(mcd), format, arguments);
+  } else {
+    (void)format_control(FSIM_TF_CONTROL_OUTPUT, mcd, 0, nullptr, nullptr,
+                         format, arguments);
+  }
   va_end(arguments);
 }
 void io_printf(PLI_BYTE8* const format, ...) {
   va_list arguments;
   va_start(arguments, format);
-  (void)format_control(FSIM_TF_CONTROL_OUTPUT, 1, 0, nullptr, nullptr,
-                       format, arguments);
+  if (current_call_context == nullptr) {
+    (void)vpi_vprintf(format, arguments);
+  } else {
+    (void)format_control(FSIM_TF_CONTROL_OUTPUT, 1, 0, nullptr, nullptr,
+                         format, arguments);
+  }
   va_end(arguments);
 }
 FSIM_TF_BYTES(mc_scan_plusargs, (PLI_BYTE8*))
@@ -826,6 +856,13 @@ PLI_INT32 tf_getnextlongtime(PLI_INT32* const low_time,
 }
 PLI_INT32 tf_getp(const PLI_INT32 parameter) {
   auto* const value = current_value(parameter);
+  if (value != nullptr && value->kind == FSIM_TF_VALUE_REAL) {
+    // A real argument is rounded to the nearest integer.
+    return std::isfinite(value->real) &&
+                   std::fabs(value->real) < 2147483647.5
+               ? static_cast<PLI_INT32>(std::lround(value->real))
+               : 0;
+  }
   return value == nullptr || value->kind != FSIM_TF_VALUE_INTEGRAL ||
                  value->word_count == 0
              ? 0
@@ -834,6 +871,25 @@ PLI_INT32 tf_getp(const PLI_INT32 parameter) {
 FSIM_TF_INT(tf_getpchange, (PLI_INT32))
 double tf_getrealp(const PLI_INT32 parameter) {
   auto* const value = current_value(parameter);
+  if (value != nullptr && value->kind == FSIM_TF_VALUE_INTEGRAL &&
+      value->word_count != 0) {
+    // An integral argument converts to real.
+    const auto* const argument = current_argument(parameter);
+    double result{};
+    double scale{1.0};
+    for (uint32_t word = 0; word < value->word_count && word < 2u; ++word) {
+      result += static_cast<double>(
+                    static_cast<PLI_UINT32>(value->vector_words[word].avalbits)) *
+                scale;
+      scale *= 4294967296.0;
+    }
+    if (argument != nullptr && argument->is_signed != 0 &&
+        argument->width != 0 && argument->width <= 64u &&
+        result >= std::ldexp(1.0, static_cast<int>(argument->width) - 1)) {
+      result -= std::ldexp(1.0, static_cast<int>(argument->width));
+    }
+    return result;
+  }
   return value == nullptr || value->kind != FSIM_TF_VALUE_REAL
              ? 0.0
              : value->real;
@@ -848,6 +904,15 @@ double tf_getrealtime(void) {
 }
 FSIM_TF_BYTES(tf_gettflist, (void))
 PLI_INT32 tf_gettime(void) { return tf_getlongtime(nullptr); }
+// Simulation time in the simulation's time precision, unscaled.
+PLI_INT32 tf_getlongsimtime(PLI_INT32* const high_time) {
+  const auto* const time = current_time();
+  const uint64_t ticks = time == nullptr ? 0 : time->scheduler_ticks;
+  if (writable_pointer(high_time)) {
+    *high_time = static_cast<PLI_INT32>(ticks >> 32u);
+  }
+  return static_cast<PLI_INT32>(ticks & UINT32_MAX);
+}
 PLI_INT32 tf_gettimeprecision(void) {
   const auto* const time = current_time();
   return time == nullptr ? 0 : time->precision_exponent;
@@ -914,10 +979,17 @@ double tf_igetrealtime(PLI_BYTE8* const instance) {
 PLI_INT32 tf_igettime(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_gettime() : 0;
 }
+// A null instance asks for the simulation time unit, the smallest
+// precision of the design.
 PLI_INT32 tf_igettimeprecision(PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_gettimeprecision() : 0;
+  return current_instance_matches(instance) || instance == nullptr
+             ? tf_gettimeprecision()
+             : 0;
 }
 PLI_INT32 tf_igettimeunit(PLI_BYTE8* const instance) {
+  if (instance == nullptr) {
+    return tf_gettimeprecision();
+  }
   return current_instance_matches(instance) ? tf_gettimeunit() : 0;
 }
 PLI_BYTE8* tf_igetworkarea(PLI_BYTE8* const instance) {
@@ -1270,7 +1342,7 @@ PLI_BYTE8* tf_strgettime(void) {
     return nullptr;
   }
   PLI_INT32 high{};
-  const auto low = tf_getlongtime(&high);
+  const auto low = tf_getlongsimtime(&high);
   return tf_longtime_tostr(low, high);
 }
 FSIM_TF_INT(tf_strlongdelputp,

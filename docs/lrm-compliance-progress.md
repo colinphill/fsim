@@ -253,6 +253,104 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 83: PLI1, VPI callbacks and puts, DPI-C headers, mixed-language ports, VHDL-2019 file operations
+
+Full run on the frozen `b83l`, compared with Batch 82 (`b82n`). Batch 83
+closes 52 corpus tests (ivtest 31, Verilator 10, nvc 10, vhdl-compliance 1).
+Two more Verilator gains, `t_trace_vif_class_clk` and
+`t_trace_vif_class_clk_multi`, were Batch 82 losses already fixed on `b82o`.
+The one loss, `pow_reg_signed`, was a load timeout during a parallel build;
+it passes alone in 42 s (45 s on `b82n`).
+
+| Suite | Batch82 passes / in scope | Batch83 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2573 / 2617 | 2603 / 2622 | 289 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1959 / 2069 | 1971 / 2082 | 333 |
+| vests | 3639 / 3646 | 3639 / 3646 | 2 |
+| nvc | 1128 / 1228 | 1138 / 1231 | 251 |
+| vhdl-compliance | 50 / 65 | 51 / 65 | 7 |
+
+Foreign interfaces (IEEE 1800-2023 35, 36, 38; IEEE 1364-2005 PLI 1.0):
+- PLI 1.0 `veriusertfs` tables load from `--vpi` modules: `s_tfcell` entries
+  register through `libfsim_tf` (new `tf_veriusertfs.cpp`) over the public
+  VPI, with `tf_getp`/`tf_getrealp`/`tf_putp`, `tf_getlongsimtime`,
+  `tf_igettimeunit`, `io_printf` and the misctf reasons.
+- VPI time callbacks: `cbNextSimTime`, `cbAfterDelay` and
+  `cbAtStartOfSimTime` run at slot start (38.36.2); `vpiScaledRealTime`
+  scales by the object's module, as do put delays. Callbacks read the time
+  and value only for reasons that carry them.
+- `vpi_put_value` on nets overrides the resolved value until a driver
+  changes (38.34); a released variable keeps its forced value (10.6.2); a
+  put to a named event triggers it (38.35). Literal arguments are
+  `vpiRealConst` where real.
+- `fsim compile --dpi-header PATH` writes the C prototypes of the design's
+  DPI-C imports (35.5.1, Annex H types; new `dpi_c_type.cpp`).
+- Mixed SystemVerilog and VHDL: a variable output port drives a resolved
+  VHDL actual as one source; SystemVerilog net outputs keep a `z` source; an
+  `inout` actual naming a hierarchical net joins it; a type-conversion
+  actual on a VHDL-to-SystemVerilog input converts the signal.
+
+Runner (`scripts/lrm_corpus.py`):
+- ivtest PLI 1.0 cases run. Verilator DPI companions build with the
+  generated header (`vc_hdrs.h` includes it) and prefer the VCS branch,
+  which uses the Annex I `svLogicVecVal` field names. Companion discovery
+  covers `test.pli_filename` and `t/<name>.cpp`; `$c` checks honour the
+  case's defines.
+- The VUnit shim has `tb_path`, `output_path` and `join`; a compliance
+  testbench's named data files are copied into its work directory.
+- New exclusions (`docs/lrm-corpus-exclusions.md`): `value_change_cb1-4`
+  (Icarus part-select value), `t_vpi_module`, `t_vpi_module_dpi` and
+  `t_vpi_public_depth` (escaped names keep their backslash and space, against
+  5.6.1), `pr723` (Icarus descriptor numbering, 21.3.1),
+  `t_display_p_elab` (21.2.1.6), `t_opt_const_no_expand`/`_no_opt` (10.4),
+  `t_foreach_delete` (12.7.3), `t_vpi_public_params`, `t_cover_line_*`,
+  and nvc mixed-language cases that need nvc's `X`-to-`'U'` mapping or
+  delta counts.
+
+VHDL (IEEE 1076-2019):
+- The 2019 file operations: `FILE_REWIND`, `FILE_SEEK`, `FILE_TRUNCATE`,
+  `FILE_STATE`, `FILE_MODE`, `FILE_POSITION`, `FILE_SIZE`, `FILE_CANSEEK`,
+  `READ_WRITE_MODE` and the impure function `FILE_OPEN` (5.5.2, 16.3).
+  Typed files count elements (one line each); `TEXT` and files of
+  unconstrained arrays count characters (file12, tb_006a).
+- `S(i)'TRANSACTION` toggles on that element's transactions only (16.2.4,
+  implicit7).
+
+Open leads (`.local-artifacts/lrm-closure/ARCH-PLAN-b83.md`, triage/b83):
+- DPI exports and DPI type mapping from resolved types instead of tokens
+  (typedefs, `input int a, b`, `[1:-1]` elements: `t_dpi_open`,
+  `t_func_wide_out`).
+- Same-cycle implicit signal updates (14.7.3.4) and waits on transactions;
+  `wait on S'transaction` still resumes on events of S.
+- VPI 1800 array model: `vpiRegArray`, `vpiRange` objects (`t_vpi_memory`).
+- Escaped-identifier spelling in hierarchical paths (`br_gh317`), deposit
+  persistence (`br_gh73a/b`), acc routines (`br_gh141`), `t_sys_sformat`,
+  generate-block `string` and DPI items, unconstrained formals whose actual
+  is a function result (func23, range1, signal32, value2).
+- `FormatDisplay scalar metadata is inconsistent` when JIT-compiling
+  `$display("%0t", $realtime * 1000)`. `a += @(e) b` is accepted but never
+  assigns; A.6.2 does not allow timing controls on operator assignments.
+
+ctest: the labelled run has the 25 known failures. Four unlabelled
+application tests (dependencies of the closure matrices) had expectations
+older than earlier batches. The b82n binary gives the same results, and
+they now assert the LRM behaviour:
+- `display`: `%h` of `4'b10xz` prints `X` (21.2.1.5).
+- `procedural_assignments`: `wildcard_nba <= @* source` assigns the value
+  evaluated before the wait (9.4.5). Each nonblocking update in a slot is
+  reported (10.4.2). A released variable keeps its forced value (10.6.2).
+  The `+= @(...)` checks are dropped because A.6.2 does not allow the form.
+- `resolution`: auto resolution is 1 fs when the design has VHDL units, and
+  the VHDL `'Z'` lands one delta later (14.7.5). The boundary-delay case
+  pins 1 ps and has updated delta placements. The strength case now copies
+  the switch ids before the restored design moves (it read a dangling
+  iterator).
+- `specialization`: the top's `unsigned` needs `use ieee.numeric_std.all`.
+
+`fsim.application.vpi` now expects a released variable to keep its forced
+value (10.6.2).
+
 ### Batch 82: foreign interfaces (VPI, DPI-C), class static locals and containers, VHDL composite shapes
 
 Full run on the frozen `b82n`, compared with Batch 81 (`b81y`). Batch 82
