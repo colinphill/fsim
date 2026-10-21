@@ -103,7 +103,7 @@ foreach(FSIM_EXPECTED IN ITEMS
     "artifact_provenance=checksum+identity"
     "platform_process_limit=POSIX+Windows"
     "installed_public_alias=fsim-vhdl"
-    "diagnostic_catalog=2970"
+    "diagnostic_catalog=2972"
     "vhdl_psl_diagnostics=19"
     "bounded_authored_sources=1149"
     "authored_test_controls=436"

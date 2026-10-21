@@ -186,6 +186,6 @@ if(FSIM_RUNNER_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2970 "
+  "UVM closure audit: 21 release/behavior rows, 82 UVM diagnostics, 2972 "
   "catalog codes, 1510 bounded sources, 1813 SPDX files, retained memory/trace/"
   "artifact/cache provenance, and zero unresolved supported gaps")
