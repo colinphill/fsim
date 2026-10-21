@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <cstdlib>
 #include <limits>
@@ -420,11 +421,95 @@ namespace {
     }
 
     [[nodiscard]] std::optional<DecodedVpiParameter>
+    decode_vpi_real_or_string_parameter(
+        const std::string_view identity, const semantic::Language language)
+    {
+        runtime::SystemVerilogVpiTypeInfo type;
+        type.language = vpi_profile_language(language);
+        type.is_constant = true;
+        constexpr std::string_view scalar_prefix { "svscalar-v1:k=" };
+        if (identity.starts_with(scalar_prefix)) {
+            const auto bits_marker = identity.find(":b=");
+            unsigned kind { };
+            std::uint64_t bits { };
+            if (bits_marker == std::string_view::npos
+                || !parse_decimal(identity.substr(scalar_prefix.size(),
+                       bits_marker - scalar_prefix.size()), kind)) {
+                return std::nullopt;
+            }
+            const auto bits_text = identity.substr(bits_marker + 3U);
+            const auto parsed = std::from_chars(bits_text.data(),
+                bits_text.data() + bits_text.size(), bits, 16);
+            if (bits_text.empty() || parsed.ec != std::errc { }
+                || parsed.ptr != bits_text.data() + bits_text.size()) {
+                return std::nullopt;
+            }
+            runtime::SystemVerilogVpiStoredValue value;
+            switch (static_cast<frontend::SystemVerilogScalarKind>(kind)) {
+            case frontend::SystemVerilogScalarKind::Real:
+            case frontend::SystemVerilogScalarKind::Realtime:
+                type.category = runtime::SystemVerilogVpiValueCategory::Real;
+                type.width = 64U;
+                value.payload = std::bit_cast<double>(bits);
+                break;
+            case frontend::SystemVerilogScalarKind::ShortReal:
+                type.category
+                    = runtime::SystemVerilogVpiValueCategory::ShortReal;
+                type.width = 32U;
+                value.payload = std::bit_cast<float>(
+                    static_cast<std::uint32_t>(bits));
+                break;
+            default:
+                return std::nullopt;
+            }
+            return DecodedVpiParameter { std::move(type), std::move(value) };
+        }
+        constexpr std::string_view string_prefix { "svstring-v1;bytes=" };
+        constexpr std::string_view hex_marker { ";hex=" };
+        if (!identity.starts_with(string_prefix)) {
+            return std::nullopt;
+        }
+        const auto marker = identity.find(hex_marker);
+        std::size_t count { };
+        if (marker == std::string_view::npos
+            || !parse_decimal(identity.substr(string_prefix.size(),
+                   marker - string_prefix.size()), count)) {
+            return std::nullopt;
+        }
+        const auto hex = identity.substr(marker + hex_marker.size());
+        if (hex.size() != count * 2U) {
+            return std::nullopt;
+        }
+        std::string text;
+        text.reserve(count);
+        for (std::size_t index = 0U; index < hex.size(); index += 2U) {
+            unsigned byte { };
+            const auto parsed = std::from_chars(
+                hex.data() + index, hex.data() + index + 2U, byte, 16);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != hex.data() + index + 2U) {
+                return std::nullopt;
+            }
+            text.push_back(static_cast<char>(byte));
+        }
+        type.category = runtime::SystemVerilogVpiValueCategory::String;
+        runtime::SystemVerilogVpiStoredValue value;
+        value.payload = std::move(text);
+        return DecodedVpiParameter { std::move(type), std::move(value) };
+    }
+
+    [[nodiscard]] std::optional<DecodedVpiParameter>
     decode_vpi_parameter(
         const semantic::design::ParameterValue& parameter,
         const semantic::sv::Declaration& declaration,
         const semantic::Language language)
     {
+        // A real or string parameter has a scalar or string canonical
+        // value (IEEE 1800-2023 6.20.2).
+        if (auto special = decode_vpi_real_or_string_parameter(
+                parameter.identity, language)) {
+            return special;
+        }
         constexpr std::string_view prefix { "svconst-v3:b=" };
         auto canonical = std::string_view { parameter.identity };
         if (!canonical.starts_with(prefix)) {
@@ -519,6 +604,16 @@ namespace {
         case frontend::ValueDomain::String:
             return std::nullopt;
         }
+        // A two-state integer atom type is a decimal constant's (IEEE
+        // 1800-2023 6.11, 37.3.2 vpiConstType).
+        const auto& spelling = declaration.type->target.spelling;
+        if ((spelling == "byte" || spelling == "shortint" || spelling == "int"
+                || spelling == "longint")
+            && (domain == frontend::ValueDomain::Integer
+                || domain == frontend::ValueDomain::Bit2)) {
+            category = runtime::SystemVerilogVpiValueCategory::Integer2;
+            four_state = false;
+        }
         if (!implicit_type && declaration.type->four_state != four_state) {
             return std::nullopt;
         }
@@ -562,6 +657,8 @@ namespace {
             runtime::SystemVerilogVpiTypeDescriptor element;
             element.category
                 = category == runtime::SystemVerilogVpiValueCategory::Bit2
+                    || category
+                        == runtime::SystemVerilogVpiValueCategory::Integer2
                 ? runtime::SystemVerilogVpiValueCategory::Bit2
                 : runtime::SystemVerilogVpiValueCategory::Logic4;
             element.width = 1U;
@@ -1323,7 +1420,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
     for (const auto& specialization : project.design_ir.specializations()) {
-        if (specialization.language != semantic::Language::verilog) {
+        if (!vpi_language(specialization.language)) {
             continue;
         }
         const auto owner = instances.find(specialization.instance.value());
@@ -1352,6 +1449,12 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     != semantic::sv::DeclarationForm::local_parameter) {
                 continue;
             }
+            if ((declaration->name != parameter.name
+                    || declaration->scope != specialization.scope)
+                && specialization.language
+                    == semantic::Language::system_verilog) {
+                continue;
+            }
             if (declaration->name != parameter.name
                 || declaration->scope != specialization.scope) {
                 throw std::logic_error {
@@ -1360,6 +1463,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
             auto decoded = decode_vpi_parameter(
                 parameter, *declaration, specialization.language);
+            // A SystemVerilog parameter of a type the registry does not
+            // model yet (a type parameter, an aggregate) stays unpublished.
+            if (!decoded
+                && specialization.language
+                    == semantic::Language::system_verilog) {
+                continue;
+            }
             if (!decoded) {
                 throw std::logic_error {
                     "VPI parameter '"

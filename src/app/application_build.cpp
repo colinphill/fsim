@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_vpi_foreign.hpp"
 #include "application_phase_profile.hpp"
 #include "application_compiled_environment_vhdl.hpp"
 #include "application_workspace_objects.hpp"
@@ -718,6 +719,15 @@ std::optional<BuiltProject> build_checked_project(
         elaboration_roots.push_back(
             { top.target, top.alias, config.project.generics });
     }
+    std::vector<elaboration::UserSystemTask> user_system_tasks;
+    if (!config.elaboration.vpi_modules.empty()) {
+        auto registered = register_vpi_user_system_tasks(
+            config.elaboration.vpi_modules, diagnostics);
+        if (!registered) {
+            return std::nullopt;
+        }
+        user_system_tasks = std::move(*registered);
+    }
     auto elaborated = [&] {
         ScopedPhaseProfile elaboration_phase { "elaboration" };
         return elaboration::elaborate(
@@ -727,7 +737,8 @@ std::optional<BuiltProject> build_checked_project(
             *systemc_instances,
             systemc_provider.get(),
             config.elaboration.search_libraries,
-            coverage_context ? &*coverage_context : nullptr);
+            coverage_context ? &*coverage_context : nullptr,
+            user_system_tasks);
     }();
     for (const auto& input : elaborated.messages) {
         application_detail::import_diagnostic(diagnostics, input);

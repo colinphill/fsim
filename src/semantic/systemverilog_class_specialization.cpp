@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
+#include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/support/index_distance.hpp"
 
 #include <algorithm>
@@ -30,58 +31,6 @@ const Record* record_for(const std::map<Id, const Record*>& records, Id id)
 std::string encoded(const std::string_view value)
 {
     return std::to_string(value.size()) + ":" + std::string { value };
-}
-
-// The value of a sized or unsized based literal without x or z digits
-// (`8'h81`, `'d5`), as an unsigned 64-bit pattern (IEEE 1800-2017 5.7.1).
-std::optional<std::uint64_t> based_literal_bits(std::string_view text)
-{
-    const auto tick = text.find('\'');
-    if (tick == std::string_view::npos || tick + 2U > text.size()) {
-        return std::nullopt;
-    }
-    auto position = tick + 1U;
-    if (text[position] == 's' || text[position] == 'S') {
-        ++position;
-    }
-    if (position >= text.size()) {
-        return std::nullopt;
-    }
-    unsigned radix { };
-    switch (text[position]) {
-    case 'b': case 'B': radix = 2U; break;
-    case 'o': case 'O': radix = 8U; break;
-    case 'd': case 'D': radix = 10U; break;
-    case 'h': case 'H': radix = 16U; break;
-    default: return std::nullopt;
-    }
-    ++position;
-    std::uint64_t value { };
-    bool digits { };
-    for (; position < text.size(); ++position) {
-        const auto character = text[position];
-        if (character == '_') {
-            continue;
-        }
-        unsigned digit { };
-        if (character >= '0' && character <= '9') {
-            digit = static_cast<unsigned>(character - '0');
-        } else if (character >= 'a' && character <= 'f') {
-            digit = static_cast<unsigned>(character - 'a') + 10U;
-        } else if (character >= 'A' && character <= 'F') {
-            digit = static_cast<unsigned>(character - 'A') + 10U;
-        } else {
-            return std::nullopt;
-        }
-        if (digit >= radix
-            || value > (std::numeric_limits<std::uint64_t>::max() - digit)
-                    / radix) {
-            return std::nullopt;
-        }
-        value = value * radix + digit;
-        digits = true;
-    }
-    return digits ? std::optional { value } : std::nullopt;
 }
 
 std::optional<std::int64_t> integer_literal(const std::string_view text)
@@ -1425,7 +1374,7 @@ private:
                         bits = static_cast<std::uint64_t>(*resolved->integer);
                     } else if (literal != nullptr
                         && literal->kind == ExpressionKind::logic_literal) {
-                        bits = based_literal_bits(literal->text);
+                        bits = systemverilog_based_literal_bits(literal->text);
                     }
                     const auto declared = bits
                         ? type(*parameter.type, result.environment, identity,

@@ -588,10 +588,18 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     auto conversion = lowerer.lower_hir_vhdl_formal_conversion(
         statement, path);
     // A resolved actual combines its port's converted value with its other
-    // sources through the resolution function; it keeps its driver.
-    if (!conversion
-        || design_.signals_[conversion->destination].vhdl_resolver
-        || design_.signals_[conversion->destination].resolution
+    // sources through the resolution function; it keeps its driver. Its
+    // resolution is assigned after elaboration, so its declared resolver
+    // tells (IEEE 1076-2008 14.7.3.2).
+    if (!conversion) {
+        return false;
+    }
+    const auto destination = conversion->destination;
+    if (design_.signals_[destination].vhdl_resolver
+        || design_.signals_[destination].resolution != ResolutionKind::none
+        || explicit_resolution(destination)
+                .value_or(native_resolution(
+                    design_.signal_info_[destination]))
             != ResolutionKind::none) {
         return false;
     }

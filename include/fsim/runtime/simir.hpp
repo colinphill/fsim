@@ -545,6 +545,9 @@ struct ContainerElementRead {
     // `index` is the element's position in a multidimensional fixed array,
     // leftmost element first, as for ContainerRead.
     bool linear_index { };
+    /// `index` names a string register: a string-keyed associative array
+    /// (IEEE 1800-2017 7.8.1).
+    bool string_index { };
 };
 
 /// Replace the value selected as for ContainerElementRead.
@@ -557,6 +560,8 @@ struct ContainerElementWrite {
     // `index` is the element's position in a multidimensional fixed array,
     // leftmost element first, as for ContainerWrite.
     bool linear_index { };
+    /// As for ContainerElementRead.
+    bool string_index { };
 };
 
 /// Bit-stream packing and unpacking through a queue of single-bit elements

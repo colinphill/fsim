@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include "fsim/semantic/systemverilog_structure_image.hpp"
+
 namespace fsim::app::application_detail {
 
 runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
@@ -116,7 +118,10 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
     result.width = 64;
     return result;
   }
-  if (container_form) {
+  // An unpacked structure with a member that has no packed image is held
+  // as an aggregate container value (IEEE 1800-2017 7.2, 8.4).
+  if (container_form
+      || semantic::sv::systemverilog_boxed_aggregate(hir, property.type)) {
     result.kind = runtime::SystemVerilogClassPropertyKind::Container;
     result.width = 0;
     return result;

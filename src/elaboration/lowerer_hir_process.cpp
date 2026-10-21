@@ -1358,7 +1358,7 @@ bool Lowerer::initialize_hir_declarations(
                               false,
                           })
                     : lower_hir_static_container_actual(
-                          *input.initializer, *type);
+                          *input.initializer, *type, declaration_id);
                 if (!initial) {
                     return false;
                 }

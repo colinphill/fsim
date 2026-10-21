@@ -584,7 +584,7 @@ end architecture;
         const auto* call = fsim::runtime::simir::operation_get_if<
             fsim::runtime::simir::ClassStaticMethodCall>(&operation);
         return call != nullptr
-            && call->method_identity == "@dpi:dpi_identity_c";
+            && call->method_identity == "@dpi:dpi_identity_c#i:i";
     }));
     auto interpreter = elaborated.design->create_interpreter();
     bool invoked_dpi { };
@@ -594,7 +594,7 @@ end architecture;
             std::vector<std::string>& strings,
             const std::span<const std::string> names,
             const std::span<const std::uint8_t> directions) {
-            assert(identity == "dpi_identity_c");
+            assert(identity == "dpi_identity_c#i:i");
             assert(actuals.size() == 1U && strings.size() == 1U);
             assert(names.size() == 1U && names.front() == "value");
             assert(directions.size() == 1U);

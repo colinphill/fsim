@@ -229,6 +229,20 @@ namespace {
             return result.name.empty()
                 ? std::nullopt : std::optional { result };
         }
+        // A Verilog escaped identifier (`\\esc.mod`) keeps its dots and
+        // parentheses (IEEE 1800-2017 5.6.1); only a library prefix
+        // precedes it.
+        if (const auto escape = target.find('\\'); escape != std::string_view::npos) {
+            if (escape != 0U) {
+                if (escape < 2U || target[escape - 1U] != '.') {
+                    return std::nullopt;
+                }
+                result.library = target.substr(0, escape - 1U);
+            }
+            result.name = target.substr(escape);
+            result.name_form = library::VhdlIdentifierForm::basic;
+            return result.name.size() > 1U ? std::optional { result } : std::nullopt;
+        }
         if (const auto open = target.find('('); open != std::string_view::npos) {
             if (target.empty() || target.back() != ')' || open + 2 >= target.size()) {
                 return std::nullopt;

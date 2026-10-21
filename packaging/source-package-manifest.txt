@@ -198,6 +198,7 @@ docs/language-support.md
 docs/legacy-pli.md
 docs/lrm-compliance-notes.md
 docs/lrm-compliance-progress.md
+docs/lrm-corpus-exclusions.md
 docs/performance-campaign.md
 docs/performance-control-candidate-pairing.md
 docs/performance-matrix-2026-09-28.md
@@ -573,6 +574,7 @@ include/fsim/semantic/model.hpp
 include/fsim/semantic/sva_plan.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_hir.hpp
+include/fsim/semantic/systemverilog_structure_image.hpp
 include/fsim/semantic/systemverilog_type_descriptor.hpp
 include/fsim/semantic/vhdl_hir.hpp
 include/fsim/support/allocation_hooks.hpp
@@ -645,6 +647,7 @@ scripts/audit_msvc_test_strings.py
 scripts/create_deterministic_zip.py
 scripts/lrm_corpus.py
 scripts/lrm_corpus/vunit_shim.vhd
+scripts/lrm_corpus_include/dpi.h
 scripts/measure-debug-footprint.sh
 scripts/perf_campaign.py
 scripts/perf_campaign_profile.py
@@ -701,6 +704,8 @@ src/app/application_design_artifact_codec_internal.hpp
 src/app/application_design_artifact_hir_codec.cpp
 src/app/application_design_ir.cpp
 src/app/application_direct_read_map_cache.hpp
+src/app/application_dpi_foreign.cpp
+src/app/application_dpi_foreign.hpp
 src/app/application_executor_container_operation.cpp
 src/app/application_executor_frame.cpp
 src/app/application_executor_services.cpp
@@ -820,6 +825,8 @@ src/app/application_vhdl_hir_types.cpp
 src/app/application_vhdl_mode_view.cpp
 src/app/application_vhdl_psl.cpp
 src/app/application_vpi.cpp
+src/app/application_vpi_foreign.cpp
+src/app/application_vpi_foreign.hpp
 src/app/application_workspace.cpp
 src/app/application_workspace.hpp
 src/app/application_workspace_catalogs.cpp
@@ -1432,6 +1439,7 @@ src/semantic/model.cpp
 src/semantic/sva_plan.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
+src/semantic/systemverilog_structure_image.cpp
 src/semantic/systemverilog_type_descriptor.cpp
 src/semantic/vhdl_hir.cpp
 src/support/allocation_hooks.cpp

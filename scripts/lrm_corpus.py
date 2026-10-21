@@ -59,7 +59,9 @@ TRAILER_RE = re.compile(r"^simulation (completed|stopped|finished)\b.*\bat tick\
 
 @dataclasses.dataclass
 class Command:
-    """One fsim invocation. `stage` is compile, elaborate or simulate."""
+    """One fsim invocation. `stage` is compile, elaborate or simulate; a
+    `host` stage runs `args` itself (the C compiler building a foreign
+    interface library, IEEE 1800-2017 35-38)."""
 
     stage: str
     args: list[str]
@@ -98,7 +100,7 @@ class Case:
     expected_runtime_error: tuple[str, str, int] | None = None
 
 
-STAGE_ORDER = {"compile": 0, "elaborate": 1, "simulate": 2}
+STAGE_ORDER = {"host": -1, "compile": 0, "elaborate": 1, "simulate": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +141,7 @@ def sv_root_modules(texts: Iterable[str]) -> list[str]:
     for name in declared:
         pattern = re.compile(
             r"(?<![A-Za-z0-9_$.`'])" + re.escape(name)
-            + r"\s*(?:#\s*\(|[A-Za-z_\\][A-Za-z0-9_$]*\s*(?:\[[^\]]*\]\s*)*\()")
+            + r"\s*(?:#\s*\(|(?:[A-Za-z_][A-Za-z0-9_$]*|\\\S+)\s*(?:\[[^\]]*\]\s*)*\()")
         instantiated = False
         for match in pattern.finditer(joined):
             prefix = joined[max(0, match.start() - 40):match.start()]
@@ -400,7 +402,8 @@ def python_driver_names(source: str) -> dict[str, object]:
 def python_literal_list(source: str, keyword: str) -> list[str] | None:
     """A driver's flag list: literals, f-strings over top-level literal
     names, string `+` and `str()` of such names."""
-    match = re.search(keyword + r"\s*=\s*(\[[^\]]*\])", source, re.S)
+    # `v_flags2` must not match inside `iv_flags2`.
+    match = re.search(r"(?<![\w.])" + keyword + r"\s*=\s*(\[[^\]]*\])", source, re.S)
     if not match:
         return None
     try:
@@ -488,6 +491,9 @@ ICARUS_EXTENSION_SYNTAX = re.compile(
 # semantics and options.
 _ICARUS_RACE = "depends on Icarus's process order within a time step"
 ICARUS_NONSTANDARD = {
+    "sv_string3": "uses a string variable as a $display format; only string "
+        "literal arguments carry format specifications (IEEE 1800-2017 "
+        "21.2.1)",
     # IEEE 1800-2017 21.3.4.3 gives %u/%z no field width; Icarus reads a
     # sized %u as whole 32-bit words truncated to the width.
     **{name: "Icarus field-width semantics for %u/%z input (IEEE 1800-2017 21.3.4.3)"
@@ -509,7 +515,7 @@ ICARUS_NONSTANDARD = {
     **{name: "SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2)"
        for name in ("br960a", "br960b", "br960c", "br960d", "pr2972866")},
     **{name: _ICARUS_RACE for name in (
-        "br_ml20190806b", "pr3064375", "pr1662508", "pr1861212b",
+        "pr377", "br_ml20190806b", "pr3064375", "pr1662508", "pr1861212b",
         "pr1862744a", "sdw_dsbl", "fork3.19A", "fork3.19B", "pr812",
         "br1019", "sv_ps_array_cassign", "real_wire_force_rel",
         "nb_ec_multi_ev", "nb_ec_real", "pv_wr_vec2_nb_ec",
@@ -645,7 +651,110 @@ ICARUS_NONSTANDARD = {
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
+# The VPI and DPI-C loaders build and load Verilator's companions that use
+# only the standard interfaces; a companion driving Verilator's generated
+# C++ model needs its API.
+VERILATOR_VPI_LOADER = True
+VERILATOR_DPI_LOADER = True
+VERILATOR_MODEL_API = re.compile(
+    r"\bVerilated|verilated\.h|\bsc_main\b|\bint\s+main\s*\(|\bVM_PREFIX")
+
+# Cases that rely on rules new in IEEE 1800-2023 run at that standard.
+VERILATOR_STANDARD_2023 = {
+    # 14.16.2 clocking drives, 18.4 rand members of unpacked structures.
+    "t_clocking_drive_same",
+    "t_randomize_unpacked_struct_no_rand_members",
+    "t_constraint_real_struct_field",
+    # foreach over a string (12.7.3).
+    "t_foreach",
+    "t_foreach_const",
+}
+
 VERILATOR_NONSTANDARD = {
+    **{name: "expects a %p image of a class or virtual-interface handle, "
+        "whose format is implementation-dependent (IEEE 1800-2017 21.2.1.7)"
+       for name in ("t_class_param_pkg", "t_interface_virtual",
+                    "t_interface_virtual_inl")},
+    **{name: "assigns an array of interface instances to a virtual-interface "
+        "array (IEEE 1800-2023 25.9)"
+       for name in ("t_interface_array_virtual", "t_interface_array_class_new")},
+    **{name: "connects an unpacked-array concatenation to an output port; it "
+        "may only be the source of an assignment-like context "
+        "(IEEE 1800-2017 10.10)"
+       for name in ("t_hier_block_struct", "t_hier_block_struct_nohier")},
+    "t_timescale_nobackwards": "expects Verilator's default 1ps/1ps time "
+        "unit; the default is implementation-specific (IEEE 1800-2017 "
+        "3.14.2.3)",
+    "t_process_rand": "expects set_randstate to replay $random; process RNG "
+        "stability covers $urandom and randomize, not $random "
+        "(IEEE 1800-2017 18.14, 20.14.1)",
+    "t_constraint_dist_weight": "expects randomize to succeed with only "
+        "zero-weight dist values; zero weights are constraints, so it fails "
+        "(IEEE 1800-2017 18.5.4)",
+    "t_randomize_union": "declares rand members in a packed structure; a "
+        "random qualifier is legal only in unpacked structures "
+        "(IEEE 1800-2017 7.2)",
+    "t_randomize_inline_var_ctl": "passes dotted names to randomize(); the "
+        "arguments are identifiers of the calling object's properties "
+        "(IEEE 1800-2017 18.11)",
+    "t_interface_modport_expr_bad": "names an undeclared scope in a modport "
+        "expression (nonexist.sig) yet expects other simulators to run it "
+        "(IEEE 1800-2017 23.8)",
+    "t_event_control_pass": "triggers a function call result (->b.get_event()); "
+        "-> takes a hierarchical event identifier (IEEE 1800-2017 A.6.5)",
+    "t_paramgraph_refdtype_unlinked": "casts to a type reached through an "
+        "interface instance; hierarchical type references are not allowed "
+        "(IEEE 1800-2017 6.18)",
+    "t_timescale_udp": "declares a sequential UDP (reg output) with "
+        "combinational table rows, and reads an undeclared name "
+        "(IEEE 1800-2017 29.3, 6.10)",
+    "t_interface_generic2": "connects a constant to a port that defaults to "
+        "inout; an inout connects only to a net (IEEE 1800-2017 23.2.2.3, "
+        "23.3.3.3)",
+    "t_interface_modport_expr_array": "writes a modport input port "
+        "(IEEE 1800-2017 25.5, 23.3.3.2)",
+    "t_multidriven_class": "procedurally assigns a class variable connected "
+        "to an output port (C2 c inherits output; IEEE 1800-2017 23.2.2.3, "
+        "23.3.3.2)",
+    **{name: "mixes continuous assignments to val[1] and val[2] with "
+        "procedural writes through a variable index, whose longest static "
+        "prefix is val (IEEE 1800-2017 6.5, 11.5.3)"
+       for name in ("t_timing_intra_assign", "t_timing_intra_assign_nolocalize")},
+    "t_setuphold": "uses internal variables and nets as timing-check "
+        "events; they shall be module input or inout ports "
+        "(IEEE 1800-2017 A.7.5.3)",
+    "t_interface_ar3": "connects a reversed slice to an instance array and "
+        "expects index-matched elements; elements match left index to left "
+        "index (IEEE 1800-2017 23.3.3.5)",
+    "t_force_array_element_index": "expects an out-of-range 64-bit index to "
+        "truncate to the array's index width; an out-of-bounds read returns x "
+        "(IEEE 1800-2017 7.4.6, 11.5.1)",
+    "t_stream": "expects a wide source unpacked by << to keep its rightmost "
+        "bits; unpacking consumes bits from the left (IEEE 1800-2017 "
+        "11.4.14.3)",
+    "t_stream_queue": "expects a stream packed into a wider queue element to "
+        "be zero-padded on the left; it is padded on the right "
+        "(IEEE 1800-2017 11.4.14)",
+    "t_stream_queue_interface": "packs a 32-bit stream into a byte; a target "
+        "narrower than the stream is an error (IEEE 1800-2017 11.4.14)",
+    "t_slice_display": "indexes the result of an array slice; a "
+        "part-select range is the last select (IEEE 1800-2017 A.8.4)",
+    "t_property_abort_implication": "expects Verilator's sync_reject_on "
+        "failure counts (IEEE 1800-2017 16.12.14)",
+    "t_property_sexpr_disable": "expects Verilator's disable iff pass count; "
+        "the disable condition uses current values from the attempt's start "
+        "through its end (IEEE 1800-2017 16.12)",
+    "t_class_trigger_null": "reads a member through a handle that may be "
+        "null at time 0, depending on process order (IEEE 1800-2017 4.7, "
+        "8.4)",
+    "t_timing_timescale": "expects a time-0 trace that depends on the order "
+        "of initial and always procedures (IEEE 1800-2017 4.7, 9.2.2)",
+    "t_sys_fmonitor": "expects $fmonitor to replace earlier monitors and obey "
+        "$monitoroff; several may be active and $monitoroff does not apply "
+        "(IEEE 1800-2017 21.3.2)",
+    "t_sys_plusargs_bad": "passes $value$plusargs user strings without a "
+        "single valid format (IEEE 1800-2017 21.6)",
+    "t_embed1": "requires a Verilator-built C++ child model through DPI-C",
     "t_param_avec": "passes a [0:7] array to a [7:0] formal and expects "
         "index-matched elements; unpacked array assignment is positional, "
         "so formal element 0 is actual element 7 (IEEE 1800-2017 7.6)",
@@ -826,15 +935,7 @@ VERILATOR_NONSTANDARD = {
     "t_enum_large_methods": "compares %p of an unnamed enumeration value",
     # 1800-2017 21.3.4.3 leaves %t scan rounding to the tool.
     "t_time_sscanf": "expects Verilator's %t scan rounding",
-    # These rules are new in IEEE 1800-2023 (14.16.2, 18.4).
-    "t_clocking_drive_same": "needs IEEE 1800-2023 clocking drive rules",
-    "t_randomize_unpacked_struct_no_rand_members": "needs IEEE 1800-2023 "
-        "rand member rules",
-    "t_constraint_real_struct_field": "needs IEEE 1800-2023 rand member "
-        "rules",
     "t_forceable_writemem": "needs the Verilator forceable metacomment",
-    # foreach over a string is new in IEEE 1800-2023 (12.7.3).
-    "t_foreach": "needs IEEE 1800-2023 foreach over a string",
     # An assignment operator is illegal in an expression outside a
     # procedural statement (IEEE 1800-2017 11.3.6).
     "t_lint_assigneqexpr": "uses an assignment operator in a continuous "
@@ -1032,7 +1133,115 @@ VERILATOR_NONSTANDARD = {
             "t_langext_2017ext", "t_langext_2023ext")},
     "t_math_pow6": "initializes output net ports with nonconstant "
         "expressions (IEEE 1800-2017 A.2.1.2 list_of_port_identifiers)",
+    **{name: "assigns the net words_i from an always_ff procedure; a "
+        "procedural assignment's target is a variable (IEEE 1800-2023 10.4)"
+       for name in ("t_opt_const", "t_opt_const_dfg")},
+    **{name: "the companion's non-Verilator branch gives the import "
+        "dpic_final C++ linkage, so no C function implements it (IEEE "
+        "1800-2023 35.5.1 links imports by their C name)"
+       for name in ("t_dpi_context", "t_dpi_context_noopt")},
+    "t_vpi_const_type": "reads the integer property vpiConstType with "
+        "vpi_get_str, which IEEE 1800-2023 38.12 defines for string "
+        "properties only",
+    "t_vpi_param": "expects vpi_get(vpiLocalParam) on a parameter to raise an "
+        "error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters",
+    "t_vpi_escape": "expects Verilator's vpiFullName spelling "
+        "'TOP.escaped_normal' and a 'top.' root for other simulators; IEEE "
+        "1800-2023 37.3.1 gives vpiFullName as the full hierarchical name",
+    "t_dpi_lib": "reads 40-bit part-selects with svGetPartselBit and "
+        "svGetPartselLogic, which IEEE 1800-2023 H.10.1.2 limits to w <= 32",
+    "t_dpi_import": "declares pure void functions with output formals; only "
+        "nonvoid functions without output or inout formals can be pure "
+        "(IEEE 1800-2023 35.5.2)",
+    "t_dpi_sys": "calls imports named with escaped identifiers such as "
+        "\\$dpii_sys as system tasks, which only Verilator supports (the test "
+        "`error's for other simulators)",
 }
+
+def unconditional_verilated_include(text: str) -> bool:
+    """Whether a C companion includes a Verilator runtime header outside
+    every preprocessor conditional."""
+    depth = 0
+    for line in text.splitlines():
+        directive = re.match(r"\s*#\s*(if|ifdef|ifndef|endif|include)\b(.*)", line)
+        if not directive:
+            continue
+        kind, rest = directive.groups()
+        if kind.startswith("if"):
+            depth += 1
+        elif kind == "endif":
+            depth = max(0, depth - 1)
+        elif depth == 0 and re.search(r'["<]verilated', rest):
+            return True
+    return False
+
+
+def without_verilator_branches(text: str) -> str:
+    """The source another simulator compiles: the text of `ifdef VERILATOR
+    branches (and `ifndef VERILATOR else branches) is dropped."""
+    kept: list[str] = []
+    # One entry per open conditional: whether it is a VERILATOR test and
+    # whether its current branch is the Verilator-only one.
+    stack: list[tuple[bool, bool]] = []
+    for line in text.splitlines():
+        directive = re.match(r"\s*`(ifdef|ifndef|elsif|else|endif)\b\s*(\w*)", line)
+        if directive:
+            kind, macro = directive.groups()
+            if kind in ("ifdef", "ifndef"):
+                stack.append((macro == "VERILATOR",
+                              macro == "VERILATOR" and kind == "ifdef"))
+            elif kind in ("elsif", "else") and stack:
+                verilator, active = stack[-1]
+                stack[-1] = (verilator, verilator and kind == "else" and not active)
+            elif kind == "endif" and stack:
+                stack.pop()
+            continue
+        if not any(active for _, active in stack):
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def without_c_verilator_branches(text: str) -> str:
+    """The C companion text another simulator compiles: the lines of
+    `#if defined(VERILATOR)` and `#ifdef VERILATOR` branches (and the `#else`
+    of their negations) are dropped."""
+    kept: list[str] = []
+    # One entry per open conditional: whether it tests VERILATOR alone and
+    # whether its current branch is the Verilator-only one.
+    stack: list[tuple[bool, bool]] = []
+    for line in text.splitlines():
+        directive = re.match(r"\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)", line)
+        if directive:
+            kind, condition = directive.groups()
+            condition = re.sub(r"//.*|/\*.*?\*/", "", condition).strip()
+            positive = re.fullmatch(r"defined\s*\(?\s*VERILATOR\s*\)?|VERILATOR",
+                                    condition) is not None
+            negative = re.fullmatch(r"!\s*defined\s*\(?\s*VERILATOR\s*\)?",
+                                    condition) is not None
+            if kind in ("if", "ifdef"):
+                stack.append((positive or negative, positive))
+            elif kind == "ifndef":
+                stack.append((condition == "VERILATOR", False))
+            elif kind == "elif" and stack:
+                stack[-1] = (stack[-1][0], positive)
+            elif kind == "else" and stack:
+                verilator, active = stack[-1]
+                stack[-1] = (verilator, verilator and not active)
+            elif kind == "endif" and stack:
+                stack.pop()
+            # Directives stay so that later checks see the nesting.
+            kept.append(line)
+            continue
+        if not any(active for _, active in stack):
+            kept.append(line)
+    return "\n".join(kept)
+
+
+# Verilator's DPI companions select a simulator's declarations; the branches
+# that declare the imports themselves come first, then ModelSim's `dpi.h`,
+# which the runner supplies as svdpi.h.
+DPI_COMPANION_SIMULATORS = ("CADENCE", "NC", "MS")
+
 
 def verilator_cases(root: Path) -> list[Case]:
     tdir = root / "sources" / "verilator" / "test_regress" / "t"
@@ -1052,21 +1261,62 @@ def verilator_cases(root: Path) -> list[Case]:
         skip = None
         if not top_file.exists():
             skip = "top file not present"
-        if re.search(r"\.(cpp|c|sv)['\"]", source) and "--exe" in source:
+        # A VPI test's companion (test.pli_filename, t/<name>.cpp) carries a
+        # Verilator main and a standalone IS_VPI form other simulators load.
+        pli_companion = tdir / f"{name}.cpp"
+        uses_pli = bool(re.search(r"make_pli\s*=\s*True|test\.pli_filename", source)) \
+            and pli_companion.is_file()
+        if re.search(r"\.(cpp|c|sv)['\"]", source) and "--exe" in source and not uses_pli:
             skip = "requires a C++ harness"
         if "test.lint(" in source and "test.execute(" not in source:
             skip = skip or "lint-only test"
         # Cases Verilator gates on its constraint solver run: class and
         # scope randomization bound wide variables instead of enumerating
         # them (2026-10-12).
-        if re.search(r"have_sc\b|test\.pli_filename|vpi|dpi|sc_main", source, re.I):
+        # A foreign harness is named by the driver's code; comments, the
+        # `--vpi` flag and a SystemC build of a plain model need none.
+        code = re.sub(r"--vpi\b", "", "\n".join(
+            line for line in source.splitlines()
+            if not line.lstrip().startswith("#")))
+        foreign_harness = bool(re.search(
+            r"test\.pli_filename|vpi|dpi|sc_main", code, re.I))
+        if foreign_harness:
             skip = skip or "requires SystemC, PLI/VPI or DPI harness"
+        # A C companion that uses only the standard DPI and VPI interfaces
+        # (IEEE 1800-2017 35, 36) is built into a library fsim loads; one
+        # that drives Verilator's generated C++ model is outside the LRMs.
+        companions: list[Path] = []
+        for keyword in ("v_flags2", "v_flags", "verilator_flags2", "verilator_flags"):
+            for value in python_literal_list(source, keyword) or []:
+                for token in value.split():
+                    if token.endswith((".c", ".cc", ".cpp")) \
+                            and (tdir.parent / token).is_file():
+                        companions.append(tdir.parent / token)
+        if uses_pli:
+            companions.append(pli_companion)
+        companions = list(dict.fromkeys(companions))
+        foreign = None
+        if companions and foreign_harness \
+                and skip == "requires SystemC, PLI/VPI or DPI harness":
+            harness = without_c_verilator_branches(
+                "\n".join(read_text(path) for path in companions))
+            if "vlog_startup_routines" in harness and VERILATOR_VPI_LOADER and (
+                    "IS_VPI" in harness
+                    and not unconditional_verilated_include(harness)
+                    or not VERILATOR_MODEL_API.search(harness)):
+                foreign = "vpi"
+                skip = None
+            elif VERILATOR_MODEL_API.search(harness):
+                skip = "needs the Verilator C++ model API"
+            elif VERILATOR_DPI_LOADER:
+                foreign = "dpi"
+                skip = None
         # Verilator extensions and behaviour it marks non-standard are outside
         # the IEEE LRMs (owner decision, 2026-10-12).
         out_of_scope = None
         if top_file.exists():
             verilog = read_text(top_file)
-            if VERILATOR_C_TASKS.search(verilog):
+            if VERILATOR_C_TASKS.search(without_verilator_branches(verilog)):
                 out_of_scope = "out of scope: Verilator $c extension"
             elif name in VERILATOR_NONSTANDARD:
                 out_of_scope = "out of scope: " + VERILATOR_NONSTANDARD[name]
@@ -1088,7 +1338,8 @@ def verilator_cases(root: Path) -> list[Case]:
                 flags += [t for t in value.split()
                           if t.startswith(("+define+", "-D", "+incdir+", "-I"))]
         # `+1364-2005ext+v` selects the Verilog-2005 keywords for the test.
-        language = ("systemverilog", "2017")
+        language = ("systemverilog",
+                    "2023" if name in VERILATOR_STANDARD_2023 else "2017")
         for flag in flags:
             for token in flag.split():
                 if token.startswith("+1364-2005ext+"):
@@ -1106,22 +1357,34 @@ def verilator_cases(root: Path) -> list[Case]:
         compile_args += ["-I", str(tdir), "-D", "SIMULATOR", "-D", "TEST_OBJ_DIR=obj_dir",
                          "-D", "TEST_DUMPFILE=obj_dir/simx.vcd"]
         plusargs: list[str] = []
+        # USE_VPI_NOT_DPI makes a VPI test call its C check only through
+        # Verilator's $c or Icarus's own define; without it the test calls
+        # the check through its DPI import, a standard path (35.5).
+        dropped_defines = {"USE_VPI_NOT_DPI"} if foreign == "vpi" else set()
+        definitions: list[str] = []
         for flag in flags:
-            for token in flag.split():
+            tokens = flag.split()
+            for index, token in enumerate(tokens):
                 if token.startswith("+define+"):
                     # Verilator splits on `+`; a piece that is not a macro
                     # name (`std::process`) defines nothing usable.
                     for definition in token[len("+define+"):].split("+"):
                         if re.fullmatch(r"[A-Za-z_]\w*(=.*)?", definition):
-                            compile_args += ["-D", definition]
+                            definitions.append(definition)
+                elif token == "-D":
+                    if index + 1 < len(tokens):
+                        definitions.append(tokens[index + 1])
                 elif token.startswith("-D"):
-                    compile_args += ["-D", token[2:]]
+                    definitions.append(token[2:])
                 elif token.startswith("+incdir+"):
                     compile_args += ["-I", str(tdir / token[len("+incdir+"):])]
                 elif token.startswith("-I"):
                     compile_args += ["-I", str(tdir / token[2:])]
                 elif token.startswith("+") and not token.startswith("+libext"):
                     plusargs.append(token)
+        for definition in definitions:
+            if definition.split("=")[0] not in dropped_defines:
+                compile_args += ["-D", definition]
         all_run_flags = python_literal_list(source, "all_run_flags") or []
         plusargs += [f for f in all_run_flags if f.startswith("+")]
         top_text = read_text(top_file)
@@ -1230,6 +1493,28 @@ def verilator_cases(root: Path) -> list[Case]:
             tops = sv_root_modules([top_text])
         commands = [Command("compile", library_args + ["--library", library] + files)
                     for library, files in library_files.items()]
+        foreign_load: list[str] = []
+        if foreign:
+            # The companions build as one shared library against fsim's
+            # standard headers; the multi-simulator VPI modules select their
+            # standalone form and DPI companions declare their imports.
+            library = f"{name}_c.so"
+            cplusplus = any(path.suffix in (".cc", ".cpp") for path in companions)
+            build = ["c++" if cplusplus else "cc", "-shared", "-fPIC", "-o", library,
+                     "-I{repo}/include", "-I{repo}/include/fsim/runtime",
+                     "-I", str(tdir)]
+            if foreign == "vpi":
+                build += ["-DIS_VPI", "-DUSE_VPI_NOT_DPI", "-DVL_SNPRINTF=snprintf"]
+            else:
+                build += ["-I{repo}/scripts/lrm_corpus_include"]
+                build += ["-D" + simulator for simulator in DPI_COMPANION_SIMULATORS
+                          if re.search(r"defined\s*\(\s*" + simulator + r"\s*\)|#\s*ifdef\s+"
+                                       + simulator + r"\b", harness)] or ["-DCADENCE"]
+            build += [str(path) for path in companions]
+            build += ["{fsim_dir}/libfsim_tf.so.3", "-Wl,-rpath,{fsim_dir}"]
+            commands.append(Command("host", build))
+            foreign_load = (["--vpi", library] if foreign == "vpi"
+                            else ["--sv-lib", library])
         commands.append(Command("compile", compile_args))
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
@@ -1241,6 +1526,8 @@ def verilator_cases(root: Path) -> list[Case]:
             elab += ["--search-library", library]
         for top in tops:
             elab += ["--top", top]
+        if foreign == "vpi":
+            elab += foreign_load
         # A compile-only test declaring no module (only classes or
         # packages) has no design to elaborate.
         if tops or executes or compile_fails:
@@ -1250,7 +1537,8 @@ def verilator_cases(root: Path) -> list[Case]:
                 # driver.py runs from test_regress: data files are named
                 # relative to it (`t/x.mem`) and outputs go to obj_dir/.
                 commands.append(Command("simulate", ["simulate", "--engine", "{engine}",
-                                                     "--file-root", "."] + plusargs))
+                                                     "--file-root", "."]
+                                        + foreign_load + plusargs))
         copies: list[tuple[str, str]] = []
         for literal in sorted(set(re.findall(r'"(t/[\w./-]+)"', top_text))):
             candidate = tdir.parent / literal
@@ -1293,6 +1581,130 @@ IVTEST_SIMULATE_OPTIONS = {
     "pow_ca_signed": ["--max-deltas", "100000000"],
     "pow_ca_unsigned": ["--max-deltas", "100000000"],
 }
+
+
+# fsim has no `--vpi` loader on the command line yet; the VPI regression
+# list is enumerated so its cases run once it does (owner, 2026-10-21).
+IVTEST_VPI_LOADER = True
+
+
+# ivtest VPI cases whose gold output depends on Icarus's own choices or
+# extensions rather than IEEE 1800-2023 clauses 36-38.
+_ICARUS_VPI_ORDER = ("gold lists objects in Icarus's iteration order; IEEE 1800-2023 "
+                     "38.23 and 38.40 define no order for an iteration")
+IVTEST_VPI_NONSTANDARD = {
+    "br_gh59": "gold prints zz for a conditional with a z condition and z operands; "
+        "IEEE 1800-2023 11.4.11 Table 11-20 gives x",
+    **{name: _ICARUS_VPI_ORDER for name in (
+        "br_gh169a", "br_gh169b", "genblk_direct", "genblk_named", "genblk_unnamed")},
+    **{name: "uses vpi_handle(vpiScope, NULL), an Icarus extension (IEEE 1800-2023 "
+       "37.42 accesses only the calling system task or function with a NULL reference)"
+       for name in ("myscope", "poke_escaped")},
+    "br_ml20191013": "registers $pow over the built-in math function; IEEE 1800-2023 "
+        "20.8.2 reserves it",
+    "ro_synch": "gold holds Icarus's error message text for a read-only synch write",
+    "ports_params": "gold reports Icarus's vpiConstType for typed time parameters",
+    "memmon": "value-change callbacks on a whole array with cb->index per word are "
+        "an Icarus extension (IEEE 1800-2023 38.36.1 places them on array members)",
+    "pr2971220": "gold holds the file name as given on Icarus's command line",
+    "by_index": "reads vpiIndex with vpi_get; IEEE 1800-2023 Annex K defines it "
+        "only as a one-to-one relation",
+}
+
+
+def ivtest_vpi_cases(base: Path) -> list[Case]:
+    """ivtest's VPI regressions (vpi_regress.list): build each C module
+    against fsim's vpi_user.h and libfsim_tf, then load it with `--vpi`
+    (IEEE 1800-2017 36.9)."""
+    entries: dict[str, list[str]] = {}
+    for line in read_text(base / "vpi_regress.list").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        name = fields[0]
+        if ":" in name:
+            variant, name = name.split(":", 1)
+            # `vstd:` entries expect the standard's behaviour where Icarus
+            # departs from it; other variants are platform specific.
+            if variant != "vstd":
+                continue
+            entries[name] = [name] + fields[1:]
+        elif name not in entries:
+            entries[name] = fields
+    cases = []
+    for name, fields in entries.items():
+        type_field = fields[1].split(",")
+        test_type, args = type_field[0], [a for a in type_field[1:] if a]
+        sources = [base / "vpi" / fields[2]] + [
+            base / extra for extra in fields[4:] if extra.endswith((".c", ".cc"))]
+        gold = base / "vpi_gold" / fields[3]
+        source = base / "vpi" / f"{name}.v"
+        language, standard = "verilog", "2005"
+        for arg in args:
+            if arg in ("-g2005-sv", "-g2009", "-g2012"):
+                language = "systemverilog"
+                standard = {"-g2005-sv": "2005", "-g2009": "2009", "-g2012": "2012"}[arg]
+            elif arg in ("-g1995", "-g1"):
+                standard = "1995"
+        skip = None
+        if test_type == "NI":
+            skip = "ivtest type NI"
+        elif test_type == "PLI1":
+            skip = "needs PLI 1.0 veriusertfs support (IEEE 1364-2005 Annex G)"
+        elif not source.exists() or not all(p.exists() for p in sources):
+            skip = "source not present"
+        elif not IVTEST_VPI_LOADER:
+            skip = "fsim has no --vpi loader yet"
+        module = f"{name}.vpi"
+        cplusplus = any(p.suffix == ".cc" for p in sources)
+        build = ["c++" if cplusplus else "cc", "-shared", "-fPIC", "-o", module,
+                 "-I{repo}/include", "-I{repo}/include/fsim/runtime",
+                 "-include", "stddef.h", "-include", "stdio.h",
+                 "-DICARUS_VPI_CONST=", '-DPLI_UINT64_FMT="llu"',
+                 # vpi_sim_control is Icarus's name for vpi_control.
+                 "-Dvpi_sim_control=vpi_control"]
+        build += [str(p) for p in sources]
+        build += ["{fsim_dir}/libfsim_tf.so.3", "-Wl,-rpath,{fsim_dir}"]
+        compile_args = ["compile", "-q"] + standard_args(language, standard) + [
+            "-I", str(base), "-I", str(base / "vpi"), str(source)]
+        # A test may be a wrapper that includes the shared design.
+        text = read_text(source) if source.exists() else ""
+        included = [base / path for path in re.findall(r'`include\s+"([^"]+)"', text)]
+        texts = [text] + [read_text(path) for path in included if path.is_file()]
+        tops = sv_root_modules(texts) if source.exists() else []
+        out_of_scope = None
+        if name in IVTEST_VPI_NONSTANDARD:
+            out_of_scope = "out of scope: " + IVTEST_VPI_NONSTANDARD[name]
+        bare = re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', "",
+                      "\n".join(texts), flags=re.S)
+        if out_of_scope:
+            pass
+        elif ICARUS_EXTENSION_TASKS.search(bare):
+            out_of_scope = "out of scope: Icarus system task extension"
+        elif ICARUS_EXTENSION_SYNTAX.search(bare):
+            out_of_scope = "out of scope: Icarus syntax extension"
+        elab = ["elaborate", "-q", "--no-aot", "--vpi", module]
+        for top in tops:
+            elab += ["--top", top]
+        cases.append(Case(
+            suite="ivtest",
+            id=f"vpi_{name}",
+            out_of_scope=out_of_scope,
+            group="vpi",
+            commands=[Command("host", build), Command("compile", compile_args),
+                      Command("elaborate", elab),
+                      Command("simulate", ["simulate", "--engine", "{engine}",
+                                           "--file-root", ".", "--vpi", module])],
+            writes=[("work/.keep", "")],
+            checker="ivtest",
+            checker_data={"gold": str(gold), "type": test_type, "diff": None,
+                          "vpi": True},
+            skip=skip,
+        ))
+    return cases
 
 
 def ivtest_cases(root: Path) -> list[Case]:
@@ -1453,7 +1865,7 @@ def ivtest_cases(root: Path) -> list[Case]:
             out_of_scope=out_of_scope,
             timeout=300.0 if name in IVTEST_SIMULATE_OPTIONS else None,
         ))
-    return cases
+    return cases + ivtest_vpi_cases(base)
 
 
 def parse_exp(path: Path):
@@ -1697,12 +2109,39 @@ def vests_group(directory: str, relative: str) -> str:
 
 # nvc cases that need extensions or expect behavior contrary to the LRM.
 NVC_NONSTANDARD = {
+    **{name: "maps an unconstrained out port through a formal conversion "
+        "function whose parameter subtype is unconstrained; it shall define "
+        "the index constraint (IEEE 1076-2008 5.3.2.2)"
+       for name in ("conv20", "conv21")},
+    "view7": "leaves subelement p.y of an individually associated port "
+        "unassociated; every scalar subelement shall be associated exactly "
+        "once (IEEE 1076-2019 6.5.7.1)",
+    "open1": "leaves i0(1) of an individually associated port unassociated; "
+        "every scalar subelement shall be associated exactly once "
+        "(IEEE 1076-2019 6.5.7.1)",
+    "debug4": "leaves p2(7 downto 4) of an individually associated port "
+        "unassociated (IEEE 1076-2008 6.5.7.1); the gold is nvc's call stack",
+    "attr21": "names a character literal as an attribute prefix, which "
+        "IEEE 1076-2008 8.1 added; the test runs as VHDL-2002",
+    "assign9": "assigns an untyped string literal to an aggregate target; "
+        "neither type is determinable from context (IEEE 1076-2008 "
+        "10.6.2.1, 9.3.2)",
+    "issue819": "assigns an aggregate to an aggregate target; neither type is "
+        "determinable from context (IEEE 1076-2008 10.5.2.1, 9.3.3.1)",
+    "real14": "copy of ivtest itor_rtoi; expects results the test notes are "
+        "not defined by the standard (IEEE 1800-2017 20.5)",
+    "file1": "expects READ's LENGTH to be 3 for the 5-character value "
+        "\"hello\" (IEEE 1076-2008 5.5.2) and reads a character file through "
+        "a string file type, whose format is implementation-defined",
+    "textio4": "expects READ of a BIT_VECTOR to read past embedded spaces; a "
+        "character that cannot be part of the value ends the read "
+        "(IEEE 1076-2008 16.4)",
     # A PSL clock declaration is a block declarative item (IEEE 1076-2008
     # 3.3.2, 11.1); these place `-- psl default clock` among the
     # concurrent statements.
     **{name: "declares a PSL default clock among concurrent statements"
        for name in ("psl7", "psl14", "psl15", "psl16", "psl17", "psl19",
-                    "psl20", "psl21", "psl22")},
+                    "psl20", "psl21", "psl22", "issue1400")},
     "agg7": (
         "expects a descending array-valued range association in an "
         "ascending constrained target (IEEE 1076-2008 9.3.3.3)"
@@ -1722,6 +2161,14 @@ NVC_NONSTANDARD = {
     "integer3": "asserts nvc's repeated range evaluation count, which the "
         "test notes should be 1",
     "reflect2": "documents nvc reflection bounds the test calls incorrect",
+    "protected13": "asserts a 'PATH_NAME of a protected-type variable "
+        "that the test notes the LRM does not specify",
+    # Owner decision (Batch 81): VHDL integer types stay 32-bit; an
+    # implementation may restrict integer type ranges (IEEE 1076-2019
+    # 5.2.3.1).
+    "integer1": "declares a 64-bit integer type",
+    "issue352": "uses Synopsys std_logic_arith, which is not an IEEE "
+        "package",
     # The `nvc` library (random, sim_pkg, cover_pkg) is nvc's own.
     **{name: "uses nvc's own library packages"
        for name in ("cover25", "issue1218", "rand1", "wait24")},
@@ -2018,7 +2465,9 @@ def prepare_uvm_libraries(cases: list[Case], fsim: Path, root: Path, out: Path,
 
 def run_command(fsim: Path, command: Command, workdir: Path, env: dict,
                 timeout: float, engine: str) -> StepResult:
-    args = [str(fsim)] + [substitute(a, engine) for a in command.args]
+    args = [substitute(a, engine) for a in command.args]
+    if command.stage != "host":
+        args = [str(fsim)] + args
     started = time.monotonic()
     process = subprocess.Popen(
         args, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -2215,6 +2664,14 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
         if gold:
             expected = [l.rstrip() for l in read_text(Path(gold)).splitlines()
                         if not re.match(r"^(VCD info:|.*\$finish called|.*: warning|.*:\d+\s+warning)", l)]
+            if case.checker_data.get("vpi"):
+                # iverilog-vpi's build messages open each VPI gold log; vvp
+                # reports an unsupported vpi_control operation in its own
+                # words, which IEEE 1800-2017 38.4 leaves to the tool.
+                while expected and re.match(r"^(Compiling|Making) ", expected[0]):
+                    expected.pop(0)
+                expected = [l for l in expected if not l.startswith(
+                    "Unsupported VPI control operation")]
             actual = ivtest_source_location_lines(
                 case.id, [l.rstrip() for l in lines])
             actual = [l for l in actual if not l.startswith("objects/")]
@@ -2586,12 +3043,69 @@ def command_list(args) -> int:
     return 0
 
 
+def command_exclusions(args) -> int:
+    """Write the exclusion document: every case not run (`skip`) or whose
+    failure is recorded as a skip (`out_of_scope`), with its reason."""
+    cases = select_cases(args)
+    lines = [
+        "<!-- SPDX-License-Identifier: Apache-2.0 -->",
+        "# LRM corpus exclusions",
+        "",
+        "Generated by `python3 scripts/lrm_corpus.py exclusions --out "
+        "docs/lrm-corpus-exclusions.md`; edit the reasons in "
+        "`scripts/lrm_corpus.py` and regenerate.",
+        "",
+        "- **not run**: the case is skipped (`skip`), for example because it "
+        "needs a tool, flag or library outside fsim's scope.",
+        "- **out of scope**: the case runs, but a failure is recorded as a "
+        "skip because it depends on behaviour the IEEE LRMs do not define "
+        "(another simulator's extension, process-order races, "
+        "implementation-defined output) or because the source is illegal.",
+        "",
+        "Exclusions never count as closures.",
+        "",
+        "| suite | not run | out of scope |",
+        "|---|---:|---:|",
+    ]
+    by_suite: dict[str, list[Case]] = collections.defaultdict(list)
+    for case in cases:
+        if case.skip or case.out_of_scope:
+            by_suite[case.suite].append(case)
+    for suite in SUITES:
+        rows = by_suite.get(suite, [])
+        if rows:
+            lines.append(
+                f"| {suite} | {sum(1 for c in rows if c.skip)} | "
+                f"{sum(1 for c in rows if not c.skip)} |")
+    for suite in SUITES:
+        rows = by_suite.get(suite, [])
+        if not rows:
+            continue
+        lines += ["", f"## {suite}", "", "| case | kind | reason |",
+                  "|---|---|---|"]
+        for case in sorted(rows, key=lambda c: c.id):
+            kind = "not run" if case.skip else "out of scope"
+            reason = case.skip or case.out_of_scope or ""
+            reason = reason.removeprefix("out of scope: ")
+            reason = reason.replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| `{case.id}` | {kind} | {reason} |")
+    text = "\n".join(lines) + "\n"
+    if args.out:
+        args.out.write_text(text)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def command_run(args) -> int:
     cases = select_cases(args)
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = args.out or (args.root / "results" / f"{stamp}-{args.engine}")
     out.mkdir(parents=True, exist_ok=True)
     fsim = args.fsim.resolve()
+    # Foreign interface libraries link the fsim build's libfsim_tf.
+    PLACEHOLDERS["{fsim_dir}"] = str(fsim.parent)
+    PLACEHOLDERS["{repo}"] = str(REPO)
     units: list[list[Case]] = []
     chains: dict[str, list[Case]] = collections.OrderedDict()
     for case in cases:
@@ -2701,6 +3215,12 @@ def main(argv: list[str] | None = None) -> int:
     add_selection(p_list)
     p_list.add_argument("-v", "--verbose", action="store_true")
     p_list.set_defaults(func=command_list)
+
+    p_exclusions = sub.add_parser(
+        "exclusions", help="write the exclusion document (Markdown)")
+    add_selection(p_exclusions)
+    p_exclusions.add_argument("--out", type=Path)
+    p_exclusions.set_defaults(func=command_exclusions)
 
     p_run = sub.add_parser("run", help="run cases")
     add_selection(p_run)

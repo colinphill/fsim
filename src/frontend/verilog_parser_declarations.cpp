@@ -1549,6 +1549,12 @@ void VerilogParser::parse_event_declaration(
 
 void VerilogParser::parse_declaration(DesignUnit& unit) {
   const auto start = current();
+  const auto net_kind_spelling = [](const std::string& spelling) {
+    return contains_word(
+        {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor", "trior",
+            "trireg", "uwire", "supply0", "supply1"},
+        spelling);
+  };
   if (keyword("automatic") || keyword("static")) {
     const auto lifetime = advance();
     (void)require_standard(
@@ -1618,6 +1624,23 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     } else {
       const auto default_spelling = spec.type.spelling;
       parse_optional_net_type(spec.type);
+      // A net port of an aggregate, enumeration or user-defined data type
+      // (IEEE 1800-2017 6.7.1, 23.2.2.3): `input wire struct_t p;`.
+      if (language_ == Language::SystemVerilog2017
+          && net_kind_spelling(spec.type.spelling)) {
+        const auto net_kind = spec.type.spelling;
+        if (keyword("struct") || keyword("union") || keyword("enum")) {
+          spec.type = parse_parameter_type();
+          spec.type.systemverilog_net_type = net_kind;
+        } else if (is_named_type_reference_start()) {
+          if (auto named_array = parse_named_packed_array_type()) {
+            spec.type = std::move(*named_array);
+          } else {
+            spec.type = parse_named_type();
+          }
+          spec.type.systemverilog_net_type = net_kind;
+        }
+      }
       // `output var b` declares a variable of type logic (IEEE 1800-2017
       // 6.8), not the default net.
       if (explicit_variable && spec.type.spelling == default_spelling
@@ -1644,19 +1667,13 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     // A net of an aggregate or enumeration data type (IEEE 1800-2017
     // 6.7.1): `wire struct packed {...} w;`.
     if (language_ == Language::SystemVerilog2017
-        && contains_word(
-            {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-                "trior", "trireg", "uwire", "supply0", "supply1"},
-            spec.type.spelling)
+        && net_kind_spelling(spec.type.spelling)
         && (keyword("struct") || keyword("union") || keyword("enum"))) {
       const auto net_kind = spec.type.spelling;
       spec.type = parse_parameter_type();
       spec.type.systemverilog_net_type = net_kind;
     } else if (language_ == Language::SystemVerilog2017
-        && contains_word(
-            {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-                "trior", "trireg", "uwire", "supply0", "supply1"},
-            spec.type.spelling)
+        && net_kind_spelling(spec.type.spelling)
         && is_named_type_reference_start()) {
       // A net of a user-defined data type: `wire byte_t [1:0] w;`.
       const auto net_kind = spec.type.spelling;

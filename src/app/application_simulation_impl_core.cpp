@@ -4,6 +4,7 @@
 #include "../elaboration/hierarchy_sv_constant_evaluator.hpp"
 
 #include "fsim/runtime/class_randomize_graph.hpp"
+#include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/native_filesystem.hpp"
 
@@ -632,82 +633,15 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     // written back to these bits (offset, width) of the property.
     std::vector<std::vector<std::pair<std::size_t, std::size_t>>>
         structure_bits;
-    const auto definition_of = [&](const semantic::sv::TypeReference& type)
-        -> const semantic::sv::TypeDefinition* {
-        // A type of another unit (a `$unit` or package typedef) keeps only
-        // its spelling; it resolves when the spelling names one typedef.
-        const auto named = [&](const semantic::sv::TypeReference& reference)
-            -> const semantic::sv::TypeDefinition* {
-            if (reference.target.target.valid()) {
-                return built.systemverilog_hir.find_type(
-                    reference.target.target);
-            }
-            auto spelling = std::string_view { reference.target.spelling };
-            if (const auto cut = spelling.rfind("::");
-                cut != std::string_view::npos) {
-                spelling.remove_prefix(cut + 2U);
-            }
-            if (spelling.empty()) return nullptr;
-            const semantic::sv::TypeDefinition* found = nullptr;
-            for (const auto& candidate : built.systemverilog_hir.types()) {
-                if (candidate.name != spelling) continue;
-                if (found != nullptr) return nullptr;
-                found = &candidate;
-            }
-            return found;
-        };
-        const auto* definition = named(type);
-        for (std::size_t depth = 0; depth < 16U && definition != nullptr
-             && definition->members.empty()
-             && (definition->base.target.target.valid()
-                 || !definition->base.target.spelling.empty());
-             ++depth) {
-            definition = named(definition->base);
-        }
-        return definition;
-    };
-    const auto structure_of = [&](const semantic::sv::TypeReference& type)
-        -> const semantic::sv::TypeDefinition* {
-        if (type.container_form) return nullptr;
-        const auto* definition = definition_of(type);
-        return definition != nullptr && !definition->members.empty()
-                && (definition->form
-                        == semantic::sv::TypeForm::packed_structure
-                    || definition->form
-                        == semantic::sv::TypeForm::unpacked_structure)
-            ? definition
-            : nullptr;
+    const auto structure_of = [&](const semantic::sv::TypeReference& type) {
+        return semantic::sv::systemverilog_structure_definition(
+            built.systemverilog_hir, type);
     };
     // The bits a value of `type` takes in a structure's image.
-    const auto image_width = [&](auto&& self,
-                                 const semantic::sv::TypeReference& type)
-        -> std::optional<std::size_t> {
-        if (type.container_form) return std::nullopt;
-        if (const auto* definition = structure_of(type)) {
-            std::size_t total { };
-            for (const auto& member : definition->members) {
-                const auto width = self(self, member.type);
-                if (!width) return std::nullopt;
-                total += *width;
-            }
-            return total;
-        }
-        if (type.executable_width) {
-            return static_cast<std::size_t>(*type.executable_width);
-        }
-        if (type.packed_range && type.packed_range->left
-            && type.packed_range->right) {
-            return static_cast<std::size_t>(support::index_distance(
-                       *type.packed_range->left, *type.packed_range->right))
-                + 1U;
-        }
-        if (const auto* definition = definition_of(type);
-            definition != nullptr && definition->members.empty()
-            && definition->base.executable_width) {
-            return static_cast<std::size_t>(
-                *definition->base.executable_width);
-        }
-        return std::nullopt;
+    const auto image_width = [&](auto&&,
+                                 const semantic::sv::TypeReference& type) {
+        return semantic::sv::systemverilog_structure_image_width(
+            built.systemverilog_hir, type);
     };
     struct StructureLeaf {
         std::string path;
@@ -902,6 +836,42 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                         value.set(bit, held.packed.get(leaf.offset + bit));
                     }
                     auto element = leaf_profile(*leaf.type, value, leaf.random);
+                    // An enumerated member takes only its type's values
+                    // (IEEE 1800-2017 18.4).
+                    const auto* enumeration
+                        = semantic::sv::systemverilog_type_definition(
+                            built.systemverilog_hir, *leaf.type);
+                    if (enumeration != nullptr && leaf.width <= 64U
+                        && enumeration->form
+                            == semantic::sv::TypeForm::enumeration) {
+                        auto& domains = node == 0U
+                            ? request.property_domains
+                            : members[node - 1U].property_domains;
+                        auto& domain = domains[property.canonical_identity
+                            + leaf.path];
+                        domain.clear();
+                        for (const auto literal :
+                            semantic::sv::systemverilog_enumeration_values(
+                                built.systemverilog_hir, *enumeration)) {
+                            const auto encoded
+                                = runtime::PackedLogic4::from_aval_bval(
+                                    leaf.width,
+                                    leaf.width == 64U ? literal
+                                        : literal
+                                            & ((std::uint64_t { 1 }
+                                                   << leaf.width)
+                                                - 1U),
+                                    0U);
+                            if (std::ranges::find(domain, encoded)
+                                == domain.end()) {
+                                domain.push_back(encoded);
+                            }
+                        }
+                        if (domain.empty()) {
+                            domains.erase(
+                                property.canonical_identity + leaf.path);
+                        }
+                    }
                     container.element_paths.push_back(leaf.path);
                     container.values.push_back(element.packed);
                     container.element_profiles.push_back(std::move(element));

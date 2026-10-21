@@ -4344,7 +4344,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool signed_index,
         bool linear_index,
         ProcessId process,
-        InstructionIndex instruction);
+        InstructionIndex instruction,
+        const std::string* string_key = nullptr);
     void write_container_object_dynamic_part_element_value(
         ContainerObjectId id,
         const PackedLogic4& index,

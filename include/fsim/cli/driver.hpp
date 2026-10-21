@@ -110,6 +110,10 @@ struct Invocation {
   std::optional<AotScope> aot_scope;
   std::optional<CompiledProcessPolicy> compiled_processes;
   std::vector<std::string> plusargs;
+  // VPI modules (`LIB[:BOOTSTRAP]`) and DPI-C libraries loaded for the
+  // design (IEEE 1800-2017 36.9.1, 35.8).
+  std::vector<std::string> vpi_modules;
+  std::vector<std::string> sv_libs;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;

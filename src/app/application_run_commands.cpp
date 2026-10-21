@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_vpi_foreign.hpp"
+#include "application_dpi_foreign.hpp"
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
@@ -268,14 +270,21 @@ int run_built_project(
     const auto simulation_setup_begin = std::chrono::steady_clock::now();
     // Hidden fused nets need no published events when nothing outside the
     // SimIR processes records them.
+    // A VPI module may read and write any design object, so the objects
+    // stay published and the fused nets visible.
+    const bool vpi_modules = !config.run.vpi_modules.empty();
+    // A DPI context import may use the VPI too.
+    const bool foreign = vpi_modules || !config.run.sv_libs.empty();
     built.cone_fusion = engine != SimulationEngine::debug
         && !built.code_coverage_enabled
-        && !(trace_config.run.trace_file && trace_config.run.trace_enabled);
+        && !(trace_config.run.trace_file && trace_config.run.trace_enabled)
+        && !foreign;
     Simulation simulation(
         std::move(built),
         config.run.max_deltas,
         engine,
-        SystemVerilogVpiRuntimeUpdates::omitted);
+        foreign ? SystemVerilogVpiRuntimeUpdates::enabled
+                    : SystemVerilogVpiRuntimeUpdates::omitted);
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
     allocation_profile_session.after_setup();
 #endif
@@ -300,6 +309,49 @@ int run_built_project(
                 if (newline) {
                     output << '\n';
                 }
+            });
+    }
+    // DPI imports resolve in the --sv-lib libraries, then in the VPI
+    // modules, which load with global symbols.
+    std::unique_ptr<DpiForeignService> dpi_service;
+    if (foreign) {
+        dpi_service = load_dpi_libraries(config.run.sv_libs, diagnostics);
+        if (!dpi_service) {
+            return 1;
+        }
+        auto& time = simulation.systemverilog_vpi_time();
+        dpi_service->set_clock({
+            [&time] {
+                const auto now = time.query(
+                    runtime::SystemVerilogVpiTimeFormat::IntegerTicks);
+                return (static_cast<std::uint64_t>(now.value.high) << 32U)
+                    | now.value.low;
+            },
+            time.profile().precision_exponent,
+        });
+    }
+    std::unique_ptr<VpiForeignService> vpi_service;
+    if (vpi_modules) {
+        auto print = sink == SimulationOutputSink::builtin_stdout
+            ? VpiForeignService::PrintSink { [](const std::string_view text) {
+                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+              } }
+            : VpiForeignService::PrintSink {
+                  [&output](const std::string_view text) { output << text; } };
+        vpi_service = attach_vpi_modules(simulation, config.run.vpi_modules,
+            design_process_count, std::move(print), plusargs,
+            dpi_service.get(), diagnostics);
+        if (!vpi_service) {
+            return 1;
+        }
+    } else if (dpi_service) {
+        simulation.set_systemverilog_dpi_function_hook(
+            [dpi = dpi_service.get()](const std::string_view identity,
+                std::vector<runtime::PackedLogic4>& actuals,
+                std::vector<std::string>& strings,
+                const std::span<const std::string>,
+                const std::span<const std::uint8_t>) {
+                return dpi->call(identity, actuals, strings);
             });
     }
     const BuiltinStdoutFlush stdout_flush {

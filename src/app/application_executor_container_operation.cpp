@@ -1746,6 +1746,18 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     if (at < source.nested_elements.size()) {
                         selected = &source.nested_elements[at];
                     }
+                } else if (!source.type.fixed && element_read->signed_index
+                    && [&] {
+                           // A negative index of a queue or dynamic array
+                           // selects no element (IEEE 1800-2017 7.4.6).
+                           const auto& layout = state.executor->layout_;
+                           const auto value = state.executor->read_register(
+                               element_read->index,
+                               layout.register_widths.at(
+                                   element_read->index))
+                               .known_signed_value();
+                           return value && *value < 0;
+                       }()) {
                 } else if (!read_index_misses(
                                source, input0_aval, input0_bval, true)) {
                     const auto at = source.type.fixed

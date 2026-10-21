@@ -1974,11 +1974,22 @@ namespace {
         if (exact(selection)) {
             return std::string { selection };
         }
-        if (!event.scope.empty()) {
-            auto qualified = event.scope + "." + std::string { selection };
+        // A scope name is searched upward from the calling scope: a child of
+        // each enclosing scope, or that scope itself (IEEE 1800-2017 23.8).
+        std::string_view scope = event.scope;
+        while (!scope.empty()) {
+            auto qualified = std::string { scope } + "." + std::string { selection };
             if (exact(qualified)) {
                 return qualified;
             }
+            const auto dot = scope.rfind('.');
+            const auto last = dot == std::string_view::npos
+                ? scope : scope.substr(dot + 1U);
+            if (last == selection && exact(scope)) {
+                return std::string { scope };
+            }
+            scope = dot == std::string_view::npos
+                ? std::string_view { } : scope.substr(0U, dot);
         }
         return std::string { selection };
     }

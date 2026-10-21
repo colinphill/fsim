@@ -253,6 +253,107 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 82: foreign interfaces (VPI, DPI-C), class static locals and containers, VHDL composite shapes
+
+Full run on the frozen `b82n`, compared with Batch 81 (`b81y`). Batch 82
+closes 63 corpus tests (Verilator 35, ivtest 23, nvc 5). The run lost three
+Verilator tests; all three pass on `b82o` (see Regressions). The ivtest total
+grew by 85 cases because the runner now builds and runs the VPI cases.
+
+| Suite | Batch81 passes / in scope | Batch82 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2550 / 2562 | 2573 / 2617 | 294 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1927 / 2057 | 1959 / 2069 | 346 |
+| vests | 3639 / 3646 | 3639 / 3646 | 2 |
+| nvc | 1123 / 1243 | 1128 / 1228 | 254 |
+| vhdl-compliance | 50 / 65 | 50 / 65 | 7 |
+
+Foreign interfaces (IEEE 1800-2017 35, 36, 38; Annex H):
+- `--vpi` modules run against a live VPI service: handles for selects and
+  constants, value arrays, value-change and simulation-time callbacks,
+  `vpi_control`, and SystemVerilog parameters (integer atoms, `real`,
+  `shortreal` and `string`) in the object registry.
+- `--sv-lib` DPI-C libraries load into a call service built on libffi. It
+  passes every scalar type, `bit` and `logic` vectors (`svLogicVecVal`,
+  encoded by value), strings, chandles and output arguments. Context imports
+  get an svdpi scope (`svGetScope`, `svSetScope`, scope names, user data,
+  caller file and line, `svGetTime`). Imports not found in an `--sv-lib`
+  library are looked up in the loaded VPI modules and the process.
+  `FSIM-DPI-LOAD-001` and `FSIM-VPI-LOAD-001` report libraries that cannot
+  be loaded.
+- A task called through a hierarchical name (`a.test1`) runs in the
+  callee's instance, both for `%m` and for a context import's scope. A DPI
+  call in an expression has its declared width, sign and domain (DPI calls
+  in concatenations).
+- Escaped top names (`\t.has.dots`) keep their dots through the command
+  line and top selection.
+
+Runner (`scripts/lrm_corpus.py`):
+- ivtest VPI cases and Verilator DPI and VPI companions are built against
+  `libfsim_tf` and run. Before a Verilator companion is classified and
+  built, its Verilator-only preprocessor branches are dropped. It is built
+  with the simulator define it tests for (`CADENCE`, `NC` or `MS`; the
+  `MS` branch gets a stub `dpi.h` from `scripts/lrm_corpus_include`).
+  Verilator VPI tests no longer get `USE_VPI_NOT_DPI`. Without other
+  simulators' `$c`/`$mon_check` they never called their checks, so some
+  earlier passes were vacuous. A split `-D NAME` option is kept.
+- New exclusions, listed in `docs/lrm-corpus-exclusions.md` (now
+  generated with an SPDX notice):
+  - `t_dpi_lib`: 40-bit part-selects, beyond the H.10.1.2 32-bit limit.
+  - `t_dpi_import`: pure void functions with outputs.
+  - `t_dpi_sys`: Verilator-only syntax.
+  - `t_dpi_context` and `t_dpi_context_noopt`: the companion gives
+    `dpic_final` C++ linkage outside the Verilator branch.
+  - `t_opt_const` and `t_opt_const_dfg`: a procedural assignment to a net.
+  - `t_vpi_const_type`: `vpi_get_str` on an integer property.
+  - `t_vpi_param`: expects an error from `vpiLocalParam`.
+  - `t_vpi_escape`: expects Verilator's `TOP.` full names.
+
+SystemVerilog:
+- Static locals of class methods have storage per class specialization,
+  so they persist across calls and accept nonblocking assignments.
+  Procedural continuous assignments in task and function bodies are
+  prepared like those in processes (`t_var_init_static_automatic`,
+  `t_assigndly_dynamic`, `pr1628288`).
+- Class properties of unpacked structure type (`t_randomize_method`).
+  Static handle queues (`t_class_uses_this`). Container results of static
+  class functions (`t_static_function_in_class`). `foreach` over associative
+  dimensions takes each level's index type, string and enumeration keys
+  included (12.7.3). Constraint `foreach` over string-keyed arrays.
+- With `--standard 2023`, a `foreach` over a collection not known to be a
+  string iterates its dimensions; only strings keep the 2023 string loop.
+- `input wire struct_t p` net ports of user-defined types (6.7.1,
+  23.2.2.3). A module's own name is a known scope in system task arguments
+  (23.8).
+
+VHDL (IEEE 1076-2019 14.4.2.5, 6.4.2):
+- Partially constrained composites take the index ranges they lack from
+  their initial value, call result or context at every level, not only the
+  top one. Record results with open elements, aggregate targets of such
+  calls and record port defaults now elaborate (issue1453, record35,
+  issue1171, signal23's gold output).
+
+Regressions the full run and the labelled ctest caught:
+- `t_trace_vif_class_clk` and `t_trace_vif_class_clk_multi` lost because
+  `$dumpvars(0, t)` inside module `t` had dumped an implicit net `t`. With
+  the module name now a scope, `$dumpvars` selections are searched upward
+  through the enclosing scopes (23.8). `t_constraint_array_sum_with` was
+  a load timeout (57 s on `b81y` against a 60 s limit). All three pass on
+  `b82o`.
+- ctest: two frontend expectations described the old 2023 `foreach`
+  form; the catalog pins move to 2967 codes. The labelled ctest now has 25
+  failures, all known; three closure matrices that failed before pass.
+
+Open leads (`.local-artifacts/lrm-closure/triage/b82/foreign-remaining.md`):
+- DPI exports and open arrays; DPI imports and `string` declarations in
+  generate blocks.
+- `cbNextSimTime` with no pending events, `cbAtStartOfSimTime` ordering, and
+  the remaining ivtest VPI groups.
+- The Verilator checker does not compare gold files, so the `t_time_vpi_*`
+  passes only show a clean finish.
+- PLI1 and VHPI loaders.
+
 ### Batch 81: nvc gold output, class specializations, VHDL conversions and external names
 
 Full run on the frozen `b81y`, compared with Batch 80 (`b80y`). Batch 81

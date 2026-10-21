@@ -586,6 +586,9 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   std::unordered_set<std::string> known;
   known.insert(
       declared_genvars_.begin(), declared_genvars_.end());
+  // The module's own name names its instance as a scope, as in a system
+  // task argument (IEEE 1800-2017 23.8).
+  known.insert(unit.name);
   for (const auto& parameter : unit.parameters) {
     known.insert(parameter.name);
   }

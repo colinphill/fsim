@@ -983,6 +983,19 @@ private:
     // (IEEE 1076-2008 5.3.3).
     [[nodiscard]] bool hir_vhdl_partially_constrained_record(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    // Whether a function result takes its subtype from the call's context:
+    // an unconstrained array or a partially constrained record (IEEE
+    // 1076-2019 4.2.1).
+    [[nodiscard]] bool hir_vhdl_context_sized(
+        const semantic::vhdl::SubtypeIndication& result) const;
+    // The subtype an aggregate target gives the value assigned to it (IEEE
+    // 1076-2008 10.5.2.1, 10.6.2.1): `type` with each open record element
+    // taken from the target element associated with it; nullopt while a
+    // level stays open.
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_aggregate_target_subtype(semantic::ExpressionId target,
+        const semantic::vhdl::SubtypeIndication& type,
+        semantic::ScopeId scope) const;
     // Fill the open ranges and element constraints of `subtype` from
     // `shape`.
     void apply_hir_vhdl_shape(semantic::vhdl::SubtypeIndication& subtype,
@@ -2693,7 +2706,8 @@ private:
     };
     [[nodiscard]] std::optional<HirArrayQueryShape>
     hir_systemverilog_array_query_shape(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool count_associative = false) const;
     [[nodiscard]] std::optional<std::int64_t>
     hir_systemverilog_container_query(
         semantic::ExpressionId expression) const;
@@ -2727,6 +2741,8 @@ private:
             runtime::simir::ContainerRegisterId container { };
             runtime::simir::RegisterId index { };
             bool signed_index { };
+            // `index` is a string register (a string-keyed level).
+            bool string_index { };
         };
         runtime::simir::ContainerRegisterId root { };
         runtime::simir::ContainerRegisterId container { };
@@ -2831,6 +2847,8 @@ private:
             bool linear_index { };
             std::vector<std::uint32_t> members;
             runtime::simir::ContainerType type;
+            // `index` is a string register (a string-keyed level).
+            bool string_index { };
         };
         runtime::simir::ContainerRegisterId root { };
         runtime::simir::ContainerRegisterId container { };
@@ -3120,6 +3138,9 @@ private:
         bool virtual_dispatch { true };
         // The method returns a string, carried in a hidden string actual.
         bool string_result { };
+        // The method returns an unpacked array or queue (IEEE 1800-2017
+        // 13.4.1); only a lowered subroutine carries it.
+        bool container_result { };
         // The parameterized class specialization the call runs in.
         std::optional<std::uint32_t> specialization;
     };
@@ -3180,7 +3201,11 @@ private:
     struct HirClassCallResult {
         std::optional<RegisterId> packed;
         std::optional<StringRegisterId> string;
+        std::optional<HirStaticContainerValue> container;
     };
+    // A class function call whose result is a container value.
+    [[nodiscard]] std::optional<HirStaticContainerValue>
+    lower_hir_class_container_call(semantic::ExpressionId expression);
     // Invoke a class task or function body as a deferred SimIR subroutine
     // with `receiver` as `this`.
     [[nodiscard]] std::optional<HirClassCallResult>
@@ -3268,8 +3293,25 @@ private:
     };
     [[nodiscard]] std::optional<ContainerType> hir_class_value_container_type(
         std::string_view identity) const;
+    // A value-container property of an object: `@sv-container-property:<id>`
+    // of a handle, or a structure property held as a value container
+    // (`obj.s`, IEEE 1800-2017 7.2, 8.4).
+    struct HirClassContainerPlace {
+        semantic::ExpressionId receiver;
+        std::string identity;
+    };
+    [[nodiscard]] std::optional<HirClassContainerPlace>
+    hir_class_container_place(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirClassContainerAccess>
     lower_hir_class_value_container(
+        semantic::ExpressionId receiver, std::string_view identity);
+    // The value-container type of an instance property that is a queue,
+    // dynamic, associative or one-dimensional fixed array of class handles;
+    // its handles stay in the class heap and each access copies them.
+    [[nodiscard]] std::optional<ContainerType> hir_class_handle_container_type(
+        std::string_view identity) const;
+    [[nodiscard]] std::optional<HirClassContainerAccess>
+    lower_hir_class_handle_container(
         semantic::ExpressionId receiver, std::string_view identity);
     void store_hir_class_value_container(const HirClassContainerAccess& access);
     // lower_hir_statement without the cache store and reload around a
@@ -3383,6 +3425,9 @@ private:
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
+        frontend::SystemVerilogScalarKind scalar {
+            frontend::SystemVerilogScalarKind::None
+        };
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;
@@ -3392,11 +3437,36 @@ private:
             frontend::ValueDomain::Unknown
         };
         bool result_signed { };
+        frontend::SystemVerilogScalarKind result_scalar {
+            frontend::SystemVerilogScalarKind::None
+        };
+        // A task or void function: the destination is a placeholder.
+        bool result_void { };
+        bool task { };
+        // The C signature the foreign service calls through: argument
+        // codes, `:`, the result code, and `@c` for a context import.
+        std::string signature;
     };
+    // The DPI import a call names, in the unit or its compilation unit.
+    [[nodiscard]] const semantic::sv::DpiDeclaration* hir_dpi_import(
+        std::string_view name) const;
+    [[nodiscard]] std::optional<HirDpiFunctionProfile> hir_dpi_profile(
+        const semantic::sv::DpiDeclaration& declaration,
+        std::span<const semantic::ExpressionId> actuals) const;
     [[nodiscard]] std::optional<HirDpiFunctionProfile>
     hir_dpi_function_profile(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // Emit the call boundary of a DPI import; the destination register.
+    [[nodiscard]] std::optional<RegisterId> emit_hir_dpi_call(
+        const HirDpiFunctionProfile& profile,
+        const frontend::SourceSpan& span);
+    // A task-call statement naming a DPI task or function; nullopt when
+    // the statement names no DPI import.
+    [[nodiscard]] std::optional<bool> lower_hir_dpi_call_statement(
+        std::string_view name,
+        std::span<const semantic::sv::TaskAssociation> arguments,
+        const frontend::SourceSpan& span);
     [[nodiscard]] bool can_lower_hir_dpi_function_call(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -3405,6 +3475,15 @@ private:
     lower_hir_dpi_function_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    // A call of a system task or function registered by a foreign (VPI)
+    // library. The call boundary names its site and arguments; a task's
+    // result bit requests that the simulation finish.
+    [[nodiscard]] const UserSystemTask* hir_user_system_task(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_user_system_call(
+        const UserSystemTask& task,
+        std::span<const std::optional<semantic::ExpressionId>> arguments,
+        const frontend::SourceSpan& span);
     // The generated concurrent-property monitor calls of an assertion
     // process (runtime::simir::SvaOperation).
     [[nodiscard]] std::optional<RegisterId> lower_hir_sva_call(
@@ -3892,6 +3971,53 @@ private:
         std::optional<HirVhdlShapedProfile>> hir_vhdl_shaped_heap_profiles_;
     mutable const semantic::SpecializedHirUnit* hir_vhdl_shaped_active_unit_ { };
     mutable bool hir_vhdl_shaped_active_types_ { };
+    // The subtype a VHDL function call takes from its context while it is
+    // lowered, by call expression: a target that completes an open result
+    // type (IEEE 1076-2019 4.2.1). An aggregate target never gives a return
+    // identifier its subtype (4.2.1 b).
+    struct HirVhdlCallContext {
+        semantic::vhdl::SubtypeIndication subtype;
+        bool aggregate_target { };
+    };
+    mutable std::unordered_map<std::uint32_t, HirVhdlCallContext>
+        hir_vhdl_call_contexts_;
+    class HirVhdlCallContextScope final {
+    public:
+        HirVhdlCallContextScope(const Lowerer& lowerer,
+            const semantic::ExpressionId call,
+            semantic::vhdl::SubtypeIndication subtype,
+            const bool aggregate_target = false)
+            : lowerer_ { &lowerer }
+            , call_ { call.value() }
+        {
+            auto& contexts = lowerer_->hir_vhdl_call_contexts_;
+            if (const auto found = contexts.find(call_);
+                found != contexts.end()) {
+                previous_ = std::move(found->second);
+            }
+            contexts.insert_or_assign(call_,
+                HirVhdlCallContext { std::move(subtype), aggregate_target });
+        }
+
+        HirVhdlCallContextScope(const HirVhdlCallContextScope&) = delete;
+        HirVhdlCallContextScope& operator=(
+            const HirVhdlCallContextScope&) = delete;
+
+        ~HirVhdlCallContextScope()
+        {
+            auto& contexts = lowerer_->hir_vhdl_call_contexts_;
+            if (previous_) {
+                contexts.insert_or_assign(call_, std::move(*previous_));
+            } else {
+                contexts.erase(call_);
+            }
+        }
+
+    private:
+        const Lowerer* lowerer_;
+        std::uint32_t call_;
+        std::optional<HirVhdlCallContext> previous_;
+    };
     // When set, a single dynamic-range aggregate records whether its length
     // matches its context here instead of asserting it.
     std::optional<RegisterId>* hir_vhdl_aggregate_length_sink_ { };
@@ -4013,6 +4139,9 @@ private:
         std::unordered_map<std::uint32_t,
             std::vector<semantic::vhdl::ElementConstraint>>
             vhdl_formal_element_constraints;
+        // The result subtype an open VHDL result type takes from the call's
+        // context; part of the frame key.
+        std::optional<semantic::vhdl::SubtypeIndication> vhdl_result_subtype;
         std::string debug_name;
         // Signal-class procedure formals denote their actual signal for the
         // whole call. Frames are specialized per actual signal set.
@@ -4049,10 +4178,30 @@ private:
         bool lowered { };
         bool snapshot_complete { };
         bool function { true };
+        // The design-level name prefix of this class method's static
+        // locals; empty for any other callable (IEEE 1800-2017 6.21, 8.25).
+        std::string class_static_scope;
     };
     void inherit_enclosing_hir_frame_facts(HirCallableFrame& frame) const;
     [[nodiscard]] bool allocate_hir_static_callable_declarations(
         std::size_t frame_index);
+    // The name prefix shared by the static locals of one class method in
+    // one class specialization: each specialization of a parameterized
+    // class has its own (IEEE 1800-2017 8.25). Empty for a callable that
+    // is not a class method.
+    // An unpacked structure whose value has no packed image: a class
+    // property of this type is a value container (IEEE 1800-2017 7.2).
+    [[nodiscard]] bool hir_systemverilog_boxed_aggregate(
+        const semantic::sv::TypeReference& type) const;
+    [[nodiscard]] std::string hir_class_static_scope(
+        const HirCallableFrame& frame) const;
+    // Creates, once per design, the signal, string or container object
+    // holding the static local `declaration` of the class method running
+    // in `frame_index`, so every call, loop iteration, process and
+    // nonblocking assignment sees one object (IEEE 1800-2017 6.21, 13.3.2).
+    // False when the local's type or initializer needs the register path.
+    [[nodiscard]] bool ensure_hir_class_static_local(
+        std::size_t frame_index, semantic::DeclarationId declaration);
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_resolution_call(
         semantic::DeclarationId function, RegisterId driving_values,
         std::size_t driver_count, std::size_t element_width);
@@ -4259,6 +4408,9 @@ private:
     // `%m` (IEEE 1800-2017 21.2.1.6): the instance and its enclosing named
     // blocks.
     [[nodiscard]] std::string hir_scope_hierarchy() const;
+    // The instance whose code is being lowered: the callee's instance while
+    // a task or function of another instance (`a.t()`) is lowered inline.
+    [[nodiscard]] std::string hir_instance_path() const;
     mutable bool hierarchical_reference_used_ { };
     mutable bool hierarchical_reference_missed_ { };
     bool hierarchical_reference_retry_ { };

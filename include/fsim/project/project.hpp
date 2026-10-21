@@ -155,6 +155,9 @@ struct ElaborationSection {
   // Unqualified lookup uses the parent logical library followed by first
   // occurrences from this ordered list as one complete ambiguity scope.
   std::vector<std::string> search_libraries;
+  // VPI libraries (`lib[:bootstrap]`) whose startup routines register the
+  // user system tasks and functions that calls in the design name.
+  std::vector<std::string> vpi_modules;
 };
 
 struct BuildSection {
@@ -205,6 +208,10 @@ struct RunSection {
   std::vector<std::string> trace_filters;
   std::size_t trace_report_limit{4'096U};
   bool trace_enabled{true};
+  // Foreign libraries loaded into the simulation: VPI modules
+  // (`lib[:bootstrap]`) and DPI-C libraries.
+  std::vector<std::string> vpi_modules;
+  std::vector<std::string> sv_libs;
 };
 
 struct SystemCSection {

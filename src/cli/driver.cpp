@@ -276,8 +276,13 @@ namespace {
     std::string inferred_top_alias(std::string_view target)
     {
         target = target.substr(0, target.find('('));
-        const auto separator = target.find_last_of(".:");
-        if (separator != std::string_view::npos) {
+        // An escaped identifier (`\t.has.dots`) may contain the separators
+        // (IEEE 1800-2023 5.6.1).
+        if (const auto escaped = target.find('\\');
+            escaped != std::string_view::npos) {
+            target.remove_prefix(escaped + 1U);
+        } else if (const auto separator = target.find_last_of(".:");
+            separator != std::string_view::npos) {
             target.remove_prefix(separator + 1U);
         }
         std::string alias { target };
@@ -504,6 +509,9 @@ namespace {
         if (!invocation.search_libraries.empty()) {
             config.elaboration.search_libraries = invocation.search_libraries;
         }
+        config.elaboration.vpi_modules = invocation.vpi_modules;
+        config.run.vpi_modules = invocation.vpi_modules;
+        config.run.sv_libs = invocation.sv_libs;
         if (!invocation.library_mappings.empty()) {
             config.library_mappings = invocation.library_mappings;
             for (auto& mapping : config.library_mappings) {
@@ -582,6 +590,9 @@ namespace {
         if (!invocation.search_libraries.empty()) {
             config.elaboration.search_libraries = invocation.search_libraries;
         }
+        config.elaboration.vpi_modules = invocation.vpi_modules;
+        config.run.vpi_modules = invocation.vpi_modules;
+        config.run.sv_libs = invocation.sv_libs;
         if (!invocation.library_mappings.empty()) {
             config.library_mappings = invocation.library_mappings;
             for (auto& mapping : config.library_mappings) {
@@ -691,6 +702,9 @@ namespace {
             << "      --compiled-processes auto|selected|all\n"
             << "                           Auto-consume matching forced-all AOT receipts\n"
             << "      --seed COUNT|random\n"
+            << "      --vpi LIB[:BOOTSTRAP]\n"
+            << "                           Load a VPI module; repeatable (elaborate, simulate)\n"
+            << "      --sv-lib LIB         Load a DPI-C library; repeatable\n"
             << "      --diagnostics text|json\n"
             << "      --color auto|always|never\n"
             << "\n"
@@ -899,6 +913,8 @@ namespace {
             "--compile-option",
             "--link-option",
             "--link-library",
+            "--vpi",
+            "--sv-lib",
             "--cache",
             "--aot-scope",
             "--compiled-processes",
@@ -1257,6 +1273,19 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.systemc_link_options.emplace_back(*value);
+            } else if (is_option(argument, "", "--vpi")
+                || is_option(argument, "", "--sv-lib")) {
+                const bool vpi = is_option(argument, "", "--vpi");
+                const auto name = vpi ? "--vpi" : "--sv-lib";
+                const auto value
+                    = take_value(index, argc, argv, argument, name, diagnostics);
+                if (!value.has_value() || value->empty()) {
+                    argument_error(diagnostics,
+                        std::string { name } + " requires a library path");
+                    return std::nullopt;
+                }
+                (vpi ? invocation.vpi_modules : invocation.sv_libs)
+                    .emplace_back(*value);
             } else if (is_option(argument, "", "--link-library")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--link-library", diagnostics);
@@ -1966,6 +1995,15 @@ std::optional<Invocation> parse_arguments(
     if (invocation.command == Command::systemc_link
         && !invocation.systemc_compile_options.empty()) {
         argument_error(diagnostics, "--compile-option requires systemc compile");
+        return std::nullopt;
+    }
+    if (!invocation.vpi_modules.empty() && !elaborate && !snapshot_consumer) {
+        argument_error(diagnostics,
+            "--vpi requires elaborate, simulate, debug, or tcl");
+        return std::nullopt;
+    }
+    if (!invocation.sv_libs.empty() && !snapshot_consumer) {
+        argument_error(diagnostics, "--sv-lib requires simulate, debug, or tcl");
         return std::nullopt;
     }
     if (!invocation.plusargs.empty() && !snapshot_consumer) {

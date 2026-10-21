@@ -2606,6 +2606,9 @@ void HierarchyBuilder::validate_process_drivers()
                 && boundary_drivers->second.size() > 1U)
             || vhdl_unprotected_shared_signals_.contains(signal)
             || static_callable_signals_.contains(signal)
+            // A class method's static local is shared by every caller
+            // (IEEE 1800-2017 6.21).
+            || info.name.starts_with("$class-static-local:")
             || info.resolution != ResolutionKind::none
             || ((info.type_name == "reg" || info.type_name == "integer")
                 && !variable_container_signals.contains(signal)

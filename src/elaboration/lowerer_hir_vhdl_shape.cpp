@@ -1258,6 +1258,16 @@ bool Lowerer::hir_vhdl_shapes_differ(const semantic::ExpressionId left_id,
     return false;
 }
 
+bool Lowerer::hir_vhdl_context_sized(
+    const semantic::vhdl::SubtypeIndication& result) const
+{
+    // An unconstrained array result, or a record result an element of which
+    // leaves its bounds open, takes its subtype from the call's context
+    // (IEEE 1076-2019 4.2.1, 14.4.2.5).
+    return result.unconstrained
+        || hir_vhdl_partially_constrained_record(result);
+}
+
 bool Lowerer::hir_vhdl_partially_constrained_record(
     const semantic::vhdl::SubtypeIndication& subtype) const
 {
@@ -1269,6 +1279,96 @@ bool Lowerer::hir_vhdl_partially_constrained_record(
         *specialized_hir_unit_, subtype.type_mark.target);
     return definition != nullptr
         && definition->form == semantic::vhdl::TypeForm::record;
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_aggregate_target_subtype(const semantic::ExpressionId target,
+    const semantic::vhdl::SubtypeIndication& type,
+    const semantic::ScopeId scope) const
+{
+    // The shape of a target: an object's own, or for a record aggregate the
+    // shapes of the targets its elements associate (9.3.3.1, 9.3.3.2).
+    const auto target_shape = [&](const auto& self,
+                                  const semantic::ExpressionId id,
+                                  const semantic::vhdl::SubtypeIndication&
+                                      subtype) -> std::optional<HirVhdlShape> {
+        const auto expression = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_expression(id)
+            : std::nullopt;
+        if (!expression || expression->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& aggregate = *expression->vhdl;
+        if (aggregate.kind != semantic::vhdl::ExpressionKind::aggregate) {
+            return hir_vhdl_shape(id);
+        }
+        const auto effective = hir_effective_vhdl_subtype(subtype).value_or(
+            subtype);
+        const auto* definition = effective.type_mark.target.valid()
+            ? semantic::vhdl_base_type_definition(
+                  *specialized_hir_unit_, effective.type_mark.target)
+            : nullptr;
+        if (definition == nullptr
+            || definition->form != semantic::vhdl::TypeForm::record) {
+            return std::nullopt;
+        }
+        HirVhdlShape record;
+        std::size_t position { };
+        for (const auto& association : aggregate.associations) {
+            std::size_t index { position++ };
+            if (!association.positional()) {
+                const auto choice = association.choices.size() == 1U
+                    ? specialized_hir_unit_->find_expression(
+                          association.choices.front())
+                    : std::nullopt;
+                if (!choice || choice->vhdl == nullptr
+                    || choice->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::name) {
+                    return std::nullopt;
+                }
+                const auto found = std::ranges::find_if(
+                    definition->record_elements,
+                    [&](const semantic::vhdl::RecordElement& element) {
+                        return equal_ignoring_ascii_case(
+                            element.name, choice->vhdl->text);
+                    });
+                if (found == definition->record_elements.end()) {
+                    return std::nullopt;
+                }
+                index = static_cast<std::size_t>(std::distance(
+                    definition->record_elements.begin(), found));
+            }
+            if (index >= definition->record_elements.size()) {
+                return std::nullopt;
+            }
+            const auto& element = definition->record_elements[index];
+            const auto element_subtype
+                = semantic::vhdl::constrained_element_subtype(
+                    effective, element.name, element.subtype);
+            // A level the type declares keeps its constraint.
+            if (!hir_vhdl_context_sized(
+                    hir_effective_vhdl_subtype(element_subtype)
+                        .value_or(element_subtype))) {
+                continue;
+            }
+            const auto child = self(self, association.value, element_subtype);
+            if (!child) {
+                return std::nullopt;
+            }
+            append_constraints(record.element_constraints, { element.name },
+                *child);
+        }
+        return record;
+    };
+    const auto shape = target_shape(target_shape, target, type);
+    if (!shape) {
+        return std::nullopt;
+    }
+    auto subtype = type;
+    apply_hir_vhdl_shape(subtype, *shape, scope);
+    const auto width = vhdl_subtype_width(subtype);
+    return width && *width != 0U ? std::optional { std::move(subtype) }
+                                 : std::nullopt;
 }
 
 } // namespace fsim::elaboration

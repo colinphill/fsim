@@ -407,6 +407,17 @@ std::optional<TargetSpec> parse_target(const std::string_view spelling) {
         return result.unit.empty() ? std::nullopt
                                   : std::optional { result };
     }
+    // A Verilog escaped identifier (`work.\t.has.dots`) keeps its dots
+    // (IEEE 1800-2023 5.6.1) and has no architecture suffix.
+    if (const auto escape = remainder.find('\\');
+        escape != std::string_view::npos) {
+        if (escape > 1U && remainder[escape - 1U] == '.') {
+            result.library = std::string{remainder.substr(0, escape - 1U)};
+        }
+        result.unit = std::string{remainder.substr(escape)};
+        return result.unit.size() > 1U ? std::optional { result }
+                                       : std::nullopt;
+    }
     if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
         result.library = std::string{remainder.substr(0, dot)};
         remainder.remove_prefix(dot + 1);

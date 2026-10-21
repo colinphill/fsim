@@ -2,6 +2,7 @@
 #include "lowerer_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "vhdl_hir_type_validation.hpp"
 
@@ -4531,6 +4532,16 @@ bool Lowerer::hir_expression_signed(
         || hir_captured_signed_.contains(expression_id.value())) {
         return true;
     }
+    // A VPI system function has the shape its registration gives it
+    // (IEEE 1800-2023 38.36).
+    if (const auto* task = hir_user_system_task(expression_id)) {
+        return task->is_signed;
+    }
+    // A DPI import's result has its declared type (IEEE 1800-2023 35.5.5).
+    if (const auto profile = hir_dpi_function_profile(
+            expression_id, hir_process_scope_)) {
+        return profile->result_signed;
+    }
     // `SIGNED'("0111")` has the signedness of its type mark, not of its
     // operand (IEEE 1076-2008 9.3.5, G.2); a concatenation has the
     // signedness of its result array type (9.2.5).
@@ -7362,6 +7373,14 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
         lookup(design_.signal_by_name_, name, result.signal);
         lookup(design_.string_by_name_, name, result.string);
         lookup(design_.container_by_name_, name, result.container);
+    } else if (frame != nullptr && !frame->class_static_scope.empty()) {
+        // A class method's static local is one design-level object per
+        // class specialization (IEEE 1800-2017 6.21, 8.25).
+        const auto name = frame->class_static_scope + "#"
+            + std::to_string(declaration.value());
+        lookup(design_.signal_by_name_, name, result.signal);
+        lookup(design_.string_by_name_, name, result.string);
+        lookup(design_.container_by_name_, name, result.container);
     } else {
         lookup(signals_, key, result.signal);
         lookup(string_objects_, key, result.string);
@@ -8238,18 +8257,13 @@ Lowerer::hir_container_object_binding(
     }
     // A container property of `this` in a lowered class body reads its
     // cached register.
-    if (const auto access = specialized_hir_unit_->find_expression(
-            expression_id);
-        access && access->systemverilog != nullptr
-        && !hir_class_container_caches_.empty()
-        && access->systemverilog->text.starts_with("@sv-container-property:")
-        && access->systemverilog->operands.size() == 1U) {
+    if (const auto place = !hir_class_container_caches_.empty()
+                ? hir_class_container_place(expression_id)
+                : std::nullopt) {
         const auto receiver = specialized_hir_unit_->find_expression(
-            access->systemverilog->operands.front());
-        const auto identity = std::string_view { access->systemverilog->text }
-            .substr(std::string_view { "@sv-container-property:" }.size());
+            place->receiver);
         const auto cache = std::ranges::find(hir_class_container_caches_,
-            identity, &HirClassContainerCache::identity);
+            place->identity, &HirClassContainerCache::identity);
         if (receiver && receiver->systemverilog != nullptr
             && (receiver->systemverilog->text == "this"
                 || receiver->systemverilog->text == "super")
@@ -9838,14 +9852,8 @@ Lowerer::hir_static_container_expression_type(
     // recognize the synthetic property expression too, so whole-array
     // assignments to a callable's container result do not fall through to
     // packed-width assignment lowering.
-    constexpr std::string_view container_property {
-        "@sv-container-property:"
-    };
-    if (source.text.starts_with(container_property)
-        && source.operands.size() == 1U) {
-        return hir_class_value_container_type(
-            std::string_view { source.text }.substr(
-                container_property.size()));
+    if (const auto place = hir_class_container_place(expression_id)) {
+        return hir_class_value_container_type(place->identity);
     }
     // A slice of a queue is a queue (IEEE 1800-2017 7.10.1).
     if (source.kind == semantic::sv::ExpressionKind::slice
@@ -9870,6 +9878,26 @@ Lowerer::hir_static_container_expression_type(
         return when_true && when_false && *when_true == *when_false
             ? when_true
             : std::nullopt;
+    }
+    // A class function returning an array or queue, as its
+    // specialization types it (IEEE 1800-2017 8.25, 13.4.1).
+    if (source.kind == semantic::sv::ExpressionKind::class_method_call
+        || source.kind == semantic::sv::ExpressionKind::class_static_method_call
+        || source.kind == semantic::sv::ExpressionKind::call) {
+        if (const auto profile = hir_class_method_profile(
+                expression_id, hir_process_scope_);
+            profile && profile->container_result) {
+            const SizeRestoreGuard specialization_frames {
+                hir_generic_binding_frames_
+            };
+            if (profile->specialization) {
+                hir_generic_binding_frames_.push_back(
+                    class_specializations().binding_frame(
+                        *profile->specialization));
+            }
+            const auto type = hir_callable_type(profile->declaration);
+            return type ? type->container : std::nullopt;
+        }
     }
     if (source.kind == semantic::sv::ExpressionKind::call) {
         const auto declaration_id = hir_referenced_declaration(
@@ -9973,7 +10001,8 @@ Lowerer::hir_systemverilog_container_bit_width(
 
 std::optional<Lowerer::HirArrayQueryShape>
 Lowerer::hir_systemverilog_array_query_shape(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const bool count_associative) const
 {
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
@@ -10039,6 +10068,11 @@ Lowerer::hir_systemverilog_array_query_shape(
                 if (!leaf->unpacked_dimensions.empty()) {
                     return std::nullopt;
                 }
+                append_dimension({ }, true);
+                ++result.unpacked_dimensions;
+            } else if (count_associative) {
+                // An associative array is one variable-sized unpacked
+                // dimension for $dimensions and $unpacked_dimensions (20.7).
                 append_dimension({ }, true);
                 ++result.unpacked_dimensions;
             } else {
@@ -10250,6 +10284,13 @@ Lowerer::hir_systemverilog_array_query_shape(
         }
         return shape;
     }
+    // A member of a structure property (`p.m`).
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text.starts_with("@sv-select:")) {
+        const auto member = hir_systemverilog_value_type(expression_id);
+        return member ? shape_for_reference(*member, source.scope)
+                      : std::nullopt;
+    }
     constexpr std::string_view container_property {
         "@sv-container-property:"
     };
@@ -10276,6 +10317,14 @@ Lowerer::hir_systemverilog_array_query_shape(
         : nullptr;
     if (property_receiver && property == nullptr) {
         return std::nullopt;
+    }
+    // A member of a structure variable (`s.m`) has the member's declared
+    // dimensions (IEEE 1800-2017 7.2, 20.7).
+    if (!property_receiver
+        && source.text.find('.') != std::string::npos) {
+        if (const auto member = hir_systemverilog_value_type(expression_id)) {
+            return shape_for_reference(*member, source.scope);
+        }
     }
     const auto named_type = property_receiver ? std::nullopt
         : hir_systemverilog_named_type_declaration(source.text, source.scope);
@@ -10349,7 +10398,8 @@ Lowerer::hir_systemverilog_container_query(
         }
     }
     if (!bits_query) {
-        if (const auto shape = hir_systemverilog_array_query_shape(receiver)) {
+        if (const auto shape = hir_systemverilog_array_query_shape(receiver,
+                dimensions_query || unpacked_dimensions_query)) {
             if (dimensions_query) {
                 return static_cast<std::int64_t>(shape->dimensions.size());
             }
@@ -14123,9 +14173,29 @@ Lowerer::hir_vhdl_attribute_profile(
         return hir_vhdl_time_expression(value)
             && value_time_identity.recognized;
     }();
+    // `TIME'HIGH` and the other bounds of STD.STANDARD.TIME or DELAY_LENGTH
+    // are values of TIME (IEEE 1076-2008 16.2.2).
+    const bool time_bound_value = [&] {
+        if (!value_expression || value_expression->vhdl == nullptr
+            || value_expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::call
+            || !semantic::vhdl::is_scalar_bound_attribute(
+                value_expression->vhdl->text)
+            || value_expression->vhdl->operands.size() != 1U) {
+            return false;
+        }
+        const auto bound_prefix = specialized_hir_unit_->find_expression(
+            value_expression->vhdl->operands.front());
+        return bound_prefix && bound_prefix->vhdl != nullptr
+            && bound_prefix->vhdl->kind
+                == semantic::vhdl::ExpressionKind::name
+            && standard_time_name_identity(
+                bound_prefix->vhdl->text, bound_prefix->vhdl->scope)
+                   .recognized;
+    }();
     const bool physical_value = literal_unit.has_value()
         || value_physical_root.has_value()
-        || builtin_time_value;
+        || builtin_time_value || time_bound_value;
     bool contextual_physical_value { };
     if (physical_prefix) {
         if (source.text == "'val") {
@@ -14144,7 +14214,8 @@ Lowerer::hir_vhdl_attribute_profile(
                 = (value_physical_root && prefix_physical_root
                       && *value_physical_root == *prefix_physical_root)
                 || (!value_physical_root && builtin_time_prefix
-                    && builtin_time_value);
+                    && builtin_time_value)
+                || (builtin_time_prefix && time_bound_value);
             contextual_physical_value
                 = matching_literal || matching_object;
             if (!contextual_physical_value) {
@@ -14271,7 +14342,11 @@ Lowerer::hir_vhdl_attribute_profile(
     result.upper_bound = high;
     if (source.text == "'pos") {
         result.kind = HirVhdlAttributeKind::position;
-        result.width = 32U;
+        // 'POS is universal_integer (IEEE 1076-2008 16.2.2); the position
+        // of a 64-bit physical value such as TIME'HIGH keeps its width.
+        result.width = physical_prefix
+            ? std::max<std::size_t>(32U, *prefix_width)
+            : 32U;
         result.domain = frontend::ValueDomain::Integer;
     } else if (source.text == "'val") {
         result.kind = HirVhdlAttributeKind::value;
@@ -14997,6 +15072,11 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (const auto status = hir_process_status_query(expression_id)) {
         return *status ? frontend::ValueDomain::Integer
                        : frontend::ValueDomain::Bit2;
+    }
+    // A DPI import's result has its declared type (IEEE 1800-2023 35.5.5).
+    if (const auto profile = hir_dpi_function_profile(
+            expression_id, process_scope)) {
+        return profile->result_domain;
     }
     if (const auto member = hir_class_property_member(expression_id)) {
         return member->member.domain;
@@ -16206,6 +16286,13 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
                     return kind;
                 }
             }
+        }
+        // A DPI import's result has its declared C-compatible type
+        // (IEEE 1800-2023 35.5.5).
+        if (const auto profile = hir_dpi_function_profile(
+                expression_id, hir_process_scope_);
+            profile && profile->result_scalar != Kind::None) {
+            return profile->result_scalar;
         }
     }
     // An element of a real array is real (7.4).
@@ -17964,6 +18051,13 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         = hir_captured_update_indices_.find(expression_id.value());
         captured != hir_captured_update_indices_.end()) {
         return register_width(captured->second);
+    }
+    if (const auto* task = hir_user_system_task(expression_id)) {
+        return task->width;
+    }
+    if (const auto profile = hir_dpi_function_profile(
+            expression_id, process_scope)) {
+        return profile->result_width;
     }
     // A reduction of an unpacked array whose with clause is its iterator
     // has the element type (IEEE 1800-2023 7.12.3).
@@ -21598,6 +21692,31 @@ Lowerer::hir_vhdl_expression_subtype(
                 : nullptr;
             if (array != nullptr && array->element_subtype) {
                 return hir_effective_vhdl_subtype(*array->element_subtype);
+            }
+        }
+    }
+    // `T'HIGH`, `T'LOW`, `T'LEFT` and `T'RIGHT` of a scalar type T are
+    // values of T (IEEE 1076-2008 16.2.2).
+    if (const auto bound = specialized_hir_unit_->find_expression(
+            expression_id);
+        bound && bound->vhdl != nullptr
+        && bound->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && semantic::vhdl::is_scalar_bound_attribute(bound->vhdl->text)
+        && bound->vhdl->operands.size() == 1U) {
+        if (auto prefix = hir_vhdl_type_actual(bound->vhdl->operands.front())) {
+            if (auto effective = hir_effective_vhdl_subtype(*prefix)) {
+                prefix = std::move(effective);
+            }
+            const auto* definition = prefix->type_mark.target.valid()
+                ? semantic::vhdl_base_type_definition(
+                      *specialized_hir_unit_, prefix->type_mark.target)
+                : nullptr;
+            if (definition != nullptr
+                && (definition->form == semantic::vhdl::TypeForm::physical
+                    || definition->form == semantic::vhdl::TypeForm::scalar
+                    || definition->form
+                        == semantic::vhdl::TypeForm::enumeration)) {
+                return prefix;
             }
         }
     }

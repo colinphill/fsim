@@ -17,8 +17,14 @@ public:
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
     ~DynamicLibrary();
 
+    /// Load a library. A global one's symbols also resolve references of
+    /// libraries loaded after it and default_symbol lookups.
     [[nodiscard]] static std::unique_ptr<DynamicLibrary> open(
-        const std::filesystem::path& path, std::string& error);
+        const std::filesystem::path& path, std::string& error,
+        bool global = false);
+    /// A symbol of the program or of any globally loaded library; null
+    /// when none defines it.
+    [[nodiscard]] static void* default_symbol(std::string_view name);
     [[nodiscard]] static bool is_loaded(
         const std::filesystem::path& path) noexcept;
 

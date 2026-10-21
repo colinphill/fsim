@@ -118,7 +118,8 @@ ElaborationResult elaborate_impl(
         systemc_instances,
     SystemCFactoryProvider* systemc_provider,
     const std::span<const std::string> search_libraries,
-    const CoverageHirContext* coverage) {
+    const CoverageHirContext* coverage,
+    const std::span<const UserSystemTask> user_system_tasks) {
     ElaborationResult result;
     const auto validated = semantic::validate_compiled_design(compiled);
     if (!validated) {
@@ -207,6 +208,8 @@ ElaborationResult elaborate_impl(
     }
 
     ElaboratedDesign design { normalized_roots };
+    design.set_user_system_tasks(
+        { user_system_tasks.begin(), user_system_tasks.end() });
 
     struct ResolvedRoot {
         std::string alias;
@@ -534,7 +537,8 @@ ElaborationResult elaborate(
     const std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
     const std::span<const std::string> search_libraries,
-    const CoverageHirContext* coverage)
+    const CoverageHirContext* coverage,
+    const std::span<const UserSystemTask> user_system_tasks)
 {
     return elaborate_impl(
         compiled,
@@ -543,7 +547,8 @@ ElaborationResult elaborate(
         systemc_instances,
         systemc_provider,
         search_libraries,
-        coverage);
+        coverage,
+        user_system_tasks);
 }
 
 } // namespace fsim::elaboration

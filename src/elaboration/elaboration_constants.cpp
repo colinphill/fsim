@@ -23,6 +23,12 @@ ValueKind value_kind(const frontend::ValueDomain domain) noexcept
 
 std::string simple_top_name(std::string_view top)
 {
+    // A Verilog escaped identifier (`lib.\t.has.dots`) keeps its dots and
+    // colons (IEEE 1800-2023 5.6.1).
+    if (const auto escape = top.find('\\');
+        escape != std::string_view::npos) {
+        return std::string { top.substr(escape) };
+    }
     if (const auto colon = top.rfind(':');
         colon != std::string_view::npos) {
         top.remove_prefix(colon + 1U);

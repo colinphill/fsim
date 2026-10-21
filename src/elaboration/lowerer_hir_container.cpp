@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "fsim/semantic/systemverilog_structure_image.hpp"
 
 namespace fsim::elaboration {
 namespace {
@@ -397,16 +398,44 @@ Lowerer::lower_hir_systemverilog_container_expression(
     }
     const auto& call = *expression->systemverilog;
     const auto span = hir_source_span(call.source);
+    // `h.p.exists(k)` of a container property held by an object
+    // (`@sv-container-method:<m>:<p>` on the handle) queries a copy of the
+    // property's container (IEEE 1800-2017 7.9, 7.10, 8.4).
+    std::string text = call.text;
+    std::optional<HirStaticContainerValue> class_source;
+    if (constexpr std::string_view prefix { "@sv-container-method:" };
+        call.text.starts_with(prefix) && !call.operands.empty()) {
+        const auto rest = std::string_view { call.text }.substr(prefix.size());
+        const auto colon = rest.find(':');
+        if (colon == std::string_view::npos) {
+            return std::nullopt;
+        }
+        text = "." + std::string { rest.substr(0U, colon) };
+        const auto identity = rest.substr(colon + 1U);
+        if (text != ".size" && text != ".num" && text != ".exists"
+            && text != ".first" && text != ".last" && text != ".next"
+            && text != ".prev") {
+            return std::nullopt;
+        }
+        const auto held = hir_class_value_container_type(identity)
+            ? lower_hir_class_value_container(call.operands.front(), identity)
+            : lower_hir_class_handle_container(
+                  call.operands.front(), identity);
+        if (!held) {
+            return std::nullopt;
+        }
+        class_source = held->container;
+    }
     const auto invalid_result = [&]() {
         const auto width = expected_width == 0U ? 32U : expected_width;
         const auto destination = load_constant(
             unsigned_value(0U, width), frontend::ValueDomain::Bit2);
         return std::optional<RegisterId> { destination };
     };
-    const bool reduction = is_container_reduction(call.text);
-    const bool locator = is_container_locator(call.text);
-    const bool ordering = call.text == ".reverse" || call.text == ".sort"
-        || call.text == ".rsort" || call.text == ".shuffle";
+    const bool reduction = is_container_reduction(text);
+    const bool locator = is_container_locator(text);
+    const bool ordering = text == ".reverse" || text == ".sort"
+        || text == ".rsort" || text == ".shuffle";
     if (ordering) {
         report(
             "FSIM-ELAB-SVORDER-004",
@@ -416,7 +445,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
     }
     if (locator) {
         report(
-            is_predicate_locator(call.text)
+            is_predicate_locator(text)
                 ? "FSIM-ELAB-SVFIND-006"
                 : "FSIM-ELAB-SVLOCATOR-004",
             "container locator results require a compatible whole-queue "
@@ -425,11 +454,11 @@ Lowerer::lower_hir_systemverilog_container_expression(
         return invalid_result();
     }
     // num() is size() for an associative array (IEEE 1800-2017 7.9.1).
-    const bool size_query = call.text == ".size" || call.text == ".num";
-    const bool query = size_query || call.text == ".exists"
-        || call.text == ".first" || call.text == ".last"
-        || call.text == ".next" || call.text == ".prev";
-    const bool pop = call.text == ".pop_front" || call.text == ".pop_back";
+    const bool size_query = text == ".size" || text == ".num";
+    const bool query = size_query || text == ".exists"
+        || text == ".first" || text == ".last"
+        || text == ".next" || text == ".prev";
+    const bool pop = text == ".pop_front" || text == ".pop_back";
     if (!reduction && !query && !pop) {
         return std::nullopt;
     }
@@ -461,8 +490,9 @@ Lowerer::lower_hir_systemverilog_container_expression(
             span);
         return invalid_result();
     }
-    const auto source = lower_hir_static_container_value(
-        call.operands.front());
+    const auto source = class_source
+        ? class_source
+        : lower_hir_static_container_value(call.operands.front());
     if (!source) {
         if (reduction) {
             report(
@@ -548,7 +578,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
             && source->type.dimensions.size() > 1U) {
             const auto transform_id = call.operands[explicit_iterator ? 2U : 1U];
             const auto reduced = lower_hir_container_reduction_loop(
-                call.text, source->value, source->type, iterator_name,
+                text, source->value, source->type, iterator_name,
                 transform_id);
             if (!reduced) {
                 report(
@@ -582,7 +612,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
                     diagnostics_.end());
                 diagnostics_.resize(diagnostic_count);
                 if (const auto reduced = lower_hir_container_reduction_loop(
-                        call.text, source->value, source->type,
+                        text, source->value, source->type,
                         iterator_name, transform_id)) {
                     return expected_width != 0U
                             && expected_width != register_width(*reduced)
@@ -599,13 +629,13 @@ Lowerer::lower_hir_systemverilog_container_expression(
             transformation = std::move(*lowered);
         }
         auto operation = ContainerReductionOperator::sum;
-        if (call.text == ".product") {
+        if (text == ".product") {
             operation = ContainerReductionOperator::product;
-        } else if (call.text == ".and") {
+        } else if (text == ".and") {
             operation = ContainerReductionOperator::bit_and;
-        } else if (call.text == ".or") {
+        } else if (text == ".or") {
             operation = ContainerReductionOperator::bit_or;
-        } else if (call.text == ".xor") {
+        } else if (text == ".xor") {
             operation = ContainerReductionOperator::bit_xor;
         }
         const auto destination = allocate_register(
@@ -637,7 +667,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
                 ? frontend::ValueDomain::Bit2
                 : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(PopContainer {
-            destination, source->value, call.text == ".pop_front" });
+            destination, source->value, text == ".pop_front" });
         if (!lower_hir_sv_value_path_write(
                 *pop_path, std::nullopt, source->value)) {
             return invalid_result();
@@ -674,7 +704,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
                 ? frontend::ValueDomain::Bit2
                 : frontend::ValueDomain::Logic4);
         process_.operations.emplace_back(PopContainer {
-            destination, source->value, call.text == ".pop_front" });
+            destination, source->value, text == ".pop_front" });
         if (!binding->local) {
             process_.operations.emplace_back(WriteContainerObject {
                 binding->object, source->value, std::nullopt });
@@ -693,7 +723,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
     if (!source->type.associative) {
         report(
             "FSIM-ELAB-SVCONTAINER-015",
-            call.text + " requires an associative-array receiver",
+            text + " requires an associative-array receiver",
             span);
         return invalid_result();
     }
@@ -707,7 +737,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
     }
     const auto destination = allocate_register(
         32U, frontend::ValueDomain::Bit2);
-    if (call.text == ".exists") {
+    if (text == ".exists") {
         auto converted = *index;
         if (!string_index
             && register_width(converted) != source->type.index_width) {
@@ -732,17 +762,17 @@ Lowerer::lower_hir_systemverilog_container_expression(
         if (!binding) {
             report(
                 "FSIM-ELAB-SVCONTAINER-016",
-                call.text
+                text
                     + " requires a direct mutable string variable argument",
                 span);
             return invalid_result();
         }
         auto traversal = ContainerTraversal::first;
-        if (call.text == ".last") {
+        if (text == ".last") {
             traversal = ContainerTraversal::last;
-        } else if (call.text == ".next") {
+        } else if (text == ".next") {
             traversal = ContainerTraversal::next;
-        } else if (call.text == ".prev") {
+        } else if (text == ".prev") {
             traversal = ContainerTraversal::previous;
         }
         process_.operations.emplace_back(TraverseContainer {
@@ -761,21 +791,21 @@ Lowerer::lower_hir_systemverilog_container_expression(
                 binding ? "FSIM-ELAB-SVCONTAINER-017"
                         : "FSIM-ELAB-SVCONTAINER-016",
                 binding
-                    ? call.text
+                    ? text
                         + " argument must match the associative-array index "
                           "width"
-                    : call.text
+                    : text
                         + " requires a direct mutable integral variable "
                           "argument",
                 span);
             return invalid_result();
         }
         auto traversal = ContainerTraversal::first;
-        if (call.text == ".last") {
+        if (text == ".last") {
             traversal = ContainerTraversal::last;
-        } else if (call.text == ".next") {
+        } else if (text == ".next") {
             traversal = ContainerTraversal::next;
-        } else if (call.text == ".prev") {
+        } else if (text == ".prev") {
             traversal = ContainerTraversal::previous;
         }
         process_.operations.emplace_back(TraverseContainer {
@@ -1495,6 +1525,49 @@ Lowerer::hir_systemverilog_value_type(
             element->container_element_types.clear();
         }
         return element;
+    }
+    // A member of a structure value (`p.m` over a class property).
+    constexpr std::string_view member_select { "@sv-select:" };
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text.starts_with(member_select)
+        && source.operands.size() == 1U && trailing_segments == 0U) {
+        // A boxed structure property has no packed profile; its declared
+        // type names the structure.
+        auto base = hir_systemverilog_value_type(source.operands.front());
+        if (!base) {
+            const auto operand = specialized_hir_unit_->find_expression(
+                source.operands.front());
+            const auto& input = operand && operand->systemverilog != nullptr
+                ? *operand->systemverilog : source;
+            const bool static_property = input.kind
+                == semantic::sv::ExpressionKind::class_static_property;
+            if (&input != &source && !input.class_member_identity.empty()
+                && (static_property
+                    || input.kind
+                        == semantic::sv::ExpressionKind::class_property)) {
+                if (const auto* property
+                    = resolver.resolve_systemverilog_class_property(
+                        input.class_member_identity, static_property)
+                          .unique()) {
+                    base = property->type;
+                }
+            }
+        }
+        const auto* structure = base
+            ? semantic::sv::systemverilog_structure_definition(
+                  specialized_hir_unit_->design().systemverilog_hir, *base)
+            : nullptr;
+        if (structure == nullptr) {
+            return std::nullopt;
+        }
+        const auto name
+            = std::string_view { source.text }.substr(member_select.size());
+        const auto member = std::ranges::find(
+            structure->members, name, &semantic::sv::PackedMember::name);
+        if (member == structure->members.end()) {
+            return std::nullopt;
+        }
+        return member->type;
     }
     // A class property, typed as the accessed specialization declares it
     // (IEEE 1800-2017 8.25).

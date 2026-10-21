@@ -1183,11 +1183,35 @@ namespace {
                 && expression.operands.size() == 1U) {
                 return lower(expression.operands.front());
             }
+            // `a[i][j]` with constant outer selections names the nested
+            // array the class randomizer materializes as `a[i]`.
+            const auto array_name = [&](const auto& self,
+                                        const Template& array)
+                -> std::optional<std::string> {
+                if (array.kind == TemplateKind::Name) {
+                    return array.text;
+                }
+                if (array.kind != TemplateKind::Index
+                    || array.operands.size() < 2U) {
+                    return std::nullopt;
+                }
+                const auto outer = self(self, array.operands[0]);
+                const auto position = constant_value(array.operands[1]);
+                if (!outer || !position) {
+                    return std::nullopt;
+                }
+                return *outer + "[" + std::to_string(*position) + "]";
+            };
             if (expression.kind == TemplateKind::Index
                 && (expression.operands.size() == 2U
                     || expression.operands.size() == 3U)
-                && expression.operands[0].kind == TemplateKind::Name) {
-                const auto* elements = container(expression.operands[0].text);
+                && (expression.operands[0].kind == TemplateKind::Name
+                    || expression.operands[0].kind == TemplateKind::Index)) {
+                const auto name = array_name(array_name, expression.operands[0]);
+                if (!name) {
+                    return std::nullopt;
+                }
+                const auto* elements = container(*name);
                 if (elements == nullptr) {
                     if (deferred_)
                         return std::nullopt;
@@ -1195,8 +1219,7 @@ namespace {
                     if (expression.operands.size() == 3U)
                         return lower(expression.operands[2]);
                     throw std::invalid_argument {
-                        "inline constraint array '"
-                        + expression.operands[0].text
+                        "inline constraint array '" + *name
                         + "' has no element solver variables"
                     };
                 }

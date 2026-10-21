@@ -12580,7 +12580,7 @@ private:
             }
         };
         std::unordered_set<std::uint32_t> discrete_range_attributes;
-        std::unordered_set<std::uint32_t> negated_integer_minimum_literals;
+        std::unordered_set<std::uint32_t> portable_range_exempt_literals;
         for (const auto& stored :
             specialization_.design().vhdl_hir.statements()) {
             const auto effective = specialization_.find_statement(
@@ -13112,6 +13112,18 @@ private:
         if (architecture_.standard != "2019") {
             for (const auto& stored :
                 specialization_.design().vhdl_hir.expressions()) {
+                // The abstract literal of a physical literal (`N fs`) is a
+                // value of the physical type's range, not of INTEGER
+                // (IEEE 1076-2008 5.2.4.1). Specialization folds the literal
+                // itself, so the stored call identifies it.
+                if (stored.kind == semantic::vhdl::ExpressionKind::call
+                    && stored.text.starts_with("@vhdl-physical:")
+                    && stored.operands.size() == 1U) {
+                    portable_range_exempt_literals.insert(
+                        stored.operands.front().value());
+                    portable_range_exempt_literals.insert(stored.id.value());
+                    continue;
+                }
                 const auto effective = specialization_.find_expression(
                     stored.id);
                 if (!effective || effective->vhdl == nullptr
@@ -13138,7 +13150,7 @@ private:
                     && *magnitude
                         == -static_cast<std::int64_t>(
                             std::numeric_limits<std::int32_t>::min())) {
-                    negated_integer_minimum_literals.insert(
+                    portable_range_exempt_literals.insert(
                         expression.operands.front().value());
                 }
             }
@@ -13235,8 +13247,10 @@ private:
             if (architecture_.standard != "2019"
                 && expression.kind
                     == semantic::vhdl::ExpressionKind::integer_literal
-                && !negated_integer_minimum_literals.contains(
+                && !portable_range_exempt_literals.contains(
                     expression.id.value())
+                && !portable_range_exempt_literals.contains(
+                    stored.id.value())
                 && !equal_ignoring_ascii_case(
                     simple_name_of(expression.nominal_type), "time")) {
                 const auto value = bound(

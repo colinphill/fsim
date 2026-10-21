@@ -720,21 +720,18 @@ endclass
     require(
         selected_foreach.ok()
             && selected_foreach.design.systemverilog_classes.size() == 1
+            // A queue property is iterated through its dimensions; only a
+            // string collection keeps the SystemVerilog-2023 string loop.
             && selected_foreach.design.systemverilog_classes.front()
                     .methods.front()
                     .statements.front()
-                    .target.text
-                == "this.values"
+                    .kind
+                == StatementKind::Block
             && selected_foreach.design.systemverilog_classes.front()
                     .methods.front()
                     .statements[1]
-                    .target.kind
-                == ExpressionKind::Index
-            && selected_foreach.design.systemverilog_classes.front()
-                .methods.front()
-                .statements[1]
-                .target.text.ends_with(
-                    ".entries")
+                    .kind
+                == StatementKind::Block
             && selected_foreach.design.systemverilog_classes.front()
                     .methods.front()
                     .statements[2]

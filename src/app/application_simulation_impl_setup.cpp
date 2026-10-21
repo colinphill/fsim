@@ -33,6 +33,114 @@ template <typename Id, typename Index>
 using PackageClassHandleInitializer = std::pair<
     runtime::simir::SignalId, semantic::ExpressionId>;
 
+// A class-handle container property as a container of 64-bit handle values
+// of `type` (IEEE 1800-2017 7.4, 7.8, 7.10): sequential elements in order,
+// associative elements in key order.
+[[nodiscard]] runtime::simir::ContainerValue handle_container_value(
+    const runtime::SystemVerilogClassHandleContainer& handles,
+    const runtime::simir::ContainerType& type)
+{
+    using Kind = runtime::SystemVerilogClassContainerKind;
+    if (handles.kind() == Kind::UnpackedAggregate
+        || type.element_kind != runtime::simir::ContainerElementKind::Packed) {
+        throw std::invalid_argument {
+            "class handle container has no value-container form"
+        };
+    }
+    auto value = runtime::simir::default_container_value(type);
+    value.elements.clear();
+    value.keys.clear();
+    value.string_keys.clear();
+    const auto element = [&](const runtime::SystemVerilogClassHandle handle) {
+        return runtime::PackedLogic4::from_aval_bval(
+            type.element_width, handle, 0);
+    };
+    if (handles.kind() != Kind::AssociativeArray) {
+        for (const auto handle : handles.sequential_values()) {
+            value.elements.push_back(element(handle));
+        }
+        return value;
+    }
+    std::vector<std::pair<runtime::PackedLogic4,
+        runtime::SystemVerilogClassHandle>> integral;
+    for (const auto& [key, handle] : handles.keyed_values()) {
+        if (type.string_indices) {
+            value.string_keys.push_back(key);
+            value.elements.push_back(element(handle));
+            continue;
+        }
+        std::uint64_t number { };
+        const auto parsed = std::from_chars(
+            key.data(), key.data() + key.size(), number);
+        if (parsed.ec != std::errc { }
+            || parsed.ptr != key.data() + key.size()) {
+            throw std::invalid_argument {
+                "class handle associative key is not integral"
+            };
+        }
+        integral.emplace_back(runtime::PackedLogic4::from_aval_bval(
+                                  type.index_width, number, 0),
+            handle);
+    }
+    std::ranges::sort(integral, [&](const auto& left, const auto& right) {
+        return runtime::simir::associative_index_key_less(
+            type, left.first, right.first);
+    });
+    for (auto& [key, handle] : integral) {
+        value.keys.push_back(std::move(key));
+        value.elements.push_back(element(handle));
+    }
+    return value;
+}
+
+// Replace the handles of a class-handle container property with `value`.
+void assign_handle_container(runtime::SystemVerilogClassHeap& heap,
+    runtime::SystemVerilogClassHandleContainer& handles,
+    const runtime::simir::ContainerValue& value)
+{
+    using Kind = runtime::SystemVerilogClassContainerKind;
+    const auto handle = [&](const std::size_t index) {
+        const auto word = value.elements.at(index).low_word();
+        if (word.bval != 0) {
+            throw std::invalid_argument {
+                "class handle container element contains X or Z"
+            };
+        }
+        return static_cast<runtime::SystemVerilogClassHandle>(word.aval);
+    };
+    if (handles.kind() == Kind::UnpackedAggregate) {
+        throw std::invalid_argument {
+            "class handle container has no value-container form"
+        };
+    }
+    if (handles.kind() != Kind::AssociativeArray) {
+        if (handles.kind() != Kind::FixedArray) {
+            handles.resize(value.elements.size());
+        }
+        for (std::size_t index { };
+             index < std::min(value.elements.size(), handles.size());
+             ++index) {
+            handles.set(heap, index, handle(index));
+        }
+        return;
+    }
+    std::vector<std::string> stale;
+    for (const auto& [key, _] : handles.keyed_values()) {
+        stale.push_back(key);
+    }
+    for (const auto& key : stale) {
+        (void)handles.erase(key);
+    }
+    for (std::size_t index { }; index < value.elements.size(); ++index) {
+        if (value.type.string_indices) {
+            handles.set(heap, value.string_keys.at(index), handle(index));
+            continue;
+        }
+        const auto word = value.keys.at(index).low_word();
+        handles.set(heap, std::to_string(word.aval), handle(index));
+    }
+}
+
 [[nodiscard]] std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>
 copy_package_class_startup_initializers(const BuiltProject& built)
 {
@@ -1351,7 +1459,20 @@ Simulation::Impl::Impl(
                     "released handle"
                 };
             }
-            auto& stored = class_heap.property(handle, property).container;
+            auto& held = class_heap.property(handle, property);
+            // A class-handle container keeps its handle storage; the value
+            // container is a copy of it (IEEE 1800-2017 7.4, 8.4).
+            if (held.handle_container) {
+                if (write) {
+                    assign_handle_container(
+                        class_heap, *held.handle_container, value);
+                } else {
+                    value = handle_container_value(
+                        *held.handle_container, value.type);
+                }
+                return;
+            }
+            auto& stored = held.container;
             if (write) {
                 stored = value;
             } else if (stored) {

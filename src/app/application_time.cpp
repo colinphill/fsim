@@ -1851,6 +1851,10 @@ private:
         replacement.origin = retained_origin;
         replacement.nominal_type = "@builtin:time";
         replacement.folded = true;
+        // The magnitude is no longer an operand of a stored expression; it
+        // stays the abstract literal of a TIME value (IEEE 1076-2008
+        // 5.2.4.1), which portable INTEGER range checks do not apply to.
+        expressions[operand.value()]->nominal_type = "@builtin:time";
         expression = std::move(replacement);
     }
 

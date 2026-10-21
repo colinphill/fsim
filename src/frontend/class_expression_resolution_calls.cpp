@@ -1196,6 +1196,25 @@ std::optional<Type> Resolver::resolve_expression(
       return resolve_expression(
           expression, scope, expected_class, expected_scalar);
     }
+    // A built-in array method without arguments may omit its parentheses
+    // (IEEE 1800-2017 7.12, 13.4.1): `a[i].size` is `a[i].size()`.
+    constexpr std::array<std::string_view, 18> argumentless_methods{
+        "size", "num", "delete", "pop_front", "pop_back", "sum", "product",
+        "and", "or", "xor", "min", "max", "unique", "unique_index",
+        "reverse", "sort", "rsort", "shuffle"};
+    const auto member = std::string_view{expression.text}.substr(
+        std::string_view{"index."}.size());
+    if (element_type && element_type->systemverilog_container
+        && member.find('.') == std::string_view::npos
+        && std::ranges::find(argumentless_methods, member)
+            != argumentless_methods.end()) {
+      Expression call{ExpressionKind::Call, "." + std::string{member},
+          {std::move(element)}, expression.span};
+      call.systemverilog_source_order = expression.systemverilog_source_order;
+      expression = std::move(call);
+      return resolve_expression(
+          expression, scope, expected_class, expected_scalar);
+    }
   }
   if (expression.kind == ExpressionKind::Index
       && expression.operands.size() == 2U) {
@@ -1334,8 +1353,25 @@ std::optional<Type> Resolver::resolve_expression(
   for (auto& operand : expression.operands) {
     resolve_expression(operand, scope);
   }
-  for (auto& choices : expression.aggregate_choice_expressions) {
-    for (auto& choice : choices) resolve_expression(choice, scope);
+  for (std::size_t index = 0;
+       index < expression.aggregate_choice_expressions.size(); ++index) {
+    // A pattern key naming a property that is not a parameter is no
+    // constant index, so it names a structure member or a type (IEEE
+    // 1800-2017 10.9.1, 10.9.2) and stays a name.
+    const bool key = index < expression.aggregate_choices.size()
+        && expression.aggregate_choices[index] == "@key";
+    for (auto& choice : expression.aggregate_choice_expressions[index]) {
+      if (key && choice.kind == ExpressionKind::Identifier
+          && scope.class_owner != nullptr
+          && !scope.objects.contains(choice.text)) {
+        const auto match = find_property(
+            scope.class_owner->canonical_identity, choice.text);
+        if (match.property != nullptr && !match.property->is_parameter) {
+          continue;
+        }
+      }
+      resolve_expression(choice, scope);
+    }
   }
   return std::nullopt;
 }

@@ -161,19 +161,16 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
         }
         // A value-container property of an object (`obj.v`, `obj.v[i]`)
         // or of a class (`C::v`) roots the path (IEEE 1800-2017 8.4, 8.9).
-        constexpr auto property_prefix
-            = std::string_view { "@sv-container-property:" };
         constexpr auto element_prefix
             = std::string_view { "@sv-container-index:" };
-        if (source.kind == semantic::sv::ExpressionKind::call
-            && ((source.text.starts_with(property_prefix)
-                    && source.operands.size() == 1U)
-                || (source.text.starts_with(element_prefix)
-                    && source.operands.size() >= 2U))) {
-            const bool element = source.text.starts_with(element_prefix);
-            auto identity = source.text.substr(element
-                    ? element_prefix.size()
-                    : property_prefix.size());
+        const auto place = hir_class_container_place(current);
+        if (place
+            || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text.starts_with(element_prefix)
+                && source.operands.size() >= 2U)) {
+            const bool element = !place;
+            auto identity = place ? place->identity
+                                  : source.text.substr(element_prefix.size());
             auto type = hir_class_value_container_type(identity);
             if (!type) {
                 return rejected(__LINE__);
@@ -813,6 +810,8 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
             level.linear_index = step.indices.size() > 1U;
             level.signed_index = level.linear_index
                 || step.container.signed_indices;
+            level.string_index = !level.linear_index
+                && step.container.string_indices;
         }
         // The value type after this step.
         const auto type = [&]() -> std::optional<ContainerType> {
@@ -835,6 +834,7 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
             child, level.container, level.index, level.signed_index,
             level.members };
         read.linear_index = level.linear_index;
+        read.string_index = level.string_index;
         process_.operations.emplace_back(std::move(read));
         cursor.container = child;
         cursor.levels.push_back(std::move(level));
@@ -853,6 +853,7 @@ void Lowerer::publish_hir_sv_value_path(
             level->container, level->index, child, level->signed_index,
             level->members };
         write.linear_index = level->linear_index;
+        write.string_index = level->string_index;
         process_.operations.emplace_back(std::move(write));
         child = level->container;
     }
@@ -1125,6 +1126,8 @@ Lowerer::lower_hir_sv_value_path_container_read(const HirSvValuePath& path)
         step.member ? std::vector<std::uint32_t> { *step.member }
                     : std::vector<std::uint32_t> { } };
     read.linear_index = linear;
+    read.string_index = !step.member && !linear
+        && step.container.string_indices;
     process_.operations.emplace_back(std::move(read));
     return HirStaticContainerValue { destination, path.type };
 }
@@ -1320,6 +1323,8 @@ bool Lowerer::lower_hir_sv_value_path_write(
             step.member ? std::vector<std::uint32_t> { *step.member }
                         : std::vector<std::uint32_t> { } };
         write.linear_index = linear;
+        write.string_index = !step.member && !linear
+            && step.container.string_indices;
         process_.operations.emplace_back(std::move(write));
     }
     publish_hir_sv_value_path(path, *cursor);
@@ -1491,6 +1496,10 @@ bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
             return write_rejected(__LINE__);
         }
         for (const auto& level : cursor->levels) {
+            // A deferred path level holds an integral index.
+            if (level.string_index) {
+                return write_rejected(__LINE__);
+            }
             levels.push_back(ContainerPathLevel {
                 level.index, level.signed_index, false, level.members });
         }

@@ -121,6 +121,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VPI-ROUTINE-005` | error | An exception escaped the host service callback and was contained at the VPI boundary. |
 | `FSIM-VPI-ROUTINE-006` | error | The host service callback rejected the validated routine request. |
 | `FSIM-VPI-ROUTINE-007` | error | The host service callback returned a truncated, reserved, invalid-status, failed, or missing-handle result. |
+| `FSIM-VPI-LOAD-001` | error | A `--vpi` module could not be loaded, or does not export its bootstrap entry point. |
+| `FSIM-DPI-LOAD-001` | error | An `--sv-lib` DPI-C library could not be loaded, or this build has no DPI-C call support (libffi was not found when it was configured). |
 
 ## Code coverage model
 

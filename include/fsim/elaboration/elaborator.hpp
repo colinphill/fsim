@@ -370,6 +370,23 @@ public:
         std::string& error) = 0;
 };
 
+/// A user-defined system task or function that a foreign library registered
+/// before elaboration (vpi_register_systf, IEEE 1800-2023 38.36). A call of
+/// one lowers to a foreign call boundary instead of a built-in system task.
+struct UserSystemTask {
+    std::string name;
+    bool function { };
+    /// Result width of a function (vpiIntFunc 32, vpiSizedFunc by sizetf).
+    std::uint32_t width { 1U };
+    bool is_signed { };
+};
+
+/// Identity prefix, after the DPI function prefix, of a user system task call
+/// boundary. The full identity is
+/// `$vpi:<name>|<scope>|<file>|<line>|<column>`.
+inline constexpr std::string_view user_system_call_identity_prefix {
+    "$vpi:" };
+
 /// Parser-free compiled-HIR elaboration. Unsupported residual structures are
 /// diagnosed instead of being reconstructed as syntax nodes.
 [[nodiscard]] ElaborationResult elaborate(
@@ -382,7 +399,8 @@ public:
     std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider,
     std::span<const std::string> search_libraries,
-    const CoverageHirContext* coverage = nullptr);
+    const CoverageHirContext* coverage = nullptr,
+    std::span<const UserSystemTask> user_system_tasks = { });
 
 struct Diagnostic {
     std::string code;
@@ -865,6 +883,23 @@ public:
     {
         return sdf_annotation_requests_;
     }
+    /// Foreign system tasks and functions known to this elaboration. They
+    /// are an elaboration input only and are not retained in the design
+    /// state; the calls carry everything the runtime needs.
+    void set_user_system_tasks(std::vector<UserSystemTask> tasks)
+    {
+        user_system_tasks_ = std::move(tasks);
+    }
+    [[nodiscard]] const UserSystemTask* user_system_task(
+        std::string_view name) const noexcept
+    {
+        for (const auto& task : user_system_tasks_) {
+            if (task.name == name) {
+                return &task;
+            }
+        }
+        return nullptr;
+    }
     [[nodiscard]] const semantic::HierarchyPathTable&
     hierarchy_paths() const noexcept;
     /// Accept an extended table only when every existing ID still names the
@@ -1020,6 +1055,7 @@ private:
     std::string top_;
     std::vector<std::string> roots_;
     std::vector<SdfAnnotationRequest> sdf_annotation_requests_;
+    std::vector<UserSystemTask> user_system_tasks_;
     std::vector<SignalInfo> signal_info_;
     std::vector<BoundaryConversionInfo> boundary_conversions_;
     std::vector<runtime::simir::Signal> signals_;

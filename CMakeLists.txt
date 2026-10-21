@@ -553,6 +553,7 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/hierarchy_path.cpp
   src/semantic/model.cpp
   src/semantic/systemverilog_class_specialization.cpp
+  src/semantic/systemverilog_structure_image.cpp
   src/semantic/systemverilog_type_descriptor.cpp
   src/semantic/systemverilog_hir.cpp
   src/semantic/sva_plan.cpp
@@ -1384,6 +1385,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_class_hir_execution.cpp
       src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp
+      src/app/application_vpi_foreign.cpp
+      src/app/application_dpi_foreign.cpp
       src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
       src/app/application_simulation_accessors.cpp
@@ -1504,6 +1507,16 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     PUBLIC fsim_lowering
     PRIVATE fsim_boost_pfr_headers
   )
+  # DPI-C imports call foreign functions through libffi.
+  find_path(FSIM_FFI_INCLUDE_DIR ffi.h PATH_SUFFIXES ffi)
+  find_library(FSIM_FFI_LIBRARY NAMES ffi_pic ffi)
+  if(FSIM_FFI_INCLUDE_DIR AND FSIM_FFI_LIBRARY)
+    target_include_directories(fsim_simulation PRIVATE "${FSIM_FFI_INCLUDE_DIR}")
+    target_link_libraries(fsim_simulation PRIVATE "${FSIM_FFI_LIBRARY}")
+    set_source_files_properties(
+      src/app/application_dpi_foreign.cpp
+      PROPERTIES COMPILE_DEFINITIONS FSIM_HAS_LIBFFI=1)
+  endif()
   target_link_libraries(
     fsim_application
     PUBLIC fsim_simulation

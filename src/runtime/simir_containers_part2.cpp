@@ -214,33 +214,58 @@ void Interpreter::Impl::execute_container(
                 process.id, process.pc,
                 "nested element read requires a nested container");
         }
-        const auto& index = get_register(process, operation.index);
-        if (source.type.associative) {
-            const auto key = associative_key(
-                process.id, process.pc, source.type, index);
-            const auto at = lower_key(source, key);
-            if (at < source.keys.size()
-                && key_equal(source.keys[at], key)) {
+        if (source.type.associative && operation.string_index) {
+            const auto& key = associative_string_key(
+                process.id, process.pc, source.type,
+                get_string_register(process, operation.index));
+            const auto at = lower_string_key(source, key);
+            if (at < source.string_keys.size()
+                && source.string_keys[at] == key) {
                 selected = &source.nested_elements[at];
             }
-        } else if (source.type.fixed && operation.linear_index) {
-            const auto at = known_index(
-                process.id, process.pc, index, true,
-                "multidimensional linear index");
-            if (at < source.nested_elements.size()) {
-                selected = &source.nested_elements[at];
-            }
-        } else if (source.type.fixed
-                ? fixed_index_in_range(source.type, index)
-                : std::ranges::none_of(index.bval_words(),
-                      [](const auto word) { return word != 0U; })) {
-            const auto at = source.type.fixed
-                ? fixed_offset(process.id, process.pc, source.type, index)
-                : known_index(
-                      process.id, process.pc, index,
-                      operation.signed_index, "container index");
-            if (at < source.nested_elements.size()) {
-                selected = &source.nested_elements[at];
+        } else {
+            const auto& index = get_register(process, operation.index);
+            if (source.type.associative) {
+                const auto key = associative_key(
+                    process.id, process.pc, source.type, index);
+                const auto at = lower_key(source, key);
+                if (at < source.keys.size()
+                    && key_equal(source.keys[at], key)) {
+                    selected = &source.nested_elements[at];
+                }
+            } else if (source.type.fixed && operation.linear_index) {
+                const auto at = known_index(
+                    process.id, process.pc, index, true,
+                    "multidimensional linear index");
+                if (at < source.nested_elements.size()) {
+                    selected = &source.nested_elements[at];
+                }
+            } else if (source.type.fixed) {
+                if (fixed_index_in_range(source.type, index)) {
+                    const auto at = fixed_offset(
+                        process.id, process.pc, source.type, index);
+                    if (at < source.nested_elements.size()) {
+                        selected = &source.nested_elements[at];
+                    }
+                }
+            } else {
+                // A negative index of a queue or dynamic array selects no
+                // element (IEEE 1800-2017 7.4.6).
+                std::optional<std::int64_t> requested;
+                if (operation.signed_index) {
+                    requested = index.known_signed_value();
+                } else if (const auto value = index.known_unsigned_value();
+                           value
+                           && *value <= static_cast<std::uint64_t>(
+                                  std::numeric_limits<std::int64_t>::max())) {
+                    requested = static_cast<std::int64_t>(*value);
+                }
+                if (requested && *requested >= 0
+                    && static_cast<std::uint64_t>(*requested)
+                        < source.nested_elements.size()) {
+                    selected = &source.nested_elements[
+                        static_cast<std::size_t>(*requested)];
+                }
             }
         }
         if (selected == nullptr) {
@@ -268,7 +293,8 @@ ContainerValue* Interpreter::Impl::select_container_element_for_write(
     const bool signed_index,
     const bool linear_index,
     const ProcessId process,
-    const InstructionIndex instruction)
+    const InstructionIndex instruction,
+    const std::string* string_key)
 {
     if (aggregate_box(target.type)) {
         return &target;
@@ -279,7 +305,23 @@ ContainerValue* Interpreter::Impl::select_container_element_for_write(
             process, instruction, "nested element write profile mismatch");
     }
     std::size_t at { };
-    if (target.type.associative) {
+    if (target.type.associative && string_key != nullptr) {
+        const auto& key = associative_string_key(
+            process, instruction, target.type, *string_key);
+        at = lower_string_key(target, key);
+        if (at >= target.string_keys.size() || target.string_keys[at] != key) {
+            if (target.string_keys.size()
+                >= maximum_container_elements(target.type)) {
+                container_error(
+                    process, instruction,
+                    "associative nested container exceeds its owning-storage budget");
+            }
+            target.string_keys.insert(iterator_at(target.string_keys, at), key);
+            target.nested_elements.insert(
+                iterator_at(target.nested_elements, at),
+                default_container_value(*element_type));
+        }
+    } else if (target.type.associative) {
         const auto key = associative_key(
             process, instruction, target.type, index);
         at = lower_key(target, key);
@@ -353,10 +395,14 @@ void Interpreter::Impl::execute_container(
 {
     auto& target = get_container_register(process, operation.target);
     const auto& source = read_container_register(process, operation.source);
-    auto* selected = select_container_element_for_write(
-        target, get_register(process, operation.index),
-        operation.signed_index, operation.linear_index, process.id,
-        process.pc);
+    auto* selected = operation.string_index
+        ? select_container_element_for_write(target, PackedLogic4 { },
+              false, false, process.id, process.pc,
+              &get_string_register(process, operation.index))
+        : select_container_element_for_write(
+              target, get_register(process, operation.index),
+              operation.signed_index, operation.linear_index, process.id,
+              process.pc);
     if (selected == nullptr) {
         ++process.pc;
         return;

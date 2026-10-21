@@ -1115,6 +1115,11 @@ void validate_prefix_operation(
                     || std::is_same_v<
                         OperationType, ContainerElementWrite>) {
                     result.uses_containers = true;
+                    if (operation.string_index) {
+                        reject_unsupported(process, index,
+                            "string-keyed nested container element access "
+                            "is interpreter-only");
+                    }
                     const auto container = [&] {
                         if constexpr (std::is_same_v<
                                           OperationType,

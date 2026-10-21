@@ -9564,8 +9564,7 @@ Lowerer::lower_hir_container_element_path(
         if (dimensions != 1U
             || result.type->element_kind
                 != ContainerElementKind::Container
-            || result.type->element_types.size() != 1U
-            || result.type->string_indices) {
+            || result.type->element_types.size() != 1U) {
             return std::nullopt;
         }
         HirContainerElementBinding level = element;
@@ -9578,14 +9577,17 @@ Lowerer::lower_hir_container_element_path(
         }
         const auto& child_type = result.type->element_types.front();
         const auto child = allocate_container_register(child_type);
-        process_.operations.emplace_back(ContainerElementRead {
+        ContainerElementRead read {
             child,
             result.container,
             *index,
             result.type->signed_indices, { },
-        });
+        };
+        read.string_index = result.type->string_indices;
+        process_.operations.emplace_back(std::move(read));
         result.parents.push_back(HirLoweredContainerElement::Parent {
-            result.container, *index, result.type->signed_indices });
+            result.container, *index, result.type->signed_indices,
+            result.type->string_indices });
         result.container = child;
         result.type = &child_type;
     }
@@ -9598,12 +9600,14 @@ void Lowerer::publish_hir_container_element_path(
     auto child = path.container;
     for (auto parent = path.parents.rbegin();
         parent != path.parents.rend(); ++parent) {
-        process_.operations.emplace_back(ContainerElementWrite {
+        ContainerElementWrite write {
             parent->container,
             parent->index,
             child,
             parent->signed_index, { },
-        });
+        };
+        write.string_index = parent->string_index;
+        process_.operations.emplace_back(std::move(write));
         child = parent->container;
     }
     if (!element.local) {
@@ -16719,19 +16723,26 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto identity = std::string_view { access.text }.substr(
             std::string_view { "@sv-container-index:" }.size());
         // An element of an unpacked array, queue or associative array of
-        // values held by an object.
-        if (hir_class_value_container_type(identity)) {
+        // values held by an object, or of a string-keyed associative array
+        // of handles (IEEE 1800-2017 7.8.1).
+        const auto string_handles = [&] {
+            const auto type = hir_class_handle_container_type(identity);
+            return type && type->associative && type->string_indices;
+        }();
+        if (hir_class_value_container_type(identity) || string_handles) {
             if (access.operands.size() != 2U) {
                 return std::nullopt;
             }
             // `obj.v[i]` of a multidimensional array is a subarray (a
             // value path).
             if (const auto type = hir_class_value_container_type(identity);
-                type->fixed && type->dimensions.size() > 1U) {
+                type && type->fixed && type->dimensions.size() > 1U) {
                 return std::nullopt;
             }
-            const auto container = lower_hir_class_value_container(
-                access.operands[0], identity);
+            const auto container = string_handles
+                ? lower_hir_class_handle_container(access.operands[0], identity)
+                : lower_hir_class_value_container(
+                      access.operands[0], identity);
             if (!container
                 || (container->container.type.element_kind
                         != ContainerElementKind::Packed
@@ -16888,7 +16899,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       destination, expected_width, type.signed_elements) }
                 : std::optional { destination };
         }
-        if (!method || call.operands.size() != 1U) {
+        // exists, first, last, next and prev query a copy of the property.
+        if (!method) {
+            return lower_hir_systemverilog_container_expression(
+                expression_id, expected_width);
+        }
+        if (call.operands.size() != 1U) {
             return std::nullopt;
         }
         const bool pop = method->pop_front;
@@ -21272,6 +21288,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(LogicalBinary {
             LogicalBinaryOperator::logical_and, edge, event, both_levels });
         result = edge;
+    } else if (const auto* user_task = hir_user_system_task(expression_id)) {
+        std::vector<std::optional<semantic::ExpressionId>> arguments;
+        for (const auto operand : expression->systemverilog->operands) {
+            arguments.emplace_back(operand);
+        }
+        result = lower_hir_user_system_call(*user_task, arguments,
+            hir_source_span(expression->systemverilog->source));
+        if (result && expected_width != 0U
+            && register_width(*result) != expected_width) {
+            result = resize_register(
+                *result, expected_width, user_task->is_signed);
+        }
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind == semantic::sv::ExpressionKind::call
         && (systemverilog_random_distribution_kind(

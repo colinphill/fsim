@@ -82,11 +82,11 @@ namespace {
         { RoutineKind::Scan, "vpi_scan", hierarchy_service,
             HandlePolicy::Required, true, false },
         { RoutineKind::GetProperty, "vpi_get", hierarchy_service,
-            HandlePolicy::Required, false, false },
+            HandlePolicy::Optional, false, false },
         { RoutineKind::GetProperty64, "vpi_get64", hierarchy_service,
-            HandlePolicy::Required, false, false },
+            HandlePolicy::Optional, false, false },
         { RoutineKind::GetStringProperty, "vpi_get_str", hierarchy_service,
-            HandlePolicy::Required, false, false },
+            HandlePolicy::Optional, false, false },
         { RoutineKind::GetDelays, "vpi_get_delays", value_service,
             HandlePolicy::Required, false, false },
         { RoutineKind::PutDelays, "vpi_put_delays", value_service,
@@ -409,14 +409,25 @@ SystemVerilogVpiRoutineResult invoke_systemverilog_vpi_2023_routine(
         return { { }, SystemVerilogVpiRoutineError::CallbackException };
     }
     if (!valid_status(status) || status != FSIM_VPI_STATUS_OK) {
-        report_routine_error(host, "FSIM-VPI-ROUTINE-006",
-            "VPI service callback rejected the request");
+        // A NOT_FOUND answer is the standard NULL/failure return of the
+        // routine (vpi_scan past the end, vpi_handle with no match), not a
+        // host fault.
+        if (status != FSIM_VPI_STATUS_NOT_FOUND) {
+            report_routine_error(host, "FSIM-VPI-ROUTINE-006",
+                "VPI service callback rejected the request");
+        }
         return { result, SystemVerilogVpiRoutineError::CallbackFailure };
     }
+    // Hierarchy routines legitimately return NULL; only registrations must
+    // produce a handle.
+    const bool registration
+        = descriptor->kind == SystemVerilogVpiRoutineKind::RegisterCallback
+        || descriptor->kind
+            == SystemVerilogVpiRoutineKind::RegisterSystemTaskFunction;
     if (result.struct_size < sizeof(fsim_vpi_service_result_v1)
         || !valid_status(result.status) || result.reserved != 0U
         || result.status != FSIM_VPI_STATUS_OK
-        || (descriptor->returns_handle && result.handle == 0U)) {
+        || (registration && result.handle == 0U)) {
         report_routine_error(host, "FSIM-VPI-ROUTINE-007",
             "VPI service callback returned a malformed result");
         return { result, SystemVerilogVpiRoutineError::MalformedResult };

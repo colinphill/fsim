@@ -236,6 +236,10 @@ class Lowerer final {
       if (const auto* frame = iterator(expression.text)) {
         // A foreach loop variable is its index; a with-clause item is its
         // element (IEEE 1800-2017 18.5.8.1, 7.12.4).
+        if (frame->string_key) {
+          error_ = "a string-keyed foreach index is used as a value";
+          return std::nullopt;
+        }
         if (!frame->item) {
           return builder_.constant(
               low_value(32, frame->index), index_profile());
@@ -363,7 +367,7 @@ class Lowerer final {
       for (std::size_t index = 0; index < elements->size(); ++index) {
         std::optional<ExpressionId> value;
         if (with != nullptr) {
-          iterators_.push_back({item, index, (*elements)[index], profile, true});
+          iterators_.push_back({item, index, (*elements)[index], profile, true, std::nullopt});
           value = lower(*with);
           iterators_.pop_back();
           if (!value) return std::nullopt;
@@ -1309,11 +1313,18 @@ class Lowerer final {
     const auto size = node_size(path).value_or(0U);
     const auto* held = shape(path);
     if (held != nullptr && held->associative && held->string_keys) {
-      if (selector.kind != sv::ConstraintExpressionKind::string_literal) {
+      // A foreach iterator over a string-keyed array holds its key.
+      const auto* frame = selector.kind == sv::ConstraintExpressionKind::name
+          ? iterator(selector.text) : nullptr;
+      if (selector.kind != sv::ConstraintExpressionKind::string_literal
+          && (frame == nullptr || !frame->string_key)) {
         return std::nullopt;
       }
-      auto text = std::string_view{selector.text};
-      if (text.size() >= 2U && text.front() == '"' && text.back() == '"') {
+      auto text = frame != nullptr && frame->string_key
+          ? std::string_view{*frame->string_key}
+          : std::string_view{selector.text};
+      if (frame == nullptr && text.size() >= 2U && text.front() == '"'
+          && text.back() == '"') {
         text = text.substr(1U, text.size() - 2U);
       }
       const auto found = std::ranges::find(held->string_key_values, text);
@@ -1461,6 +1472,8 @@ class Lowerer final {
     std::optional<runtime::SystemVerilogConstraintVariableId> element;
     runtime::SystemVerilogConstraintVariableProfile profile;
     bool item{};
+    /// The key of a string-keyed associative array element.
+    std::optional<std::string> string_key;
   };
 
   /// The iterations of `foreach (a[i])`: each element of the container
@@ -1487,11 +1500,17 @@ class Lowerer final {
       path = *selected;
     }
     const auto* held = shape(path);
-    if (held != nullptr && held->associative && held->string_keys) {
-      error_ = "constraint foreach over a string-keyed array is not "
-          "supported";
-      return std::nullopt;
-    }
+    // The elements of a string-keyed array are iterated in key order,
+    // each iterator holding its key (IEEE 1800-2017 7.8.1, 18.5.8.1).
+    const auto string_key = [&](const std::size_t position)
+        -> std::optional<std::string> {
+      if (held == nullptr || !held->associative || !held->string_keys) {
+        return std::nullopt;
+      }
+      return position < held->string_key_values.size()
+          ? std::optional<std::string>{held->string_key_values[position]}
+          : std::nullopt;
+    };
     std::vector<Iterator> loop;
     const auto& name = selection.operands[1].text;
     if (nested_ != nullptr) {
@@ -1500,7 +1519,7 @@ class Lowerer final {
              ++position) {
           loop.push_back({name,
               static_cast<std::size_t>(index_at(path, position)),
-              std::nullopt, index_profile(), false});
+              std::nullopt, index_profile(), false, string_key(position)});
         }
         return loop;
       }
@@ -1513,7 +1532,7 @@ class Lowerer final {
     const auto profile = element_profile(selection.operands[0], path);
     for (std::size_t position = 0; position < elements->size(); ++position) {
       loop.push_back({name, static_cast<std::size_t>(index_at(path, position)),
-          (*elements)[position], profile, false});
+          (*elements)[position], profile, false, string_key(position)});
     }
     return loop;
   }
@@ -1785,6 +1804,7 @@ class Lowerer final {
     if (expression.kind == sv::ConstraintExpressionKind::name) {
       if (const auto* frame = iterator(expression.text);
           frame != nullptr && !frame->item) {
+        if (frame->string_key) return std::nullopt;
         return static_cast<std::int64_t>(frame->index);
       }
       if (const auto dot = expression.text.rfind('.');

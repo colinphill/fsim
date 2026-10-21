@@ -865,10 +865,6 @@ Statement VerilogParser::parse_procedural_foreach_statement(
                 || collection_type->spelling == "string")
         : statement.target.kind == ExpressionKind::Identifier
             && unit_string_names_.contains(statement.target.text);
-    const bool known_container = collection_type
-        ? collection_type->systemverilog_container.has_value()
-        : statement.target.kind == ExpressionKind::Identifier
-            && unit_container_names_.contains(statement.target.text);
     const auto container_type = [&]() -> std::optional<Type> {
         if (collection_type) {
             return collection_type;
@@ -985,9 +981,9 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         nothing.span = statement.span;
         return nothing;
     }
+    // Only a collection known to be a string keeps the SystemVerilog-2023
+    // string form; arrays of any declared shape iterate their dimensions.
     if (language_ != Language::SystemVerilog2017 || string_collection
-        || (standard_revision_ == StandardRevision::SystemVerilog2023
-            && !known_container)
         || dimension_names.empty() || diagnostics_.size() != saved_diagnostics) {
         return statement;
     }
@@ -1009,25 +1005,65 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             }
         }
     }
-    std::string associative_spelling;
-    if (associative_index) {
-        const auto& spelling = associative_index->spelling;
-        if (associative_index->domain == ValueDomain::String
-            || spelling == "string") {
-            associative_spelling = "string";
-        } else if (spelling == "int" || spelling == "integer"
+    // The loop variable of an associative dimension has its index type
+    // (IEEE 1800-2017 7.8.4, 7.8.5, 12.7.3).
+    const auto index_spelling = [](const Type& index)
+        -> std::optional<std::string> {
+        const auto& spelling = index.spelling;
+        if (index.domain == ValueDomain::String || spelling == "string") {
+            return std::string { "string" };
+        }
+        if (spelling == "int" || spelling == "integer"
             || spelling == "byte" || spelling == "shortint"
             || spelling == "longint" || spelling == "*") {
-            associative_spelling = spelling == "*" ? "int" : spelling;
-        } else if (const auto width = associative_index->width();
-                   width && *width != 0U && *width <= 64U) {
-            associative_spelling = std::string { associative_index->is_signed
-                    ? "bit signed [" : "bit [" }
+            return spelling == "*" ? std::string { "int" } : spelling;
+        }
+        if (!index.named_type.empty()) {
+            return index.named_type;
+        }
+        if (const auto width = index.width(); width && *width != 0U) {
+            return std::string { index.is_signed ? "bit signed [" : "bit [" }
                 + std::to_string(*width - 1U) + ":0]";
-        } else {
+        }
+        return std::nullopt;
+    };
+    // The index type of each associative loop position, from the declared
+    // container levels; the outermost may come from the unit tables.
+    std::vector<std::optional<std::string>> level_spelling(
+        dimension_names.size());
+    if (associative_index) {
+        level_spelling.front() = index_spelling(*associative_index);
+        if (!level_spelling.front()) {
             return statement;
         }
     }
+    if (container_type) {
+        std::size_t position { };
+        for (const Type* level = &*container_type;
+             level != nullptr && level->systemverilog_container
+             && position < dimension_names.size();) {
+            const auto& container = *level->systemverilog_container;
+            if (container.kind == SystemVerilogContainerKind::StaticArray) {
+                position += std::max<std::size_t>(
+                    container.static_range_expressions.size(), 1U);
+            } else {
+                if (container.kind
+                        == SystemVerilogContainerKind::AssociativeArray
+                    && container.associative_index_type) {
+                    level_spelling[position] = index_spelling(
+                        *container.associative_index_type);
+                    if (!level_spelling[position]) {
+                        return statement;
+                    }
+                }
+                ++position;
+            }
+            level = container.element_types.size() == 1U
+                ? &container.element_types.front() : nullptr;
+        }
+    }
+    const bool associative_level = std::ranges::any_of(level_spelling,
+        [](const auto& spelling) { return spelling.has_value(); });
     // A collection whose dimensions all have fixed bounds is queried by
     // dimension number (unpacked dimensions first, then packed); others are
     // queried through the element selected by the outer indices.
@@ -1040,7 +1076,7 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             && std::ranges::all_of(container.element_types,
                 [&](const Type& element) { return self(self, element); });
     };
-    const bool numbered_dimensions = container_type && !associative_index
+    const bool numbered_dimensions = container_type && !associative_level
         && fixed_bounds(fixed_bounds, *container_type);
     const std::vector<Token> collection_tokens(
         tokens_.begin() + static_cast<std::ptrdiff_t>(collection_begin),
@@ -1058,7 +1094,8 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         out.insert(out.end(), tokens.begin(), tokens.end());
     };
     std::vector<std::string> names;
-    std::size_t closers {};
+    // Associative positions, innermost last, each closed by a next() loop.
+    std::vector<std::size_t> associative_positions;
     emit("begin");
     for (std::size_t dimension = 0; dimension < dimension_names.size();
          ++dimension) {
@@ -1076,13 +1113,13 @@ Statement VerilogParser::parse_procedural_foreach_statement(
                 emit("[" + previous_name + "]");
             }
         };
-        if (dimension == 0U && associative_index) {
-            emit("begin automatic " + associative_spelling + " " + name
+        if (level_spelling[dimension]) {
+            emit("begin automatic " + *level_spelling[dimension] + " " + name
                 + "; if (");
             element();
             emit(".first(" + name + ")) do begin");
+            associative_positions.push_back(names.size());
             names.push_back(name);
-            ++closers;
             continue;
         }
         const auto query = [&](const std::string_view function) {
@@ -1113,12 +1150,15 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         names.push_back(name);
     }
     append(body_tokens);
-    if (associative_index) {
+    for (auto position = associative_positions.rbegin();
+         position != associative_positions.rend(); ++position) {
         emit("end while (");
         append(collection_tokens);
-        emit(".next(" + names.front() + ")); end");
+        for (std::size_t outer { }; outer < *position; ++outer) {
+            emit("[" + names[outer] + "]");
+        }
+        emit(".next(" + names[*position] + ")); end");
     }
-    (void)closers;
     emit("end");
     auto desugared = parse_generated_statement(std::move(out), statement.span);
     return desugared ? std::move(*desugared) : statement;

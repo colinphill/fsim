@@ -65,9 +65,10 @@ DynamicLibrary::~DynamicLibrary() {
 }
 
 std::unique_ptr<DynamicLibrary> DynamicLibrary::open(
-    const std::filesystem::path& path, std::string& error) {
+    const std::filesystem::path& path, std::string& error, const bool global) {
     error.clear();
 #if defined(_WIN32)
+    (void)global;
     std::error_code path_error;
     const auto resolved = path.is_absolute()
         ? path.lexically_normal()
@@ -95,13 +96,26 @@ std::unique_ptr<DynamicLibrary> DynamicLibrary::open(
         new DynamicLibrary{reinterpret_cast<void*>(handle)}};
 #else
     dlerror();
-    const auto handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    const auto handle = dlopen(
+        path.c_str(), RTLD_NOW | (global ? RTLD_GLOBAL : RTLD_LOCAL));
     if (handle == nullptr) {
         const auto* message = dlerror();
         error = message == nullptr ? "unknown dynamic loader error" : message;
         return nullptr;
     }
     return std::unique_ptr<DynamicLibrary>{new DynamicLibrary{handle}};
+#endif
+}
+
+void* DynamicLibrary::default_symbol(const std::string_view name) {
+    if (name.empty() || name.find('\0') != std::string_view::npos) {
+        return nullptr;
+    }
+#if defined(_WIN32)
+    return nullptr;
+#else
+    const std::string owned_name{name};
+    return dlsym(RTLD_DEFAULT, owned_name.c_str());
 #endif
 }
 
