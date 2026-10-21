@@ -12,6 +12,16 @@ void Interpreter::Impl::execute_container(
     const ContainerStringWrite& operation)
 {
     auto& target = get_container_register(process, operation.target);
+    if (operation.associative_default) {
+        if (!target.type.associative) {
+            container_error(process.id, process.pc,
+                "a container default requires an associative array");
+        }
+        target.associative_default_text
+            = get_string_register(process, operation.source);
+        ++process.pc;
+        return;
+    }
     if (!operation.members.empty()) {
         if (target.type.element_kind != ContainerElementKind::Aggregate
             || target.type.associative || operation.string_index) {

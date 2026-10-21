@@ -621,7 +621,7 @@ endmodule
 
   const auto invalid_systemverilog_hex_escape = parse_text(
       "invalid-systemverilog-hex-escape.sv",
-      R"(module bad #(parameter string VALUE = "bad\x4") (); endmodule)",
+      R"(module bad #(parameter string VALUE = "bad\xg") (); endmodule)",
       Language::SystemVerilog2017);
   require(
       !invalid_systemverilog_hex_escape.ok()
@@ -630,7 +630,7 @@ endmodule
               [](const auto& diagnostic) {
                   return diagnostic.code == "FSIM-SV-SEM-040";
               }),
-      "SystemVerilog hexadecimal string escapes require two digits");
+      "SystemVerilog hexadecimal string escapes require a digit");
 
   const auto verilog_systemverilog_escape = parse_text(
       "verilog-systemverilog-escape.v",
@@ -807,14 +807,15 @@ module invalid_string_escape #(
 endmodule
 )",
       Language::SystemVerilog2017);
+  // An escaped character outside Table 5-1 is that character (IEEE
+  // 1800-2023 5.9.1).
   require(
-      !invalid_string_escape.ok()
-          && std::ranges::any_of(
-              invalid_string_escape.diagnostics,
-              [](const auto& diagnostic) {
-                return diagnostic.code == "FSIM-SV-SEM-040";
-              }),
-      "invalid string parameter escapes retain the shared diagnostic");
+      std::ranges::none_of(
+          invalid_string_escape.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-040";
+          }),
+      "unlisted string parameter escapes denote the escaped character");
 
   const auto type_namespace_conflict = parse_text(
       "type-parameter-conflict.sv",

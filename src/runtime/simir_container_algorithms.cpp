@@ -2,7 +2,9 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
+#include <limits>
 
 namespace fsim::runtime::simir {
 
@@ -718,9 +720,14 @@ MemoryLoadResult load_memory_text_with_status(
     const std::optional<std::int32_t> start,
     const std::optional<std::int32_t> finish) {
   validate_container_value(target);
-  if (!target.type.fixed || target.type.associative) {
+  // A dynamic array or queue keeps its size; an associative array needs
+  // integral indices (IEEE 1800-2017 21.4.1).
+  if (target.type.associative
+      && (target.type.string_indices || target.type.index_width > 64U
+          || target.type.element_kind != ContainerElementKind::Packed)) {
     throw std::invalid_argument{
-        "$readmemb/$readmemh target must be a fixed unpacked array"};
+        "$readmemb/$readmemh associative target must have integral indices "
+        "and packed elements"};
   }
   if (text.size() > maximum_memory_file_bytes) {
     throw std::length_error{
@@ -808,44 +815,6 @@ MemoryLoadResult load_memory_text_with_status(
   if (!token.empty()) {
     tokens.push_back(std::move(token));
   }
-
-  const auto count = memory_element_count(target);
-  if (count == 0) {
-    throw std::invalid_argument{
-        "read-memory target has no materialized elements"};
-  }
-  const bool linear = target.type.dimensions.size() > 1U;
-  const auto range_low = linear
-      ? INT64_C(0)
-      : static_cast<std::int64_t>(
-            std::min(target.type.index_left, target.type.index_right));
-  const auto range_high = linear
-      ? static_cast<std::int64_t>(count - 1U)
-      : static_cast<std::int64_t>(
-            std::max(target.type.index_left, target.type.index_right));
-  const auto first = start
-      ? static_cast<std::int64_t>(*start) : range_low;
-  const auto last = finish
-      ? static_cast<std::int64_t>(*finish) : range_high;
-  const auto in_declared_range =
-      [&](const std::int64_t index) {
-        return index >= range_low && index <= range_high;
-      };
-  if (!in_declared_range(first) || !in_declared_range(last)) {
-    throw std::out_of_range{
-        "read-memory start/finish is outside the target range"};
-  }
-  const auto step = first <= last ? 1 : -1;
-  const auto in_window =
-      [&](const std::int64_t index) {
-        return step > 0
-            ? index >= first && index <= last
-            : index <= first && index >= last;
-      };
-  auto current = static_cast<std::int64_t>(first);
-  bool has_address_entries{};
-  bool sequential_data_outside_window{};
-  std::size_t data_word_count{};
 
   const auto parse_address =
       [](const std::string_view digits) -> std::int32_t {
@@ -938,6 +907,99 @@ MemoryLoadResult load_memory_text_with_status(
         return PackedLogic4::from_msb_string(bits);
       };
 
+  if (target.type.associative) {
+    // Each address loaded creates the element of that index (21.4.1); the
+    // start and finish addresses bound the loaded window.
+    const auto step = start && finish && *finish < *start ? -1 : 1;
+    const auto in_window = [&](const std::int64_t index) {
+      const auto low = step > 0 ? start : finish;
+      const auto high = step > 0 ? finish : start;
+      return (!low || index >= *low) && (!high || index <= *high);
+    };
+    const auto width = target.type.index_width;
+    const auto mask = width >= 64U
+        ? ~std::uint64_t{}
+        : (std::uint64_t{1} << width) - 1U;
+    auto current = static_cast<std::int64_t>(start.value_or(0));
+    for (const auto& item : tokens) {
+      if (item.starts_with('@')) {
+        current = parse_address(std::string_view{item}.substr(1));
+        if (!in_window(current)) {
+          throw std::out_of_range{
+              "read-memory @address is outside the selected range"};
+        }
+        continue;
+      }
+      const auto value = parse_data(item, target.type.element_width);
+      if (!in_window(current)) {
+        continue;
+      }
+      auto key = PackedLogic4::from_aval_bval(
+          width, static_cast<std::uint64_t>(current) & mask, 0U);
+      const auto position = std::ranges::lower_bound(
+          replacement.keys, key,
+          [&](const PackedLogic4& left, const PackedLogic4& right) {
+            return associative_index_key_less(
+                replacement.type, left, right);
+          });
+      const auto offset = static_cast<std::size_t>(
+          position - replacement.keys.begin());
+      if (position == replacement.keys.end()
+          || associative_index_key_less(
+              replacement.type, key, *position)) {
+        replacement.keys.insert(position, std::move(key));
+        replacement.elements.insert(
+            replacement.elements.begin()
+                + static_cast<std::ptrdiff_t>(offset),
+            value);
+      } else {
+        replacement.elements[offset] = value;
+      }
+      current += step;
+    }
+    validate_container_value(replacement);
+    target = std::move(replacement);
+    return MemoryLoadResult{false};
+  }
+  const auto count = memory_element_count(target);
+  if (count == 0) {
+    throw std::invalid_argument{
+        "read-memory target has no materialized elements"};
+  }
+  // A dynamic array or queue is addressed from 0 (7.5, 7.10).
+  const bool linear = target.type.dimensions.size() > 1U
+      || !target.type.fixed;
+  const auto range_low = linear
+      ? INT64_C(0)
+      : static_cast<std::int64_t>(
+            std::min(target.type.index_left, target.type.index_right));
+  const auto range_high = linear
+      ? static_cast<std::int64_t>(count - 1U)
+      : static_cast<std::int64_t>(
+            std::max(target.type.index_left, target.type.index_right));
+  const auto first = start
+      ? static_cast<std::int64_t>(*start) : range_low;
+  const auto last = finish
+      ? static_cast<std::int64_t>(*finish) : range_high;
+  const auto in_declared_range =
+      [&](const std::int64_t index) {
+        return index >= range_low && index <= range_high;
+      };
+  if (!in_declared_range(first) || !in_declared_range(last)) {
+    throw std::out_of_range{
+        "read-memory start/finish is outside the target range"};
+  }
+  const auto step = first <= last ? 1 : -1;
+  const auto in_window =
+      [&](const std::int64_t index) {
+        return step > 0
+            ? index >= first && index <= last
+            : index <= first && index >= last;
+      };
+  auto current = static_cast<std::int64_t>(first);
+  bool has_address_entries{};
+  bool sequential_data_outside_window{};
+  std::size_t data_word_count{};
   for (const auto& item : tokens) {
     if (item.starts_with('@')) {
       has_address_entries = true;
@@ -1019,16 +1081,21 @@ std::string write_memory_text(
     const std::optional<std::int32_t> start,
     const std::optional<std::int32_t> finish) {
   validate_container_value(source);
-  if (!source.type.fixed || source.type.associative) {
+  if (source.type.associative
+      && (source.type.string_indices || source.type.index_width > 64U
+          || source.type.element_kind != ContainerElementKind::Packed)) {
     throw std::invalid_argument{
-        "$writememb/$writememh source must be a fixed unpacked array"};
+        "$writememb/$writememh associative source must have integral "
+        "indices and packed elements"};
   }
   const auto count = memory_element_count(source);
-  if (count == 0) {
+  if (count == 0 && source.type.fixed) {
     throw std::invalid_argument{
         "write-memory source has no materialized elements"};
   }
-  const bool linear = source.type.dimensions.size() > 1U;
+  // A dynamic array or queue is addressed from 0 (7.5, 7.10).
+  const bool linear = source.type.dimensions.size() > 1U
+      || !source.type.fixed;
   const auto low = linear
       ? INT64_C(0)
       : static_cast<std::int64_t>(
@@ -1041,13 +1108,6 @@ std::string write_memory_text(
       ? static_cast<std::int64_t>(*start) : low;
   const auto last = finish
       ? static_cast<std::int64_t>(*finish) : high;
-  const auto in_range = [&](const std::int64_t index) {
-    return index >= low && index <= high;
-  };
-  if (!in_range(first) || !in_range(last)) {
-    throw std::out_of_range{
-        "write-memory start/finish is outside the source range"};
-  }
   const auto format = [&](const PackedLogic4& value) {
     auto bits = value.to_msb_string();
     if (!hexadecimal) return bits;
@@ -1072,6 +1132,55 @@ std::string write_memory_text(
     return text;
   };
   std::string result;
+  if (source.type.associative) {
+    // The existing elements in index order, each run of consecutive
+    // indices after an address specifier (21.5.3).
+    const auto window_low = start && finish
+        ? std::min(*start, *finish)
+        : start.value_or(std::numeric_limits<std::int32_t>::min());
+    const auto window_high = start && finish
+        ? std::max(*start, *finish)
+        : finish.value_or(std::numeric_limits<std::int32_t>::max());
+    std::optional<std::int64_t> next;
+    for (std::size_t offset = 0; offset < source.keys.size(); ++offset) {
+      const auto key = source.type.signed_indices
+          ? source.keys[offset].known_signed_value()
+          : std::optional<std::int64_t>{};
+      const auto unsigned_key = source.keys[offset].known_unsigned_value();
+      if (!key && !unsigned_key) {
+        continue;
+      }
+      const auto index = key ? *key
+                             : static_cast<std::int64_t>(*unsigned_key);
+      if (index < window_low || index > window_high) {
+        continue;
+      }
+      if (index != next.value_or(0)) {
+        std::array<char, 24> digits{};
+        const auto written = std::to_chars(
+            digits.data(), digits.data() + digits.size(), index, 16);
+        result.push_back('@');
+        result.append(digits.data(), written.ptr);
+        result.push_back('\n');
+      }
+      result += format(source.elements[offset]);
+      result.push_back('\n');
+      next = index + 1;
+    }
+    if (result.size() > maximum_memory_file_bytes)
+      throw std::length_error{"write-memory file exceeds the 1 MiB limit"};
+    return result;
+  }
+  if (count == 0) {
+    return result;
+  }
+  const auto in_range = [&](const std::int64_t index) {
+    return index >= low && index <= high;
+  };
+  if (!in_range(first) || !in_range(last)) {
+    throw std::out_of_range{
+        "write-memory start/finish is outside the source range"};
+  }
   const auto step = first <= last ? 1 : -1;
   for (auto index = first;; index += step) {
     const auto offset = linear

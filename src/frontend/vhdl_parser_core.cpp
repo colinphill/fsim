@@ -1112,10 +1112,21 @@ VhdlParser::parse_vhdl_mode_view_indication(const Token& start)
         "select VHDL-2019 or declare ordinary scalar interface modes");
 
     ParsedVhdlModeViewIndication result;
+    // A mode view name may be V'CONVERSE, the view with each mode
+    // reversed (IEEE 1076-2019 6.5.2, 16.2.6).
+    const auto match_converse = [&] {
+        if (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)
+            && keyword("converse", 1, true)) {
+            advance();
+            advance();
+            result.indication.converse = true;
+        }
+    };
     if (match(TokenKind::LeftParen)) {
         result.indication.kind = VhdlModeViewIndicationKind::array;
         result.indication.view = parse_vhdl_selected_name(
             "array element mode view name");
+        match_converse();
         expect(
             TokenKind::RightParen,
             "')' after array mode view name",
@@ -1124,6 +1135,7 @@ VhdlParser::parse_vhdl_mode_view_indication(const Token& start)
         result.indication.kind = VhdlModeViewIndicationKind::record;
         result.indication.view = parse_vhdl_selected_name(
             "record mode view name");
+        match_converse();
     }
     if (match_keyword("of", true)) {
         result.indication.explicit_subtype = true;

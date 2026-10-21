@@ -1311,15 +1311,27 @@ semantic::ScopeId SystemVerilogHirBuilder::class_parent_scope(
                 : std::string_view { unit.library };
             return parent == std::string { library } + "::" + unit.name;
         });
-    return enclosing_unit == hir_.units().end()
-        ? ensure_compilation_unit(
-              input.span,
-              input.library,
-              input.compilation_unit_identity,
-              input.standard_revision,
-              input.verilog_compatibility_profile,
-              parent)
-        : enclosing_unit->scope;
+    if (enclosing_unit != hir_.units().end())
+        return enclosing_unit->scope;
+    const auto scope = ensure_compilation_unit(
+        input.span,
+        input.library,
+        input.compilation_unit_identity,
+        input.standard_revision,
+        input.verilog_compatibility_profile,
+        parent);
+    // A $unit class keeps the time unit of its compilation unit (IEEE
+    // 1800-2023 3.14.2.3).
+    for (auto& unit : hir_.mutable_units()) {
+        if (unit.scope == scope
+            && unit.kind == sv::UnitKind::compilation_unit
+            && unit.compilation.time_unit.empty()
+            && unit.compilation.time_precision.empty()) {
+            unit.compilation.time_unit = input.time_unit;
+            unit.compilation.time_precision = input.time_precision;
+        }
+    }
+    return scope;
 }
 
 std::string SystemVerilogHirBuilder::class_identity(

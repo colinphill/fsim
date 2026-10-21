@@ -52,7 +52,7 @@ begin
 
         width := 6;
         write(l, boolean'(true), left, width);
-        assert l.all = "TRUE  "
+        assert l.all = "true  "
             report "dynamic BOOLEAN field is wrong" severity error;
         deallocate(l);
 

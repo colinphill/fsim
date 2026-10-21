@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1063,6 +1064,10 @@ class VerilogParser final : private detail::ParserBase {
   // of the compilation unit import.
   std::optional<DesignUnit> compilation_unit_package_;
   DesignUnit& compilation_unit_package(const Token& start);
+  // The $unit time unit and precision: the compilation-unit timeunit, else
+  // the `timescale in effect (IEEE 1800-2023 3.14.2.3).
+  [[nodiscard]] std::pair<std::string, std::string>
+  compilation_unit_time_scale() const;
   void parse_compilation_unit_declaration();
   std::unordered_map<std::string, std::string>
       dpi_import_linkage_profiles_;

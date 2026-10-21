@@ -660,14 +660,16 @@ private:
         const semantic::SpecializedHirUnit& specialization,
         const semantic::vhdl::Declaration& declaration,
         const std::string& name);
-    // A scalar VHDL constant with a static value, materialized as a
-    // read-only signal found only by its hierarchy path `name`, for the
+    // A scalar VHDL constant or generic with a static value, materialized
+    // as a read-only signal found only by its hierarchy path `name`, for the
     // external names of another block (IEEE 1076-2008 8.7); nullopt when
-    // the design has no external names or the value does not fold.
+    // the design has no external names or the value does not fold. `value`
+    // is a generic's actual, else the declaration's initializer is used.
     std::optional<SignalId> add_compiled_vhdl_external_constant_signal(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::vhdl::Declaration& declaration,
-        const std::string& name);
+        const std::string& name,
+        std::optional<semantic::ExpressionId> value = std::nullopt);
     // A composite constant of an architecture or block whose value does not
     // fold, computed when its declaration is elaborated into a read-only
     // signal whose subtype the value completes (IEEE 1076-2008 14.4.2.1,
@@ -780,7 +782,9 @@ private:
         ContainerMap& container_objects,
         ReadOnlyContainerSet& read_only_containers,
         SpecializationInfo& specialization,
-        std::size_t& concurrent_order);
+        std::size_t& concurrent_order,
+        std::vector<std::size_t>* deferred = nullptr,
+        const std::vector<std::size_t>* only = nullptr);
 
     // With `deferred`, architecture processes that use external names are
     // collected there instead of lowered; with `only`, just those processes
@@ -804,6 +808,26 @@ private:
     // 14.7.3.2): its adapters become one composing conversion program.
     void compose_vhdl_output_routes();
 
+    // The architecture's processes and concurrent statements that name
+    // objects of its child instances through external names (IEEE
+    // 1076-2008 8.7); they are lowered once those instances exist.
+    // The source spans of the external names written in an architecture,
+    // and whether a source span encloses one of them (IEEE 1076-2008 8.7).
+    [[nodiscard]] std::vector<const semantic::SourceSpan*>
+    compiled_vhdl_external_name_spans(
+        const semantic::vhdl::Unit& architecture) const;
+    [[nodiscard]] bool compiled_source_encloses(
+        semantic::SourceSpanId outer,
+        std::span<const semantic::SourceSpan* const> inner) const;
+    struct CompiledVhdlDeferredOccurrences {
+        std::vector<semantic::ProcessId> processes;
+        std::vector<semantic::StatementId> statements;
+
+        [[nodiscard]] bool empty() const noexcept
+        {
+            return processes.empty() && statements.empty();
+        }
+    };
     bool lower_compiled_vhdl_unit_processes(
         const semantic::vhdl::Unit& entity,
         const semantic::vhdl::Unit& architecture,
@@ -812,8 +836,8 @@ private:
         std::string_view path,
         SpecializationInfo& specialization,
         std::size_t& concurrent_order,
-        std::vector<semantic::ProcessId>* deferred = nullptr,
-        const std::vector<semantic::ProcessId>* only = nullptr);
+        CompiledVhdlDeferredOccurrences* deferred = nullptr,
+        const CompiledVhdlDeferredOccurrences* only = nullptr);
 
     bool validate_compiled_vhdl_generated_callables(
         std::span<const semantic::DeclarationId> declarations,
@@ -1963,6 +1987,15 @@ private:
     std::unordered_map<std::uint32_t, PackageObjectBindings>
         vhdl_package_object_bindings_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    // An out or inout port associated with a resolved VHDL actual: the
+    // instance it belongs to and its default, which is the initial value of
+    // the port's drivers (IEEE 1076-2008 6.5.2, 14.7.3.2).
+    struct VhdlPortSource {
+        std::string instance;
+        std::optional<PackedLogic4> initial;
+    };
+    std::unordered_map<SignalId, std::vector<VhdlPortSource>>
+        vhdl_port_sources_;
     struct PendingVhdlResolver {
         semantic::DeclarationId body;
         semantic::SourceSpanId source;

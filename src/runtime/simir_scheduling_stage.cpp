@@ -10,6 +10,7 @@
 #include <limits>
 #include <new>
 #include <ranges>
+#include <unordered_map>
 
 namespace fsim::runtime::simir {
 
@@ -287,21 +288,20 @@ void Interpreter::Impl::schedule_update_commit()
             break;
         }
     }
-    for (std::size_t left = 0U;
-         !has_disjoint_owner_group_candidate
-             && left < pending_updates.size();
-         ++left) {
-        const auto& first = pending_updates[left];
-        if (!first.driver_present() || first.signal >= signals.size()
-            || !can_try_wide_disjoint_signal_commit(first.signal)) {
-            continue;
-        }
-        for (std::size_t right = left + 1U;
-             right < pending_updates.size(); ++right) {
-            const auto& second = pending_updates[right];
-            if (second.signal == first.signal
-                && second.driver_present()
-                && second.driver != first.driver) {
+    // Two drivers updating one signal in this delta: remember the first
+    // driver seen per signal, so the scan is linear in the updates.
+    if (!has_disjoint_owner_group_candidate) {
+        using Driver = std::remove_cvref_t<
+            decltype(pending_updates.front().driver)>;
+        std::unordered_map<std::size_t, Driver> first_driver;
+        for (const auto& update : pending_updates) {
+            if (!update.driver_present() || update.signal >= signals.size()
+                || !can_try_wide_disjoint_signal_commit(update.signal)) {
+                continue;
+            }
+            const auto [entry, inserted]
+                = first_driver.try_emplace(update.signal, update.driver);
+            if (!inserted && entry->second != update.driver) {
                 has_disjoint_owner_group_candidate = true;
                 break;
             }

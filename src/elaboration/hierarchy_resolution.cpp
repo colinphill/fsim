@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/runtime/logic.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <exception>
 #include <limits>
@@ -2539,6 +2541,61 @@ void HierarchyBuilder::validate_process_drivers()
             selected.value_or(
                 native_resolution(
                     design_.signal_info_.at(signal))));
+    }
+    // A resolved signal starts with the resolution of its sources' initial
+    // values (IEEE 1076-2008 14.7.3.2, 14.7.5.2): the defaults of its out
+    // and inout ports, and its own default when a process outside those
+    // ports drives it.
+    const auto inside = [](const std::string_view name,
+                            const std::string_view instance) {
+        return name.size() > instance.size()
+            && name[instance.size()] == '.'
+            && std::ranges::equal(name.substr(0U, instance.size()), instance,
+                [](const char left, const char right) {
+                    return std::tolower(static_cast<unsigned char>(left))
+                        == std::tolower(static_cast<unsigned char>(right));
+                });
+    };
+    for (const auto& [signal, ports] : vhdl_port_sources_) {
+        auto& initial = design_.signals_.at(signal).initial_value;
+        if (design_.signals_[signal].resolution != ResolutionKind::std_logic
+            || std::ranges::none_of(ports, [&](const VhdlPortSource& port) {
+                   return port.initial
+                       && port.initial->width() == initial.width();
+               })) {
+            continue;
+        }
+        bool own_driver { };
+        if (const auto found = driver_processes.find(signal);
+            found != driver_processes.end()) {
+            own_driver = std::ranges::any_of(found->second,
+                [&](const ProcessId process) {
+                    const auto view = design_.process_view(process);
+                    return std::ranges::none_of(ports,
+                        [&](const VhdlPortSource& port) {
+                            return inside(view.name(), port.instance);
+                        });
+                });
+        }
+        std::optional<PackedLogic4> resolved;
+        if (own_driver) {
+            resolved = initial;
+        }
+        for (const auto& port : ports) {
+            if (!port.initial || port.initial->width() != initial.width()) {
+                continue;
+            }
+            if (!resolved) {
+                resolved = *port.initial;
+                continue;
+            }
+            for (std::size_t bit { }; bit < initial.width(); ++bit) {
+                resolved->set_logic9(bit,
+                    runtime::resolve(resolved->get_logic9(bit),
+                        port.initial->get_logic9(bit)));
+            }
+        }
+        initial = std::move(*resolved);
     }
     lower_compiled_vhdl_resolvers(driver_processes);
     for (const auto& [signal, process_drivers] : drivers) {

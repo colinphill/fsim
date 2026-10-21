@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/input_format.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -38,11 +39,9 @@ parse_input_format(const std::string_view text) {
            && text[index] >= '0' && text[index] <= '9') {
       has_width = true;
       const auto digit = static_cast<unsigned>(text[index] - '0');
-      if (width > (std::numeric_limits<std::uint32_t>::max() - digit) / 10U) {
-        result.valid = false;
-        return result;
-      }
-      width = width * 10U + digit;
+      // A field width beyond any input saturates.
+      width = std::min<std::uint64_t>(
+          width * 10U + digit, std::numeric_limits<std::uint32_t>::max());
       ++index;
     }
     if ((has_width && width == 0) || index >= text.size()) {

@@ -2811,6 +2811,21 @@ void test_simir_containers()
         require(false, "oversized read-memory input must fail");
     } catch (const std::length_error&) {
     }
+    // An associative memory gains an element per loaded address and is
+    // written with address specifiers (IEEE 1800-2017 21.4.1, 21.5.3).
+    ContainerType keyed_memory_type;
+    keyed_memory_type.element_width = 8U;
+    keyed_memory_type.associative = true;
+    auto keyed_memory = default_container_value(keyed_memory_type);
+    load_memory_text(keyed_memory, "01 02 @8 10 @c 14 15", true);
+    require(
+        keyed_memory.keys.size() == 5U
+            && keyed_memory.elements[2] == value(8, 0x10),
+        "read-memory creates one associative element per address");
+    require(
+        write_memory_text(keyed_memory, true)
+            == "01\n02\n@8\n10\n@c\n14\n15\n",
+        "$writememh writes associative address specifiers at gaps");
     auto matrix_type = memory_type;
     matrix_type.dimensions = { { 1, 0 }, { 0, 1 } };
     auto matrix = default_container_value(matrix_type);

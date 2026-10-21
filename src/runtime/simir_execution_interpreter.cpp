@@ -906,6 +906,22 @@ void Interpreter::Impl::execute(ProcessId id)
                         ++process.pc;
                         return;
                     }
+                    if (op.nonblocking) {
+                        // `s <= v` updates the string in the time slot's
+                        // NBA region (IEEE 1800-2017 10.4.2, 4.9.4).
+                        const auto origin = capture_signal_change_origin(
+                            process.id, SignalUpdateDomain::systemverilog_nba);
+                        scheduler.schedule_systemverilog(origin.phase,
+                            process.id,
+                            [this, object = op.object,
+                                value = get_string_register(
+                                    process, op.source)](Scheduler&) {
+                                get_string_object(object).initial_value
+                                    = value;
+                            });
+                        ++process.pc;
+                        return;
+                    }
                     get_string_object(op.object).initial_value = get_string_register(process, op.source);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {

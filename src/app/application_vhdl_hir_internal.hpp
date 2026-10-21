@@ -277,6 +277,7 @@ private:
             input.vhdl_mode_view->span,
             scope);
         profile.explicit_subtype = input.vhdl_mode_view->explicit_subtype;
+        profile.converse = input.vhdl_mode_view->converse;
         declaration(id).interface_view = std::move(profile);
     }
 

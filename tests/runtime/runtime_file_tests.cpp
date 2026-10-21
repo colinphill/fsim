@@ -220,26 +220,31 @@ void test_simir_text_files()
         scanner.string_object_value(scanned_text) == "alpha",
         "formatted string scan stores bounded text");
 
-    const auto rejects_leading_separator = [](
+    // Integer fields take underscores anywhere, also first (IEEE 1800-2023
+    // Table 21-7).
+    const auto accepts_leading_separator = [](
         const InputScanFormat format,
-        const std::string_view input) {
+        const std::string_view input,
+        const std::uint32_t expected) {
         FileScan scan;
         scan.string_source = true;
         scan.conversions = {
             { "", format, 0U, false,
-                { InputScanTargetKind::packed_register, 0U, 32U, false } },
+                { InputScanTargetKind::packed_register, 0U, 32U, true } },
         };
         const auto result = scan_formatted_string(scan, input);
-        return result.assignments == 0 && result.values.size() == 1U
-            && !result.values[0];
+        return result.assignments == 1 && result.values.size() == 1U
+            && result.values[0]
+            && result.values[0]->packed == number(expected);
     };
     require(
-        rejects_leading_separator(InputScanFormat::binary, "_01")
-            && rejects_leading_separator(InputScanFormat::octal, "_7")
-            && rejects_leading_separator(InputScanFormat::decimal, "_1")
-            && rejects_leading_separator(InputScanFormat::decimal, "+_1")
-            && rejects_leading_separator(InputScanFormat::hexadecimal, "_a"),
-        "formatted integer scans reject a leading underscore");
+        accepts_leading_separator(InputScanFormat::binary, "_01", 1U)
+            && accepts_leading_separator(InputScanFormat::octal, "_7", 7U)
+            && accepts_leading_separator(InputScanFormat::decimal, "_1", 1U)
+            && accepts_leading_separator(InputScanFormat::decimal, "+_1", 1U)
+            && accepts_leading_separator(
+                InputScanFormat::hexadecimal, "_a", 10U),
+        "formatted integer scans accept a leading underscore");
 
     FileScan embedded_separator_scan;
     embedded_separator_scan.string_source = true;
@@ -349,8 +354,10 @@ void test_simir_text_files()
             { InputScanTargetKind::packed_register, 2, 64, true,
                 SystemVerilogScalarKind::Chandle } },
     };
+    // A floating-point field has no underscores; an integer field may
+    // (IEEE 1800-2023 Table 21-7).
     const auto scalar_values = scan_formatted_string(
-        scalar_scan, "real=1.2_5 time=1_7 handle=0");
+        scalar_scan, "real=1.25 time=1_7 handle=0");
     require(
         scalar_values.assignments == 3
             && scalar_values.values[0] && scalar_values.values[1]

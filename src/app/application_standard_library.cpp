@@ -654,6 +654,44 @@ end package vital_memory;
         return false;
     }
 
+    // Whether a unit references the IEEE context `context` (16.9).
+    bool uses_context(
+        const frontend::ParsedDesign& parsed,
+        const std::string_view context)
+    {
+        const auto name = "ieee." + std::string { context };
+        for (const auto& unit : parsed.units) {
+            if (unit.language != frontend::Language::Vhdl2008) {
+                continue;
+            }
+            for (const auto& item : unit.vhdl_context) {
+                if (item.kind
+                        == frontend::VhdlContextItemKind::ContextReference
+                    && std::ranges::find(item.selected_names, name)
+                        != item.selected_names.end()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // The standard synthesis contexts of library IEEE (IEEE 1076-2019 16.9).
+    constexpr std::string_view kIeeeBitContextSource = R"vhdl(-- SPDX-License-Identifier: Apache-2.0
+context ieee_bit_context is
+  library ieee;
+  use ieee.numeric_bit.all;
+end context ieee_bit_context;
+)vhdl";
+
+    constexpr std::string_view kIeeeStdContextSource = R"vhdl(-- SPDX-License-Identifier: Apache-2.0
+context ieee_std_context is
+  library ieee;
+  use ieee.std_logic_1164.all;
+  use ieee.numeric_std.all;
+end context ieee_std_context;
+)vhdl";
+
     std::filesystem::path library_root()
     {
         if (const auto override = support::environment_variable("FSIM_IEEE_LIBRARY");
@@ -1501,9 +1539,11 @@ void inject_vhdl_standard_libraries(
         || uses_package(checked.parsed, "vital_primitives");
     const bool vital_timing = vital_primitives
         || uses_package(checked.parsed, "vital_timing");
+    const bool bit_context = uses_context(checked.parsed, "ieee_bit_context");
+    const bool std_context = uses_context(checked.parsed, "ieee_std_context");
     const bool numeric_bit_unsigned = uses_package(
         checked.parsed, "numeric_bit_unsigned");
-    const bool numeric_bit = numeric_bit_unsigned
+    const bool numeric_bit = numeric_bit_unsigned || bit_context
         || uses_package(checked.parsed, "numeric_bit");
     const bool numeric_std_unsigned = uses_package(
         checked.parsed, "numeric_std_unsigned");
@@ -1519,7 +1559,7 @@ void inject_vhdl_standard_libraries(
     const bool math_real = fixed_generic || math_complex
         || uses_package(checked.parsed, "math_real");
     const bool numeric_std = fixed_generic || numeric_std_unsigned
-        || uses_package(checked.parsed, "numeric_std");
+        || std_context || uses_package(checked.parsed, "numeric_std");
     const bool logic_textio = uses_package(checked.parsed, "std_logic_textio");
     const bool std_logic_signed = uses_package(checked.parsed, "std_logic_signed");
     const bool std_logic_unsigned = uses_package(checked.parsed, "std_logic_unsigned");
@@ -1727,6 +1767,56 @@ void inject_vhdl_standard_libraries(
     if ((populate_complete_environment || vital_memory)
         && standard >= frontend::VhdlStandard::Vhdl1993
         && !inject_vital("vital_memory", kVitalMemorySource)) {
+        return;
+    }
+    const auto inject_context = [&](const std::string_view context,
+                                    const std::string_view source_text) {
+        const bool conflict = std::ranges::any_of(
+            checked.parsed.units,
+            [&](const frontend::DesignUnit& unit) {
+                return unit.language == frontend::Language::Vhdl2008
+                    && unit.kind == frontend::UnitKind::VhdlContext
+                    && unit.library == "ieee" && unit.name == context;
+            });
+        if (conflict) {
+            diagnostics.error(
+                "FSIM-FE-VHSTD-004",
+                "the compiler-supplied ieee." + std::string { context }
+                    + " context cannot be redeclared by a project source");
+            return false;
+        }
+        const auto path = std::filesystem::path { "fsim-standard" } / "ieee"
+            / (std::string { context } + ".vhdl");
+        const auto source_name = fsim::support::path_to_utf8(path);
+        auto parsed = frontend::parse(
+            frontend::SourceText { source_name, std::string { source_text } },
+            frontend::Language::Vhdl2008, standard);
+        if (!parsed.diagnostics.empty() || parsed.design.units.size() != 1U) {
+            diagnostics.error(
+                "FSIM-FE-VHSTD-003",
+                "internal ieee." + std::string { context }
+                    + " context declaration is invalid",
+                { source_name, { }, { } });
+            return false;
+        }
+        auto unit = std::move(parsed.design.units.front());
+        unit.library = "ieee";
+        unit.vhdl_predefined_environment
+            = predefined_environment(standard, "ieee");
+        std::vector<frontend::DesignUnit> context_units;
+        context_units.push_back(std::move(unit));
+        auto source = checked_source(path, source_text);
+        stamp_projected_unit_identities(context_units, source);
+        sources.push_back(std::move(source));
+        units.push_back(std::move(context_units.front()));
+        return true;
+    };
+    if (standard >= frontend::VhdlStandard::Vhdl2008
+        && ((bit_context
+                && !inject_context("ieee_bit_context", kIeeeBitContextSource))
+            || (std_context
+                && !inject_context(
+                    "ieee_std_context", kIeeeStdContextSource)))) {
         return;
     }
     checked.standard_sources.insert(

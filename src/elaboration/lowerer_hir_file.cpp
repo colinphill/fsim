@@ -1626,13 +1626,12 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                 || required != call.operands.size() - 2U
                                 || parsed.trailing_text.size()
                                     > maximum_string_bytes
+                                // A field width only bounds the scan.
                                 || std::ranges::any_of(
                                     parsed.conversions,
                                     [](const auto& conversion) {
                                         return conversion.prefix.size()
-                                                > maximum_string_bytes
-                                            || conversion.maximum_characters
-                                                > maximum_string_bytes;
+                                            > maximum_string_bytes;
                                     })) {
                                 fail("FSIM-ELAB-SVFILE-011",
                                     call.text + " has an invalid or "
@@ -2006,6 +2005,16 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 const auto object = name
                     ? container_objects_.find(*name)
                     : container_objects_.end();
+                // A memory is an unpacked array; a dynamic array, queue or
+                // integral-indexed associative array holds packed elements
+                // (IEEE 1800-2017 21.4.1).
+                const auto memory_type = [](const ContainerType& type) {
+                    return type.fixed
+                        || (type.element_kind == ContainerElementKind::Packed
+                            && (!type.associative
+                                || (!type.string_indices
+                                    && type.index_width <= 64U)));
+                };
                 // A subprogram's local or formal unpacked array is bound
                 // when its body is lowered (IEEE 1800-2017 21.4).
                 const auto declared_fixed_local = [&] {
@@ -2021,7 +2030,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                     }
                     const auto type = hir_systemverilog_container_type(
                         *record->systemverilog->type);
-                    return type && type->fixed;
+                    return type && memory_type(*type);
                 };
                 const auto valid_object = source.value && source.target
                     && hir_filename_operand(*source.value, source.scope)
@@ -2031,14 +2040,14 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                     *name))
                             && static_cast<std::size_t>(object->second)
                                 < design_.container_object_info_.size()
-                            && design_.container_object_info_[object->second]
-                                .type.fixed)
+                            && memory_type(design_.container_object_info_
+                                    [object->second].type))
                         || (object == container_objects_.end()
                             && declared_fixed_local()));
                 if (!valid_object) {
                     statement_fail("FSIM-ELAB-SVMEMORY-003",
-                        "memory transfer requires a writable bounded "
-                        "static-array object");
+                        "memory transfer requires a writable unpacked-array "
+                        "object");
                 }
             }
             const auto diagnose_optional = [&](const auto& expression) {
@@ -3005,8 +3014,20 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             && vhdl_simple_name(subtype->type_mark.spelling) == "text";
     };
     const auto standard_output = [&](const semantic::ExpressionId value) {
-        if (hir_target_declaration(value)) {
-            return false;
+        if (const auto declared = hir_target_declaration(value)) {
+            // A file opened on STD_OUTPUT, the logical name std.textio
+            // gives OUTPUT, is that same host file (IEEE 1076-2008 16.4).
+            const auto file = specialized_hir_unit_->find_declaration(
+                *declared);
+            if (!file || file->vhdl == nullptr
+                || file->vhdl->form != semantic::vhdl::DeclarationForm::file
+                || !file->vhdl->initializer) {
+                return false;
+            }
+            const auto logical_name
+                = specialized_hir_unit_->evaluate_string_expression(
+                    *file->vhdl->initializer);
+            return logical_name && *logical_name == "STD_OUTPUT";
         }
         const auto expression = specialized_hir_unit_->find_expression(
             value);
@@ -3931,6 +3952,24 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return false;
         }
         const auto value_class = textio_scalar_class(*value);
+        // A CHARACTER literal appends that character (IEEE 1076-2008 5.7,
+        // 16.4).
+        if (const auto expression
+            = specialized_hir_unit_->find_expression(*value);
+            value_class == TextioScalarClass::character && expression
+            && expression->vhdl != nullptr
+            && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && expression->vhdl->text.size() == 3U) {
+            if (!lower_dynamic_field()) {
+                return false;
+            }
+            const auto text = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant {
+                text, std::string(1U, expression->vhdl->text[1]) });
+            append_string(text);
+            return true;
+        }
         if (value_class == TextioScalarClass::integer
             || value_class == TextioScalarClass::bit) {
             const auto lowered = lower_hir_expression(*value, *width);
@@ -3982,8 +4021,10 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             const auto true_start = static_cast<InstructionIndex>(
                 process_.operations.size());
             const auto true_text = allocate_string_register();
+            // The string representation of an identifier value is in
+            // lower case (IEEE 1076-2008 5.7), as 'IMAGE gives it.
             process_.operations.emplace_back(LoadStringConstant {
-                true_text, "TRUE" });
+                true_text, "true" });
             append_string(true_text);
             const auto skip_false = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -3992,7 +4033,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 process_.operations.size());
             const auto false_text = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
-                false_text, "FALSE" });
+                false_text, "false" });
             append_string(false_text);
             const auto end = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -4496,10 +4537,16 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
             hir_source_span(source.source));
         return true;
     }
+    // A dynamic array, queue or integral-indexed associative array of
+    // packed elements is a memory too (IEEE 1800-2017 21.4.1, 21.5.3).
     const auto& type = *binding->type;
-    if (!type.fixed) {
+    if (!type.fixed
+        && (type.element_kind != ContainerElementKind::Packed
+            || (type.associative
+                && (type.string_indices || type.index_width > 64U)))) {
         report("FSIM-ELAB-SVMEMORY-003",
-            "$readmem*/$writemem* requires a bounded static array",
+            "$readmem*/$writemem* requires an array of packed elements with "
+            "integral indices",
             hir_source_span(source.source));
         return true;
     }

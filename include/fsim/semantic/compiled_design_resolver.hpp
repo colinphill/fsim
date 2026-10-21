@@ -150,6 +150,13 @@ struct CompiledVhdlPackageResolution {
     unique() const;
 };
 
+/// A package instance's template and its generic map bound to the template's
+/// generics (IEEE 1076-2008 4.9).
+struct CompiledVhdlPackageInstanceBinding {
+    UnitId template_unit;
+    CompiledBindingFrame generic_bindings;
+};
+
 struct CompiledVhdlCallableResolution {
     DeclarationId key;
     DeclarationId body;
@@ -390,6 +397,12 @@ public:
     [[nodiscard]] CompiledVhdlPackageResolution
     resolve_vhdl_package_members(const vhdl::Name&, ScopeId use_scope,
         const CompiledDeclarationPredicate& predicate = { }) const;
+
+    /// The template and generic bindings of the package instance declared by
+    /// `instance`; `use_scope` gives the library of an unprefixed template.
+    [[nodiscard]] std::optional<CompiledVhdlPackageInstanceBinding>
+    vhdl_package_instance_binding(DeclarationId instance,
+        ScopeId use_scope) const;
 
     /// Return whether a package member is visible from a VHDL unit. Governed
     /// standard packages expose a compact declaration-name surface instead of

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ranges>
+#include <set>
 #include <utility>
 
 namespace fsim::frontend::class_resolution_detail {
@@ -15,8 +16,9 @@ namespace fsim::frontend::class_resolution_detail {
     const std::string_view name,
     const SystemVerilogClassMethodKind kind,
     const std::size_t actual_count,
-    const SourceSpan& span) {
-  auto matches = find_methods(identity, name, kind);
+    const SourceSpan& span,
+    const Type* receiver) {
+  auto matches = find_methods(identity, name, kind, receiver);
   std::erase_if(matches, [&](const MethodMatch& match) {
     const auto required = static_cast<std::size_t>(std::ranges::count_if(
         match.method->arguments,
@@ -534,10 +536,11 @@ void Resolver::retain_task_profile(
   if (expression.text.starts_with('.') && !expression.operands.empty()) {
     const auto built_in_mode = expression.text == ".rand_mode"
         || expression.text == ".constraint_mode";
-    if (built_in_mode
+    const bool implicit_member = built_in_mode
         && expression.operands.front().kind == ExpressionKind::Identifier
         && this_mode_member(
-            expression.operands.front().text + expression.text, scope)) {
+            expression.operands.front().text + expression.text, scope);
+    if (implicit_member) {
       expression.operands.front().text =
           "this." + expression.operands.front().text;
     }
@@ -563,6 +566,7 @@ void Resolver::retain_task_profile(
           && !property.property->declaration.type.systemverilog_container;
     };
     if (built_in_mode && expression.operands.size() == 2U
+        && !implicit_member
         && expression.operands.front().kind == ExpressionKind::Identifier
         && object_receiver(expression.operands.front())) {
       auto receiver = expression.operands.front();
@@ -741,13 +745,19 @@ void Resolver::retain_task_profile(
                 && expression.operands[1].kind == ExpressionKind::Identifier
             ? expression.operands[1].text
             : std::string{"item"};
-        if (expression.operands.size() >= 2U && scope.class_owner != nullptr
-            && find_property(scope.class_owner->canonical_identity,
-                   iterator_name).property
-            && !scope.objects.contains(iterator_name)) {
+        // A class-handle element always binds the iterator, so that
+        // `x.m` and `x.f()` select through it (7.12.4).
+        const bool class_element
+            = !receiver_type->systemverilog_class_declaration.empty();
+        if (expression.operands.size() >= 2U
+            && (class_element
+                || (scope.class_owner != nullptr
+                    && find_property(scope.class_owner->canonical_identity,
+                           iterator_name).property
+                    && !scope.objects.contains(iterator_name)))) {
           auto element = *receiver_type;
           element.systemverilog_container.reset();
-          with_scope.objects.add(iterator_name, std::move(element));
+          with_scope.objects.assign(iterator_name, std::move(element));
         }
         for (auto& operand :
              expression.operands | std::views::drop(1)) {
@@ -857,8 +867,31 @@ void Resolver::retain_task_profile(
       // A name in the inline constraint that is not a member of the
       // randomized object, or is `local::`-qualified, denotes the calling
       // scope's object (IEEE 1800-2017 18.7, 18.7.1).
+      // An array method's with-clause iterator (`item` by default) is
+      // bound in its with expression (IEEE 1800-2017 7.12).
+      std::vector<std::string> bound_iterators;
       const auto resolve_caller_names = [&](const auto& self,
                                             Expression& node) -> void {
+        static const std::set<std::string_view> iterator_methods{
+            ".find", ".find_index", ".find_first", ".find_first_index",
+            ".find_last", ".find_last_index", ".min", ".max", ".unique",
+            ".unique_index", ".sort", ".rsort", ".sum", ".product", ".and",
+            ".or", ".xor", ".map"};
+        if (node.kind != ExpressionKind::Identifier
+            && iterator_methods.contains(node.text)
+            && node.operands.size() >= 2U) {
+          self(self, node.operands.front());
+          bound_iterators.push_back(
+              node.operands.size() == 3U
+                      && node.operands[1].kind == ExpressionKind::Identifier
+                  ? node.operands[1].text
+                  : std::string{"item"});
+          for (auto& operand : node.operands | std::views::drop(1)) {
+            self(self, operand);
+          }
+          bound_iterators.pop_back();
+          return;
+        }
         if (node.kind == ExpressionKind::Identifier) {
           constexpr std::string_view local_prefix{"local::"};
           // The first name of a dotted path (`item.addr`) selects the
@@ -879,6 +912,8 @@ void Resolver::retain_task_profile(
             return;
           }
           if (node.text.find("::") == std::string::npos
+              && std::ranges::find(bound_iterators, head(node.text))
+                  == bound_iterators.end()
               && !find_property(receiver_identity, head(node.text)).property
               && scope.class_owner != nullptr
               && !scope.objects.contains(head(node.text))
@@ -919,7 +954,7 @@ void Resolver::retain_task_profile(
         name,
         SystemVerilogClassMethodKind::Function,
         expression.operands.size() - 1U,
-        expression.span);
+        expression.span, &*receiver_type);
     if (!match || !match->method) return std::nullopt;
     expression.text =
         (expression.operands.front().text == "super"
@@ -1424,17 +1459,16 @@ bool Resolver::this_mode_member(
   }
   if (method != "rand_mode") return false;
   const auto property = find_property(owner, member);
+  // A random class handle member names the handle itself (18.8).
   return property.property
-      && (property.property->is_rand || property.property->is_randc)
-      && !class_identity(property.property->declaration.type);
+      && (property.property->is_rand || property.property->is_randc);
 }
 
 void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   // In a method, `c.constraint_mode(0);` and `v.rand_mode(0);` select a
-  // member of the object itself (IEEE 1800-2017 18.8, 18.9).
-  if (this_mode_member(statement.task_name, scope)) {
-    statement.task_name = "this." + statement.task_name;
-  }
+  // member of the object itself (IEEE 1800-2017 18.8, 18.9); the call
+  // conversion below binds it.
+  const bool implicit_member = this_mode_member(statement.task_name, scope);
   // An unqualified `rand_mode(b);` or `constraint_mode(b);` in a method
   // applies to the object itself.
   if (scope.class_owner != nullptr && scope.method_body
@@ -1461,7 +1495,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   // `obj.c.constraint_mode(0);` or `obj.v.rand_mode(0);` selects a
   // constraint block or random property, not an object (18.8, 18.9).
   if (dot != std::string::npos
-      && statement.task_name.find('.') < dot
+      && (statement.task_name.find('.') < dot || implicit_member)
       && (statement.task_name.ends_with(".constraint_mode")
           || statement.task_name.ends_with(".rand_mode"))) {
     Expression call{ExpressionKind::Call,
@@ -1560,10 +1594,10 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
       if ((name == "pre_randomize" || name == "post_randomize")
           && statement.task_arguments.empty()
           && find_methods(*class_identity(*receiver_type), name,
-                 SystemVerilogClassMethodKind::Function)
+                 SystemVerilogClassMethodKind::Function, &*receiver_type)
                  .empty()
           && find_methods(*class_identity(*receiver_type), name,
-                 SystemVerilogClassMethodKind::Task)
+                 SystemVerilogClassMethodKind::Task, &*receiver_type)
                  .empty()) {
         statement.kind = StatementKind::Null;
         statement.task_name.clear();
@@ -1576,7 +1610,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         kind = find_methods(
                    *class_identity(*receiver_type),
                    name,
-                   SystemVerilogClassMethodKind::Task)
+                   SystemVerilogClassMethodKind::Task, &*receiver_type)
                        .empty()
             ? SystemVerilogClassMethodKind::Function
             : SystemVerilogClassMethodKind::Task;
@@ -1590,7 +1624,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           && (builtin_function
               || (scope.class_owner == nullptr
                   && !find_methods(*class_identity(*receiver_type), name,
-                      SystemVerilogClassMethodKind::Function)
+                      SystemVerilogClassMethodKind::Function, &*receiver_type)
                       .empty()))) {
         // A function method called as a statement discards its result
         // (IEEE 1800-2017 13.4.1); outside class methods it lowers as an
@@ -1626,7 +1660,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
           name,
           kind,
           statement.task_arguments.size(),
-          statement.span);
+          statement.span, &*receiver_type);
       // A static task called through a handle runs without an object
       // (IEEE 1800-2017 8.10); the handle only names the class.
       if (match && match->method && match->method->is_static

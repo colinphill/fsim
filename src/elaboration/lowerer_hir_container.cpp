@@ -543,6 +543,27 @@ Lowerer::lower_hir_systemverilog_container_expression(
             return invalid_result();
         }
         std::vector<ContainerPredicateNode> transformation;
+        // Over a multidimensional array the iterator is a row (7.12.3).
+        if (transformed && source->type.fixed
+            && source->type.dimensions.size() > 1U) {
+            const auto transform_id = call.operands[explicit_iterator ? 2U : 1U];
+            const auto reduced = lower_hir_container_reduction_loop(
+                call.text, source->value, source->type, iterator_name,
+                transform_id);
+            if (!reduced) {
+                report(
+                    "FSIM-ELAB-SVREDUCE-004",
+                    "a reduction transformation over array rows must be an "
+                    "integral expression",
+                    span);
+                return invalid_result();
+            }
+            return expected_width != 0U
+                    && expected_width != register_width(*reduced)
+                ? std::optional { resize_register(*reduced, expected_width,
+                      hir_expression_signed(transform_id)) }
+                : reduced;
+        }
         if (transformed) {
             const auto transform_id = call.operands[explicit_iterator ? 2U : 1U];
             const auto diagnostic_count = diagnostics_.size();
@@ -832,8 +853,12 @@ bool Lowerer::lower_hir_container_locator_assignment(
             span);
         return true;
     }
+    // A predicate locator selects string elements as well (7.12.1).
+    const bool string_elements
+        = source->type.element_kind == ContainerElementKind::String;
     if (source->type.element_kind != ContainerElementKind::Packed
-        && source->type.element_kind != ContainerElementKind::Scalar) {
+        && source->type.element_kind != ContainerElementKind::Scalar
+        && !(predicate && string_elements)) {
         report(
             predicate ? "FSIM-ELAB-SVFIND-008"
                       : "FSIM-ELAB-SVLOCATOR-008",
@@ -851,6 +876,8 @@ bool Lowerer::lower_hir_container_locator_assignment(
                 ? target->type->element_width == 32U
                     && target->type->two_state
                     && target->type->signed_elements
+                : string_elements
+                ? target->type->element_kind == ContainerElementKind::String
                 : target->type->element_width == source->type.element_width
                     && target->type->two_state == source->type.two_state
                     && target->type->signed_elements
@@ -887,11 +914,13 @@ bool Lowerer::lower_hir_container_locator_assignment(
     if (predicate) {
         const auto predicate_id = call.operands[explicit_iterator ? 2U : 1U];
         const auto diagnostic_count = diagnostics_.size();
-        const auto lowered = lower_hir_container_expression_graph(
-            predicate_id,
-            iterator_name,
-            source->type,
-            HirContainerExpressionPurpose::locator_predicate);
+        const auto lowered = string_elements
+            ? std::nullopt
+            : lower_hir_container_expression_graph(
+                predicate_id,
+                iterator_name,
+                source->type,
+                HirContainerExpressionPurpose::locator_predicate);
         if (!lowered) {
             // A predicate beyond the bounded graph (a method call, a
             // select, a variable operand) runs as an element loop.
@@ -1014,15 +1043,30 @@ bool Lowerer::lower_hir_container_locator_loop(
         process_.operations.emplace_back(Binary {
             BinaryOperator::subtract_unsigned, index, from_end, one });
     }
-    const auto element = allocate_register(
-        source_type.element_width, element_domain);
-    process_.operations.emplace_back(ContainerRead {
-        element, source, index, true, false, false });
+    const bool string_elements
+        = source_type.element_kind == ContainerElementKind::String;
+    std::optional<RegisterId> element;
+    std::optional<StringRegisterId> text;
+    if (string_elements) {
+        text = allocate_string_register();
+        process_.operations.emplace_back(ContainerStringRead {
+            *text, source, index, true, false, false, { } });
+    } else {
+        element = allocate_register(
+            source_type.element_width, element_domain);
+        process_.operations.emplace_back(ContainerRead {
+            *element, source, index, true, false, false });
+    }
     for (const auto& [id, is_index] : references) {
-        hir_captured_update_indices_.insert_or_assign(
-            id, is_index ? index : element);
-        if (!is_index && source_type.signed_elements) {
-            hir_captured_signed_.insert(id);
+        if (is_index) {
+            hir_captured_update_indices_.insert_or_assign(id, index);
+        } else if (text) {
+            hir_captured_strings_.insert_or_assign(id, *text);
+        } else {
+            hir_captured_update_indices_.insert_or_assign(id, *element);
+            if (source_type.signed_elements) {
+                hir_captured_signed_.insert(id);
+            }
         }
     }
     const auto width = hir_expression_width(predicate, hir_process_scope_)
@@ -1031,6 +1075,7 @@ bool Lowerer::lower_hir_container_locator_loop(
     for (const auto& reference : references) {
         hir_captured_update_indices_.erase(reference.first);
         hir_captured_signed_.erase(reference.first);
+        hir_captured_strings_.erase(reference.first);
     }
     if (!truth) {
         return false;
@@ -1048,8 +1093,14 @@ bool Lowerer::lower_hir_container_locator_loop(
     process_.operations.emplace_back(Branch { *truth, 0U, 0U });
     const auto take = static_cast<InstructionIndex>(
         process_.operations.size());
-    process_.operations.emplace_back(PushContainer {
-        destination, index_result ? index : element, false, std::nullopt });
+    if (text && !index_result) {
+        process_.operations.emplace_back(AppendContainer {
+            destination, false, std::nullopt, std::nullopt, *text });
+    } else {
+        process_.operations.emplace_back(PushContainer {
+            destination, index_result ? index : *element, false,
+            std::nullopt });
+    }
     std::optional<InstructionIndex> leave;
     if (first || last) {
         leave = static_cast<InstructionIndex>(process_.operations.size());
@@ -1234,22 +1285,58 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     const auto element_domain = source_type.two_state
         ? frontend::ValueDomain::Bit2
         : frontend::ValueDomain::Logic4;
+    // Over a multidimensional array each iterator value is a row: the
+    // array without its first dimension (IEEE 1800-2023 7.12.3).
+    std::optional<ContainerType> row_type;
+    std::uint64_t row_count { 1U };
+    std::uint64_t row_elements { 1U };
+    if (source_type.fixed && source_type.dimensions.size() > 1U) {
+        row_type = source_type;
+        row_type->dimensions.erase(row_type->dimensions.begin());
+        row_type->index_left = row_type->dimensions.front().first;
+        row_type->index_right = row_type->dimensions.front().second;
+        const auto& outer = source_type.dimensions.front();
+        row_count = index_distance(outer.first, outer.second) + 1U;
+        for (const auto& dimension : row_type->dimensions) {
+            row_elements *= index_distance(dimension.first, dimension.second)
+                + 1U;
+        }
+    }
+    const auto bind_iterator = [&](const RegisterId index,
+                                   const std::optional<RegisterId> element,
+                                   const std::optional<ContainerRegisterId>
+                                       row) {
+        for (const auto& [id, is_index] : references) {
+            if (is_index) {
+                hir_captured_update_indices_.insert_or_assign(id, index);
+            } else if (row) {
+                hir_captured_containers_.insert_or_assign(
+                    id, HirStaticContainerValue { *row, *row_type });
+            } else {
+                hir_captured_update_indices_.insert_or_assign(id, *element);
+                if (source_type.signed_elements) {
+                    hir_captured_signed_.insert(id);
+                }
+            }
+        }
+    };
+    const auto unbind_iterator = [&]() {
+        for (const auto& reference : references) {
+            hir_captured_update_indices_.erase(reference.first);
+            hir_captured_signed_.erase(reference.first);
+            hir_captured_containers_.erase(reference.first);
+        }
+    };
     // The with expression's width, with the iterator at the element's.
     const auto probe = allocate_register(
         source_type.element_width, element_domain);
-    for (const auto& [id, is_index] : references) {
-        hir_captured_update_indices_.insert_or_assign(id, probe);
-        if (!is_index && source_type.signed_elements) {
-            hir_captured_signed_.insert(id);
-        }
-    }
+    bind_iterator(probe, probe,
+        row_type ? std::optional { allocate_container_register(*row_type) }
+                 : std::nullopt);
     const auto width = hir_expression_width(
         transformation, hir_process_scope_);
     const bool signed_transformation = hir_expression_signed(transformation);
-    for (const auto& reference : references) {
-        hir_captured_update_indices_.erase(reference.first);
-        hir_captured_signed_.erase(reference.first);
-    }
+    unbind_iterator();
     if (!width || *width == 0U) {
         return std::nullopt;
     }
@@ -1264,7 +1351,12 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     }
     process_.operations.emplace_back(LoadConstant { accumulator, initial });
     const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(ContainerSize { size, source });
+    if (row_type) {
+        process_.operations.emplace_back(LoadConstant {
+            size, unsigned_value(row_count, 32U) });
+    } else {
+        process_.operations.emplace_back(ContainerSize { size, source });
+    }
     const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(LoadConstant {
         count, PackedLogic4::from_aval_bval(32U, 0U, 0U) });
@@ -1281,22 +1373,25 @@ std::optional<RegisterId> Lowerer::lower_hir_container_reduction_loop(
     process_.operations.emplace_back(Branch { more, 0U, 0U });
     const auto body = static_cast<InstructionIndex>(
         process_.operations.size());
-    const auto element = allocate_register(
-        source_type.element_width, element_domain);
-    process_.operations.emplace_back(ContainerRead {
-        element, source, count, true, false, false });
-    for (const auto& [id, is_index] : references) {
-        hir_captured_update_indices_.insert_or_assign(
-            id, is_index ? count : element);
-        if (!is_index && source_type.signed_elements) {
-            hir_captured_signed_.insert(id);
-        }
+    if (row_type) {
+        const auto row = allocate_container_register(*row_type);
+        const auto offset = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::multiply_unsigned, offset, count,
+            load_constant(unsigned_value(row_elements, 32U),
+                frontend::ValueDomain::Bit2) });
+        copy_hir_static_container_ordinals(
+            row, *row_type, source, *row_type, { }, offset);
+        bind_iterator(count, std::nullopt, row);
+    } else {
+        const auto element = allocate_register(
+            source_type.element_width, element_domain);
+        process_.operations.emplace_back(ContainerRead {
+            element, source, count, true, false, false });
+        bind_iterator(count, element, std::nullopt);
     }
     auto value = lower_hir_expression(transformation, *width);
-    for (const auto& reference : references) {
-        hir_captured_update_indices_.erase(reference.first);
-        hir_captured_signed_.erase(reference.first);
-    }
+    unbind_iterator();
     if (!value) {
         return std::nullopt;
     }
@@ -1348,6 +1443,23 @@ Lowerer::hir_container_iterator_references(
             && (node.text == iterator_name || node.text == index_name)) {
             references.emplace_back(current.value(), node.text == index_name);
             continue;
+        }
+        // A nested array method whose with clause names the same iterator
+        // hides this one there (IEEE 1800-2023 7.12.4).
+        if (node.kind == semantic::sv::ExpressionKind::call
+            && (is_container_reduction(node.text)
+                || is_container_locator(node.text))
+            && node.operands.size() >= 2U) {
+            const auto inner = node.operands.size() == 3U
+                ? specialized_hir_unit_->find_expression(node.operands[1])
+                : std::nullopt;
+            const auto inner_name = inner && inner->systemverilog != nullptr
+                ? std::string_view { inner->systemverilog->text }
+                : std::string_view { "item" };
+            if (inner_name == iterator_name) {
+                pending.push_back(node.operands.front());
+                continue;
+            }
         }
         pending.insert(
             pending.end(), node.operands.begin(), node.operands.end());

@@ -761,6 +761,8 @@ struct ModeViewInterfaceProfile {
     ModeViewCompositionState composition {
         ModeViewCompositionState::uncomposed
     };
+    // The indication names V'CONVERSE (IEEE 1076-2019 6.5.2, 16.2.6).
+    bool converse { };
 };
 
 // The signature of a subprogram alias (IEEE 1076-2008 4.5.3, 6.6.3): the

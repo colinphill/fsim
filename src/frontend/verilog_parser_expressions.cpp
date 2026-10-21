@@ -349,6 +349,13 @@ Expression VerilogParser::parse_lvalue()
             selected.systemverilog_source_order = source_order;
             return selected;
         }
+        // `C#(0)::b[i]` names a static property of a class
+        // specialization (IEEE 1800-2017 8.25.1).
+        if (lvalue_base->kind == ExpressionKind::Identifier
+            && lvalue_base->systemverilog_class_selection) {
+            selected.systemverilog_source_order = source_order;
+            return selected;
+        }
         rewind(before);
         implicit_net_references_.resize(implicit_reference_count);
     }

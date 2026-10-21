@@ -191,10 +191,19 @@ const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
     if (!scope.valid() || scope.value() >= scopes.size()) {
         return fallback;
     }
+    // Code declared in a package or in $unit, such as a class method,
+    // keeps that scope's time unit (IEEE 1800-2023 3.14.2.3).
     const auto owner = design.find_unit(scopes[scope.value()].unit);
-    return owner && owner->systemverilog != nullptr
-            && owner->systemverilog->kind == semantic::sv::UnitKind::package
-        ? owner->systemverilog
+    if (!owner || owner->systemverilog == nullptr) {
+        return fallback;
+    }
+    // A $unit class without a timeunit or `timescale keeps the caller's.
+    const auto& unit = *owner->systemverilog;
+    return unit.kind == semantic::sv::UnitKind::package
+            || (unit.kind == semantic::sv::UnitKind::compilation_unit
+                && (!unit.compilation.time_unit.empty()
+                    || !unit.compilation.time_precision.empty()))
+        ? &unit
         : fallback;
 }
 

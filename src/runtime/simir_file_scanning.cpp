@@ -533,9 +533,11 @@ namespace {
                         && (text.back() == 'e' || text.back() == 'E')));
                 return digit || decimal_or_exponent || sign;
             }
+            // Floating-point fields have no underscores (IEEE 1800-2023
+            // Table 21-7).
             return (character >= '0' && character <= '9') || character == '.'
                 || character == 'e' || character == 'E'
-                || character == '+' || character == '-' || character == '_';
+                || character == '+' || character == '-';
         }
         if (first && (character == '+' || character == '-'))
             return true;
@@ -545,11 +547,9 @@ namespace {
             return (character >= '0' && character <= '9')
                 || character == '_';
         }
+        // Integer fields accept underscores anywhere (Table 21-7).
         if (character == '_') {
-            const bool first_number_character = first
-                || (text.size() == 1U
-                    && (text.front() == '+' || text.front() == '-'));
-            return !first_number_character;
+            return true;
         }
         if (character == '?' || character == 'x' || character == 'X'
             || character == 'z' || character == 'Z')
@@ -1201,10 +1201,22 @@ InputScanResult scan_formatted_input_impl(
         const bool empty_string_read = vhdl_textio_line
             && conversion.format == InputScanFormat::string
             && conversion.maximum_characters == 0U && complete;
+        // A field of only underscores (and a sign) holds no digit, so it
+        // is not a conversion.
+        const bool integer_field = !vhdl_textio_line
+            && (conversion.format == InputScanFormat::binary
+                || conversion.format == InputScanFormat::octal
+                || conversion.format == InputScanFormat::decimal
+                || conversion.format == InputScanFormat::hexadecimal);
+        const bool digitless = integer_field && !text.empty()
+            && std::ranges::all_of(text, [](const char character) {
+                   return character == '_' || character == '+'
+                       || character == '-';
+               });
         if ((!is_vhdl_textio_sread && text.empty()
                 && !empty_string_read
                 && conversion.format != InputScanFormat::hierarchy)
-            || !complete) {
+            || !complete || digitless) {
             if (eof && result.assignments == 0)
                 result.assignments = -1;
             result.consumed = scanner.consumed();

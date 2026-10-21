@@ -1202,9 +1202,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         at < source.string_keys.size()
                                 && source.string_keys[at] == sought
                             ? source.elements[at]
-                            : PackedLogic4(
-                                  source.type.element_width,
-                                  runtime::Logic4::zero));
+                            : source.associative_default.value_or(
+                                  PackedLogic4(
+                                      source.type.element_width,
+                                      runtime::Logic4::zero)));
                     return 0;
                 }
                 const auto sought = container_operation_key(
@@ -1214,9 +1215,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     at < source.keys.size()
                             && key_equal(source.keys[at], sought)
                         ? source.elements[at]
-                        : PackedLogic4(
-                              source.type.element_width,
-                              runtime::Logic4::zero));
+                        : source.associative_default.value_or(
+                              PackedLogic4(
+                                  source.type.element_width,
+                                  runtime::Logic4::zero)));
                 return 0;
             }
             std::optional<std::size_t> selected_offset;
@@ -1537,7 +1539,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         at < source.string_keys.size()
                                 && source.string_keys[at] == sought
                             ? source.string_elements[at]
-                            : std::string { });
+                            : source.associative_default_text.value_or(
+                                  std::string { }));
                     return 0;
                 }
                 const auto sought = container_operation_key(
@@ -1548,7 +1551,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     at < source.keys.size()
                             && key_equal(source.keys[at], sought)
                         ? source.string_elements[at]
-                        : std::string { });
+                        : source.associative_default_text.value_or(
+                              std::string { }));
                 return 0;
             }
             const auto at = source.type.fixed

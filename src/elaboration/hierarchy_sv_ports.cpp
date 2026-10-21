@@ -2007,6 +2007,22 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     merged.initial_value.width(), pull };
                 merged_info.systemverilog_net_type = formal_net;
             }
+            // A supply port makes the merged net that supply type, whatever
+            // the actual's net type other than the other supply (Table
+            // 23-1).
+            if ((formal_net == "supply0" || formal_net == "supply1")
+                && merged_info.systemverilog_net_type != "supply0"
+                && merged_info.systemverilog_net_type != "supply1") {
+                const auto supply = formal_net == "supply0"
+                    ? Logic4::zero : Logic4::one;
+                merged.implicit_driver = supply;
+                merged.implicit_drive_strength = {
+                    StrengthRank::supply, StrengthRank::supply
+                };
+                merged.initial_value = PackedLogic4 {
+                    merged.initial_value.width(), supply };
+                merged_info.systemverilog_net_type = formal_net;
+            }
         }
         // An output variable port shares its actual variable's storage; the
         // port's declaration initializer is that variable's value at time

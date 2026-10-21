@@ -94,6 +94,28 @@ void Resolver::run() {
         declaration.canonical_identity,
         &declaration,
         {}};
+    for (const auto& import : declaration.compilation_unit_imports) {
+      scope.imports.push_back(&import);
+    }
+    // A class declared in a package sees that package's imports.
+    const auto& identity = declaration.canonical_identity;
+    const auto library_end = identity.find("::");
+    const auto package_end = library_end == std::string::npos
+        ? std::string::npos
+        : identity.find("::", library_end + 2U);
+    if (package_end != std::string::npos) {
+      const auto package = std::string_view{identity}.substr(
+          library_end + 2U, package_end - library_end - 2U);
+      for (const auto& unit : design_.units) {
+        if (unit.kind == UnitKind::SystemVerilogPackage
+            && unit.name == package
+            && effective_library(unit.library) == scope.library) {
+          for (const auto& import : unit.systemverilog_imports) {
+            scope.imports.push_back(&import);
+          }
+        }
+      }
+    }
     resolve_class(declaration, scope);
   }
   for (auto& unit : design_.units) {
@@ -106,6 +128,9 @@ void Resolver::run() {
         {}};
     // Compilation-unit objects are visible to every unit of the file, and
     // the unit's own declarations hide them (IEEE 1800-2017 3.12.1).
+    for (const auto& import : unit.systemverilog_imports) {
+      scope.imports.push_back(&import);
+    }
     for (const auto& import : unit.systemverilog_imports) {
       if (!import.package.starts_with("fsim_unit_")) continue;
       for (const auto& candidate : design_.units) {
@@ -759,6 +784,28 @@ bool Resolver::class_assignable(
   const auto identity = class_identity(*parameter->default_type);
   return identity ? find_class(*identity) : nullptr;
 }
+[[nodiscard]] const SystemVerilogClassDeclaration* Resolver::find_base_class(
+    const SystemVerilogClassDeclaration& declaration,
+    const Type& receiver) const {
+  if (!declaration.base || !declaration.base->declaration_identity.empty()) {
+    return find_base_class(declaration);
+  }
+  // `class C #(type T = D) extends T`: the base is the receiver's actual
+  // for T, and only the default without one (IEEE 1800-2017 8.25).
+  const Scope scope{
+      effective_library(declaration.library),
+      declaration.compilation_unit_identity,
+      declaration.canonical_identity,
+      &declaration,
+      {}};
+  if (const auto actual = class_type_parameter_actual(
+          declaration.base->name, declaration, receiver, scope)) {
+    if (const auto identity = class_identity(*actual)) {
+      if (const auto* base = find_class(*identity)) return base;
+    }
+  }
+  return find_base_class(declaration);
+}
 [[nodiscard]] bool Resolver::has_specialization_dependent_base(
     const std::string_view identity) const {
   std::set<std::string> visited;
@@ -1177,6 +1224,12 @@ void Resolver::resolve_class_scope_constants(
     } else {
       named.named_type = expression.operands.front().text;
       named.spelling = named.named_type;
+      // `C#(6)::t` keeps its actuals (IEEE 1800-2017 8.25.1).
+      if (const auto& selection
+          = expression.operands.front().systemverilog_class_selection) {
+        named.systemverilog_class_parameter_actuals
+            = selection->systemverilog_class_parameter_actuals;
+      }
     }
     if (const auto scoped = resolve_class_scoped_type(named, scope);
         scoped && !scoped->systemverilog_container) {
@@ -1753,8 +1806,11 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         : nullptr);
   }
   // Class local parameters (`localparam int n = W * 2`) follow the
-  // parameters they are computed from (IEEE 1800-2017 8.25, 6.20.4).
-  if (any_value_actual) {
+  // parameters they are computed from (IEEE 1800-2017 8.25, 6.20.4); with
+  // no actual, from the parameters' defaults.
+  const bool any_default = std::ranges::any_of(values,
+      [](const auto& value) { return value.second != nullptr; });
+  if (any_value_actual || any_default) {
     for (const auto& property : selection.declaration->properties) {
       if (property.is_parameter && property.declaration.initializer
           && std::ranges::none_of(values, [&](const auto& value) {
@@ -1770,18 +1826,24 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   // ranges (`localparam type T = logic [W-1:0]`).
   std::map<std::string, Type> type_bindings;
   for (const auto& [name, bound] : bindings) {
-    type_bindings.emplace(name, any_value_actual
+    type_bindings.emplace(name, any_value_actual || any_default
         ? specialize_selected_class_type(bound, values, {})
         : bound);
   }
-  if (any_value_actual || !type_bindings.empty()) {
+  if (any_value_actual || any_default || !type_bindings.empty()) {
     type = specialize_selected_class_type(
         std::move(type), values, type_bindings);
   }
+  // Substitution is simultaneous: a bound type names the outer scope's
+  // parameters, so it is not substituted again (`T` bound to `pool#(T)`).
+  std::set<std::string> replacing;
   const auto substitute = [&](const auto& self, Type retained) -> Type {
     const auto outer_container = retained.systemverilog_container;
+    std::optional<std::string> replaced;
     if (const auto found = bindings.find(retained.named_type);
-        found != bindings.end()) {
+        found != bindings.end() && !replacing.contains(found->first)) {
+      replaced = found->first;
+      replacing.insert(*replaced);
       retained = found->second;
       if (outer_container) retained.systemverilog_container = outer_container;
     }
@@ -1794,16 +1856,19 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     for (auto& actual : retained.systemverilog_class_parameter_actuals) {
       if (actual.type_actual) {
         actual.type_actual = std::make_shared<Type>(
-            self(self, std::move(*actual.type_actual)));
+            self(self, *actual.type_actual));
       } else if (actual.value.kind == ExpressionKind::Identifier) {
         // A type parameter named as an actual (`item#(T)`, parsed as an
         // expression) is the type it is bound to.
         if (const auto found = bindings.find(actual.value.text);
-            found != bindings.end()) {
+            found != bindings.end() && !replacing.contains(found->first)) {
           actual.type_actual = std::make_shared<Type>(found->second);
           actual.value = {};
         }
       }
+    }
+    if (replaced) {
+      replacing.erase(*replaced);
     }
     return retained;
   };
@@ -2243,6 +2308,38 @@ Resolver::resolve_class_name(
     if (separator == std::string::npos) break;
     lexical.resize(separator);
   }
+  // A nested class inherited from a base class (IEEE 1800-2017 8.13, 8.23).
+  if (normalized.find("::") == std::string::npos) {
+    for (lexical = scope.lexical_identity;;) {
+      if (const auto* owner = find_class(lexical)) {
+        std::set<std::string> visited;
+        for (auto base = find_base_class(*owner);
+             base != nullptr
+             && visited.insert(base->canonical_identity).second;
+             base = find_base_class(*base)) {
+          if (const auto nested = find_class(
+                  base->canonical_identity + "::" + normalized)) {
+            return {nested};
+          }
+        }
+      }
+      const auto separator = lexical.rfind("::");
+      if (separator == std::string::npos) break;
+      lexical.resize(separator);
+    }
+  }
+  // A class made visible by a package import (IEEE 1800-2017 26.3).
+  if (normalized.find("::") == std::string::npos) {
+    append([&](const std::string& identity, const auto& declaration) {
+      return declaration.name == normalized
+          && std::ranges::any_of(scope.imports, [&](const auto* import) {
+               return (import->name.empty() || import->name == normalized)
+                   && identity.ends_with(
+                       "::" + import->package + "::" + normalized);
+             });
+    });
+    if (!matches.empty()) return matches;
+  }
   append([&](const std::string& identity, const auto& declaration) {
     if (declaration.library != scope.library) return false;
     if (normalized.find("::") != std::string::npos) {
@@ -2250,9 +2347,13 @@ Resolver::resolve_class_name(
           && identity.size() > normalized.size()
           && identity[identity.size() - normalized.size() - 1U] == ':';
     }
+    // Otherwise only the compilation unit's own `$unit` classes are
+    // visible; a package class needs an import or `pkg::` (IEEE 1800-2017
+    // 26.3, 3.12.1).
     return declaration.name == normalized
         && declaration.compilation_unit_identity
-            == scope.compilation_unit_identity;
+            == scope.compilation_unit_identity
+        && identity.starts_with(scope.library + "::$unit");
   });
   // A typedef of a class (`typedef C #(int) K;`) names that class in a
   // class scope resolution `K::f()` (IEEE 1800-2017 8.23, 6.18).
@@ -2279,9 +2380,15 @@ Resolver::resolve_class_name(
 }
 [[nodiscard]] PropertyMatch Resolver::find_property(
     const std::string_view identity,
-    const std::string_view name) const {
+    const std::string_view name,
+    const Type* receiver) const {
   std::set<std::string> visited;
   auto current = find_class(identity);
+  Type self;
+  if (receiver == nullptr) {
+    self.systemverilog_class_declaration = std::string{identity};
+    receiver = &self;
+  }
   while (current != nullptr
          && visited.insert(current->canonical_identity).second) {
     const auto property = std::ranges::find(
@@ -2293,7 +2400,7 @@ Resolver::resolve_class_name(
     if (property != current->properties.end()) {
       return {&*property, current};
     }
-    current = find_base_class(*current);
+    current = find_base_class(*current, *receiver);
   }
   return {};
 }
@@ -2351,10 +2458,16 @@ void Resolver::retain_result_type(
 [[nodiscard]] std::vector<MethodMatch> Resolver::find_methods(
     const std::string_view identity,
     const std::string_view name,
-    const SystemVerilogClassMethodKind kind) const {
+    const SystemVerilogClassMethodKind kind,
+    const Type* receiver) const {
   std::set<std::string> visited;
   std::vector<MethodMatch> matches;
   auto current = find_class(identity);
+  Type self;
+  if (receiver == nullptr) {
+    self.systemverilog_class_declaration = std::string{identity};
+    receiver = &self;
+  }
   while (current != nullptr
          && visited.insert(current->canonical_identity).second) {
     for (const auto& method : current->methods) {
@@ -2365,7 +2478,7 @@ void Resolver::retain_result_type(
     if (!matches.empty() || kind == SystemVerilogClassMethodKind::Constructor) {
       break;
     }
-    current = find_base_class(*current);
+    current = find_base_class(*current, *receiver);
   }
   if (!matches.empty() || kind == SystemVerilogClassMethodKind::Constructor) {
     return matches;
@@ -2413,6 +2526,19 @@ void Resolver::retain_result_type(
       && scope.class_owner->base) {
     if (const auto base = find_base_class(*scope.class_owner)) {
       auto type = class_type(*base);
+      // `super` is the base specialization named in `extends B #(...)`
+      // (IEEE 1800-2017 8.15, 8.25).
+      for (const auto& actual : scope.class_owner->base->parameter_actuals) {
+        SystemVerilogClassTypeActual converted;
+        if (!actual.name.empty()) converted.name = actual.name;
+        converted.value = actual.value;
+        if (actual.type_actual) {
+          converted.type_actual = std::make_shared<Type>(*actual.type_actual);
+        }
+        converted.span = actual.span;
+        type.systemverilog_class_parameter_actuals.push_back(
+            std::move(converted));
+      }
       expression.nominal_type = type.systemverilog_class_declaration;
       return type;
     }
@@ -2643,7 +2769,7 @@ void Resolver::retain_result_type(
     }
     if (!receiver_type || !class_identity(*receiver_type)) return std::nullopt;
     const auto member = expression.text.substr(dot + 1U);
-    const auto match = find_property(*class_identity(*receiver_type), member);
+    const auto match = find_property(*class_identity(*receiver_type), member, &*receiver_type);
     if (match.property
         && !check_member_visibility(match, scope, member, expression.span)) {
       return std::nullopt;
@@ -2701,7 +2827,7 @@ void Resolver::retain_result_type(
       // (IEEE 1800-2017 13.5.5, 18.6.1).
       if (member == "randomize"
           && find_methods(*class_identity(*receiver_type), member,
-                 SystemVerilogClassMethodKind::Function)
+                 SystemVerilogClassMethodKind::Function, &*receiver_type)
                  .empty()) {
         expression.kind = ExpressionKind::Call;
         expression.text = ".randomize";
@@ -2714,7 +2840,7 @@ void Resolver::retain_result_type(
           member,
           SystemVerilogClassMethodKind::Function,
           0U,
-          expression.span);
+          expression.span, &*receiver_type);
       if (method && method->method) {
         expression.kind = ExpressionKind::Call;
         if (method->method->is_static) {

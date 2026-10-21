@@ -414,6 +414,9 @@ def python_literal_list(source: str, keyword: str) -> list[str] | None:
             return str(node.value)
         if isinstance(node, (ast.Name, ast.Attribute)):
             key = ast.unparse(node)
+            # driver.py runs from test_regress, where the tests are in t/.
+            if key == "test.t_dir":
+                return "t"
             if key not in names:
                 raise ValueError(key)
             return str(names[key])
@@ -436,9 +439,10 @@ def python_literal_list(source: str, keyword: str) -> list[str] | None:
         return None
 
 
-def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
+def verilator_library_files(top_file: Path, tdir: Path,
+                            extensions: Iterable[str] = (".v", ".sv")) -> list[Path]:
     """Files driver.py's `-y t/` would load: a module or interface used but
-    not declared is read from t/<name>.v."""
+    not declared is read from t/<name>.v, or with a `+libext+` extension."""
     unit_re = re.compile(r"^\s*(?:module|macromodule|interface|program)\s+"
                          r"(?:automatic\s+|static\s+)?([A-Za-z_]\w*)", re.M)
     loaded: list[Path] = []
@@ -453,7 +457,7 @@ def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
         for name in sorted(set(re.findall(r"\b([A-Za-z_]\w*)\b", text))):
             if name in declared or len(name) > 100:
                 continue
-            for extension in (".v", ".sv"):
+            for extension in extensions:
                 candidate = tdir / f"{name}{extension}"
                 if candidate == top_file or candidate in loaded \
                         or not candidate.is_file():
@@ -493,6 +497,10 @@ ICARUS_NONSTANDARD = {
     "sv_macro3b": "macro name formed by `` pasting (IEEE 1800-2017 22.5.1)",
     "br_gh105a": "directive produced by a macro expansion (IEEE 1800-2017 22.5.1)",
     "pr2202706c": "Icarus plusarg value syntax and real targets for %d",
+    # The default time unit and precision are implementation-specific (IEEE
+    # 1800-2023 3.14.2.3); the expected %t text assumes Icarus's 1 s.
+    "sformatf": "expects %t of a time literal under Icarus's default 1 s "
+        "time unit (IEEE 1800-2023 3.14.2.3)",
     # A timing-check event names a module input or inout port
     # (IEEE 1364-2005 A.7.5.3, specify_terminal_descriptor).
     "pr1520314": "timing-check data event on an internal net",
@@ -673,6 +681,36 @@ VERILATOR_NONSTANDARD = {
     # nonblocking update scheduled in the same time step as the $finish.
     "t_scheduling_many_clocks": "counts a nonblocking update of the time "
         "step that calls $finish, which IEEE 1800-2017 20.2 does not run",
+    # IEEE 1800-2023 21.2.1.3: a format specification has an optional field
+    # width (or 0) and no flags; `%-d` and `%-0d` are C-style extensions.
+    "t_display": "uses the left-justify format flag (%-d, %-0d), which "
+        "IEEE 1800-2023 21.2.1.3 does not define",
+    "t_display_noopt": "uses the left-justify format flag (%-d, %-0d), "
+        "which IEEE 1800-2023 21.2.1.3 does not define",
+    # IEEE 1800-2023 12.7.3, A.9.3: foreach names an array by a
+    # hierarchical identifier with constant bit-selects, then a list of
+    # index variable identifiers.
+    # IEEE 1800-2023 A.9.3, 11.2.1: a hierarchical-name select is a
+    # constant expression, which cannot reach through a module instance.
+    "t_select_crazy": "selects a hierarchical name with a parameter of "
+        "another instance (bar_inst.THE_LP), not a constant expression",
+    # IEEE 1800-2023 25.9: a virtual interface takes an interface instance,
+    # not an array of instances.
+    "t_interface_dearray": "assigns an array of interface instances to a "
+        "virtual-interface array (IEEE 1800-2023 25.9)",
+    # IEEE 1800-2023 7.9.9: associative arrays assign only with the same
+    # index type; int and bit [31:0] differ in signedness (6.22.2).
+    "t_cast_types": "assigns associative arrays with int and bit [31:0] "
+        "index types (IEEE 1800-2023 7.9.9)",
+    "t_struct_unpacked": "compares %p text against Verilator's hexadecimal "
+        "members",
+    "t_stream_unpack": "compares %p text against Verilator's spelling",
+    "t_assocsel_sideeffect": "uses a constant index among the foreach loop "
+        "variables (dict2d[0][b]), which IEEE 1800-2023 12.7.3 does not "
+        "allow",
+    "t_foreach_sideeff_uvm": "names the foreach array through a loop-variable "
+        "select (blks[i].reg_files), not a constant bit-select (IEEE "
+        "1800-2023 A.9.3)",
     # IEEE 1800-2017 20.4.2: $timeformat takes all four arguments or none.
     "t_display_time": "calls $timeformat with one to three or empty "
         "arguments; IEEE 1800-2017 20.4.2 requires all four or none",
@@ -739,6 +777,8 @@ VERILATOR_NONSTANDARD = {
     # against Verilator's own spelling.
     "t_queue_slice": "compares %p text against Verilator's element spacing",
     "t_queue": "compares %p text against Verilator's element spacing",
+    "t_assoc": "compares %p text against Verilator's hexadecimal index "
+        "labels",
     # A synchronous drive targets a clockvar expression, not a
     # concatenation (IEEE 1800-2023 14.16); the test notes this.
     "t_clocking_drive_concat": "drives a concatenation of clockvars",
@@ -1135,15 +1175,27 @@ def verilator_cases(root: Path) -> list[Case]:
                 library_files.setdefault(current_library, []).append(
                     str(tdir.parent / token))
         # Source files the driver passes in v_flags (t_sv_cpu's design
-        # files) are part of the compilation.
-        for flag in flags:
+        # files) or verilator_flags2 are part of the compilation.
+        source_flags = flags + [token for token in flag_tokens
+                                if token.startswith("t/") and current_library is None]
+        for flag in source_flags:
             for token in flag.split():
                 if token.startswith("t/") and token.endswith((".v", ".sv")) \
                         and (tdir.parent / token).is_file() \
                         and (tdir.parent / token) != top_file:
                     compile_args.append(str(tdir.parent / token))
         compile_args.append(str(top_file))
-        compile_args += [str(f) for f in verilator_library_files(top_file, tdir)]
+        # `+libext+.a+.b` adds library file extensions to the default .v
+        # and .sv.
+        library_extensions = [".v", ".sv"]
+        for flag in flags:
+            for token in flag.split():
+                if token.startswith("+libext+"):
+                    library_extensions += [f"{piece}" for piece in
+                                           token[len("+libext+"):].split("+")
+                                           if piece.startswith(".")]
+        compile_args += [str(f) for f in verilator_library_files(
+            top_file, tdir, library_extensions)]
         shell = ""
         if explicit_top and explicit_top != "t":
             if explicit_top in declared and re.search(
@@ -1164,7 +1216,15 @@ def verilator_cases(root: Path) -> list[Case]:
                     tops = [cell.split(".")[-1] for cell in cells.group(1).split()]
         elif use_shell:
             compile_args.append("verilator_shell.sv")
-            tops = ["top"]
+            # Another module the source never instantiates is a top-level
+            # module too (IEEE 1800-2017 23.3.1). The text scan does not
+            # evaluate conditional compilation or generate names, so only a
+            # module without ports or parameters is taken as an extra top.
+            tops = ["top"] + [
+                module for module in sv_root_modules([top_text])
+                if module != "t" and re.search(
+                    r"\b(?:module|program)\s+" + re.escape(module)
+                    + r"\s*(?:;|\(\s*\)\s*;)", top_text)]
             shell = verilator_shell(top_text, sim_time=sim_time)
         else:
             tops = sv_root_modules([top_text])
@@ -1665,6 +1725,13 @@ NVC_NONSTANDARD = {
     # The `nvc` library (random, sim_pkg, cover_pkg) is nvc's own.
     **{name: "uses nvc's own library packages"
        for name in ("cover25", "issue1218", "rand1", "wait24")},
+    # Run under the testlist's VHDL-1993/2000 default, these use later
+    # standards' features.
+    "issue677": "uses UNAFFECTED in a sequential signal assignment, which "
+        "needs VHDL-2008 (IEEE 1076-2008 10.5.2.1); the test runs as "
+        "VHDL-1993",
+    "issue589": "declares an access parameter on a protected method, which "
+        "needs VHDL-2019 (IEEE 1076-2019 5.6.2); the test runs as VHDL-2000",
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",
     "wide7": "uses ~& and ~| as binary operators",
@@ -1773,6 +1840,37 @@ def nvc_cases(root: Path) -> list[Case]:
     return cases
 
 
+NVC_GOLD_PREFIX_RE = re.compile(
+    r"^(?:(?:Note|Warning|Error|Failure):\s*)?"
+    r"(?:(?:\d+(?:\.\d+)?[munpf]?s\+\d+|\(init\)):\s*)?"
+    r"(?:(?:Assertion|Report) (?:Note|Warning|Error|Failure):\s*)?")
+# nvc's backtraces, source excerpts and STOP/FINISH notices in gold files.
+NVC_GOLD_TOOL_LINE_RE = re.compile(
+    r"^(?:\*\*|(?:Function|Procedure|Process|Package|Entity) \S|\s*\d*\s*\||\s*\^"
+    r"|(?:\d+(?:\.\d+)?[munpf]?s\+\d+:\s*)?(?:STOP|FINISH|\$finish|\$stop) called)")
+# Gold output that is nvc's own text, not language-defined output.
+NVC_GOLD_NONSTANDARD = {
+    "stop1": "nvc's STOP message text (std.env.stop, IEEE 1076-2008 16.5)",
+    "issue597": "nvc's own driver-source notes at initialization",
+    "assert6": "nvc's assertion operand hints",
+    "issue700": "nvc's glyphs for control characters in output",
+    # An unlabeled process is an empty path element (IEEE 1076-2008
+    # 16.2.5); nvc's gold omits it.
+    "attr19": "nvc omits the unlabeled process element of INSTANCE_NAME",
+    # The default Verilog time unit is implementation-defined (IEEE
+    # 1800-2017 3.14.2.3).
+    "ivtest2": "nvc's default time unit",
+    # T'IMAGE of a floating-point value has implementation-defined digits
+    # and notation (IEEE 1076-2008 16.2.2, 5.2.5.1).
+    "real1": "nvc's floating-point image format",
+    "real3": "nvc's floating-point image format",
+    "real10": "nvc's floating-point image format",
+    # The Synopsys std_logic_arith package is not an IEEE package; its
+    # warnings and nvc's call-stack lines are tool text.
+    "debug1": "nvc's call stack under Synopsys std_logic_arith warnings",
+    "synopsys2": "nvc's call stack under Synopsys std_logic_arith warnings",
+}
+
 VUNIT_RUN_RE = re.compile(r'\brun\s*\(\s*"([^"]+)"\s*\)', re.I)
 
 # Testbenches whose body is an unconditional `error(...)` placeholder for a
@@ -1781,6 +1879,21 @@ VHDL_COMPLIANCE_SKIP = {
     f"vhdl_2019/{name}.vhd": "out of scope: placeholder testbench that "
         "reports an unconditional error"
     for name in ("tb_014", "tb_014a", "tb_023")
+} | {
+    # IEEE 1076-2019 7.3.3: an entity aspect without an architecture names
+    # the most recently analyzed one; these entities have none.
+    "vhdl_2019/tb_016.vhd": "out of scope: instantiates entities that have "
+        "no architecture (IEEE 1076-2019 7.3.3)",
+    "vhdl_2019/tb_086.vhd": "out of scope: instantiates an entity that has "
+        "no architecture and declares a procedure without a body (IEEE "
+        "1076-2019 7.3.3)",
+    # IEEE 1076-2019 3.3.2, 11.1: PSL declarations are block declarative
+    # items, not concurrent statements.
+    "vhdl_2019/tb_043.vhd": "out of scope: declares PSL property and sequence "
+        "among the concurrent statements (IEEE 1076-2019 3.3.2)",
+    # IEEE 1076-2019 5.6.1: a protected type declaration needs a body.
+    "vhdl_2019/tb_034.vhd": "out of scope: declares a protected type without "
+        "a protected type body (IEEE 1076-2019 5.6.1)",
 }
 
 
@@ -2116,6 +2229,22 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if case.checker == "vhdl_clean":
         if hdl_errors:
             return "fail", "error assertion: " + hdl_errors[0][-160:]
+        # nvc's gold tests (run_regr.c) require each gold line, in order,
+        # within some output line. The `<time>+<delta>:` and `Assertion
+        # <severity>:` prefixes are nvc's report format and `**` lines its
+        # tool messages, so only the message text is compared.
+        gold = case.checker_data.get("nvc_gold")
+        if gold and case.id not in NVC_GOLD_NONSTANDARD:
+            remaining = iter(sim_output.splitlines())
+            for number, line in enumerate(
+                    read_text(Path(gold)).splitlines(), start=1):
+                if NVC_GOLD_TOOL_LINE_RE.match(line):
+                    continue
+                text = NVC_GOLD_PREFIX_RE.sub("", line.rstrip())
+                if not text.strip():
+                    continue
+                if not any(text in produced for produced in remaining):
+                    return "fail", f"output has no match for gold line {number}"
         # GHDL's VESTs harness (testsuite.sh) records OUTPUT= files but never
         # compares them: the iofiles are inputs for the read tests, and a
         # typed file's representation is implementation defined.

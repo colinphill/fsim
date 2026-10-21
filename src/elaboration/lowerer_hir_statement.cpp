@@ -449,9 +449,12 @@ Lowerer::lower_hir_container_assignment_pattern(
                 for (std::size_t slot { }; slot < values.size(); ++slot) {
                     named[slot] = values[slot].has_value();
                 }
+                // A type key sets each element of an array member whose
+                // element type it names, as a default does.
                 for (const auto& [slot, typed_value] : type_keyed) {
                     if (!named[slot]) {
                         values[slot] = typed_value;
+                        defaulted[slot] = true;
                     }
                 }
                 for (std::size_t slot { }; slot < values.size(); ++slot) {
@@ -483,6 +486,45 @@ Lowerer::lower_hir_container_assignment_pattern(
             const auto& member_type = aggregate.element_types[member];
             auto member_path = path;
             member_path.push_back(static_cast<std::uint32_t>(member));
+            // Each structure of an array member takes the inherited keys
+            // or the default (IEEE 1800-2017 10.9.2).
+            if (member_type.element_kind == ContainerElementKind::Aggregate
+                && !member_type.aggregate_value && member_type.fixed
+                && !member_type.dimensions.empty()
+                && (inherit[member] || defaulted[member])) {
+                std::size_t count { 1U };
+                for (const auto& [left, right] : member_type.dimensions) {
+                    count *= static_cast<std::size_t>(
+                        index_distance(left, right) + 1U);
+                }
+                constexpr std::size_t maximum_elements { 4096U };
+                if (count > maximum_elements) {
+                    return false;
+                }
+                const auto filled = allocate_container_register(member_type);
+                const bool linear = member_type.dimensions.size() > 1U;
+                const auto [left, right] = member_type.dimensions.front();
+                for (std::size_t position { }; position < count; ++position) {
+                    const auto at = linear ? static_cast<std::int64_t>(position)
+                        : left >= right
+                        ? static_cast<std::int64_t>(left)
+                            - static_cast<std::int64_t>(position)
+                        : static_cast<std::int64_t>(left)
+                            + static_cast<std::int64_t>(position);
+                    if (!emit_aggregate_value(*values[member], member_type,
+                            filled,
+                            load_integer(at, 32U, frontend::ValueDomain::Integer),
+                            { }, true, linear, inherit[member])) {
+                        return false;
+                    }
+                }
+                ContainerElementWrite write {
+                    output, index, filled, signed_index,
+                    std::move(member_path) };
+                write.linear_index = linear_index;
+                process_.operations.emplace_back(std::move(write));
+                continue;
+            }
             if (member_type.element_kind
                 == ContainerElementKind::Aggregate) {
                 // A default of the substructure's own type sets it whole.
@@ -662,6 +704,9 @@ Lowerer::lower_hir_container_assignment_pattern(
             ? std::optional { element_target->output }
             : std::nullopt;
     }
+    // Set while the `default:` member of an associative pattern is
+    // emitted: it becomes the value of every missing key (7.9.11).
+    bool emitting_default { };
     const auto emit_value = [&](const semantic::ExpressionId value_id,
                                 const std::int64_t declared_index,
                                 const std::uint64_t linear_index,
@@ -730,6 +775,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                 target.type->fixed && dimensions.size() > 1U,
                 target.type->string_indices,
                 { },
+                emitting_default,
             });
             return true;
         }
@@ -772,6 +818,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                 : true,
             target.type->fixed && dimensions.size() > 1U,
             string_key.has_value(),
+            emitting_default,
         });
         return true;
     };
@@ -787,10 +834,31 @@ Lowerer::lower_hir_container_assignment_pattern(
 
     if (!target.type->fixed) {
         const auto& source = *root->systemverilog;
+        // `default:` gives an associative array the value its missing
+        // keys read as; it adds no element (IEEE 1800-2017 7.9.11).
+        const auto emit_default = [&](
+            const semantic::sv::AssignmentPatternAssociation& association) {
+            if (aggregate_elements || container_elements) {
+                return false;
+            }
+            emitting_default = true;
+            const auto emitted = target.type->string_indices
+                ? emit_value(association.value, 0, 0U, false,
+                      allocate_string_register())
+                : emit_value(association.value, 0, 0U, false);
+            emitting_default = false;
+            return emitted;
+        };
         // String keys are locally constant string expressions (IEEE
         // 1800-2017 10.9.1, 7.8.1).
         if (target.type->associative && target.type->string_indices) {
             for (const auto& association : source.associations) {
+                if (association.choice_spelling == "default") {
+                    if (!emit_default(association)) {
+                        return std::nullopt;
+                    }
+                    continue;
+                }
                 if (association.choice_spelling != "@key"
                     || association.choices.size() != 1U) {
                     report(
@@ -848,6 +916,13 @@ Lowerer::lower_hir_container_assignment_pattern(
             ordinal < source.associations.size(); ++ordinal) {
             const auto& association = source.associations[ordinal];
             auto index_value = static_cast<std::int64_t>(ordinal);
+            if (target.type->associative
+                && association.choice_spelling == "default") {
+                if (!emit_default(association)) {
+                    return std::nullopt;
+                }
+                continue;
+            }
             if (target.type->associative) {
                 if (association.choice_spelling != "@key"
                     || association.choices.size() != 1U) {
@@ -1495,6 +1570,117 @@ void Lowerer::emit_hir_vhdl_string_length_check(
         failure,
         UnknownBranchPolicy::when_false,
     };
+}
+
+bool Lowerer::lower_hir_queue_push(
+    const runtime::simir::ContainerRegisterId target,
+    const runtime::simir::ContainerType& type,
+    const semantic::DeclarationId declaration,
+    const semantic::ExpressionId value,
+    const bool front,
+    const std::optional<semantic::ExpressionId> insertion_index)
+{
+    // A queue of arrays or structures appends one unpacked element: it is
+    // written at index size() (7.10.2).
+    if ((type.element_kind == ContainerElementKind::Container
+            || type.element_kind == ContainerElementKind::Aggregate)
+        && !insertion_index) {
+        // The element value takes the element type, so an assignment
+        // pattern or cast is built in place (10.9).
+        const auto element_type
+            = runtime::simir::nested_element_container_type(type);
+        const auto element = element_type
+            ? lower_hir_static_container_actual(
+                  value, *element_type, declaration)
+            : std::nullopt;
+        if (!element) {
+            return false;
+        }
+        if (!front) {
+            const auto size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize { size, target });
+            process_.operations.emplace_back(ContainerElementWrite {
+                target, size, *element, false, { } });
+            return true;
+        }
+        // The new element, followed by the old ones.
+        const auto built = allocate_container_register(type);
+        const auto zero = load_constant(
+            unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(AppendContainer {
+            built, true, { }, { }, { } });
+        process_.operations.emplace_back(ContainerElementWrite {
+            built, zero, *element, false, { } });
+        process_.operations.emplace_back(AppendContainer {
+            built, false, target, { }, { } });
+        process_.operations.emplace_back(
+            CopyContainerRegister { target, built });
+        return true;
+    }
+    // A queue of strings appends the string; push_front builds the string
+    // followed by the old elements (7.10.2).
+    if (type.element_kind == ContainerElementKind::String
+        && !insertion_index) {
+        const auto text = lower_hir_string_expression(value);
+        if (!text) {
+            return false;
+        }
+        if (!front) {
+            process_.operations.emplace_back(AppendContainer {
+                target, false, { }, { }, *text });
+            return true;
+        }
+        const auto built = allocate_container_register(type);
+        process_.operations.emplace_back(AppendContainer {
+            built, true, { }, { }, { } });
+        process_.operations.emplace_back(AppendContainer {
+            built, false, { }, { }, *text });
+        process_.operations.emplace_back(AppendContainer {
+            built, false, target, { }, { } });
+        process_.operations.emplace_back(
+            CopyContainerRegister { target, built });
+        return true;
+    }
+    const auto value_expression
+        = specialized_hir_unit_->find_expression(value);
+    const auto element_type = hir_container_leaf_type(
+        *specialized_hir_unit_, declaration, hir_generic_binding_frames_);
+    const auto packed_pattern = element_type && value_expression
+        && value_expression->systemverilog != nullptr
+        && (value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::assignment_pattern
+            || (value_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && value_expression->systemverilog->text.starts_with(
+                    "@sv-tagged:")));
+    // The pushed value is converted as in an assignment to an element.
+    auto pushed_value = packed_pattern
+        ? lower_hir_systemverilog_packed_pattern(
+              value, *element_type, type.element_width)
+        : lower_hir_scalar_converted_value(
+              value, type.element_width, type.scalar_kind);
+    if (!pushed_value) {
+        return false;
+    }
+    if (register_width(*pushed_value) != type.element_width) {
+        pushed_value = resize_register(
+            *pushed_value, type.element_width, hir_expression_signed(value));
+    }
+    std::optional<RegisterId> index;
+    if (insertion_index) {
+        index = lower_hir_expression(*insertion_index, 32U);
+        if (!index) {
+            return false;
+        }
+        if (register_width(*index) != 32U) {
+            index = resize_register(
+                *index, 32U, hir_expression_signed(*insertion_index));
+        }
+    }
+    process_.operations.emplace_back(PushContainer {
+        target, *pushed_value, front, index });
+    return true;
 }
 
 bool Lowerer::lower_hir_systemverilog_event_array_dispatch(
@@ -6084,6 +6270,129 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return lower_hir_container_locator_assignment(
                 *target, *value);
         }
+        // `q[a:b] = s` writes s's elements over the queue from index
+        // max(a, 0); a slice target takes as many elements as the source
+        // has (IEEE 1800-2017 7.6, 7.10.1).
+        if (const auto queue_slice = [&]()
+                -> std::optional<HirContainerObjectBinding> {
+                if (target_expression->systemverilog == nullptr
+                    || target_expression->systemverilog->kind
+                        != semantic::sv::ExpressionKind::slice
+                    || target_expression->systemverilog->text != ":"
+                    || target_expression->systemverilog->operands.size()
+                        != 3U) {
+                    return std::nullopt;
+                }
+                auto base = hir_container_object_binding(
+                    target_expression->systemverilog->operands.front());
+                if (!base || base->type == nullptr || !base->type->queue
+                    || (base->type->element_kind
+                            != ContainerElementKind::Packed
+                        && base->type->element_kind
+                            != ContainerElementKind::Scalar
+                        && base->type->element_kind
+                            != ContainerElementKind::String)) {
+                    return std::nullopt;
+                }
+                return base;
+            }()) {
+            const auto& input = *statement->systemverilog;
+            if (signal_assignment || nonblocking
+                || input.assignment_kind
+                    != semantic::sv::AssignmentKind::blocking
+                || input.assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || input.delay) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto& type = *queue_slice->type;
+            const auto diagnostics_before = diagnostics_.size();
+            const auto source = lower_hir_static_container_actual(
+                *value, type, queue_slice->declaration);
+            if (!source) {
+                return diagnostics_.size() != diagnostics_before
+                    || assignment_rejected(__LINE__);
+            }
+            const auto queue = queue_slice->local
+                ? *queue_slice->local
+                : allocate_container_register(type);
+            if (!queue_slice->local) {
+                process_.operations.emplace_back(
+                    ReadContainerObject { queue, queue_slice->object });
+            }
+            const auto size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize { size, queue });
+            const auto one = load_constant(
+                unsigned_value(1U, 32U), frontend::ValueDomain::Bit2);
+            const auto last = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::subtract_unsigned, last, size, one });
+            const HirQueueLastIndexRestore restore_last {
+                hir_queue_last_index_, hir_queue_last_index_
+            };
+            hir_queue_last_index_ = last;
+            const auto low = lower_hir_expression(
+                target_expression->systemverilog->operands[1], 32U);
+            if (!low) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto zero = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+            const auto low_negative = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_signed, low_negative, *low, zero });
+            const auto index = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ConditionalSelect {
+                index, low_negative, zero, *low });
+            const auto count = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize { count, *source });
+            const auto ordinal = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(CopyRegister { ordinal, zero });
+            const auto loop = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto within = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_signed, within, ordinal, count });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                within, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            if (type.element_kind == ContainerElementKind::String) {
+                const auto text = allocate_string_register();
+                process_.operations.emplace_back(ContainerStringRead {
+                    text, *source, ordinal, true, false, false, { } });
+                process_.operations.emplace_back(ContainerStringWrite {
+                    queue, index, text, true, false, false, { } });
+            } else {
+                const auto element = allocate_register(type.element_width,
+                    type.two_state ? frontend::ValueDomain::Bit2
+                                   : frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(ContainerRead {
+                    element, *source, ordinal, true, false, false });
+                process_.operations.emplace_back(ContainerWrite {
+                    queue, index, element, true, false, false });
+            }
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::add_unsigned, index, index, one });
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::add_unsigned, ordinal, ordinal, one });
+            process_.operations.emplace_back(Jump { loop });
+            process_.operations[branch] = Branch { within, branch + 1U,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+            if (!queue_slice->local) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    queue_slice->object, queue, std::nullopt });
+            }
+            return true;
+        }
         const auto target_static_type
             = hir_static_container_expression_type(*target);
         const auto value_static_type
@@ -6261,27 +6570,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     : lower_hir_static_container_actual(
                           id, *target_static_type);
             };
-            std::optional<ContainerRegisterId> row;
-            const auto& value_source = *container_value_expression->systemverilog;
-            if (value_source.kind == semantic::sv::ExpressionKind::call
-                && value_source.operands.size() == 3U) {
-                // `sel ? '{...} : '{...}`: each alternative takes the row's
-                // type (11.4.11).
-                auto condition = lower_hir_expression(
-                    value_source.operands.front(), 1U);
-                const auto when_true = row_value(value_source.operands[1]);
-                const auto when_false = row_value(value_source.operands[2]);
-                if (condition && when_true && when_false) {
-                    if (register_width(*condition) != 1U) {
-                        condition = resize_register(*condition, 1U, false);
-                    }
-                    row = allocate_container_register(*target_static_type);
-                    process_.operations.emplace_back(ConditionalContainerSelect {
-                        *row, *condition, *when_true, *when_false });
-                }
-            } else {
-                row = row_value(*value);
-            }
+            // `sel ? '{...} : '{...}`: each alternative takes the row's
+            // type (11.4.11).
+            const auto row = row_value(*value);
             if (!row) {
                 return diagnostics_.size() != diagnostics_before;
             }
@@ -7930,6 +8221,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto& input = *statement->systemverilog;
             const auto width = hir_expression_width(
                 *target, hir_process_scope_);
+            // A member of an instance elaborated later (`{s.a, s.b} = v`)
+            // is bound when the statement is lowered again (IEEE 1800-2023
+            // 23.6, 25.5).
+            if (!width) {
+                for (const auto operand
+                    : target_expression->systemverilog->operands) {
+                    const auto item
+                        = specialized_hir_unit_->find_expression(operand);
+                    if (item && item->systemverilog != nullptr
+                        && item->systemverilog->kind
+                            == semantic::sv::ExpressionKind::name
+                        && item->systemverilog->text.find('.')
+                            != std::string::npos) {
+                        hierarchical_reference_missed_ = true;
+                    }
+                }
+            }
             const bool continuous_assignment = signal_assignment
                 && input.assignment_kind
                     == semantic::sv::AssignmentKind::continuous;
@@ -9424,21 +9732,35 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
-        if (declaration && statement->systemverilog != nullptr
-            && hir_string_binding(
-                *declaration, hir_process_scope_, true)) {
+        // `s <= v` of a whole static string variable (IEEE 1800-2017
+        // 10.4.2); the update is published in the NBA region.
+        bool string_nonblocking { };
+        if (declaration && statement->systemverilog != nullptr) {
+            if (const auto string_binding = hir_string_binding(
+                    *declaration, hir_process_scope_, true)) {
             const auto& input = *statement->systemverilog;
-            if (signal_assignment || nonblocking
-                || input.assignment_kind
-                    != semantic::sv::AssignmentKind::blocking
-                || input.assignment_control
-                    != semantic::sv::AssignmentControl::none
-                || input.delay) {
+            string_nonblocking = nonblocking && !signal_assignment
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking
+                && input.assignment_control
+                    == semantic::sv::AssignmentControl::none
+                && !input.delay && string_binding->object
+                && target_expression->systemverilog != nullptr
+                && target_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name;
+            if (!string_nonblocking
+                && (signal_assignment || nonblocking
+                    || input.assignment_kind
+                        != semantic::sv::AssignmentKind::blocking
+                    || input.assignment_control
+                        != semantic::sv::AssignmentControl::none
+                    || input.delay)) {
                 report(
                     "FSIM-ELAB-SVSTRING-013",
                     "string assignments must be blocking and time-free",
                     span);
                 return true;
+            }
             }
         }
         const semantic::sv::Delay* driver_delay = nullptr;
@@ -9908,7 +10230,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                 }
             }
-            if (signal_assignment || nonblocking
+            if (signal_assignment || (nonblocking && !string_nonblocking)
                 || !can_lower_hir_string_expression(
                     *target, hir_process_scope_)
                 || (!process_randstate
@@ -10132,7 +10454,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 emit_hir_vhdl_string_length_check(previous, *lowered, span);
             }
             process_.operations.emplace_back(WriteStringObject {
-                *string_binding->object, *lowered });
+                *string_binding->object, *lowered, string_nonblocking });
             return true;
         }
         auto binding = direct_binding
@@ -18027,17 +18349,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto final_id = runtime_bounds
                 ? std::optional { runtime_bounds->second }
                 : statement->vhdl->loop_limit;
-            if (!initial_id || !final_id) {
+            // Static bounds of an attribute range (`v'range`) have no bound
+            // expressions.
+            const bool expression_bounds = initial_id && final_id;
+            if (!static_bounds && !expression_bounds) {
                 return false;
             }
-            const auto initial_width = hir_expression_width(
-                *initial_id, hir_process_scope_);
-            const auto final_width = hir_expression_width(
-                *final_id, hir_process_scope_);
-            const auto initial_domain = hir_expression_domain(
-                *initial_id, hir_process_scope_);
-            const auto final_domain = hir_expression_domain(
-                *final_id, hir_process_scope_);
+            const auto initial_width = expression_bounds
+                ? hir_expression_width(*initial_id, hir_process_scope_)
+                : std::nullopt;
+            const auto final_width = expression_bounds
+                ? hir_expression_width(*final_id, hir_process_scope_)
+                : std::nullopt;
+            const auto initial_domain = expression_bounds
+                ? hir_expression_domain(*initial_id, hir_process_scope_)
+                : std::nullopt;
+            const auto final_domain = expression_bounds
+                ? hir_expression_domain(*final_id, hir_process_scope_)
+                : std::nullopt;
             const auto parameter_binding = hir_runtime_binding(
                 *vhdl_loop_declaration, hir_process_scope_, true);
             const auto parameter = hir_local_registers_.find(
@@ -18073,8 +18402,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     != frontend::ValueDomain::Integer
                 || !parameter_binding->signed_value
                 || parameter_width == 0U || parameter_width > 64U
-                || !bound_ok(*initial_id, initial_width, initial_domain)
-                || !bound_ok(*final_id, final_width, final_domain)
+                || (expression_bounds
+                    && (!bound_ok(*initial_id, initial_width, initial_domain)
+                        || !bound_ok(*final_id, final_width, final_domain)))
                 || parameter == hir_local_registers_.end()
                 || register_width(parameter->second) != parameter_width
                 || register_domain(parameter->second)
@@ -18310,16 +18640,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return true;
         };
         const auto iterations = static_loop_iterations;
+        // A long loop over a static range, or over an attribute range with
+        // static bounds (`for i in v'range`), runs at run time instead of
+        // being unrolled.
+        const bool attribute_static_range = vhdl_attribute_range
+            && statement->vhdl->loop_initial && !statement->vhdl->loop_limit;
         if (vhdl_loop_declaration
             && statement->vhdl->loop_initial
-            && statement->vhdl->loop_limit
+            && (statement->vhdl->loop_limit || attribute_static_range)
             && vhdl_first_static && vhdl_last_static
             && iterations
             && *iterations >= minimum_static_vhdl_for_runtime_iterations
             && *iterations <= maximum_runtime_vhdl_for_iterations) {
             const auto operation_count = process_.operations.size();
             if (lower_runtime_vhdl_for(std::pair {
-                    *vhdl_first_static, *vhdl_last_static })) {
+                    *vhdl_first_static, *vhdl_last_static },
+                    std::nullopt,
+                    attribute_static_range ? vhdl_attribute_descending
+                                           : std::nullopt)) {
                 restore_scope();
                 return true;
             }
@@ -19679,13 +20017,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto* const time_owner
                     = hir_time_scope_unit(input.scope);
                 if (!argument && time_owner != nullptr
-                    && time_owner->kind == semantic::sv::UnitKind::package) {
+                    && (time_owner->kind == semantic::sv::UnitKind::package
+                        || time_owner->kind
+                            == semantic::sv::UnitKind::compilation_unit)) {
                     // A package or $unit subroutine reports its declaring
                     // scope (IEEE 1800-2017 20.4.1).
                     const auto& compilation = time_owner->compilation;
                     process_.operations.emplace_back(Display {
                         "Time scale of ("
                             + (time_owner->name.starts_with("fsim_unit_")
+                                        || time_owner->kind
+                                            == semantic::sv::UnitKind::
+                                                compilation_unit
                                     ? std::string { "$unit" }
                                     : time_owner->name)
                             + "::) is "
@@ -22252,136 +22595,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         hir_source_span(container_call.source));
                     return true;
                 }
-                const auto value_id = container_call.operands.back();
-                // A queue of arrays or structures appends one unpacked
-                // element: it is written at index size() (7.10.2).
-                if ((container_binding->type->element_kind
-                            == ContainerElementKind::Container
-                        || container_binding->type->element_kind
-                            == ContainerElementKind::Aggregate)
-                    && (container_call.text == ".push_back"
-                        || container_call.text == ".push_front")
-                    && container_binding->type->queue) {
-                    // The element value takes the element type, so an
-                    // assignment pattern or cast is built in place (10.9).
-                    const auto element_type
-                        = runtime::simir::nested_element_container_type(
-                            *container_binding->type);
-                    const auto element = element_type
-                        ? lower_hir_static_container_actual(
-                              value_id, *element_type,
-                              container_binding->declaration)
-                        : std::nullopt;
-                    if (!element) {
-                        return false;
-                    }
-                    if (container_call.text == ".push_back") {
-                        const auto size = allocate_register(
-                            32U, frontend::ValueDomain::Bit2);
-                        process_.operations.emplace_back(ContainerSize {
-                            size, target_register });
-                        process_.operations.emplace_back(ContainerElementWrite {
-                            target_register, size, *element, false, { } });
-                    } else {
-                        // The new element, followed by the old ones.
-                        const auto built = allocate_container_register(
-                            *container_binding->type);
-                        const auto zero = load_constant(
-                            unsigned_value(0U, 32U),
-                            frontend::ValueDomain::Bit2);
-                        process_.operations.emplace_back(AppendContainer {
-                            built, true, { }, { }, { } });
-                        process_.operations.emplace_back(ContainerElementWrite {
-                            built, zero, *element, false, { } });
-                        process_.operations.emplace_back(AppendContainer {
-                            built, false, target_register, { }, { } });
-                        process_.operations.emplace_back(
-                            CopyContainerRegister { target_register, built });
-                    }
-                    publish();
-                    return true;
-                }
-                // A queue of strings appends the string; push_front builds
-                // the string followed by the old elements (7.10.2).
-                if (container_binding->type->element_kind
-                        == ContainerElementKind::String
-                    && container_call.text != ".insert") {
-                    const auto text = lower_hir_string_expression(value_id);
-                    if (!text) {
-                        return false;
-                    }
-                    if (container_call.text == ".push_back") {
-                        process_.operations.emplace_back(AppendContainer {
-                            target_register, false, { }, { }, *text });
-                    } else {
-                        const auto built = allocate_container_register(
-                            *container_binding->type);
-                        process_.operations.emplace_back(AppendContainer {
-                            built, true, { }, { }, { } });
-                        process_.operations.emplace_back(AppendContainer {
-                            built, false, { }, { }, *text });
-                        process_.operations.emplace_back(AppendContainer {
-                            built, false, target_register, { }, { } });
-                        process_.operations.emplace_back(
-                            CopyContainerRegister { target_register, built });
-                    }
-                    publish();
-                    return true;
-                }
-                const auto value_expression
-                    = specialized_hir_unit_->find_expression(value_id);
-                const auto element_type = hir_container_leaf_type(
-                    *specialized_hir_unit_,
-                    container_binding->declaration,
-                    hir_generic_binding_frames_);
-                const auto packed_pattern = element_type
-                    && value_expression
-                    && value_expression->systemverilog != nullptr
-                    && (value_expression->systemverilog->kind
-                            == semantic::sv::ExpressionKind::assignment_pattern
-                        || (value_expression->systemverilog->kind
-                                == semantic::sv::ExpressionKind::call
-                            && value_expression->systemverilog->text.starts_with(
-                                "@sv-tagged:")));
-                auto pushed_value = packed_pattern
-                    ? lower_hir_systemverilog_packed_pattern(
-                          value_id,
-                          *element_type,
-                          container_binding->type->element_width)
-                    : lower_hir_expression(
-                          value_id,
-                          container_binding->type->element_width);
-                if (!pushed_value) {
+                if (!lower_hir_queue_push(target_register,
+                        *container_binding->type,
+                        container_binding->declaration,
+                        container_call.operands.back(),
+                        container_call.text == ".push_front",
+                        container_call.text == ".insert"
+                            ? std::optional { container_call.operands[1] }
+                            : std::nullopt)) {
                     return false;
                 }
-                if (register_width(*pushed_value)
-                    != container_binding->type->element_width) {
-                    pushed_value = resize_register(
-                        *pushed_value,
-                        container_binding->type->element_width,
-                        hir_expression_signed(value_id));
-                }
-                std::optional<RegisterId> insertion_index;
-                if (container_call.text == ".insert") {
-                    insertion_index = lower_hir_expression(
-                        container_call.operands[1], 32U);
-                    if (!insertion_index) {
-                        return false;
-                    }
-                    if (register_width(*insertion_index) != 32U) {
-                        insertion_index = resize_register(
-                            *insertion_index,
-                            32U,
-                            hir_expression_signed(
-                                container_call.operands[1]));
-                    }
-                }
-                process_.operations.emplace_back(PushContainer {
-                    target_register,
-                    *pushed_value,
-                    container_call.text == ".push_front",
-                    insertion_index,
-                });
                 publish();
                 return true;
             }
@@ -22914,26 +23137,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto container = lower_hir_class_value_container(
                     container_call.operands[0], identity);
                 if (!container || !container->container.type.queue
-                    || (container->container.type.element_kind
-                            != ContainerElementKind::Packed
-                        && container->container.type.element_kind
-                            != ContainerElementKind::Scalar)) {
+                    || !lower_hir_queue_push(container->container.value,
+                        container->container.type, container->declaration,
+                        container_call.operands[1], false, std::nullopt)) {
                     return false;
                 }
-                const auto& type = container->container.type;
-                auto element = lower_hir_scalar_converted_value(
-                    container_call.operands[1], type.element_width,
-                    type.scalar_kind);
-                if (!element) {
-                    return false;
-                }
-                if (register_width(*element) != type.element_width) {
-                    element = resize_register(*element, type.element_width,
-                        hir_expression_signed(container_call.operands[1]));
-                }
-                process_.operations.emplace_back(PushContainer {
-                    container->container.value, *element, false,
-                    std::nullopt });
                 store_hir_class_value_container(*container);
                 return true;
             }
@@ -23158,7 +23366,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         input.kind
                                 == semantic::vhdl::StatementKind::report
                             ? std::string { }
-                            : std::string { "assertion violation" }),
+                            // The default message of an assertion (IEEE
+                            // 1076-2008 10.3).
+                            : std::string { "Assertion violation." }),
                     effective_severity
                         ? assertion_severity(
                               *effective_severity, fallback)
@@ -23180,7 +23390,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             } else {
                 message_register = allocate_string_register();
                 process_.operations.emplace_back(LoadStringConstant {
-                    *message_register, "assertion violation" });
+                    *message_register, "Assertion violation." });
             }
             if (!message_register) {
                 return false;
@@ -23270,7 +23480,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && (!input.report || message) && effective_severity) {
             process_.operations.emplace_back(Assert {
                 *checked,
-                message.value_or("assertion violation"),
+                message.value_or("Assertion violation."),
                 assertion_severity(*effective_severity, fallback),
                 location,
             });

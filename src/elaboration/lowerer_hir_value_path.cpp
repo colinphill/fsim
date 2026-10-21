@@ -252,11 +252,26 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
                                   || candidate.systemverilog->form
                                       == semantic::sv::DeclarationForm::port);
                       };
-                const auto declaration
+                auto declaration
                     = hir_resolver()
                           .resolve_systemverilog(names.front(), source.scope,
                               object, false)
                           .unique();
+                // The implicit result variable of the function being
+                // lowered (IEEE 1800-2017 13.4.1).
+                if (!declaration && active_hir_callable_
+                    && *active_hir_callable_ < hir_callable_frames_.size()) {
+                    const auto& frame
+                        = hir_callable_frames_[*active_hir_callable_];
+                    const auto callable = frame.container_result
+                        ? specialized_hir_unit_->find_declaration(
+                              frame.declaration)
+                        : std::nullopt;
+                    if (callable && callable->systemverilog != nullptr
+                        && callable->systemverilog->name == names.front()) {
+                        declaration = frame.declaration;
+                    }
+                }
                 if (!declaration) {
                     return rejected(__LINE__);
                 }
@@ -884,6 +899,26 @@ std::optional<RegisterId> Lowerer::lower_hir_sv_value_path_read(
         destination, cursor->container, *index,
         step.indices.size() > 1U || step.container.signed_indices,
         step.indices.size() > 1U, step.container.string_indices });
+    return destination;
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_sv_value_path_string_read(
+    const HirSvValuePath& path)
+{
+    if (!path.string_leaf || path.steps.empty()
+        || !path.steps.back().member) {
+        return std::nullopt;
+    }
+    const auto cursor = lower_hir_sv_value_path_descend(path);
+    if (!cursor) {
+        return std::nullopt;
+    }
+    const auto zero = load_constant(
+        unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(ContainerStringRead {
+        destination, cursor->container, zero, true, false, false,
+        { *path.steps.back().member } });
     return destination;
 }
 

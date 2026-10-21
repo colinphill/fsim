@@ -538,6 +538,10 @@ void validate_prefix_operation(
                 } else if constexpr (std::is_same_v<OperationType, WriteStringObject>) {
                     result.uses_strings = true;
                     validate_string_register(operation.source, index, "source");
+                    if (operation.nonblocking) {
+                        reject_unsupported(process, index,
+                            "nonblocking string object writes run in the interpreter");
+                    }
                     (void)operation.object;
                 } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {
                     result.uses_strings = true;
@@ -932,6 +936,10 @@ void validate_prefix_operation(
                     result.uses_containers = true;
                     validate_container_register(
                         operation.target, index, "target");
+                    if (operation.associative_default) {
+                        reject_unsupported(process, index,
+                            "associative-array defaults run in the interpreter");
+                    }
                     if (operation.string_index) {
                         result.uses_strings = true;
                         validate_string_register(
@@ -1015,6 +1023,13 @@ void validate_prefix_operation(
                     std::is_same_v<OperationType, ContainerStringRead>
                     || std::is_same_v<
                         OperationType, ContainerStringWrite>) {
+                    if constexpr (std::is_same_v<
+                                      OperationType, ContainerStringWrite>) {
+                        if (operation.associative_default) {
+                            reject_unsupported(process, index,
+                                "associative-array defaults run in the interpreter");
+                        }
+                    }
                     result.uses_containers = true;
                     result.uses_strings = true;
                     const auto container = [&] {
@@ -1332,9 +1347,10 @@ void validate_prefix_operation(
                         operation.path, index, "path");
                     if (operation.target < container_register_types.size()) {
                         const auto& type = container_register_types[operation.target];
-                        if (!type.fixed)
+                        if (type.associative
+                            && (type.string_indices || type.index_width > 64U))
                             reject(process, index,
-                                "LoadMemory target must be a fixed static array");
+                                "LoadMemory associative target needs integral indices");
                     }
                     for (const auto source :
                         { operation.start, operation.finish }) {

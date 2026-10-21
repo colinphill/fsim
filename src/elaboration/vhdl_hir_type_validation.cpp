@@ -12063,11 +12063,23 @@ private:
                 selected->selectors[index]);
             // An index is a value of the dimension's discrete index type;
             // enumeration values select by position (IEEE 1076-2008 8.4).
+            // A dimension of known index type was checked against the
+            // selector's type above, as a record element of a call result
+            // (`v(f(x).e)`) whose profile is not retained.
+            const bool typed_dimension = array_definition != nullptr
+                && array_definition->form == TypeForm::array
+                && index < array_definition->array_dimensions.size()
+                && dimension_index_type(
+                       array_definition->array_dimensions[index],
+                       index_type_scope)
+                        .kind
+                    != OperandClass::unknown;
             if (index_profile
                 && index_profile->kind != ProfileKind::integer
                 && index_profile->kind != ProfileKind::enumeration
                 && operand_type(selected->selectors[index]).kind
-                    != OperandClass::enumeration) {
+                    != OperandClass::enumeration
+                && !typed_dimension) {
                 report(
                     "FSIM-ELAB-VHARRAYSEL-002",
                     "VHDL array index requires an integer-family signed "

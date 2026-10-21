@@ -2281,7 +2281,7 @@ private:
             if (declaration && declaration->systemverilog != nullptr
                 && declaration->systemverilog->name == prefix) {
                 const auto slice = declaration->systemverilog->type
-                    ? packed_member_slice(*declaration->systemverilog->type,
+                    ? member_slice(*declaration->systemverilog->type,
                           std::string_view { record.text }.substr(dot + 1U))
                     : std::nullopt;
                 if (!slice) {
@@ -4267,14 +4267,22 @@ private:
                             *local.type, &specialization_, visiting);
                         width && *width != 0U
                         && *width <= maximum_constant_width) {
+                        auto initial = local.type->four_state
+                            ? make_unknown(
+                                  static_cast<std::uint32_t>(*width),
+                                  local.type->signed_value)
+                            : make_known(0U,
+                                  static_cast<std::uint32_t>(*width),
+                                  local.type->signed_value, false);
+                        // The declared range indexes its selects (`[2:1]`,
+                        // IEEE 1800-2017 7.4.6).
+                        auto typed = convert_record_type(
+                            initial, *local.type);
+                        if (typed && local.type->four_state) {
+                            typed->packed = initial.packed;
+                        }
                         frames_.back().values.emplace(child_id,
-                            local.type->four_state
-                                ? make_unknown(
-                                      static_cast<std::uint32_t>(*width),
-                                      local.type->signed_value)
-                                : make_known(0U,
-                                      static_cast<std::uint32_t>(*width),
-                                      local.type->signed_value, false));
+                            typed ? std::move(*typed) : std::move(initial));
                     }
                 }
             }
@@ -4913,12 +4921,15 @@ private:
             }
             assigned.insert(member->name);
         }
-        if (default_value) {
-            for (std::size_t index { }; index < members->size(); ++index) {
-                if (!assigned.contains((*members)[index].name)
-                    && !place_member(index, *default_value)) {
-                    return std::nullopt;
-                }
+        // Without `default:`, a member the pattern does not name keeps its
+        // declared initial value (IEEE 1800-2017 7.2.2).
+        for (std::size_t index { }; index < members->size(); ++index) {
+            const auto& member = (*members)[index];
+            const auto item = default_value ? default_value
+                                            : member.initializer;
+            if (!assigned.contains(member.name) && item
+                && !place_member(index, *item)) {
+                return std::nullopt;
             }
         }
         return make_value(std::move(packed), false, false);
@@ -5163,6 +5174,25 @@ private:
         return std::pair { offset, *width };
     }
 
+    /// The bit slice a member path selects in a packed aggregate, or in the
+    /// bit stream of an unpacked structure (IEEE 1800-2017 7.2.1, 6.24.3).
+    [[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>>
+    member_slice(const semantic::sv::TypeReference& type,
+        const std::string_view path)
+    {
+        if (auto slice = packed_member_slice(type, path)) {
+            return slice;
+        }
+        if (!unpacked_aggregate(type)) {
+            return std::nullopt;
+        }
+        const auto aggregate = aggregate_slice(type, "." + std::string { path });
+        if (!aggregate) {
+            return std::nullopt;
+        }
+        return std::pair { aggregate->offset, aggregate->width };
+    }
+
     /// The frame-local packed aggregate a dotted name `s.m` selects into,
     /// with the member's bit slice.
     struct FrameMember {
@@ -5200,11 +5230,14 @@ private:
                 continue;
             }
             const auto& type = *declaration->systemverilog->type;
-            const auto slice = packed_member_slice(type,
+            const auto slice = member_slice(type,
                 std::string_view { record.text }.substr(separator + 1U));
             std::unordered_set<std::uint32_t> visiting;
-            const auto root_width = resolved_type_width(
+            auto root_width = resolved_type_width(
                 type, &specialization_, visiting);
+            if (!root_width && unpacked_aggregate(type)) {
+                root_width = aggregate_width(type);
+            }
             if (!slice || !root_width
                 || slice->first + slice->second > *root_width) {
                 return std::nullopt;

@@ -396,6 +396,9 @@ private:
                 continue;
             }
             profile.elements = view->mode_view->elements;
+            if (profile.converse) {
+                apply_converse(profile.elements);
+            }
             if (!profile.explicit_subtype
                 && profile.form == vh::ModeViewElementForm::record_view) {
                 interface.subtype = view->mode_view->record_subtype;

@@ -1940,6 +1940,9 @@ private:
         // S'STABLE(T)'EVENT/'ACTIVE or S'QUIET(T)'EVENT/'ACTIVE: the kind of
         // the implicit signal prefix whose changes are tested.
         std::optional<HirVhdlSignalAttributeKind> implicit_prefix;
+        // An attribute of S'DELAYED(T): T; the attribute reads the implicit
+        // signal, which has S's layout.
+        std::optional<runtime::SimulationTick> delayed_prefix;
     };
     [[nodiscard]] std::optional<HirVhdlSignalAttributeProfile>
     hir_vhdl_signal_attribute_profile(
@@ -2097,6 +2100,13 @@ private:
         const semantic::vhdl::SubtypeIndication& target_element,
         const semantic::vhdl::SubtypeIndication& operand_element,
         std::size_t target_width);
+    // A value of a closely related type in the target type: record
+    // elements match by name and convert one by one, recursively (IEEE
+    // 1076-2019 9.3.6).
+    [[nodiscard]] std::optional<RegisterId>
+    convert_hir_vhdl_closely_related_value(RegisterId value,
+        const semantic::vhdl::SubtypeIndication& operand,
+        const semantic::vhdl::SubtypeIndication& target);
     // The value of the IEEE.MATH_REAL constant (MATH_PI, ...) a VHDL name
     // denotes.
     [[nodiscard]] std::optional<double> hir_vhdl_math_real_constant(
@@ -2558,6 +2568,16 @@ private:
     [[nodiscard]] std::optional<HirContainerObjectBinding>
     hir_container_object_binding(
         semantic::ExpressionId expression) const;
+    // push_back, push_front or insert of `value` into the queue in
+    // `target` (IEEE 1800-2017 7.10.2); false when the value cannot be
+    // lowered.
+    [[nodiscard]] bool lower_hir_queue_push(
+        runtime::simir::ContainerRegisterId target,
+        const runtime::simir::ContainerType& type,
+        semantic::DeclarationId declaration,
+        semantic::ExpressionId value,
+        bool front,
+        std::optional<semantic::ExpressionId> insertion_index);
     // A static value-container class property
     // (`@sv-static-container-property:`) is one container object per
     // specialization (IEEE 1800-2017 8.9, 8.25), created at its first use
@@ -2852,6 +2872,9 @@ private:
         const HirSvValuePath& path, const HirSvValuePathCursor& cursor);
     [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_read(
         const HirSvValuePath& path);
+    // The string member a string-leaf path selects (`o.q[i].name`).
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_sv_value_path_string_read(const HirSvValuePath& path);
     // The selected value, including a packed member tail.
     [[nodiscard]] std::optional<RegisterId> lower_hir_sv_value_path_value(
         const HirSvValuePath& path);
@@ -3260,6 +3283,16 @@ private:
     // process turned this off; the flag below records that one was.
     bool lower_class_functions_ { true };
     bool class_functions_lowered_ { };
+    // Class functions whose bodies failed to lower in this process; a
+    // retry leaves only calls to them (or to a dispatch reaching them) to
+    // the runtime.
+    std::unordered_set<std::uint32_t> hir_failed_class_functions_;
+    std::unordered_set<std::uint32_t> hir_interpreted_class_functions_;
+    [[nodiscard]] bool hir_class_function_interpreted(
+        semantic::DeclarationId declaration) const;
+    // Whether `declaration` is a class function other than a constructor.
+    [[nodiscard]] bool hir_class_function_declaration(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<Process> lower_hir_process_body_once(
         const HirProcessDescription& description,
         frontend::Language language,
@@ -3383,6 +3416,22 @@ private:
         std::optional<RegisterId> packed;
         std::optional<HirStaticContainerValue> container;
     };
+    struct HirVhdlFunctionActualShapes {
+        std::vector<std::pair<std::size_t, std::int64_t>>
+            static_integer_actuals;
+        std::vector<std::pair<std::size_t, semantic::ExpressionId>>
+            static_integer_actual_expressions;
+        std::vector<std::pair<std::size_t,
+            std::vector<std::optional<HirPackedRange>>>>
+            ranges;
+        std::vector<std::pair<std::size_t,
+            std::vector<semantic::vhdl::ElementConstraint>>>
+            element_constraints;
+    };
+    [[nodiscard]] HirVhdlFunctionActualShapes hir_vhdl_function_actual_shapes(
+        semantic::DeclarationId body,
+        const std::vector<semantic::DeclarationId>& formals,
+        const std::vector<semantic::ExpressionId>& actuals);
     [[nodiscard]] std::optional<HirFunctionCallValue>
     lower_hir_function_call_value(
         semantic::ExpressionId expression,
@@ -3446,6 +3495,23 @@ private:
         std::optional<semantic::ExpressionId> type_prefix,
         runtime::simir::OutputFormat vector_format,
         bool image_quotes);
+    // The image of a lowered scalar or bit/character vector value.
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_scalar_image(
+        RegisterId value, std::size_t width,
+        const semantic::vhdl::TypeDefinition* definition, bool builtin_array,
+        std::string_view simple_type, bool real_value,
+        runtime::simir::OutputFormat vector_format, bool image_quotes,
+        const frontend::SourceSpan& span);
+    // The string representation of a lowered value of `subtype`, including
+    // a composite one: `(e1,e2,...)` (IEEE 1076-2019 5.7).
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_value_image(
+        RegisterId value, const semantic::vhdl::SubtypeIndication& subtype,
+        runtime::simir::OutputFormat vector_format,
+        const frontend::SourceSpan& span);
+    // Whether values of the type have the parenthesized composite string
+    // representation rather than a character string (IEEE 1076-2019 5.7).
+    [[nodiscard]] bool hir_vhdl_parenthesized_image_type(
+        const semantic::vhdl::TypeDefinition& definition) const;
     [[nodiscard]] std::optional<std::vector<semantic::ExpressionId>>
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
@@ -3524,6 +3590,13 @@ private:
     // Bound `with`-clause iterators over signed elements: such an iterator
     // has its element's signedness (IEEE 1800-2017 7.12).
     std::unordered_set<std::uint32_t> hir_captured_signed_;
+    // Bound `with`-clause iterators over string elements (IEEE 1800-2017
+    // 7.12.1).
+    std::unordered_map<std::uint32_t, StringRegisterId> hir_captured_strings_;
+    // Bound `with`-clause iterators over the rows of a multidimensional
+    // array: each iterator is a row (IEEE 1800-2023 7.12.3).
+    std::unordered_map<std::uint32_t, HirStaticContainerValue>
+        hir_captured_containers_;
     // Whether every side effect of the current update target is captured.
     bool hir_update_indices_captured_ { };
     // The declaration an assignment or initializer writes, so that `new`

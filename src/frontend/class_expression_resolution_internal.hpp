@@ -110,6 +110,9 @@ struct Scope {
   // Statements of a method body (not property initializers or
   // constraints).
   bool method_body{};
+  // Package imports visible in the enclosing unit or class's package
+  // (IEEE 1800-2017 26.3).
+  std::vector<const SystemVerilogImport*> imports{};
 };
 
 struct PropertyMatch {
@@ -204,6 +207,10 @@ class Resolver final {
       std::string_view from, std::string_view to) const;
   [[nodiscard]] const SystemVerilogClassDeclaration* find_base_class(
       const SystemVerilogClassDeclaration& declaration) const;
+  // The base of `declaration` within an object of type `receiver`.
+  [[nodiscard]] const SystemVerilogClassDeclaration* find_base_class(
+      const SystemVerilogClassDeclaration& declaration,
+      const Type& receiver) const;
   // Reports a local or protected member used where it is not visible
   // (IEEE 1800-2017 8.18); returns whether it is visible.
   bool check_member_visibility(const PropertyMatch& match, const Scope& scope,
@@ -281,8 +288,11 @@ class Resolver final {
       std::string_view method);
   [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
   resolve_class_name(std::string_view spelling, const Scope& scope) const;
+  // `receiver` is the handle type the lookup starts from: a base named by a
+  // type parameter is that receiver's actual (IEEE 1800-2017 8.25).
   [[nodiscard]] PropertyMatch find_property(
-      std::string_view identity, std::string_view name) const;
+      std::string_view identity, std::string_view name,
+      const Type* receiver = nullptr) const;
   [[nodiscard]] ConstraintMatch find_constraint(
       std::string_view identity, std::string_view name) const;
   [[nodiscard]] bool can_access(
@@ -293,7 +303,8 @@ class Resolver final {
   [[nodiscard]] std::vector<MethodMatch> find_methods(
       std::string_view identity,
       std::string_view name,
-      SystemVerilogClassMethodKind kind) const;
+      SystemVerilogClassMethodKind kind,
+      const Type* receiver = nullptr) const;
   [[nodiscard]] std::optional<Type> resolve_identifier(
       Expression& expression, const Scope& scope);
   [[nodiscard]] std::optional<MethodMatch> select_method(
@@ -301,7 +312,8 @@ class Resolver final {
       std::string_view name,
       SystemVerilogClassMethodKind kind,
       std::size_t actual_count,
-      const SourceSpan& span);
+      const SourceSpan& span,
+      const Type* receiver = nullptr);
   static void retain_call_profile(
       Expression& expression,
       const SystemVerilogClassMethod& method,

@@ -12,6 +12,7 @@
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -441,18 +442,38 @@ void diagnose(
   return identity.str();
 }
 
+// Substitution is simultaneous: a type parameter's bound (`T` bound to
+// `pool#(T)`) names the outer scope's parameters, so the names replaced
+// on the way to a type are not replaced again inside it.
+[[nodiscard]] Type specialize_type(
+    Type type,
+    const ValueEnvironment& values,
+    const TypeEnvironment& types,
+    std::set<std::string>& replacing);
+
 [[nodiscard]] Type specialize_type(
     Type type,
     const ValueEnvironment& values,
     const TypeEnvironment& types) {
+  std::set<std::string> replacing;
+  return specialize_type(std::move(type), values, types, replacing);
+}
+
+[[nodiscard]] Type specialize_type(
+    Type type,
+    const ValueEnvironment& values,
+    const TypeEnvironment& types,
+    std::set<std::string>& replacing) {
   const auto outer_container = type.systemverilog_container;
-  std::set<std::string> substituted;
+  std::vector<std::string> substituted;
   while (!type.named_type.empty()
-         && substituted.insert(type.named_type).second) {
+         && !replacing.contains(type.named_type)) {
     const auto replacement = types.find(type.named_type);
     if (replacement == types.end()) {
       break;
     }
+    replacing.insert(type.named_type);
+    substituted.push_back(type.named_type);
     type = replacement->second;
   }
   if (outer_container) {
@@ -524,14 +545,19 @@ void diagnose(
       }
     }
     for (auto& nested : member.nested_types) {
-      nested = specialize_type(std::move(nested), values, types);
+      nested = specialize_type(
+          std::move(nested), values, types, replacing);
     }
     // A member typed by a type parameter (`T a;`) takes the bound type.
     if (member.nested_types.empty() && !member.packed_range
-        && !member.packed_range_expression) {
+        && !member.packed_range_expression
+        && !replacing.contains(member.spelling)) {
       if (const auto replacement = types.find(member.spelling);
           replacement != types.end()) {
-        auto bound = specialize_type(replacement->second, values, types);
+        replacing.insert(member.spelling);
+        auto bound = specialize_type(
+            replacement->second, values, types, replacing);
+        replacing.erase(member.spelling);
         member.domain = bound.domain;
         member.is_signed = bound.is_signed;
         member.nested_types.push_back(std::move(bound));
@@ -565,14 +591,17 @@ void diagnose(
   if (type.systemverilog_container) {
     for (auto& element :
          type.systemverilog_container->element_types) {
-      element = specialize_type(std::move(element), values, types);
+      element = specialize_type(
+          std::move(element), values, types, replacing);
     }
   }
   for (auto& actual : type.systemverilog_class_parameter_actuals) {
     if (actual.type_actual) {
+      // Copies of a Type share their type actuals; rebind a copy rather
+      // than moving from the shared value.
       actual.type_actual = std::make_shared<Type>(
           specialize_type(
-              std::move(*actual.type_actual), values, types));
+              *actual.type_actual, values, types, replacing));
     } else if (const auto value = evaluate(actual.value, values)) {
       actual.value = Expression{
           ExpressionKind::IntegerLiteral,
@@ -580,6 +609,9 @@ void diagnose(
           {},
           actual.value.span};
     }
+  }
+  for (const auto& name : substituted) {
+    replacing.erase(name);
   }
   return type;
 }
@@ -1410,7 +1442,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
         if (actual.type_actual) {
           actual.type_actual = std::make_shared<Type>(
               expand_type_aliases(
-                  std::move(*actual.type_actual), expanded));
+                  *actual.type_actual, expanded));
         }
       }
       return type;

@@ -1203,16 +1203,27 @@ Expression VhdlParser::parse_primary()
     if (at(TokenKind::Identifier)) {
         const auto name = advance();
         std::string canonical = vhdl_name(name.text);
+        // An attribute of an external-name alias other than a name
+        // attribute applies to the object it denotes (IEEE 1076-2008 6.6.2).
+        const bool object_attribute = at(TokenKind::Apostrophe)
+            && at(TokenKind::Identifier, 1)
+            && vhdl_name(current(1).text) != "simple_name"
+            && vhdl_name(current(1).text) != "path_name"
+            && vhdl_name(current(1).text) != "instance_name"
+            && vhdl_name(current(1).text) != "stable"
+            && vhdl_name(current(1).text) != "quiet"
+            && vhdl_name(current(1).text) != "delayed";
         if (const auto external = vhdl_external_aliases_.find(canonical);
             external != vhdl_external_aliases_.end()
-            && !at(TokenKind::Apostrophe)
+            && (!at(TokenKind::Apostrophe) || object_attribute)
             && (!at(TokenKind::Dot) || at(TokenKind::Identifier, 1))) {
             auto expression = external->second;
             expression.span = name.span;
             // An element or record element of the object an external-name
             // alias denotes is selected by suffix (IEEE 1076-2008 6.6.2,
             // 8.3, 8.7).
-            if (at(TokenKind::Dot) || at(TokenKind::LeftParen)) {
+            if (at(TokenKind::Dot) || at(TokenKind::LeftParen)
+                || object_attribute) {
                 return parse_vhdl_name_suffixes(
                     std::move(expression), name.span);
             }

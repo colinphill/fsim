@@ -662,6 +662,26 @@ ParseResult VerilogParser::run() {
     return ParseResult { std::move(design), std::move(diagnostics_) };
 }
 
+std::pair<std::string, std::string>
+VerilogParser::compilation_unit_time_scale() const {
+    // $unit takes the compilation-unit timeunit, else the `timescale in
+    // effect (IEEE 1800-2017 3.14.2.3).
+    const auto& time_unit = compilation_time_unit_.empty()
+        ? current_time_unit_
+        : compilation_time_unit_;
+    return {
+        time_unit.empty()
+            ? std::string { }
+            : std::to_string(compilation_time_unit_.empty()
+                      ? current_time_unit_magnitude_
+                      : compilation_time_unit_magnitude_)
+                + time_unit,
+        compilation_time_precision_.empty()
+            ? current_time_precision_
+            : compilation_time_precision_,
+    };
+}
+
 DesignUnit& VerilogParser::compilation_unit_package(const Token& start) {
     if (!compilation_unit_package_) {
         auto& unit = compilation_unit_package_.emplace();
@@ -670,20 +690,8 @@ DesignUnit& VerilogParser::compilation_unit_package(const Token& start) {
         unit.standard_revision = standard_revision_;
         unit.verilog_compatibility_profile = compatibility_profile_;
         unit.systemverilog_imports = compilation_unit_imports_;
-        // $unit takes the compilation-unit timeunit, else the `timescale in
-        // effect (IEEE 1800-2017 3.14.2.3).
-        const auto& time_unit = compilation_time_unit_.empty()
-            ? current_time_unit_
-            : compilation_time_unit_;
-        unit.time_unit = time_unit.empty()
-            ? std::string { }
-            : std::to_string(compilation_time_unit_.empty()
-                      ? current_time_unit_magnitude_
-                      : compilation_time_unit_magnitude_)
-                + time_unit;
-        unit.time_precision = compilation_time_precision_.empty()
-            ? current_time_precision_
-            : compilation_time_precision_;
+        std::tie(unit.time_unit, unit.time_precision)
+            = compilation_unit_time_scale();
         // The design file names its compilation unit, so separately compiled
         // files keep separate $unit scopes.
         std::uint64_t hash = 1469598103934665603ULL;
@@ -1046,20 +1054,21 @@ std::string VerilogParser::decoded_string_literal_text(const Token& token) {
                 }
                 return std::nullopt;
             };
-            if (index + 2 >= spelling.size()) {
+            // One or two hexadecimal digits (IEEE 1800-2023 5.9.1).
+            const auto high = index + 1 < spelling.size()
+                ? hexadecimal_value(spelling[index + 1])
+                : std::nullopt;
+            if (!high) {
                 error(token, "FSIM-SV-SEM-040",
-                    "a SystemVerilog string hexadecimal escape requires two digits");
+                    "a SystemVerilog string hexadecimal escape requires a digit");
                 break;
             }
-            const auto high = hexadecimal_value(spelling[index + 1]);
-            const auto low = hexadecimal_value(spelling[index + 2]);
-            if (!high || !low) {
-                error(token, "FSIM-SV-SEM-040",
-                    "a SystemVerilog string hexadecimal escape requires two digits");
-                break;
-            }
-            result.push_back(static_cast<char>((*high << 4U) | *low));
-            index += 2;
+            const auto low = index + 2 < spelling.size()
+                ? hexadecimal_value(spelling[index + 2])
+                : std::nullopt;
+            result.push_back(static_cast<char>(
+                low ? (*high << 4U) | *low : *high));
+            index += low ? 2U : 1U;
             break;
         }
         error(token, "FSIM-SV-SEM-040",
@@ -1096,6 +1105,10 @@ std::string VerilogParser::decoded_string_literal_text(const Token& token) {
         } else {
           result.push_back(static_cast<char>(value));
         }
+      } else if (language_ == Language::SystemVerilog2017) {
+        // An escaped character not in Table 5-1 is that character (IEEE
+        // 1800-2023 5.9.1): "\b" is "b".
+        result.push_back(escaped);
       } else {
         error(
             token,

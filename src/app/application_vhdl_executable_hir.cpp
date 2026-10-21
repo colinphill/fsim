@@ -1384,11 +1384,33 @@ class VhdlExecutableBuilder final {
               ? std::nullopt
               : std::optional { primary->scope };
         };
+        // A declaration is visible from its end onwards (IEEE 1076-2008
+        // 12.3): in the use's own region, one written after the use does
+        // not hide an outer declaration yet.
+        const auto declared_after_use = [&](const semantic::DeclarationId id) {
+          const auto* declaration = hir_.find_declaration(id);
+          const auto& spans = model_.source_spans();
+          if (declaration == nullptr || !declaration->source.valid()
+              || !name.source.valid()
+              || declaration->source.value() >= spans.size()
+              || name.source.value() >= spans.size()) {
+            return false;
+          }
+          const auto& declared = spans[declaration->source.value()];
+          const auto& used = spans[name.source.value()];
+          return declared.file == used.file && !declared.expansion
+              && !used.expansion
+              && declared.begin.offset > used.begin.offset;
+        };
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         bool primary_visited { };
         while (visible_scope) {
           if (const auto* overload = overload_in_scope(
-                  *visible_scope, name.canonical)) {
+                  *visible_scope, name.canonical);
+              overload != nullptr
+              && !(*visible_scope == scope
+                  && std::ranges::all_of(overload->declarations,
+                      declared_after_use))) {
             if (name.overloads.empty()) {
               if (primary_visited) {
                 break;

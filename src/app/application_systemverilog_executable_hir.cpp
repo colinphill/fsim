@@ -245,6 +245,80 @@ namespace {
             return found != genvar_scopes_->end() && found->second == spelling;
         }
 
+        // `blk.v` names `v` of the enclosing named block `blk`, found by
+        // searching upward from the use (IEEE 1800-2017 23.8, 23.9). Only a
+        // block that encloses the use is bound here, so an automatic has one
+        // activation; a name whose head is a declaration is a member select.
+        [[nodiscard]] std::optional<std::vector<semantic::DeclarationId>>
+        enclosing_block_member(
+            const std::string_view spelling,
+            const semantic::ScopeId scope)
+        {
+            if (spelling.find('.') == std::string_view::npos
+                || spelling.find("::") != std::string_view::npos
+                || spelling.find_first_of("[(") != std::string_view::npos) {
+                return std::nullopt;
+            }
+            std::vector<std::string_view> parts;
+            for (std::size_t begin { };;) {
+                const auto dot = spelling.find('.', begin);
+                parts.push_back(spelling.substr(begin, dot - begin));
+                if (dot == std::string_view::npos) {
+                    break;
+                }
+                begin = dot + 1U;
+            }
+            if (std::ranges::any_of(parts, &std::string_view::empty)) {
+                return std::nullopt;
+            }
+            std::vector<semantic::ScopeId> ancestors;
+            for (auto visible = std::optional { scope }; visible;
+                 visible = parent_scope(*visible)) {
+                ancestors.push_back(*visible);
+            }
+            const auto scope_name = [&](const semantic::ScopeId id) {
+                return std::string_view { model_.scopes()[id.value()].name };
+            };
+            std::size_t head = ancestors.size();
+            for (std::size_t index { }; index < ancestors.size(); ++index) {
+                if (!declarations_named(ancestors[index], parts.front())
+                         .empty()) {
+                    return std::nullopt;
+                }
+                // A design unit's own name is left to hierarchical
+                // references.
+                if (scope_name(ancestors[index]) == parts.front()) {
+                    if (!parent_scope(ancestors[index])) {
+                        return std::nullopt;
+                    }
+                    head = index;
+                    break;
+                }
+            }
+            if (head == ancestors.size()) {
+                return std::nullopt;
+            }
+            auto target = head;
+            for (std::size_t part = 1U; part + 1U < parts.size(); ++part) {
+                do {
+                    if (target == 0U) {
+                        return std::nullopt;
+                    }
+                    --target;
+                } while (scope_name(ancestors[target]).empty()
+                    || scope_name(ancestors[target]).starts_with('<'));
+                if (scope_name(ancestors[target]) != parts[part]) {
+                    return std::nullopt;
+                }
+            }
+            auto named = declarations_named(ancestors[target], parts.back());
+            if (named.empty()) {
+                return std::nullopt;
+            }
+            return std::vector<semantic::DeclarationId>(
+                named.begin(), named.end());
+        }
+
         [[nodiscard]] sv::Name name(
             const std::string_view spelling,
             const frontend::SourceSpan& span,
@@ -253,6 +327,16 @@ namespace {
         {
             sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
             result.source_order = source_order;
+            if (const auto bound = enclosing_block_member(spelling, scope)) {
+                // The bound name is the block's own declaration.
+                result.spelling = std::string {
+                    spelling.substr(spelling.rfind('.') + 1U) };
+                result.overloads = *bound;
+                if (result.overloads.size() == 1) {
+                    result.selected = result.overloads.front();
+                }
+                return result;
+            }
             auto visible_scope = std::optional<semantic::ScopeId> { scope };
             while (visible_scope) {
                 const auto named = declarations_named(*visible_scope, spelling);
@@ -770,6 +854,14 @@ namespace {
                 output.referenced_name = name(
                     input.text, input.span, scope,
                     input.systemverilog_source_order);
+                // `blk.v` bound to the block's own `v` is that variable,
+                // not a member select of it (IEEE 1800-2017 23.9).
+                if (input.kind == frontend::ExpressionKind::Identifier
+                    && output.referenced_name->selected
+                    && enclosing_block_member(input.text, scope)) {
+                    output.text = input.text.substr(
+                        input.text.rfind('.') + 1U);
+                }
             } else if (input.kind == frontend::ExpressionKind::Call
                 && input.text.starts_with("@sv-cast:")
                 && input.text != "@sv-cast:@type") {

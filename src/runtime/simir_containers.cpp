@@ -3125,7 +3125,8 @@ void Interpreter::Impl::execute_container(
             get_register(process, operation.destination) = at < source.string_keys.size()
                     && source.string_keys[at] == key
                 ? source.elements[at]
-                : default_container_element(source.type);
+                : source.associative_default.value_or(
+                    default_container_element(source.type));
             ++process.pc;
             return;
         }
@@ -3135,7 +3136,8 @@ void Interpreter::Impl::execute_container(
         const auto at = lower_key(source, key);
         get_register(process, operation.destination) = at < source.keys.size() && key_equal(source.keys[at], key)
             ? source.elements[at]
-            : default_container_element(source.type);
+            : source.associative_default.value_or(
+                    default_container_element(source.type));
         ++process.pc;
         return;
     }
@@ -3202,6 +3204,15 @@ void Interpreter::Impl::execute_container(
         container_error(
             process.id, process.pc,
             "container element write type mismatch");
+    }
+    if (operation.associative_default) {
+        if (!target.type.associative) {
+            container_error(process.id, process.pc,
+                "a container default requires an associative array");
+        }
+        target.associative_default = source;
+        ++process.pc;
+        return;
     }
     if (target.type.associative) {
         if (operation.string_index) {
@@ -3573,7 +3584,7 @@ void Interpreter::Impl::execute_container(
             get_string_register(process, operation.destination) = at < source.string_keys.size()
                     && source.string_keys[at] == key
                 ? source.string_elements[at]
-                : std::string { };
+                : source.associative_default_text.value_or(std::string { });
             ++process.pc;
             return;
         }
@@ -3583,7 +3594,7 @@ void Interpreter::Impl::execute_container(
         const auto at = lower_key(source, key);
         get_string_register(process, operation.destination) = at < source.keys.size() && key_equal(source.keys[at], key)
             ? source.string_elements[at]
-            : std::string { };
+            : source.associative_default_text.value_or(std::string { });
         ++process.pc;
         return;
     }

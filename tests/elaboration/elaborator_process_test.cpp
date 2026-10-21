@@ -2320,7 +2320,7 @@ endmodule
             R"(
 module nonblocking_string;
   string value;
-  initial value <= "bad";
+  initial value <= #1 "bad";
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);

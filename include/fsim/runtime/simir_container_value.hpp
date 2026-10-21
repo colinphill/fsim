@@ -86,6 +86,11 @@ struct ContainerValue {
   std::vector<std::string> string_keys;
   // The index ranges of a VHDL shaped value; empty for every other value.
   std::vector<VhdlShapeRange> shape;
+  // An associative array's `default:` value from an assignment pattern: a
+  // read of a missing key returns it (IEEE 1800-2017 7.9.11). Run-time
+  // state only; elaborated initial values never carry one.
+  std::optional<PackedLogic4> associative_default;
+  std::optional<std::string> associative_default_text;
   ContainerValue() = default;
   // Retain the original packed-container construction surface while the
   // additional storages remain an internal representation detail.

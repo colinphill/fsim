@@ -105,6 +105,9 @@ struct ReadStringObject {
 struct WriteStringObject {
     StringObjectId object { };
     StringRegisterId source { };
+    /// Capture the value now and publish it in the current time slot's
+    /// nonblocking-update phase.
+    bool nonblocking { };
 };
 struct ConcatenateStrings {
     StringRegisterId destination { };
@@ -407,6 +410,9 @@ struct ContainerWrite {
     bool signed_index { true };
     bool linear_index { };
     bool string_index { };
+    /// Set the associative array's default for missing keys instead of an
+    /// element; the index is ignored (IEEE 1800-2017 7.9.11).
+    bool associative_default { };
 };
 
 /// Runtime base and fixed-width metadata shared by indexed part-select writes.
@@ -522,6 +528,8 @@ struct ContainerStringWrite {
     // A string member path inside an unpacked structure element, as for
     // ContainerStringRead.
     std::vector<std::uint32_t> members;
+    /// As for ContainerWrite.
+    bool associative_default { };
 };
 
 /// Read one element whose value is a container or an unpacked aggregate,

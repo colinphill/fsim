@@ -4706,19 +4706,38 @@ CompiledDesignResolver::effective_vhdl_subtype(
         const auto visit = [&](const std::string& step,
                                const vhdl::SubtypeIndication& declared) {
             path.push_back(step);
-            const bool owned = std::ranges::any_of(root.element_constraints,
+            const auto owned = std::ranges::find_if(root.element_constraints,
                 [&](const vhdl::ElementConstraint& constraint) {
                     return constraint.path == path;
                 });
-            const auto element = owned
-                ? std::nullopt
-                : resolve(vhdl::constrained_element_subtype(
-                              level, step, declared),
-                      definition_scope, active_frames);
-            if (element && residual_bounds(residual_bounds, declared, 0U)) {
+            const auto owned_index = owned == root.element_constraints.end()
+                ? std::optional<std::size_t> { }
+                : std::optional { static_cast<std::size_t>(
+                      owned - root.element_constraints.begin()) };
+            // A constraint written on the selected subtype is evaluated in
+            // this frame too: its bounds may name the instance's generics.
+            const auto element = resolve(vhdl::constrained_element_subtype(
+                                             level, step, declared),
+                definition_scope, active_frames);
+            if (element
+                && (owned_index
+                    || residual_bounds(residual_bounds, declared, 0U))) {
                 std::vector<vhdl::RangeConstraint> ranges;
+                const bool array_element = std::ranges::any_of(
+                    element->constraints, [](const auto& range) {
+                        return range.kind == vhdl::RangeKind::array_index;
+                    });
                 for (auto range : element->constraints) {
-                    if (range.kind != vhdl::RangeKind::array_index) {
+                    // A scalar element's range is the instance's as well
+                    // (IEEE 1076-2008 4.9, 5.3.3.1).
+                    const bool kept = array_element
+                        ? range.kind == vhdl::RangeKind::array_index
+                        : ranges.empty()
+                            && (range.kind == vhdl::RangeKind::integer
+                                || range.kind
+                                    == vhdl::RangeKind::enumeration
+                                || range.kind == vhdl::RangeKind::discrete);
+                    if (!kept) {
                         continue;
                     }
                     if (!range.left || !range.right
@@ -4730,7 +4749,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     range.right_expression.reset();
                     ranges.push_back(range);
                 }
-                if (!ranges.empty()) {
+                if (!ranges.empty() && owned_index) {
+                    root.element_constraints[*owned_index].constraints
+                        = std::move(ranges);
+                } else if (!ranges.empty()) {
                     root.element_constraints.push_back(
                         { path, std::move(ranges) });
                 }
@@ -4769,6 +4791,18 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 *design_, effective_, package.member);
             if (declaration && declaration->vhdl != nullptr) {
                 auto selected = declaration->vhdl->subtype;
+                // A generic type of the instance denotes its actual (IEEE
+                // 1076-2008 6.5.3, 4.9).
+                if (declaration->vhdl->form
+                    == vhdl::DeclarationForm::generic_type) {
+                    const auto bound = std::ranges::find(
+                        package.generic_bindings, package.member,
+                        &CompiledActualBinding::formal);
+                    if (bound != package.generic_bindings.end()
+                        && bound->vhdl_type) {
+                        selected = bound->vhdl_type;
+                    }
+                }
                 if (!selected && declaration->vhdl->declared_type) {
                     selected.emplace();
                     selected->type_mark.target
@@ -6471,6 +6505,29 @@ CompiledDesignResolver::bind_vhdl_generics(
                             subtype = *actual->vhdl->subtype;
                         }
                     }
+                    // `inst.t` naming a generic type of another package
+                    // instance denotes that instance's actual (IEEE
+                    // 1076-2008 6.5.3, 4.9).
+                    if (actual && actual->vhdl != nullptr
+                        && actual->vhdl->form
+                            == vhdl::DeclarationForm::generic_type) {
+                        const auto members = resolve_vhdl_package_members(
+                            name,
+                            use_scope.valid() ? use_scope
+                                              : expression->vhdl->scope,
+                            {});
+                        if (members.candidates.size() == 1U
+                            && members.candidates.front().package_instance) {
+                            const auto& frame
+                                = members.candidates.front().generic_bindings;
+                            const auto chained = std::ranges::find(frame,
+                                *selected, &CompiledActualBinding::formal);
+                            if (chained != frame.end()
+                                && chained->vhdl_type) {
+                                subtype = *chained->vhdl_type;
+                            }
+                        }
+                    }
                 } else {
                     subtype.type_mark.spelling
                         = expression->vhdl->text;
@@ -6555,6 +6612,58 @@ CompiledDesignResolver::bind_vhdl_generics(
         }
     }
     return result;
+}
+
+std::optional<CompiledVhdlPackageInstanceBinding>
+CompiledDesignResolver::vhdl_package_instance_binding(
+    const DeclarationId instance_id, const ScopeId use_scope) const
+{
+    const auto instance = find_declaration(*design_, effective_, instance_id);
+    if (!instance || instance->vhdl == nullptr
+        || instance->vhdl->form != vhdl::DeclarationForm::package_instance
+        || !instance->vhdl->package) {
+        return std::nullopt;
+    }
+    const auto lookup_units = vhdl_lookup_units(
+        *design_, selected_unit_,
+        use_scope.valid() ? use_scope : instance->vhdl->scope);
+    if (lookup_units.empty()) {
+        return std::nullopt;
+    }
+    const auto& profile = *instance->vhdl->package;
+    auto template_name = vhdl_spelling(profile.template_name);
+    auto library = normalized_library(lookup_units.front()->library);
+    if (const auto separator = template_name.rfind('.');
+        separator != std::string_view::npos) {
+        library = effective_vhdl_library(
+            template_name.substr(0U, separator),
+            lookup_units.front()->library);
+        template_name.remove_prefix(separator + 1U);
+    }
+    for (const auto& package : design_->vhdl_units()) {
+        if (package.kind != vhdl::UnitKind::package
+            || !package.primary_name.empty()
+            || !same_vhdl_identifier(package.name, template_name)
+            || !same_vhdl_identifier(
+                normalized_library(package.library), library)) {
+            continue;
+        }
+        std::vector<DeclarationId> formals;
+        for (const auto id : package.declarations) {
+            const auto declaration = find_declaration(
+                *design_, effective_, id);
+            if (declaration && declaration->vhdl != nullptr
+                && vhdl::is_generic_formal(declaration->vhdl->form)) {
+                formals.push_back(id);
+            }
+        }
+        if (auto bindings = bind_vhdl_generics(
+                formals, profile.generic_map, instance->vhdl->scope)) {
+            return CompiledVhdlPackageInstanceBinding {
+                package.id, std::move(*bindings) };
+        }
+    }
+    return std::nullopt;
 }
 
 CompiledVhdlPackageResolution
@@ -6664,14 +6773,6 @@ CompiledDesignResolver::resolve_vhdl_package_members(
 
     const auto append_instance = [&](const DeclarationId instance_id,
                                      const std::string_view member) {
-        const auto instance = find_declaration(
-            *design_, effective_, instance_id);
-        if (!instance || instance->vhdl == nullptr
-            || instance->vhdl->form
-                != vhdl::DeclarationForm::package_instance
-            || !instance->vhdl->package) {
-            return;
-        }
         // Binding an instance's generics can resolve a default subprogram
         // (`is <>`) that names the instance again; it is not its own actual.
         thread_local std::set<std::uint32_t> binding_instances;
@@ -6682,42 +6783,16 @@ CompiledDesignResolver::resolve_vhdl_package_members(
             std::uint32_t id;
             ~BindingGuard() { binding_instances.erase(id); }
         } binding_guard { instance_id.value() };
-        const auto& profile = *instance->vhdl->package;
-        auto template_name = vhdl_spelling(profile.template_name);
-        auto library = normalized_library(owner->library);
-        if (const auto separator = template_name.rfind('.');
-            separator != std::string_view::npos) {
-            library = effective_vhdl_library(
-                template_name.substr(0U, separator),
-                owner->library);
-            template_name.remove_prefix(separator + 1U);
+        auto binding = vhdl_package_instance_binding(instance_id, use_scope);
+        const auto package = binding
+            ? design_->find_unit(binding->template_unit)
+            : std::nullopt;
+        if (!package || package->vhdl == nullptr) {
+            return;
         }
-        for (const auto& package : design_->vhdl_units()) {
-            if (package.kind != vhdl::UnitKind::package
-                || !package.primary_name.empty()
-                || !same_vhdl_identifier(package.name, template_name)
-                || !same_vhdl_identifier(
-                    normalized_library(package.library), library)) {
-                continue;
-            }
-            std::vector<DeclarationId> formals;
-            for (const auto id : package.declarations) {
-                const auto declaration = find_declaration(
-                    *design_, effective_, id);
-                if (declaration && declaration->vhdl != nullptr
-                    && vhdl::is_generic_formal(declaration->vhdl->form)) {
-                    formals.push_back(id);
-                }
-            }
-            const auto bindings = bind_vhdl_generics(
-                formals, profile.generic_map,
-                instance->vhdl->scope);
-            if (!bindings) {
-                continue;
-            }
-            append_template(library, template_name, member,
-                instance_id, &*bindings);
-        }
+        append_template(normalized_library(package->vhdl->library),
+            package->vhdl->name, member, instance_id,
+            &binding->generic_bindings);
     };
 
     // The package instances named `name` in the nearest enclosing scope of
@@ -7747,12 +7822,33 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
         }
         return declaration_result(std::move(literals));
     };
+    // A declaration is visible from its end onwards (IEEE 1076-2008 12.3):
+    // in the use's own region, one written after the use does not yet hide
+    // an outer declaration.
+    const auto declared_after_use = [&](const DeclarationId id) {
+        const auto declaration = find_declaration(*design_, effective_, id);
+        const auto& spans = design_->semantics.source_spans();
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->source.valid() || !name.source.valid()
+            || declaration->vhdl->source.value() >= spans.size()
+            || name.source.value() >= spans.size()) {
+            return false;
+        }
+        const auto& declared = spans[declaration->vhdl->source.value()];
+        const auto& used = spans[name.source.value()];
+        return declared.file == used.file && !declared.expansion
+            && !used.expansion && declared.begin.offset > used.begin.offset;
+    };
     auto scope = use_scope;
     const Scope* root { };
     for (std::size_t depth { };
          scope.valid() && depth <= design_->semantics.scopes().size();
          ++depth) {
-        const auto tier = in_scope(scope);
+        auto tier = in_scope(scope);
+        if (scope == use_scope && !tier.candidates.empty()
+            && std::ranges::all_of(tier.candidates, declared_after_use)) {
+            tier = { CompiledResolutionStatus::not_found, { } };
+        }
         if (tier.status != CompiledResolutionStatus::not_found) {
             if (!tier.candidates.empty()
                 && std::ranges::all_of(tier.candidates, is_literal)) {

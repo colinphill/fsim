@@ -2140,6 +2140,7 @@ module container_invalid_lowering;
   pair_t composite_element[int];
   logic [64:0] too_wide_elements[];
   byte lookup[int];
+  byte named[string];
   byte dynamic[];
   byte fixed[1:0];
   string strings[1:0];
@@ -2245,8 +2246,8 @@ module container_invalid_lowering;
     fixed.delete();
     fixed = new[2];
     dynamic = new[2](fixed);
-    $readmemh("invalid.hex", dynamic);
-    $writememh("invalid-out.hex", dynamic);
+    $readmemh("invalid.hex", named);
+    $writememh("invalid-out.hex", named);
   end
 endmodule
 )",

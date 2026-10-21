@@ -253,6 +253,101 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 81: nvc gold output, class specializations, VHDL conversions and external names
+
+Full run on the frozen `b81y`, compared with Batch 80 (`b80y`). Batch 81
+closes 51 corpus tests (Verilator 30, nvc 15, vests 4, vhdl-compliance 1,
+ivtest 1). The two nvc losses, `signal23` and `ieee14`, come from the gold
+output comparison below; the Batch80 column counts them as passes.
+
+| Suite | Batch80 passes / in scope | Batch81 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2549 / 2563 | 2550 / 2562 | 264 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1897 / 2067 | 1927 / 2057 | 358 |
+| vests | 3635 / 3646 | 3639 / 3646 | 2 |
+| nvc | 1110 / 1245 | 1123 / 1243 | 239 |
+| vhdl-compliance | 49 / 69 | 50 / 65 | 7 |
+
+Runner (`scripts/lrm_corpus.py`):
+- nvc cases marked `gold` now compare fsim's output with nvc's gold file, as
+  nvc's own test runner does. On `b80y` this turns 19 passes into failures
+  (wrong default assertion text, subprogram path names, composite images,
+  textio character writes and others). Batch 81 fixes 17 of them; `signal23`
+  and `ieee14` still differ from the gold output.
+- Verilator: `+libext+` library options; portless, parameterless modules that
+  nothing instantiates are extra tops (`t_inst_v2k`, `t_multitop_xref`,
+  `t_tri_no_top`).
+- New exclusions: Verilator cases that need non-standard behaviour, ivtest
+  `sformatf` (an Icarus formatting extension), and vhdl-compliance tb_016,
+  tb_034, tb_043 and tb_086 (they need tool-specific behaviour).
+
+SystemVerilog classes (IEEE 1800-2017 8.13, 8.23, 8.25):
+- Class specializations resolve nested classes, typedefs and value
+  parameters in the receiver's specialization; inherited nested classes are
+  found through the base chain; `C#(0)::b[i] = v` is an lvalue.
+- Class function lowering phase 2: a class function that cannot be lowered
+  falls back to the interpreter one function at a time; container results and
+  handle-container methods lower to SimIR.
+- `$unit` classes take the compilation unit's time scale.
+
+SystemVerilog values and places:
+- Container value places: queue slices and pushes of aggregates, queue
+  arguments, unpacked-to-queue assignment, associative arrays read by
+  `$readmem`, string-to-number conversions of dynamic strings.
+- A packed concatenation target can name a member of an interface instance;
+  a constant part-select keeps its dimension direction for array queries.
+- Constant structure parameters: a member select of an unpacked structure
+  parameter, with unnamed members taking their declared defaults (7.2.2).
+- `$sscanf` time fields, `with` clauses on array locator and reduction
+  methods, `inside` with ranges, `rand_mode` in constraints.
+
+VHDL (IEEE 1076-2008):
+- External names in generate regions are lowered once the regions' instances
+  exist (8.7); chained selections and slices of function results; string
+  functions with formal ranges taken from the actual.
+- Type conversions between closely related array types (9.3.6); a bare
+  function name as a string actual; BOOLEAN and BIT enumeration indexes.
+- Block ports of mode `out` whose actual is a slice or index are aliases of
+  the actual (6.5.6.3); out and inout port defaults initialize an unresolved
+  actual that only they drive.
+- Signatures in subprogram `'path_name` and `'instance_name` elements
+  (16.2.5, VHDL-2002 and later); `'image` of TIME record elements; default
+  assertion text and severity (11.5); protected-type attribute ranges;
+  sequential blocks (VHDL-2019 11.9).
+
+Regressions the full run and the labelled ctest caught:
+- The `b81v` full run lost six tests. elab37 and issue428: an inout port
+  default overwrote a STD_LOGIC actual's initial value, because the actual's
+  resolution is assigned after port binding. issue38: VHDL-1993 path names
+  have no subprogram signatures. tb_012: `'image` of a record with a TIME
+  element. t_struct_unpacked_init_param: unpacked structure member defaults.
+  t_paramgraph_cloned_refdtype: class type substitution moved out of a
+  type actual that copies of the type share, emptying a typedef in another
+  specialization.
+- The `b81x` run then lost issue885 and 80 sv-tests UVM and randomization
+  cases. Copying the shared type actual exposed a substitution cycle (`T`
+  bound to `pool#(T)`) that crashed the UVM package compile; type parameter
+  substitution is now simultaneous, so a bound type is not substituted
+  again. issue885: a resolved actual's initial value is now the resolution
+  of its sources' initial values (out and inout port defaults, and its own
+  default when a process outside those ports drives it, IEEE 1076-2008
+  14.7.3.2), so elab37 and issue885 both hold. All pass on `b81y`.
+- The labelled ctest found a static function's queue result lost (static
+  storage now binds before the local result register) and a stale runtime
+  unit test input (`real` scan fields have no underscores, 1800-2017 Table
+  21-7). With these fixed, ctest has 28 failures, all known.
+
+Open leads (`.local-artifacts/lrm-closure/triage/b81/`):
+- ch_04_09: an array of CHARACTER's frontend width is its element count.
+- gensub7: return-type overloads of generic subprogram instances.
+- tb_072b: a null target assigned from a call.
+- Static locals of lowered class functions are process registers
+  initialized at the first call site; they need storage per class
+  specialization (6.21, 8.25): `diag-class-static-locals.md`, with repros.
+- Stream `with [range]`, the VHDL singles in
+  `diag-vhdl-hir-singles-b81o.md`.
+
 ### Batch 80: VHDL context typing and elaboration-time values, SV declared-type places
 
 Full run on the frozen `b80y`, compared with Batch 79 (`b79ab`). Batch 80

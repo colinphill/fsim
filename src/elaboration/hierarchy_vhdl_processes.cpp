@@ -2,6 +2,7 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -46,8 +47,19 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
     ContainerMap& container_objects,
     ReadOnlyContainerSet& read_only_containers,
     SpecializationInfo& specialization,
-    std::size_t& concurrent_order)
+    std::size_t& concurrent_order,
+    std::vector<std::size_t>* const deferred,
+    const std::vector<std::size_t>* const only)
 {
+    // With `deferred`, a generated region that contains an external name is
+    // collected there and lowered, through `only`, once the architecture's
+    // instances exist (IEEE 1076-2008 8.7, 14.5).
+    const auto external_spans = deferred != nullptr
+        ? compiled_vhdl_external_name_spans(architecture)
+        : std::vector<const semantic::SourceSpan*> { };
+    const auto names_external = [&](const semantic::SourceSpanId source) {
+        return compiled_source_encloses(source, external_spans);
+    };
 
     // Signals a generated occurrence may name: the architecture's and the
     // generate region's.
@@ -64,7 +76,20 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                   materialization.signal_declarations.end());
               return declarations;
           };
-    for (auto& materialization : materializations) {
+    for (std::size_t materialization_index { };
+         materialization_index < materializations.size();
+         ++materialization_index) {
+        auto& materialization = materializations[materialization_index];
+        if (only != nullptr
+            && std::ranges::find(*only, materialization_index)
+                == only->end()) {
+            continue;
+        }
+        if (!external_spans.empty()
+            && names_external(materialization.region->source)) {
+            deferred->push_back(materialization_index);
+            continue;
+        }
         Lowerer generated_lowerer {
             design_,
             materialization.signals,

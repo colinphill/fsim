@@ -1364,6 +1364,16 @@ bool Lowerer::initialize_hir_declarations(
                 }
                 process_.operations.emplace_back(CopyContainerRegister {
                     destination, *initial });
+            } else if (input.lifetime == semantic::sv::Lifetime::automatic
+                || (input.lifetime == semantic::sv::Lifetime::implicit
+                    && active_hir_callable_
+                    && hir_callable_frames_[*active_hir_callable_]
+                           .type.automatic)) {
+                // An automatic variable without an initializer starts at its
+                // type's default on each entry to its block (IEEE 1800-2017
+                // 6.21, 6.8).
+                process_.operations.emplace_back(CopyContainerRegister {
+                    destination, allocate_container_register(*type) });
             }
             continue;
         }
@@ -3968,25 +3978,64 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     const std::string_view hierarchy)
 {
     // A process whose lowered class function bodies cannot all be lowered
-    // is lowered again with those calls left to the runtime interpreter.
+    // is lowered again with calls to the failing functions left to the
+    // runtime interpreter, and as a last resort with every class function
+    // call left there.
     const auto diagnostics_before = diagnostics_.size();
     const auto processes_before = design_.process_count();
-    class_functions_lowered_ = false;
-    auto lowered = lower_hir_process_body_once(
-        description, language, hierarchy);
-    // A pass that reported errors failed too, even if it produced a
-    // process.
-    if ((lowered && diagnostics_.size() == diagnostics_before)
-        || !class_functions_lowered_ || !lower_class_functions_
-        || design_.process_count() != processes_before) {
-        return lowered;
+    const struct InterpretedClassFunctions {
+        Lowerer& lowerer;
+        ~InterpretedClassFunctions()
+        {
+            lowerer.hir_interpreted_class_functions_.clear();
+            lowerer.hir_failed_class_functions_.clear();
+        }
+    } interpreted_scope { *this };
+    std::optional<Process> lowered;
+    for (;;) {
+        class_functions_lowered_ = false;
+        hir_failed_class_functions_.clear();
+        lowered = lower_hir_process_body_once(
+            description, language, hierarchy);
+        // A pass that reported errors failed too, even if it produced a
+        // process.
+        if ((lowered && diagnostics_.size() == diagnostics_before)
+            || !class_functions_lowered_ || !lower_class_functions_
+            || design_.process_count() != processes_before) {
+            return lowered;
+        }
+        // A hierarchical name not yet elaborated (a virtual interface
+        // member read in a lowered class function) defers the whole
+        // process to the second pass; the interpreter cannot resolve it
+        // either.
+        if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
+            return std::nullopt;
+        }
+        // Strict mode reports the failing body instead of falling back.
+        if (std::getenv("FSIM_CLASS_LOWER_STRICT") != nullptr) {
+            return lowered;
+        }
+        bool narrowed { };
+        for (const auto declaration : hir_failed_class_functions_) {
+            narrowed = hir_interpreted_class_functions_.insert(declaration)
+                           .second
+                || narrowed;
+        }
+        if (!narrowed) {
+            break;
+        }
+        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            for (auto index = diagnostics_before;
+                 index < diagnostics_.size(); ++index) {
+                std::cerr << "[fsim-hir-lower] class-function body left to "
+                             "the runtime after "
+                          << diagnostics_[index].code << ": "
+                          << diagnostics_[index].message << '\n';
+            }
+        }
+        diagnostics_.resize(diagnostics_before);
     }
-    // A hierarchical name not yet elaborated (a virtual interface member
-    // read in a lowered class function) defers the whole process to the
-    // second pass; the interpreter cannot resolve it either.
-    if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
-        return std::nullopt;
-    }
+    hir_interpreted_class_functions_.clear();
     if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
         for (auto index = diagnostics_before; index < diagnostics_.size();
              ++index) {

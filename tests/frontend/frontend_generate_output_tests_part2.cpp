@@ -512,13 +512,14 @@ endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      std::any_of(
+      std::none_of(
           bad_escape.diagnostics.begin(),
           bad_escape.diagnostics.end(),
           [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-SV-SEM-040";
           }),
-      "unsupported output-string escapes need a targeted diagnostic");
+      "an escaped character outside Table 5-1 is that character "
+      "(IEEE 1800-2023 5.9.1)");
 
   const auto wide_octal_escape = parse_text(
       "wide_octal_escape.sv",

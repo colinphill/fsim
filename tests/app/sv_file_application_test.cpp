@@ -397,7 +397,7 @@ fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
     assert(read_text(directory / "vhdl-output.txt") == "27\n");
     assert(
         read_text(directory / "vhdl-text-output.txt")
-        == "   7TRUE0  |\nX\n");
+        == "   7true0  |\nX\n");
     if (engine != fsim::app::SimulationEngine::compiled) {
         assert(std::ranges::any_of(
             points,

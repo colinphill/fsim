@@ -117,7 +117,8 @@ void assign_class_identities(
 [[nodiscard]] std::vector<ClassEntry*> resolve_name(
     const std::string_view spelling,
     const ClassEntry& owner,
-    std::vector<ClassEntry>& entries) {
+    std::vector<ClassEntry>& entries,
+    const bool through_bases = true) {
   const auto matching = [&](const auto& predicate) {
     std::vector<ClassEntry*> result;
     for (auto& entry : entries) {
@@ -159,6 +160,32 @@ void assign_class_identities(
     lexical.resize(separator);
   }
 
+  // A nested class inherited from a base class (IEEE 1800-2017 8.13, 8.23).
+  std::set<std::string> visited;
+  for (const ClassEntry* current = &owner;
+       through_bases && current->declaration->base
+       && visited.insert(current->declaration->canonical_identity).second;) {
+    const auto& base = *current->declaration->base;
+    const auto bases = base.declaration_identity.empty()
+        ? resolve_name(base.name, *current, entries, false)
+        : matching([&](const ClassEntry& entry) {
+            return entry.declaration->canonical_identity
+                == base.declaration_identity;
+          });
+    if (bases.size() != 1U) {
+      break;
+    }
+    auto inherited = matching([&](const ClassEntry& entry) {
+      return entry.declaration->canonical_identity
+          == bases.front()->declaration->canonical_identity + "::"
+              + std::string{spelling};
+    });
+    if (!inherited.empty()) {
+      return inherited;
+    }
+    current = bases.front();
+  }
+
   auto sibling = matching([&](const ClassEntry& entry) {
     const auto& identity = owner.declaration->canonical_identity;
     const auto separator = identity.rfind("::");
@@ -190,11 +217,15 @@ void assign_class_identities(
     }
   }
 
+  // Only the compilation unit's own `$unit` classes; a package class needs
+  // an import or `pkg::` (IEEE 1800-2017 26.3, 3.12.1).
   return matching([&](const ClassEntry& entry) {
     return entry.library == owner.library
         && entry.compilation_unit_identity
             == owner.compilation_unit_identity
-        && entry.declaration->name == spelling;
+        && entry.declaration->name == spelling
+        && entry.declaration->canonical_identity.starts_with(
+            entry.library + "::$unit");
   });
 }
 

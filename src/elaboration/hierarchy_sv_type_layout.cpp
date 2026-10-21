@@ -579,8 +579,16 @@ std::optional<ContainerType> systemverilog_container_type(
             if (result.associative
                 && candidate.associative_index) {
                 const auto& index = *candidate.associative_index;
-                semantic::sv::TypeReference index_reference;
+                // The metadata keeps the index's packed range
+                // (`[bit [63:0]]`, `[*]`).
+                semantic::sv::TypeReference index_reference
+                    = candidate.associative_index_metadata
+                    ? semantic::sv::type_reference_from_associative_index_metadata(
+                          *candidate.associative_index_metadata)
+                    : semantic::sv::TypeReference { };
                 index_reference.target = index;
+                const bool packed_index = index_reference.packed_range
+                    || !index_reference.packed_dimensions.empty();
                 const auto effective_index
                     = type_resolver.underlying_systemverilog_type(
                                        index_reference,
@@ -636,6 +644,7 @@ std::optional<ContainerType> systemverilog_container_type(
                     // while adding a packed range, so use the fully
                     // resolved declaration width for non-builtin names.
                     result.index_width = direct_builtin_width
+                            && !(packed_index && width)
                         ? *direct_builtin_width
                         : width
                         ? static_cast<std::uint32_t>(*width)

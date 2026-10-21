@@ -848,6 +848,8 @@ struct VhdlModeViewIndication {
     bool explicit_subtype { };
     std::vector<VhdlModeViewPortElement> elements;
     SourceSpan span;
+    // `view V'CONVERSE`: the view with each mode reversed (6.5.2, 16.2.6).
+    bool converse { };
 };
 
 /// The hidden typedef that gives an anonymous SystemVerilog enumeration a

@@ -378,6 +378,10 @@ struct SystemVerilogClassDeclaration {
     // Package imports in effect where a compilation-unit ($unit) class is
     // declared (IEEE 1800-2017 26.3); empty for other classes.
     std::vector<SystemVerilogImport> compilation_unit_imports;
+    // The $unit time unit and precision where such a class is declared
+    // (IEEE 1800-2023 3.14.2.3); empty for other classes.
+    std::string time_unit;
+    std::string time_precision;
     StandardRevision standard_revision {
         StandardRevision::SystemVerilog2017
     };
