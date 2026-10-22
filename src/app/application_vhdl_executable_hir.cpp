@@ -1640,17 +1640,22 @@ class VhdlExecutableBuilder final {
       }
       // An object alias without a subtype indication denotes its object
       // and has that object's subtype (IEEE 1076-2008 6.6.2).
+      // An alias of a record element or other subelement of an object
+      // (`alias a is s.f`) is an object alias too (6.6.2).
       const bool untyped_object_alias = declaration != nullptr
           && declaration->form == vh::DeclarationForm::alias
           && !declaration->subtype && declaration->alias_target
-          && declaration->alias_target->selected
+          && !declaration->alias_signature
           && expression.operands.size() == 1U
-          && [&] {
-               const auto* aliased = find_declaration(
-                   *declaration->alias_target->selected);
-               return aliased != nullptr && aliased->subtype
-                   && !aliased->callable && indexed_object(aliased->form);
-             }();
+          && (declaration->alias_target->selected
+                 ? [&] {
+                       const auto* aliased = find_declaration(
+                           *declaration->alias_target->selected);
+                       return aliased != nullptr && aliased->subtype
+                           && !aliased->callable
+                           && indexed_object(aliased->form);
+                   }()
+                 : declaration->initializer.has_value());
       if (declaration == nullptr
           || (!declaration->subtype && !untyped_object_alias)
           || !indexed_object(declaration->form)) {

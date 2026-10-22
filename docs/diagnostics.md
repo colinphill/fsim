@@ -123,6 +123,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VPI-ROUTINE-007` | error | The host service callback returned a truncated, reserved, invalid-status, failed, or missing-handle result. |
 | `FSIM-VPI-LOAD-001` | error | A `--vpi` module could not be loaded, or does not export its bootstrap entry point. |
 | `FSIM-DPI-LOAD-001` | error | An `--sv-lib` DPI-C library could not be loaded, or this build has no DPI-C call support (libffi was not found when it was configured). |
+| `FSIM-VPI-001` | error | The code `vpi_chk_error` reports for a failed VPI routine call made by a `--vpi` module (IEEE 1800-2023 38.2). |
+| `FSIM-VHPI-LOAD-001` | error | A `--vhpi` module could not be loaded, or does not export its bootstrap entry point. |
+| `FSIM-VHPI-ASSERT` | error | The prefix of a message a `--vhpi` module reports with `vhpi_assert`; error, failure and system severities fail the run (IEEE 1076-2019 23.2). |
 
 ## Code coverage model
 

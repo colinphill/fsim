@@ -10,10 +10,10 @@ Exclusions never count as closures.
 
 | suite | not run | out of scope |
 |---|---:|---:|
-| verilator | 70 | 271 |
+| verilator | 70 | 279 |
 | ivtest | 20 | 299 |
 | vests | 2 | 0 |
-| nvc | 251 | 0 |
+| nvc | 218 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## verilator
@@ -84,6 +84,7 @@ Exclusions never count as closures.
 | `t_display_string_noopt` | out of scope | calls $sformatf in a constant function |
 | `t_display_time` | out of scope | calls $timeformat with one to three or empty arguments; IEEE 1800-2017 20.4.2 requires all four or none |
 | `t_dpi_accessors` | not run | needs the Verilator C++ model API |
+| `t_dpi_arg_input_unpack` | out of scope | its SystemVerilog branch for simulators other than Verilator and NC passes the undeclared variable shotreal_array1 (data shall be declared before use, IEEE 1800-2023 6.5) |
 | `t_dpi_context` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_context_noopt` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_decl` | not run | needs the Verilator C++ model API |
@@ -255,6 +256,8 @@ Exclusions never count as closures.
 | `t_sequence_within` | out of scope | expects Verilator's match counts; the case notes other simulators differ (vacuous successes run the pass action, IEEE 1800-2017 16.14.1) |
 | `t_setuphold` | out of scope | uses internal variables and nets as timing-check events; they shall be module input or inout ports (IEEE 1800-2017 A.7.5.3) |
 | `t_slice_display` | out of scope | indexes the result of an array slice; a part-select range is the last select (IEEE 1800-2017 A.8.4) |
+| `t_split_var_0` | out of scope | procedurally assigns the wire tmp of barshift_bitslice and the output wire of unpack2pack; a net cannot be procedurally assigned (IEEE 1800-2023 6.5) |
+| `t_split_var_2_trace` | out of scope | procedurally assigns the wire tmp of barshift_bitslice and the output wire of unpack2pack; a net cannot be procedurally assigned (IEEE 1800-2023 6.5) |
 | `t_split_var_3_wreal` | out of scope | uses Verilog-AMS keywords (not an IEEE 1800 begin_keywords version, 22.14) |
 | `t_split_var_4` | out of scope | assumes two-state initial values |
 | `t_split_var_5` | out of scope | assumes two-state initial values |
@@ -349,8 +352,10 @@ Exclusions never count as closures.
 | `t_vpi_escape` | out of scope | expects Verilator's vpiFullName spelling 'TOP.escaped_normal' and a 'top.' root for other simulators; IEEE 1800-2023 37.3.1 gives vpiFullName as the full hierarchical name |
 | `t_vpi_force` | not run | needs the Verilator C++ model API |
 | `t_vpi_forceable_bad` | not run | needs the Verilator C++ model API |
+| `t_vpi_forceable_var` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
 | `t_vpi_module` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_module_dpi` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
+| `t_vpi_package` | out of scope | looks up '$unit::' names with vpi_handle_by_name, which shall not reach objects of a compilation unit (IEEE 1800-2023 37.10 detail 6) |
 | `t_vpi_param` | out of scope | expects vpi_get(vpiLocalParam) on a parameter to raise an error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters |
 | `t_vpi_public_depth` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_public_depth_off` | out of scope | Verilator $c extension |
@@ -359,6 +364,9 @@ Exclusions never count as closures.
 | `t_vpi_sc` | not run | needs the Verilator C++ model API |
 | `t_vpi_time_cb` | not run | needs the Verilator C++ model API |
 | `t_vpi_unimpl` | not run | needs the Verilator C++ model API |
+| `t_vpi_var` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
+| `t_vpi_var2` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
+| `t_vpi_var3` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
 | `t_wait_iface_vif` | out of scope | expects an always @* block to run without an event |
 | `t_wrapper_multicontext` | not run | needs the Verilator C++ model API |
 
@@ -767,22 +775,14 @@ Exclusions never count as closures.
 | `integer2` | not run | expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; out-of-range INTEGER arithmetic is erroneous (IEEE 1076-2019 5.2.3.1) |
 | `integer3` | not run | asserts nvc's repeated range evaluation count, which the test notes should be 1 |
 | `issue1030` | not run | nvc-specific test kind wave |
-| `issue1035` | not run | nvc-specific test kind vhpi |
 | `issue1044` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
-| `issue1045` | not run | nvc-specific test kind vhpi |
-| `issue1057` | not run | nvc-specific test kind vhpi |
-| `issue1060` | not run | nvc-specific test kind vhpi |
+| `issue1060` | not run | expects vhpi_assert with severity vhpiError to end the simulation; whether an error stops it is implementation-defined (IEEE 1076-2019 23.2, 10.3) |
 | `issue1071` | not run | nvc-specific test kind wave |
-| `issue1161` | not run | nvc-specific test kind vhpi |
 | `issue1175` | not run | nvc-specific test kind relaxed |
-| `issue1192` | not run | nvc-specific test kind vhpi |
-| `issue1213` | not run | nvc-specific test kind vhpi |
 | `issue1218` | not run | uses nvc's own library packages |
-| `issue1233` | not run | nvc-specific test kind vhpi |
-| `issue1240` | not run | nvc-specific test kind vhpi |
 | `issue1287` | not run | nvc-specific test kind shell |
 | `issue1294` | not run | expects nvc's mapping of a Verilog x to std_logic 'U'; neither IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value mapping, and fsim maps x to 'X' (the value of the same name) |
-| `issue1301` | not run | nvc-specific test kind vhpi |
+| `issue1301` | not run | uses GHDL's foreign attribute form; IEEE 1076-2019 20.2.4 defines only the VHPI and VHPIDIRECT forms |
 | `issue1359` | not run | nvc-specific test kind shell |
 | `issue1362` | not run | nvc-specific test kind wave |
 | `issue1386` | not run | nvc-specific test kind cover |
@@ -791,21 +791,15 @@ Exclusions never count as closures.
 | `issue1406` | not run | nvc-specific test kind wave |
 | `issue1410` | not run | nvc-specific test kind shell |
 | `issue1420` | not run | nvc-specific test kind wave |
-| `issue1428` | not run | nvc-specific test kind vhpi |
 | `issue1433` | not run | nvc-specific test kind shell |
-| `issue1463` | not run | nvc-specific test kind vhpi |
-| `issue1473` | not run | nvc-specific test kind vhpi |
+| `issue1473` | not run | binds a VHDL component to a Verilog module through nvc's vhpiVerilogModuleK extension class, outside IEEE 1076-2019 |
 | `issue1476` | not run | nvc-specific test kind wave |
 | `issue1494` | not run | nvc-specific test kind cover |
-| `issue1505` | not run | nvc-specific test kind vhpi |
 | `issue1512` | not run | nvc-specific test kind cover |
 | `issue1516` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `issue1517` | not run | nvc-specific test kind cover |
-| `issue1579` | not run | nvc-specific test kind vhpi |
 | `issue1581` | not run | nvc-specific test kind exit |
 | `issue1595` | not run | nvc-specific test kind tcl |
-| `issue1616` | not run | nvc-specific test kind vhpi |
-| `issue1621` | not run | nvc-specific test kind vhpi |
 | `issue1624` | not run | nvc-specific test kind tcl |
 | `issue1626` | not run | nvc-specific test kind tcl |
 | `issue1629` | not run | nvc-specific test kind tcl |
@@ -828,15 +822,13 @@ Exclusions never count as closures.
 | `issue571` | not run | nvc-specific test kind relaxed |
 | `issue586` | not run | nvc-specific test kind shell |
 | `issue589` | not run | declares an access parameter on a protected method, which needs VHDL-2019 (IEEE 1076-2019 5.6.2); the test runs as VHDL-2000 |
-| `issue612` | not run | nvc-specific test kind vhpi |
+| `issue612` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
 | `issue646` | not run | nvc-specific test kind relaxed |
 | `issue677` | not run | uses UNAFFECTED in a sequential signal assignment, which needs VHDL-2008 (IEEE 1076-2008 10.5.2.1); the test runs as VHDL-1993 |
 | `issue703` | not run | nvc-specific test kind wave |
 | `issue704` | not run | nvc-specific test kind wave |
 | `issue715` | not run | nvc-specific test kind shell |
-| `issue744` | not run | nvc-specific test kind vhpi |
 | `issue752` | not run | nvc-specific test kind shell |
-| `issue762` | not run | nvc-specific test kind vhpi |
 | `issue769` | not run | nvc-specific test kind shell |
 | `issue819` | not run | assigns an aggregate to an aggregate target; neither type is determinable from context (IEEE 1076-2008 10.5.2.1, 9.3.3.1) |
 | `issue840` | not run | nvc-specific test kind wave |
@@ -855,11 +847,11 @@ Exclusions never count as closures.
 | `issue957` | not run | nvc-specific test kind wave |
 | `issue962` | not run | nvc-specific test kind wave |
 | `issue972` | not run | nvc-specific test kind wave |
-| `issue978` | not run | nvc-specific test kind vhpi |
+| `issue978` | not run | reads 64-bit integer and physical values through VHPI |
 | `issue979` | not run | nvc-specific test kind wave |
 | `issue983` | not run | nvc-specific test kind relaxed |
 | `issue985` | not run | nvc-specific test kind wave |
-| `issue988` | not run | nvc-specific test kind vhpi |
+| `issue988` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
 | `lfsr` | not run | nvc stop-delta option |
 | `libdir1` | not run | nvc-specific test kind shell |
 | `libdir2` | not run | nvc-specific test kind shell |
@@ -909,27 +901,10 @@ Exclusions never count as closures.
 | `tcl5` | not run | nvc-specific test kind tcl |
 | `textio4` | not run | expects READ of a BIT_VECTOR to read past embedded spaces; a character that cannot be part of the value ends the read (IEEE 1076-2008 16.4) |
 | `toplevel3` | not run | hierarchical generic override |
-| `vhpi1` | not run | nvc-specific test kind vhpi |
-| `vhpi10` | not run | nvc-specific test kind vhpi |
-| `vhpi11` | not run | nvc-specific test kind vhpi |
-| `vhpi12` | not run | nvc-specific test kind vhpi |
-| `vhpi13` | not run | nvc-specific test kind vhpi |
-| `vhpi14` | not run | nvc-specific test kind vhpi |
-| `vhpi15` | not run | nvc-specific test kind vhpi |
-| `vhpi16` | not run | nvc-specific test kind vhpi |
-| `vhpi17` | not run | nvc-specific test kind vhpi |
-| `vhpi18` | not run | nvc-specific test kind vhpi |
-| `vhpi19` | not run | nvc-specific test kind vhpi |
-| `vhpi2` | not run | nvc-specific test kind vhpi |
+| `vhpi1` | not run | nvc option +foo=bar |
+| `vhpi18` | not run | reads 64-bit integer and physical values through VHPI |
 | `vhpi20` | not run | nvc-specific test kind tcl |
-| `vhpi21` | not run | nvc-specific test kind vhpi |
-| `vhpi3` | not run | nvc-specific test kind vhpi |
-| `vhpi4` | not run | nvc-specific test kind vhpi |
-| `vhpi5` | not run | nvc-specific test kind vhpi |
-| `vhpi6` | not run | nvc-specific test kind vhpi |
-| `vhpi7` | not run | nvc-specific test kind vhpi |
-| `vhpi8` | not run | nvc-specific test kind vhpi |
-| `vhpi9` | not run | nvc-specific test kind vhpi |
+| `vhpi4` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
 | `view7` | not run | leaves subelement p.y of an individually associated port unassociated; every scalar subelement shall be associated exactly once (IEEE 1076-2019 6.5.7.1) |
 | `vlog29` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `wait24` | not run | uses nvc's own library packages |

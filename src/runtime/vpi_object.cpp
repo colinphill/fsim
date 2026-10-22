@@ -289,6 +289,7 @@ std::vector<Observer> snapshot_observers(
             && lhs.width == rhs.width
             && lhs.is_signed == rhs.is_signed
             && lhs.is_constant == rhs.is_constant
+            && lhs.string_literal == rhs.string_literal
             && lhs.driver_range == rhs.driver_range
             && descriptors_equal;
     }

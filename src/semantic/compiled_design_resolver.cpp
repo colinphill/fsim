@@ -5704,7 +5704,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 return range;
             };
             std::uint64_t count { 1U };
-            bool concrete = element && element->executable_width
+            // An element left unconstrained has no layout of its own
+            // (IEEE 1076-2008 5.3.2.1); its nominal width is not its size.
+            const bool open_element = element && element->unconstrained
+                && std::ranges::none_of(element->constraints,
+                    [](const vhdl::RangeConstraint& range) {
+                        return range.kind == vhdl::RangeKind::array_index;
+                    });
+            bool concrete = element && !open_element
+                && element->executable_width
                 && *element->executable_width != 0U;
             const bool constrained_shape = !result.constraints.empty()
                 || (!definition.array_dimensions.empty()

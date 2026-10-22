@@ -253,6 +253,101 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 84: VHPI, DPI-C exports and types, nested units, VHDL generic shapes
+
+Full run on the frozen `b84e`, compared with Batch 83 (`b83l`). Batch 84
+closes 51 corpus tests (nvc 31, Verilator 15, ivtest 5) with no losses. The
+ivtest gain `pow_reg_signed` is not counted: it was Batch 83's load timeout.
+`t_constraint_array_sum_with` passes alone but still times out at 60 s in
+the full run, as on `b83l`.
+
+| Suite | Batch83 passes / in scope | Batch84 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2603 / 2622 | 2609 / 2622 | 289 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1971 / 2082 | 1986 / 2074 | 341 |
+| vests | 3639 / 3646 | 3639 / 3646 | 2 |
+| nvc | 1138 / 1231 | 1169 / 1264 | 218 |
+| vhdl-compliance | 51 / 65 | 51 / 65 | 7 |
+
+Foreign interfaces (IEEE 1076-2019 17-23; IEEE 1800-2023 35, 38):
+- VHPI: `--vhpi LIB[:BOOTSTRAP]` loads VHPI modules at simulate time (new
+  `vhpi_user.h`, `vhpi_bridge.h`, `application_vhpi_foreign.cpp`,
+  `vhpi_standard.cpp`). The nvc VHPI cases now run instead of being
+  excluded: vhpi2, 3, 5-9, 12, 13, 16, 17, 19. `vhpi_assert` messages carry
+  `FSIM-VHPI-ASSERT` (23.2); a load failure is `FSIM-VHPI-LOAD-001`.
+- DPI-C exports are callable from C, including through generate blocks; the
+  DPI declarations of a generate block belong to its module (35.5.3).
+  `string` results and arguments, and argument and result types from resolved
+  types (typedefs, `input int a, b`), follow Annex H (`t_dpi_arg_*_type`,
+  `t_dpi_result_type`, `t_dpi_string`, `t_dpi_imp_gen`).
+- A DPI output or inout actual of another width takes the formal's value as
+  an assignment does (35.5.6.1), and a parameterized-class formal copies out
+  with its specialized signedness (13.5.1; `t_func_wide_out`).
+- `vpi_chk_error` reports `FSIM-VPI-001`; VPI arrays (`t_vpi_memory`),
+  parameter lists and `vpi_br_gh496` match their gold output.
+
+SystemVerilog:
+- Nested module, program and interface declarations (23.4). A nested unit is
+  hoisted under a unique name. Without ports or an explicit instance it is
+  instantiated once under its own name. Without its own time declarations it
+  takes its enclosing unit's (3.14.2.3). It sees the enclosing units'
+  declarations through upward names (23.8). Closes `program3` and
+  `sv_timeunit_prec3b`/`4b`.
+- `break` in a multidimensional `foreach` leaves the whole loop (12.8,
+  `t_foreach`). Disabling a process suspended in a delay cancels its pending
+  wake-up (9.6.2, `t_disable_task_join`).
+- `$typename` and class type names spell specialization actuals; `T::Name`
+  through a type parameter and typedefs of type parameters resolve in the
+  specialization (`t_param_typedef2`, `t_typedef_param_class`,
+  `t_param_type_dot`). A `@sv-select` of an index has its declared width
+  (`t_unopt_bound`).
+- `$sformat`/`$swrite` and assignments write hierarchical string targets.
+- A concatenation target piece that selects within a selected element
+  (`{x[1][4], x[1][5]}`) is placed in the whole variable (11.5.1).
+
+VHDL:
+- A library-level package instance whose template has an interface package
+  generic (`package p is new work.poly generic map (<>)`, 6.5.5) names the
+  actual package (genpack7).
+- The whole-range slice `s(s'range)` is the string `s`, including a TextIO
+  `LINE` (8.5, issue103).
+- An object alias takes its object's shape. A formal bound to a call's actual
+  has the actual's shape. An array of open elements has no concrete layout
+  until its initial value completes it (5.3.2.1; issue932).
+- Function results and formals of generic-type subprogram instances use the
+  instance's generic actuals (gensub7 part 1). Earlier fixes in the batch:
+  alias14, comp3, conv17, driver18/19, func23 and issue744-1616.
+
+Runner (`scripts/lrm_corpus.py`):
+- Root detection skips units nested in another unit when declarations and
+  ends balance.
+- `t_split_var_0` and `t_split_var_2_trace` are excluded: they procedurally
+  assign nets (6.5).
+
+Open leads (`.local-artifacts/lrm-closure/triage/b84/b84tri`):
+- `t_class_localparam_dotref`: class parameter defaults naming `C#(7)::b`,
+  static method calls in constants. A nested class-scope actual
+  `D#(C#(9)::b)` silently takes the default.
+- `t_iface_param_class_type`: `X::td_t` through a module type parameter
+  resolves with the parameter's default.
+- Virtual-interface clocking drives through hierarchical handles and
+  interface arrays (`t_clocking_virtual`, `t_clocking_drive_same`).
+  `@(buses[0].w)` has no dependencies with a single event expression.
+- nvc: stdenv3 (call path vectors, `file_path`), issue726 (indexing a
+  protected function's result), issue620 and gentype2 (builtin and operator
+  generic subprogram actuals). Also gensub7 part 2 (`init'subtype` of a
+  generic constant) and ieee9 (`fixed_generic_pkg` instance).
+- Class-interpreter gaps in constructors (`new[n]`, struct patterns, mailbox
+  `new`) belong to the class-lowering project.
+
+ctest: the labelled run has the known pre-existing failures only. The
+diagnostic catalog is 2970 codes (`FSIM-VPI-001`, `FSIM-VHPI-LOAD-001`,
+`FSIM-VHPI-ASSERT` documented), and the release pins are 2975. The closure
+matrices are not run because their known-failing dependencies fail:
+`artifact_phases`, `classes`, `expressions`, `specify`, `vhdl_numeric`,
+`vhdl_ieee_integration`, `fsim.elaboration` and `fsim.runtime`.
+
 ### Batch 83: PLI1, VPI callbacks and puts, DPI-C headers, mixed-language ports, VHDL-2019 file operations
 
 Full run on the frozen `b83l`, compared with Batch 82 (`b82n`). Batch 83

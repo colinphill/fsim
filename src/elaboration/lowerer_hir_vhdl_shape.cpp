@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
+#include <unordered_set>
 
 namespace fsim::elaboration {
 namespace {
@@ -377,11 +378,88 @@ Lowerer::hir_vhdl_external_subtype(
     return subtype;
 }
 
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_return_identifier_context(
+    const semantic::ExpressionId value,
+    const semantic::vhdl::SubtypeIndication& target) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto callee = hir_referenced_declaration(value);
+    const auto function = callee
+        ? specialized_hir_unit_->find_declaration(*callee)
+        : std::nullopt;
+    if (!function || function->vhdl == nullptr
+        || function->vhdl->form != semantic::vhdl::DeclarationForm::function
+        || !function->vhdl->callable
+        || !function->vhdl->callable->return_identifier) {
+        return std::nullopt;
+    }
+    auto effective = hir_effective_vhdl_subtype(target);
+    if (!effective || effective->unconstrained
+        || !effective->executable_width) {
+        return std::nullopt;
+    }
+    return effective;
+}
+
+bool Lowerer::hir_vhdl_contextual_result_local(
+    const semantic::DeclarationId declaration_id) const
+{
+    if (!active_hir_callable_
+        || *active_hir_callable_ >= hir_callable_frames_.size()
+        || specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(declaration_id);
+    const auto callable = specialized_hir_unit_->find_declaration(
+        hir_callable_frames_[*active_hir_callable_].declaration);
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->subtype || !callable
+        || callable->vhdl == nullptr || !callable->vhdl->callable
+        || !callable->vhdl->callable->return_identifier) {
+        return false;
+    }
+    const auto return_identifier = *callable->vhdl->callable->return_identifier;
+    const auto result_declaration
+        = specialized_hir_unit_->find_declaration(return_identifier);
+    if (result_declaration && result_declaration->vhdl != nullptr
+        && simple_name_of(declaration->vhdl->subtype->type_mark.spelling)
+            == result_declaration->vhdl->name) {
+        return true;
+    }
+    auto type_id = declaration->vhdl->subtype->type_mark.target;
+    std::unordered_set<std::uint32_t> visited;
+    while (type_id.valid() && visited.insert(type_id.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            return false;
+        }
+        if (type->vhdl->declaration == return_identifier) {
+            return true;
+        }
+        type_id = type->vhdl->base.type_mark.target;
+    }
+    return false;
+}
+
 std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
     const semantic::DeclarationId declaration,
     const std::size_t dimensions) const
 {
     HirVhdlShape object;
+    // An object of the return identifier's subtype has the call's result
+    // subtype, record element constraints included (IEEE 1076-2019 4.2.1).
+    if (hir_vhdl_contextual_result_local(declaration)) {
+        const auto& result_subtype
+            = hir_callable_frames_[*active_hir_callable_].vhdl_result_subtype;
+        if (result_subtype && !result_subtype->element_constraints.empty()) {
+            object.element_constraints = result_subtype->element_constraints;
+            return object;
+        }
+    }
     // A formal of the running subprogram takes its bounds from its actual
     // (IEEE 1076-2008 4.2.2.2).
     bool formal { };
@@ -399,6 +477,33 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
         = hir_vhdl_callable_formal_element_constraints(declaration)) {
         formal = true;
         object.element_constraints = *constraints;
+    }
+    // An object alias whose subtype indication leaves index ranges or
+    // element bounds open takes them from the aliased object
+    // (IEEE 1076-2008 6.6.2).
+    if (!formal) {
+        if (const auto aliased = hir_vhdl_alias_object(declaration)) {
+            // A formal bound to its call's actual has that actual's shape.
+            std::optional<HirVhdlShape> shape;
+            for (auto frame = hir_generic_binding_frames_.rbegin();
+                 !shape && frame != hir_generic_binding_frames_.rend();
+                 ++frame) {
+                const auto bound = std::ranges::find(*frame, *aliased,
+                    &semantic::CompiledActualBinding::formal);
+                if (bound != frame->end()) {
+                    if (bound->expression) {
+                        shape = hir_vhdl_shape(*bound->expression);
+                    }
+                    break;
+                }
+            }
+            if (!shape) {
+                shape = hir_vhdl_object_shape(*aliased, hir_process_scope_);
+            }
+            if (shape) {
+                return shape;
+            }
+        }
     }
     if (!formal) {
         // A signal or port: the layout elaboration gave its occurrence
@@ -741,6 +846,10 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
                         *declared->vhdl->subtype, scope);
                     if (member && facts) {
                         complete_shape(*member, *facts);
+                    } else if (!member) {
+                        // An open subtype (a contextual result's) leaves
+                        // the shape to the object's facts.
+                        member = facts;
                     }
                     for (auto step = std::next(root);
                         member && step != segments.end(); ++step) {

@@ -1028,6 +1028,11 @@ private:
         semantic::SourceSpanId declaration_source,
         const CompiledVhdlResolutionBinding& binding,
         const semantic::SpecializedHirUnit& specialization);
+    // Register the resolution of a port formal materialized as its own
+    // signal, as for a declared signal of the formal's subtype.
+    void register_compiled_vhdl_formal_resolution(SignalId signal,
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& formal);
     // Lower the resolver programs of signals resolved by a VHDL resolution
     // function, given each signal's driving processes in process order.
     void lower_compiled_vhdl_resolvers(
@@ -1996,6 +2001,15 @@ private:
     // An out or inout port associated with a resolved VHDL actual: the
     // instance it belongs to and its default, which is the initial value of
     // the port's drivers (IEEE 1076-2008 6.5.2, 14.7.3.2).
+    // The two adapters of an inout formal materialized as its own signal:
+    // the input adapter copies the actual's effective value into the formal,
+    // the output adapter drives the actual with the formal's value.
+    struct VhdlInoutAdapters {
+        SignalId formal { };
+        ProcessId input { };
+        ProcessId output { };
+    };
+    std::vector<VhdlInoutAdapters> vhdl_inout_adapters_;
     struct VhdlPortSource {
         std::string instance;
         std::optional<PackedLogic4> initial;

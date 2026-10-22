@@ -233,6 +233,29 @@ PackedLogic4 character_string_value(const std::string_view text)
                 separator != std::string::npos) {
                 result.erase(0U, separator + 2U);
             }
+            // A parameterized class type names its actuals (20.6.1).
+            if (!type.interface_parameter_actuals.empty()
+                && result.find("#(") == std::string::npos) {
+                std::string actuals;
+                for (const auto& actual : type.interface_parameter_actuals) {
+                    std::string text;
+                    if (actual.type) {
+                        text = hir_systemverilog_type_name(
+                            specialization, *actual.type, depth + 1U);
+                    } else if (actual.expression) {
+                        if (const auto value
+                            = specialization.evaluate_integral_expression(
+                                *actual.expression)) {
+                            text = std::to_string(*value);
+                        }
+                    }
+                    if (text.empty()) {
+                        return result;
+                    }
+                    actuals += (actuals.empty() ? "" : ",") + text;
+                }
+                result += "#(" + actuals + ")";
+            }
             return result;
         }
 
@@ -26909,6 +26932,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             destination, *binding->object });
         return destination;
     }
+    // A DPI import returning `string` (IEEE 1800-2023 35.5.5).
+    if (const auto profile = hir_dpi_function_profile(
+            expression_id, hir_process_scope_);
+        profile && profile->result_string) {
+        return lower_hir_dpi_string_call(expression_id);
+    }
     // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
@@ -27058,6 +27087,26 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     if (const auto whole = hir_vhdl_whole_range_slice(expression_id);
         whole && hir_expression_is_string(*whole, hir_process_scope_)) {
         return lower_hir_string_expression(*whole, contextual_subtype);
+    }
+    if (const auto access = hir_vhdl_access_string_whole_slice(
+            expression_id)) {
+        const auto declaration = hir_target_declaration(*access);
+        const auto binding = declaration
+            ? hir_string_binding(*declaration, hir_process_scope_, true)
+            : std::nullopt;
+        if (binding && binding->kind == HirStringBindingKind::local) {
+            return binding->local;
+        }
+        if (binding && binding->object) {
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(ReadStringObject {
+                destination, *binding->object });
+            return destination;
+        }
+        const auto record = specialized_hir_unit_->find_expression(
+            expression_id);
+        return lower_hir_vhdl_access_string_handle(*access,
+            hir_source_span(record->vhdl->source));
     }
     // A slice of a STRING is the substring at the slice's positions in the
     // prefix's index range (IEEE 1076-2008 8.5).
@@ -27347,7 +27396,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     return hir_expression_is_string(
                         association.value, hir_process_scope_);
                 });
-            const auto width = explicit_context_bounds
+            auto width = explicit_context_bounds
                 ? vhdl_subtype_width(*effective)
                 : string_elements ? std::nullopt
                 : hir_vhdl_positional_aggregate_width(
@@ -27379,13 +27428,58 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                     destination, std::move(pieces) });
                 return destination;
             }
+            // An unconstrained STRING aggregate of named associations whose
+            // choices are static values takes the direction of POSITIVE and
+            // its bounds from the smallest and largest choice (IEEE
+            // 1076-2008 9.3.3.3).
+            auto named_context = *effective;
+            if (predefined_string && !width && !explicit_context_bounds
+                && !string_elements && !source.associations.empty()) {
+                std::optional<std::int64_t> low;
+                std::optional<std::int64_t> high;
+                std::size_t choices { };
+                for (const auto& association : source.associations) {
+                    if (association.choices.empty()) {
+                        low.reset();
+                        break;
+                    }
+                    bool all_static = true;
+                    for (const auto choice : association.choices) {
+                        const auto value = hir_constant_integer(choice);
+                        if (!value) {
+                            all_static = false;
+                            break;
+                        }
+                        low = low ? std::min(*low, *value) : *value;
+                        high = high ? std::max(*high, *value) : *value;
+                        ++choices;
+                    }
+                    if (!all_static) {
+                        low.reset();
+                        break;
+                    }
+                }
+                if (low && high && *low >= 1
+                    && static_cast<std::uint64_t>(*high - *low) + 1U
+                        == choices) {
+                    semantic::vhdl::RangeConstraint range;
+                    range.kind = semantic::vhdl::RangeKind::array_index;
+                    range.left = *low;
+                    range.right = *high;
+                    range.descending = false;
+                    named_context.constraints.assign(1U, range);
+                    named_context.unconstrained = false;
+                    named_context.executable_width = choices * 8U;
+                    width = choices * 8U;
+                }
+            }
             if (!predefined_string || !width || *width == 0U
                 || *width % 8U != 0U
                 || *width / 8U > maximum_string_bytes) {
                 return rejected();
             }
             const auto packed = lower_hir_vhdl_aggregate(
-                expression_id, *width, &*effective);
+                expression_id, *width, &named_context);
             if (!packed) {
                 return rejected();
             }
@@ -28325,6 +28419,79 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         const auto declaration = declaration_id
             ? specialized_hir_unit_->find_declaration(*declaration_id)
             : std::nullopt;
+        // A class specialization's typedef actuals name the types they
+        // denote (IEEE 1800-2017 20.6.1): `Foo#(s_t)` is `Foo#(Bar#(string))`.
+        const auto resolved_class_spelling
+            = [&](const std::string& spelling) -> std::string {
+            const auto open = spelling.find("#(");
+            if (open == std::string::npos || spelling.back() != ')') {
+                return spelling;
+            }
+            std::string result = spelling.substr(0U, open + 2U);
+            const std::string_view body {
+                spelling.data() + open + 2U, spelling.size() - open - 3U
+            };
+            std::size_t begin { };
+            int depth { };
+            for (std::size_t index { }; index <= body.size(); ++index) {
+                if (index < body.size()) {
+                    depth += body[index] == '(' ? 1
+                        : body[index] == ')'    ? -1
+                                                : 0;
+                }
+                if (index != body.size()
+                    && !(body[index] == ',' && depth == 0)) {
+                    continue;
+                }
+                std::string piece { body.substr(begin, index - begin) };
+                const auto first = piece.find_first_not_of(" \t");
+                const auto last = piece.find_last_not_of(" \t");
+                if (first != std::string::npos) {
+                    const auto name = piece.substr(first, last - first + 1U);
+                    const bool identifier = std::ranges::all_of(
+                        name, [](const char character) {
+                            return std::isalnum(static_cast<unsigned char>(
+                                       character))
+                                != 0
+                                || character == '_';
+                        });
+                    const auto alias = identifier
+                        ? hir_resolver()
+                              .resolve_systemverilog(name, operand_source.scope,
+                                  [](const semantic::CompiledDeclarationView&
+                                          candidate) {
+                                      return candidate.systemverilog != nullptr
+                                          && candidate.systemverilog->form
+                                              == semantic::sv::DeclarationForm::
+                                                  typedef_declaration
+                                          && candidate.systemverilog->type
+                                                 .has_value();
+                                  },
+                                  false)
+                              .unique()
+                        : std::nullopt;
+                    const auto record = alias
+                        ? specialized_hir_unit_->find_declaration(*alias)
+                        : std::nullopt;
+                    if (record && record->systemverilog != nullptr
+                        && record->systemverilog->type) {
+                        if (auto resolved = hir_systemverilog_type_name(
+                                *specialized_hir_unit_,
+                                *record->systemverilog->type);
+                            !resolved.empty()) {
+                            piece = piece.substr(0U, first) + resolved
+                                + piece.substr(last + 1U);
+                        }
+                    }
+                }
+                result += piece;
+                if (index != body.size()) {
+                    result += ',';
+                }
+                begin = index + 1U;
+            }
+            return result + ")";
+        };
         std::string text;
         // A built-in type keyword names that type (IEEE 1800-2017 20.6.1).
         static constexpr std::array builtin_types {
@@ -28354,7 +28521,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         } else if (operand_source.kind
                 == semantic::sv::ExpressionKind::name
             && !declaration && !operand_source.text.empty()) {
-            text = operand_source.text;
+            text = resolved_class_spelling(operand_source.text);
         } else if (const auto member
             = operand_source.kind == semantic::sv::ExpressionKind::name
                 && operand_source.text.find('.') != std::string::npos
@@ -30379,16 +30546,18 @@ bool Lowerer::lower_hir_packed_copy_out(
                 || (selected_target
                     && (selected.operands.size()
                             != (index ? 2U : 3U)
-                        || hir_referenced_declaration(
+                        || hir_target_declaration(
                                selected.operands.front())
                             != declaration))) {
                 return false;
             }
 
+            // A select of a selected element (`x[1][4]`) is placed within
+            // the whole variable (IEEE 1800-2023 11.5.1).
             const auto member = hir_systemverilog_member_selection(
                 selected_target ? selected.operands.front() : lvalue);
             auto constant_selection = selected_target
-                ? hir_constant_selection(lvalue, hir_process_scope_)
+                ? hir_root_constant_selection(lvalue, hir_process_scope_)
                 : std::nullopt;
             if (!add_hir_member_selection(
                     member, constant_selection, selected_target)) {

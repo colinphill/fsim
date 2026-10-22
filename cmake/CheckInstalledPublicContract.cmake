@@ -84,6 +84,7 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/acc_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_bridge.h"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vhpi_bridge.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/simir_region_frontier.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/simir_region_frontier_v2.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
@@ -152,7 +153,7 @@ endforeach()
 
 foreach(FSIM_TF_HEADER IN ITEMS
     native_plugin_abi.h tf_plugin_abi.h veriuser.h acc_user.h
-    vpi_abi.h vpi_bridge.h)
+    vpi_abi.h vpi_bridge.h vhpi_bridge.h)
   file(SHA256
     "${FSIM_SOURCE_DIR}/include/fsim/runtime/${FSIM_TF_HEADER}"
     FSIM_SOURCE_DIGEST)

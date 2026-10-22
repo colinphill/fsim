@@ -1181,15 +1181,20 @@ std::optional<BuiltProject> load_design_artifact(
                 "unsupported standard or empty compatibility profile");
             return std::nullopt;
         }
+        // A package and a module may share a name (IEEE 1800-2023 3.13:
+        // definitions and packages are separate name spaces), so one
+        // library::name identity may carry two records that must agree.
         const auto identity = unit.library + "::" + unit.name;
-        if (!verilog_unit_revisions.emplace(
-                                       identity,
-                                       application_detail::frontend_standard_revision(
-                                           expected_language, *canonical))
-                .second
-            || !verilog_unit_compatibility_profiles.emplace(
-                                                       identity, record.compatibility_profile)
-                .second) {
+        const auto revision = application_detail::frontend_standard_revision(
+            expected_language, *canonical);
+        const auto [stored_revision, new_revision]
+            = verilog_unit_revisions.emplace(identity, revision);
+        const auto [stored_profile, new_profile]
+            = verilog_unit_compatibility_profiles.emplace(
+                identity, record.compatibility_profile);
+        if ((!new_revision && stored_revision->second != revision)
+            || (!new_profile
+                && stored_profile->second != record.compatibility_profile)) {
             diagnostics.error(
                 "FSIM-ART-0014",
                 ".fsimdesign contains duplicate Verilog/SystemVerilog unit "

@@ -1748,7 +1748,7 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   return selection;
 }
 [[nodiscard]] Type Resolver::specialize_selected_type(
-    Type type, const ClassSelection& selection) {
+    Type type, const ClassSelection& selection) const {
   std::map<std::string, Type, std::less<>> bindings;
   std::vector<bool> assigned(selection.declaration->parameters.size());
   std::vector<const Expression*> value_actuals(
@@ -1846,6 +1846,26 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       replacing.insert(*replaced);
       retained = found->second;
       if (outer_container) retained.systemverilog_container = outer_container;
+    }
+    if (!replaced) {
+      // `T::Name`: a type declared by the class that type parameter T is
+      // bound to (IEEE 1800-2017 8.25.1).
+      const auto cut = retained.named_type.find("::");
+      if (cut != std::string::npos && cut != 0U) {
+        const auto found = bindings.find(retained.named_type.substr(0U, cut));
+        if (found != bindings.end() && !replacing.contains(found->first)) {
+          if (const auto owner = class_identity(found->second)) {
+            if (const auto alias = class_aliases_.find(
+                    *owner + "::" + retained.named_type.substr(cut + 2U));
+                alias != class_aliases_.end()) {
+              retained = *alias->second;
+              if (outer_container) {
+                retained.systemverilog_container = outer_container;
+              }
+            }
+          }
+        }
+      }
     }
     if (retained.systemverilog_container) {
       for (auto& element :

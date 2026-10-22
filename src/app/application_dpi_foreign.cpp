@@ -14,11 +14,16 @@
 #include <algorithm>
 #include <bit>
 #include <charconv>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -570,7 +575,22 @@ public:
             &Service::time_scale,
         }
     {
+        fsim_svdpi_set_export_dispatcher_v3(&Service::export_call, this);
     }
+
+    ~Service() override
+    {
+        fsim_svdpi_set_export_dispatcher_v3(nullptr, nullptr);
+        // The simulation ended inside an export (as by $finish): the C code
+        // that called it never resumes.
+        for (auto& flight : flights_) {
+            flight->thread.detach();
+            (void)flight.release();
+        }
+    }
+
+    Service(const Service&) = delete;
+    Service& operator=(const Service&) = delete;
 
     void set_clock(Clock clock) override { clock_ = std::move(clock); }
 
@@ -602,34 +622,28 @@ public:
         return true;
     }
 
+    void set_thread_entry(ThreadEntry entry) override
+    {
+        thread_entry_ = std::move(entry);
+    }
+
     PackedLogic4 call(const std::string_view identity,
         std::vector<PackedLogic4>& actuals,
         std::vector<std::string>& strings) override
     {
+        if (identity.starts_with("!x")) {
+            start(identity.substr(2U), actuals, strings);
+            return PackedLogic4(1U, Logic4::zero);
+        }
+        if (identity.starts_with("!f")) {
+            return finish(identity.substr(2U), actuals, strings);
+        }
+        if (identity.starts_with(export_prefix)) {
+            return serve_export(identity, actuals, strings);
+        }
         auto& import = resolve(identity);
-        const auto& parameters = import.signature.parameters;
-        if (actuals.size() != parameters.size()) {
-            throw std::runtime_error { "DPI import '"
-                + import.signature.linkage + "' actual count mismatch" };
-        }
-        std::vector<Slot> slots(parameters.size());
-        std::vector<void*> values(parameters.size());
-        for (std::size_t index = 0U; index < parameters.size(); ++index) {
-            const auto& parameter = parameters[index];
-            auto& slot = slots[index];
-            store_actual(slot, parameter, actuals[index],
-                index < strings.size() ? strings[index] : empty_);
-            const bool vector = parameter.code == 'B' || parameter.code == 'V'
-                || parameter.code == 'A';
-            if (parameter.reference && !vector) {
-                slot.reference = &slot.scalar;
-                values[index] = &slot.reference;
-            } else {
-                values[index] = &slot.scalar;
-            }
-        }
-        // Small integer results widen to ffi_arg.
-        alignas(16) std::uint64_t result[2] { };
+        Call call;
+        prepare(import, call, actuals, strings);
         const auto caller = import.signature.context
             ? caller_of(identity)
             : std::nullopt;
@@ -641,18 +655,95 @@ public:
             scope_ = &scope_named(caller->instance);
             file_ = std::string { caller->file };
             line_ = caller->line;
-            const bool entered
-                = fsim_svdpi_call_context_enter_v3(&context_) == 0;
-            ffi_call(&import.cif, import.function, result, values.data());
-            if (entered) {
-                (void)fsim_svdpi_call_context_leave_v3(&context_);
-            }
+            invoke(import, call, true);
             scope_ = saved_scope;
             file_ = saved_file;
             line_ = saved_line;
         } else {
-            ffi_call(&import.cif, import.function, result, values.data());
+            invoke(import, call, false);
         }
+        return complete(import, call, actuals, strings);
+    }
+
+private:
+    static constexpr std::string_view export_prefix { "__fsim_dpi_export_" };
+
+    // The C values of one call's actuals.
+    struct Call {
+        std::vector<Slot> slots;
+        std::vector<void*> values;
+        // Small integer results widen to ffi_arg.
+        alignas(16) std::uint64_t result[2] { };
+    };
+
+    // A context import call whose C code runs on a helper thread, so that
+    // the calling process can run the DPI exports that code calls (IEEE
+    // 1800-2023 35.5.3). The two threads take turns.
+    struct Flight {
+        Import* import { };
+        Call call;
+        std::vector<std::string> strings;
+        std::thread thread;
+        std::mutex mutex;
+        std::condition_variable turn;
+        bool c_turn { true };
+        bool done { };
+        // The pending export call.
+        std::string name;
+        void** arguments { };
+        void* result { };
+        // Strings returned to C stay valid until the import returns.
+        std::deque<std::string> returned;
+        Scope* saved_scope { };
+        std::string saved_file;
+        int saved_line { };
+    };
+
+    void prepare(const Import& import, Call& call,
+        const std::vector<PackedLogic4>& actuals,
+        const std::vector<std::string>& strings)
+    {
+        const auto& parameters = import.signature.parameters;
+        // A string result returns in one more string actual after the
+        // formals (IEEE 1800-2023 H.7.4: const char*).
+        const bool string_result = import.signature.result == 'z';
+        if (actuals.size() != parameters.size() + (string_result ? 1U : 0U)
+            || (string_result && strings.size() != actuals.size())) {
+            throw std::runtime_error { "DPI import '"
+                + import.signature.linkage + "' actual count mismatch" };
+        }
+        call.slots.resize(parameters.size());
+        call.values.resize(parameters.size());
+        for (std::size_t index = 0U; index < parameters.size(); ++index) {
+            const auto& parameter = parameters[index];
+            auto& slot = call.slots[index];
+            store_actual(slot, parameter, actuals[index],
+                index < strings.size() ? strings[index] : empty_);
+            const bool vector = parameter.code == 'B' || parameter.code == 'V'
+                || parameter.code == 'A';
+            if (parameter.reference && !vector) {
+                slot.reference = &slot.scalar;
+                call.values[index] = &slot.reference;
+            } else {
+                call.values[index] = &slot.scalar;
+            }
+        }
+    }
+
+    void invoke(Import& import, Call& call, const bool context)
+    {
+        const bool entered = context
+            && fsim_svdpi_call_context_enter_v3(&context_) == 0;
+        ffi_call(&import.cif, import.function, call.result, call.values.data());
+        if (entered) {
+            (void)fsim_svdpi_call_context_leave_v3(&context_);
+        }
+    }
+
+    PackedLogic4 complete(const Import& import, Call& call,
+        std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
+    {
+        const auto& parameters = import.signature.parameters;
         for (std::size_t index = 0U; index < parameters.size(); ++index) {
             const auto& parameter = parameters[index];
             const bool vector = parameter.code == 'B' || parameter.code == 'V';
@@ -662,19 +753,26 @@ public:
             }
             if (parameter.code == 'z') {
                 if (index < strings.size()) {
-                    const auto* const text = slots[index].scalar.text;
+                    const auto* const text = call.slots[index].scalar.text;
                     strings[index] = text == nullptr ? std::string { } : text;
                 }
                 continue;
             }
-            actuals[index] = load_actual(slots[index], parameter);
+            actuals[index] = load_actual(call.slots[index], parameter);
         }
         Slot returned;
         const auto code = import.signature.result;
+        if (code == 'z') {
+            const char* text { };
+            std::memcpy(&text, call.result, sizeof(text));
+            strings.back() = text == nullptr ? std::string { } : text;
+            return PackedLogic4(1U, Logic4::zero);
+        }
         if (code == 'v' || code == 'T') {
             return PackedLogic4(1U, Logic4::zero);
         }
-        const auto* const bytes = reinterpret_cast<const unsigned char*>(result);
+        const auto* const bytes
+            = reinterpret_cast<const unsigned char*>(call.result);
         switch (code) {
         case 'd':
             std::memcpy(&returned.scalar.f64, bytes, sizeof(double));
@@ -698,7 +796,219 @@ public:
             returned, Parameter { code, false, code_width(code), { }, { } });
     }
 
-private:
+    // Start a context import whose C code may call exports: the caller
+    // serves those calls until the code returns, then finishes the call.
+    void start(const std::string_view identity,
+        const std::vector<PackedLogic4>& actuals,
+        const std::vector<std::string>& strings)
+    {
+        auto& import = resolve(identity);
+        auto flight = std::make_unique<Flight>();
+        auto& state = *flight;
+        state.import = &import;
+        state.strings = strings;
+        prepare(import, state.call, actuals, state.strings);
+        state.saved_scope = scope_;
+        state.saved_file = file_;
+        state.saved_line = line_;
+        if (const auto caller = caller_of(identity)) {
+            scope_ = &scope_named(caller->instance);
+            file_ = std::string { caller->file };
+            line_ = caller->line;
+        }
+        flights_.push_back(std::move(flight));
+        state.thread = std::thread { [this, &state] {
+            current_flight = &state;
+            const auto run = [&] { invoke(*state.import, state.call, true); };
+            if (thread_entry_) {
+                thread_entry_(run);
+            } else {
+                run();
+            }
+            const std::lock_guard lock { state.mutex };
+            state.done = true;
+            state.c_turn = false;
+            state.turn.notify_all();
+        } };
+    }
+
+    PackedLogic4 finish(const std::string_view identity,
+        std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
+    {
+        if (flights_.empty()) {
+            throw std::runtime_error { "DPI import '"
+                + std::string { identity } + "' finished without a start" };
+        }
+        auto flight = std::move(flights_.back());
+        flights_.pop_back();
+        {
+            std::unique_lock lock { flight->mutex };
+            flight->turn.wait(lock, [&] { return !flight->c_turn; });
+            if (!flight->done) {
+                // The C code waits for an export nobody serves.
+                flight->thread.detach();
+                (void)flight.release();
+                throw std::runtime_error { "DPI import '"
+                    + std::string { identity }
+                    + "' returned while its C code called an export" };
+            }
+        }
+        flight->thread.join();
+        scope_ = flight->saved_scope;
+        file_ = flight->saved_file;
+        line_ = flight->saved_line;
+        return complete(*flight->import, flight->call, actuals, strings);
+    }
+
+    // The C bytes of one DPI value and where a slot holds them.
+    [[nodiscard]] static std::size_t c_bytes(const Parameter& parameter)
+    {
+        const auto words = (parameter.width + 31U) / 32U;
+        switch (parameter.code) {
+        case 'B':
+            return words * sizeof(std::uint32_t);
+        case 'V':
+            return words * sizeof(LogicWord);
+        case 'z':
+            return sizeof(const char*);
+        case 'A':
+            throw std::runtime_error {
+                "an open array argument of a DPI export is not supported" };
+        default:
+            return code_width(parameter.code) / 8U == 0U
+                ? 1U
+                : code_width(parameter.code) / 8U;
+        }
+    }
+
+    [[nodiscard]] static void* c_data(Slot& slot, const Parameter& parameter)
+    {
+        switch (parameter.code) {
+        case 'B':
+            return slot.bits.data();
+        case 'V':
+            return slot.logic.data();
+        default:
+            return &slot.scalar;
+        }
+    }
+
+    // The hidden imports through which a unit's service runs the exports
+    // that a context import's C code calls: `next` waits for an export
+    // call (returning its 1-based position among the unit's exports) or
+    // for the C code to return (0); `args_<mask>__<linkage>` delivers the
+    // export's actuals; `return_<mask>__<linkage>` hands back its result
+    // and outputs and lets the C code continue. The mask is `r` (a result)
+    // or `v`, then per formal `i` (input), `o` (output) or `b` (inout).
+    PackedLogic4 serve_export(const std::string_view identity,
+        std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
+    {
+        if (flights_.empty()) {
+            throw std::runtime_error {
+                "a DPI export service ran outside a context import" };
+        }
+        auto& flight = *flights_.back();
+        const auto signature
+            = parse_signature(identity.substr(0U, identity.find('|')));
+        const auto name = std::string_view { signature.linkage }.substr(
+            export_prefix.size());
+        if (name == "next") {
+            std::unique_lock lock { flight.mutex };
+            flight.turn.wait(lock, [&] { return !flight.c_turn; });
+            if (flight.done) {
+                return from_bits(0U, 32U);
+            }
+            std::string_view names { strings.empty() ? empty_ : strings.front() };
+            std::uint64_t ordinal { };
+            while (!names.empty()) {
+                ++ordinal;
+                const auto space = names.find(' ');
+                if (names.substr(0U, space) == flight.name) {
+                    return from_bits(ordinal, 32U);
+                }
+                names = space == std::string_view::npos
+                    ? std::string_view { }
+                    : names.substr(space + 1U);
+            }
+            throw std::runtime_error { "DPI export '" + flight.name
+                + "' is not exported by the scope of the calling import" };
+        }
+        Import hidden;
+        hidden.signature = signature;
+        Call call;
+        prepare(hidden, call, actuals, strings);
+        const auto& parameters = signature.parameters;
+        // The directions of the export's formals follow the result mark.
+        const auto prefix = name.substr(0U, name.find('_'));
+        const auto mask = name.substr(prefix.size() + 1U,
+            name.find("__") - prefix.size() - 1U);
+        if (prefix == "args") {
+            for (std::size_t index = 0U; index < parameters.size(); ++index) {
+                if (index + 1U < mask.size() && mask[index + 1U] != 'o') {
+                    std::memcpy(c_data(call.slots[index], parameters[index]),
+                        flight.arguments[index], c_bytes(parameters[index]));
+                }
+            }
+            (void)complete(hidden, call, actuals, strings);
+            return PackedLogic4(1U, Logic4::zero);
+        }
+        if (prefix != "return") {
+            throw std::runtime_error { "unknown DPI export service '"
+                + std::string { name } + "'" };
+        }
+        const auto deliver = [&](void* const target, const std::size_t index) {
+            const auto& parameter = parameters[index];
+            if (parameter.code == 'z') {
+                const auto* const text = flight.returned
+                                             .emplace_back(strings[index])
+                                             .c_str();
+                std::memcpy(target, &text, sizeof(text));
+                return;
+            }
+            std::memcpy(target, c_data(call.slots[index], parameter),
+                c_bytes(parameter));
+        };
+        const std::size_t first = mask.starts_with('r') ? 1U : 0U;
+        if (first == 1U && flight.result != nullptr && !parameters.empty()) {
+            deliver(flight.result, 0U);
+        }
+        for (std::size_t index = 1U; index < mask.size(); ++index) {
+            const auto parameter = first + index - 1U;
+            if (mask[index] != 'i' && parameter < parameters.size()) {
+                deliver(flight.arguments[index - 1U], parameter);
+            }
+        }
+        const std::lock_guard lock { flight.mutex };
+        flight.c_turn = true;
+        flight.turn.notify_all();
+        return PackedLogic4(1U, Logic4::zero);
+    }
+
+    // An export call from the C code of the current thread's import.
+    static int export_call(void* const user_data, const char* const name,
+        void** const arguments, void* const result)
+    {
+        (void)user_data;
+        auto* const flight = current_flight;
+        if (flight == nullptr) {
+            std::fprintf(stderr,
+                "error: DPI export '%s' called outside a context import of "
+                "its scope\n",
+                name);
+            return -1;
+        }
+        std::unique_lock lock { flight->mutex };
+        flight->name = name;
+        flight->arguments = arguments;
+        flight->result = result;
+        flight->c_turn = false;
+        flight->turn.notify_all();
+        flight->turn.wait(lock, [&] { return flight->c_turn; });
+        return 0;
+    }
+
+    static thread_local Flight* current_flight;
+
     Scope& scope_named(const std::string_view name)
     {
         auto& scope = scopes_[std::string { name }];
@@ -857,6 +1167,8 @@ private:
     }
 
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
+    std::vector<std::unique_ptr<Flight>> flights_;
+    ThreadEntry thread_entry_;
     std::unordered_map<std::string, std::unique_ptr<Import>> imports_;
     std::unordered_map<std::string, std::unique_ptr<Scope>> scopes_;
     fsim_svdpi_call_context_v3 context_;
@@ -866,6 +1178,8 @@ private:
     int line_ { };
     std::string empty_;
 };
+
+thread_local Service::Flight* Service::current_flight { };
 
 #endif
 

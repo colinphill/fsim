@@ -1319,11 +1319,30 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
 
-    std::map<std::string, fsim_vpi_handle_v1, std::less<>> packages;
+    // Every compilation unit has a `$unit` package, the first package
+    // (IEEE 1800-2023 3.12.1); the others follow in design order.
+    std::vector<const semantic::sv::Unit*> package_units;
     for (const auto& unit : project.systemverilog_hir.units()) {
-        if (unit.kind != semantic::sv::UnitKind::package) {
-            continue;
+        if (unit.kind == semantic::sv::UnitKind::package) {
+            package_units.push_back(&unit);
         }
+    }
+    std::ranges::stable_partition(package_units, [](const auto* unit) {
+        return unit->name.starts_with("fsim_unit_");
+    });
+    const bool vpi_language_present = !relevant_specializations.empty();
+    if (vpi_language_present && (package_units.empty()
+            || !package_units.front()->name.starts_with("fsim_unit_"))) {
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
+        descriptor.name = "fsim_unit_";
+        descriptor.type = runtime::SystemVerilogVpiTypeInfo { };
+        (void)create_checked(
+            *result.registry, std::move(descriptor), "fsim_unit_");
+    }
+    std::map<std::string, fsim_vpi_handle_v1, std::less<>> packages;
+    for (const auto* const package_unit : package_units) {
+        const auto& unit = *package_unit;
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Package;
         descriptor.name = unit.name;
@@ -1595,6 +1614,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     + "' has an invalid canonical value or type: identity '"
                     + parameter.identity + "'"
                 };
+            }
+            // An untyped parameter keeps its string literal's constant
+            // type (IEEE 1800-2023 6.20.2, 37.32).
+            if (declaration->initializer && declaration->type
+                && declaration->type->target.spelling == "implicit") {
+                const auto* const initializer
+                    = project.systemverilog_hir.find_expression(
+                        *declaration->initializer);
+                decoded->type.string_literal = initializer != nullptr
+                    && initializer->kind
+                        == semantic::sv::ExpressionKind::string_literal;
             }
             runtime::SystemVerilogVpiObjectDescriptor descriptor;
             descriptor.kind = runtime::SystemVerilogVpiObjectKind::Parameter;

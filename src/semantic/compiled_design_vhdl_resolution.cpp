@@ -729,23 +729,14 @@ private:
         return result;
     }
 
-    [[nodiscard]] TypeKey result_key(const vhdl::Declaration& callable)
+    /// The type of `subtype`, declared in `scope`; in a subprogram instance
+    /// a generic-type formal of its template has the actual type (4.9).
+    [[nodiscard]] TypeKey instance_subtype_key(
+        const vhdl::SubtypeIndication& subtype, const ScopeId scope,
+        const vhdl::Declaration* const instance)
     {
-        return callable.callable && callable.callable->return_type
-            ? subtype_key(*callable.callable->return_type, callable.scope)
-            : TypeKey { };
-    }
-
-    [[nodiscard]] TypeKey formal_key(const DeclarationId formal,
-        const vhdl::Declaration* const instance = nullptr)
-    {
-        const auto* record = declaration(formal);
-        if (record == nullptr || !record->subtype) {
-            return { };
-        }
-        // A generic-type formal of an instance has its actual type (4.9).
         if (instance != nullptr && instance->package) {
-            const auto mark = simple_name(record->subtype->type_mark.spelling);
+            const auto mark = simple_name(subtype.type_mark.spelling);
             for (const auto& association : instance->package->generic_map) {
                 if (!association.formal
                     || simple_name(association.formal->text()) != mark) {
@@ -767,7 +758,26 @@ private:
                 }
             }
         }
-        return subtype_key(*record->subtype, record->scope);
+        return subtype_key(subtype, scope);
+    }
+
+    [[nodiscard]] TypeKey result_key(const vhdl::Declaration& callable,
+        const vhdl::Declaration* const instance = nullptr)
+    {
+        return callable.callable && callable.callable->return_type
+            ? instance_subtype_key(
+                  *callable.callable->return_type, callable.scope, instance)
+            : TypeKey { };
+    }
+
+    [[nodiscard]] TypeKey formal_key(const DeclarationId formal,
+        const vhdl::Declaration* const instance = nullptr)
+    {
+        const auto* record = declaration(formal);
+        if (record == nullptr || !record->subtype) {
+            return { };
+        }
+        return instance_subtype_key(*record->subtype, record->scope, instance);
     }
 
     /// The formal each actual of a call associates with, positionally or by
@@ -866,7 +876,8 @@ private:
             }
         }
         return !expected
-            || compatible(*expected, result_key(*callable.declaration));
+            || compatible(*expected,
+                result_key(*callable.declaration, callable.instance));
     }
 
     [[nodiscard]] bool function_call(const vhdl::Expression& record) const
@@ -1199,7 +1210,8 @@ private:
             }
             for (const auto& callable : visible) {
                 if (applicable(callable, *record, std::nullopt)) {
-                    add(result, result_key(*callable.declaration));
+                    add(result,
+                        result_key(*callable.declaration, callable.instance));
                 }
             }
             return result;
@@ -1308,7 +1320,8 @@ private:
             if (!applicable(callable, record, std::nullopt)) {
                 continue;
             }
-            const auto key = result_key(*callable.declaration);
+            const auto key
+                = result_key(*callable.declaration, callable.instance);
             if (!key.known()) {
                 return { };
             }

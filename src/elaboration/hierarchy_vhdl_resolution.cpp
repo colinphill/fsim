@@ -595,14 +595,16 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
         return false;
     }
     const auto destination = conversion->destination;
-    if (design_.signals_[destination].vhdl_resolver
-        || design_.signals_[destination].resolution != ResolutionKind::none
+    if (design_.signals_[destination].vhdl_resolver) {
+        return false;
+    }
+    const bool resolved = design_.signals_[destination].resolution
+            != ResolutionKind::none
+        || resolver_by_signal_.contains(destination)
         || explicit_resolution(destination)
                 .value_or(native_resolution(
                     design_.signal_info_[destination]))
-            != ResolutionKind::none) {
-        return false;
-    }
+            != ResolutionKind::none;
     auto& program = conversion->conversion;
     auto& process = program.program.process;
     process.language_standard = owner.standard;
@@ -610,6 +612,32 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     canonicalize_process_operations(process);
     const auto process_id = process.id;
     design_.append_process_record(std::move(process));
+    if (resolved) {
+        // The converted value is one driver of the resolved actual: a
+        // halted stub owns that driver, and the runtime assigns it the
+        // program's result in the cycle a source changes.
+        const auto stub_index = design_.process_count();
+        Process stub;
+        stub.id = static_cast<ProcessId>(stub_index);
+        if (static_cast<std::size_t>(stub.id) != stub_index) {
+            throw std::length_error { "too many SimIR processes" };
+        }
+        const auto& name = design_.signal_info_[destination].name;
+        stub.name = name.substr(0U, name.find_last_of('.') + 1U)
+            + "conversion_driver_" + std::to_string(stub_index);
+        stub.language_standard = owner.standard;
+        stub.compatibility_profile = owner.compatibility_profile;
+        stub.initialize = false;
+        stub.driver_regions.push_back(Process::DriverRegion {
+            destination, 0U, 0U, true });
+        stub.operations.emplace_back(Halt { });
+        design_.append_process_record(std::move(stub));
+        design_.signals_[destination].vhdl_conversion_drivers.push_back(
+            VhdlConversionDriver { static_cast<ProcessId>(stub_index),
+                process_id, program.program.output,
+                std::move(program.sources) });
+        return true;
+    }
     VhdlSignalResolver resolver {
         process_id, program.program.input, program.program.output, { } };
     resolver.sources = std::move(program.sources);

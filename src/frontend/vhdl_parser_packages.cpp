@@ -840,10 +840,26 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     // `is <>`: the subprogram of that name and profile visible where the
     // package is instantiated (IEEE 1076-2008 6.5.6.2).
     bool box_default { };
+    // `package p is new ...`: an interface package (IEEE 1076-2008 6.5.5),
+    // whose name in the template denotes the actual package.
+    bool package { };
   };
   std::vector<Generic> generics;
   for (auto interface : interfaces) {
     std::size_t cursor { };
+    if (interface.size() >= 4U && interface[0].kind == TokenKind::Identifier
+        && detail::ascii_lower(interface[0].text) == "package"
+        && interface[1].kind == TokenKind::Identifier
+        && interface[2].kind == TokenKind::Identifier
+        && detail::ascii_lower(interface[2].text) == "is"
+        && interface[3].kind == TokenKind::Identifier
+        && detail::ascii_lower(interface[3].text) == "new") {
+      Generic package_generic;
+      package_generic.name = detail::ascii_lower(interface[1].text);
+      package_generic.package = true;
+      generics.push_back(std::move(package_generic));
+      continue;
+    }
     // `[pure|impure] function f (a, b : t) return r [is name|<>]` and
     // `procedure p (a : t)` become aliases with a signature.
     if (!interface.empty() && interface.front().kind == TokenKind::Identifier
@@ -972,7 +988,7 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
         return false;
       }
       generics.push_back({ detail::ascii_lower(interface[cursor + 1U].text),
-          true, { }, { }, std::nullopt, { }, { }, false });
+          true, { }, { }, std::nullopt, { }, { }, false, false });
       continue;
     }
     std::vector<std::string> names;
@@ -1020,7 +1036,7 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     for (const auto& name : names) {
       generics.push_back(
           { name, false, subtype, default_value, std::nullopt, { }, { },
-            false });
+            false, false });
     }
   }
   // Actuals: positional in order, then named.
@@ -1089,6 +1105,9 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
       }
       return false;
     }
+    if (formal.package) {
+      continue;
+    }
     if (formal.signature) {
       // A wrapper subprogram that calls the actual; its body follows in the
       // package body.
@@ -1132,14 +1151,37 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     }
     expanded.push_back(make(TokenKind::Semicolon, ";"));
   }
+  // Template tokens with each interface package name replaced by its
+  // actual package name; a name after `.` is a selected suffix, not the
+  // formal.
+  const auto copy_template = [&](std::vector<Token>& out,
+      const std::size_t from, const std::size_t to) {
+    for (auto cursor = from; cursor < to; ++cursor) {
+      const auto& token = tokens[cursor];
+      const std::vector<Token>* actual { };
+      if (token.kind == TokenKind::Identifier
+          && (cursor == 0U || !kind(cursor - 1U, TokenKind::Dot))) {
+        for (std::size_t generic { }; generic < generics.size(); ++generic) {
+          if (generics[generic].package && actuals[generic]
+              && generics[generic].name == detail::ascii_lower(token.text)) {
+            actual = &*actuals[generic];
+            break;
+          }
+        }
+      }
+      if (actual) {
+        out.insert(out.end(), actual->begin(), actual->end());
+      } else {
+        out.push_back(token);
+      }
+    }
+  };
   auto declaration_end_keyword = *declaration_end;
   while (declaration_end_keyword > clause_end
       && !word(declaration_end_keyword, "end")) {
     --declaration_end_keyword;
   }
-  expanded.insert(expanded.end(),
-      tokens.begin() + static_cast<std::ptrdiff_t>(clause_end + 1U),
-      tokens.begin() + static_cast<std::ptrdiff_t>(declaration_end_keyword));
+  copy_template(expanded, clause_end + 1U, declaration_end_keyword);
   // The template's closing `end ... ;` names the instance instead.
   expanded.push_back(identifier("end"));
   expanded.push_back(identifier("package"));
@@ -1197,9 +1239,7 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
     expanded.push_back(identifier(instance_name));
     expanded.push_back(identifier("is"));
     expanded.insert(expanded.end(), wrappers.begin(), wrappers.end());
-    expanded.insert(expanded.end(),
-        tokens.begin() + static_cast<std::ptrdiff_t>(body_items),
-        tokens.begin() + static_cast<std::ptrdiff_t>(end_keyword));
+    copy_template(expanded, body_items, end_keyword);
     expanded.push_back(identifier("end"));
     expanded.push_back(identifier("package"));
     expanded.push_back(identifier("body"));

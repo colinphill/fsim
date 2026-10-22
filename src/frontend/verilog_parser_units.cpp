@@ -1066,6 +1066,16 @@ void VerilogParser::parse_generate_branch(
             body.instances.end(),
             std::make_move_iterator(instances.begin()),
             std::make_move_iterator(instances.end()));
+    } else if (dpi_declaration_start("import")
+        || dpi_declaration_start("export")) {
+        // A DPI declaration in a generate block (IEEE 1800-2017 35.5.4)
+        // is declared with its module's other subroutines.
+        const bool import = dpi_declaration_start("import");
+        const auto declaration = advance();
+        parse_dpi_declaration(generate_dpi_declarations_, declaration,
+            import ? SystemVerilogDpiDirection::Import
+                   : SystemVerilogDpiDirection::Export,
+            SystemVerilogDpiOwnerKind::DesignUnit, std::string { });
     } else {
         const auto unsupported = advance();
         error(
@@ -1179,6 +1189,10 @@ void VerilogParser::parse_generate_declaration(
     type.domain = ValueDomain::Logic4;
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
+  } else if (keyword("string") || keyword("chandle")) {
+    // A string or chandle variable of a generate block (IEEE 1800-2023
+    // 27.2, 6.16, 6.14).
+    type = parse_parameter_type();
   } else {
     parse_optional_net_type(type);
     parse_optional_signedness(type);
@@ -1253,7 +1267,8 @@ void VerilogParser::parse_generate_declaration(
           "FSIM-SV-SEM-006",
           "duplicate generated signal declaration '"
               + name.text + "'");
-    } else if (container_declaration || class_handle_declaration) {
+    } else if (container_declaration || class_handle_declaration
+        || declaration_type.domain == ValueDomain::String) {
       body.variables.emplace_back(
           name.text,
           std::move(declaration_type),
@@ -1283,7 +1298,8 @@ void VerilogParser::parse_generate_declaration(
       driver.span = span_from(name, previous());
       body.concurrent_statements.push_back(std::move(driver));
     } else if (initializer && !container_declaration
-        && !class_handle_declaration) {
+        && !class_handle_declaration
+        && declaration_type.domain != ValueDomain::String) {
       // A variable initializer sets the generated variable at time zero
       // (IEEE 1800-2017 6.8), as for a module variable.
       Statement assignment;

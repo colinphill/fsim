@@ -326,6 +326,12 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start,
       UnitKind kind = UnitKind::VerilogModule,
       bool extern_declaration = false);
+  // A top-level module, program or interface whose nested units name
+  // declarations of their enclosing units (IEEE 1800-2017 23.4).
+  DesignUnit parse_scoped_unit(Token start, UnitKind kind);
+  // Moves the module, program and interface declarations nested in the
+  // unit whose name follows the current token after that unit.
+  void hoist_nested_units();
 
   void parse_anonymous_program(
       ParsedDesign& design, const Token& start);
@@ -605,6 +611,10 @@ class VerilogParser final : private detail::ParserBase {
     bool const_reference{};
     bool static_reference{};
     std::optional<Expression> default_value;
+    // The formal's data type and unpacked dimension tokens, which a DPI
+    // export's generated service declarations repeat.
+    std::vector<Token> type_tokens;
+    std::vector<Token> dimension_tokens;
   };
 
   std::vector<AnsiCallableFormal> parse_ansi_callable_formals(
@@ -884,6 +894,17 @@ class VerilogParser final : private detail::ParserBase {
   std::vector<Token> balanced_tokens(TokenKind open, TokenKind close);
   // Rewritten randcase/randsequence blocks get distinct generated names.
   std::size_t generated_statement_counter_ {};
+  // The result and ANSI formal type tokens of the callables of the unit
+  // being parsed, by name; a DPI export's service repeats them.
+  struct CallableTypeTokens {
+    bool function {};
+    std::vector<Token> result;
+    std::vector<std::pair<std::vector<Token>, std::vector<Token>>> formals;
+  };
+  std::unordered_map<std::string, CallableTypeTokens> callable_type_tokens_;
+  // Declares hidden module items through which a context import's C code
+  // calls the unit's DPI exports (IEEE 1800-2023 35.5.3, 35.9).
+  void generate_dpi_export_service(DesignUnit& unit);
   // The monitor sites of `expect` statements (16.17).
   std::uint32_t expect_sites_ {};
   // Assignments nested in expressions (IEEE 1800-2017 11.3.6) run as
@@ -1050,6 +1071,24 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_map<std::string, std::size_t>
       current_loop_names_;
   std::size_t current_loop_depth_{};
+  // Named blocks around desugared multi-dimensional foreach loops, with the
+  // loop depth of their bodies: a break leaves the whole loop (12.8).
+  std::vector<std::pair<std::size_t, std::string>> foreach_break_targets_;
+  // A hoisted nested unit's enclosing unit, by the nested unit's name, and
+  // the names each enclosing unit declares.
+  std::unordered_map<std::string, std::string> nested_unit_parents_;
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      nested_parent_known_names_;
+  // References in a nested unit to a declaration of an enclosing unit; the
+  // unit is read again with each made an upward name (23.8).
+  struct NestedUpwardReference {
+    SourceSpan span;
+    std::string name;
+    std::string ancestor;
+  };
+  std::vector<NestedUpwardReference> nested_upward_references_;
+  // DPI declarations of generate blocks, declared in their module.
+  std::vector<SystemVerilogDpiDeclaration> generate_dpi_declarations_;
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
   std::size_t next_implicit_generate_scope_{1};

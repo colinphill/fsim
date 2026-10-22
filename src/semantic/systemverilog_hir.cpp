@@ -1093,6 +1093,11 @@ const TypeDefinition* Hir::find_type(const TypeId id) const noexcept
 {
     return find_by_id(types_, id);
 }
+
+const Expression* Hir::find_expression(const ExpressionId id) const noexcept
+{
+    return find_by_id(expressions_, id);
+}
 const std::vector<Expression>& Hir::expressions() const noexcept {
     return expressions_;
 }

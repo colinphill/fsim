@@ -48,6 +48,7 @@ enum class Tag : std::uint64_t {
     scheduled = 6,
     select = 7,
     constant = 8,
+    range = 9,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -865,6 +866,25 @@ public:
         if (request.flags != 0U) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
+        // vpi_chk_error reports the previous routine's error, and any
+        // other routine clears it (IEEE 1800-2023 38.6).
+        if (routine == Routine::CheckError) {
+            return check_error(request, result);
+        }
+        error_ = false;
+        if (routine == Routine::PutValue || routine == Routine::GetValue) {
+            const auto status = routine == Routine::PutValue
+                ? put_value(request, result)
+                : get_value(request, result);
+            if (status != FSIM_VPI_STATUS_OK) {
+                error_message_ = std::string { routine == Routine::PutValue
+                        ? "vpi_put_value"
+                        : "vpi_get_value" }
+                    + ": the object has no value of that kind";
+                error_ = true;
+            }
+            return status;
+        }
         switch (routine) {
         case Routine::RegisterSystemTaskFunction:
             return register_systf(request, result);
@@ -902,7 +922,7 @@ public:
         case Routine::GetVlogInfo:
             return vlog_info(request, result);
         case Routine::CheckError:
-            return succeed(result);
+            return check_error(request, result);
         case Routine::FreeObject:
         case Routine::ReleaseHandle:
             if (owned(request.handle) && tag_of(request.handle) == Tag::iterator) {
@@ -1000,6 +1020,12 @@ private:
         Value value;
         PLI_INT32 const_type { vpiDecConst };
     };
+    // One dimension of an array or vector (IEEE 1800-2023 37.22 vpiRange).
+    struct Range {
+        fsim_vpi_handle_v1 parent { };
+        std::int64_t left { };
+        std::int64_t right { };
+    };
 
     // --- selects and constants ----------------------------------------------
 
@@ -1025,6 +1051,71 @@ private:
             return std::nullopt;
         }
         return std::pair { std::int64_t { object->type->width } - 1, std::int64_t { 0 } };
+    }
+
+    // Every dimension of an object, leftmost first: an array's unpacked
+    // dimensions, or a vector's packed ones (IEEE 1800-2023 37.17).
+    [[nodiscard]] std::vector<std::pair<std::int64_t, std::int64_t>>
+    dimension_ranges(const fsim_vpi_handle_v1 handle) const
+    {
+        std::vector<std::pair<std::int64_t, std::int64_t>> result;
+        const auto object = info(handle);
+        if (!object || !object->type) {
+            return result;
+        }
+        if (object->kind == SystemVerilogVpiObjectKind::Memory) {
+            const auto* level = object->type->descriptor.get();
+            while (level != nullptr
+                && level->kind
+                    == runtime::SystemVerilogVpiDescriptorKind::UnpackedArray) {
+                for (const auto& range : level->ranges) {
+                    result.emplace_back(range.left, range.right);
+                }
+                level = level->children.empty() ? nullptr
+                                                 : &level->children.front();
+            }
+            return result;
+        }
+        // Packed dimensions that tile the vector, else its flat range.
+        const auto& descriptor = object->type->descriptor;
+        if (descriptor
+            && descriptor->kind
+                == runtime::SystemVerilogVpiDescriptorKind::PackedArray
+            && descriptor->ranges.size() > 1U) {
+            std::uint64_t product = 1U;
+            for (const auto& range : descriptor->ranges) {
+                product *= static_cast<std::uint64_t>(
+                               range.left >= range.right
+                                   ? range.left - range.right
+                                   : range.right - range.left)
+                    + 1U;
+                result.emplace_back(range.left, range.right);
+            }
+            if (product == object->type->width) {
+                return result;
+            }
+            result.clear();
+        }
+        if (const auto range = declared_range(handle)) {
+            result.push_back(*range);
+        }
+        return result;
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 make_range(const fsim_vpi_handle_v1 parent,
+        const std::int64_t left, const std::int64_t right)
+    {
+        ranges_.push_back({ parent, left, right });
+        return tagged(Tag::range, ranges_.size() - 1U);
+    }
+
+    [[nodiscard]] const Range* range_of(const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::range
+            || serial_of(handle) >= ranges_.size()) {
+            return nullptr;
+        }
+        return &ranges_[serial_of(handle)];
     }
 
     [[nodiscard]] fsim_vpi_handle_v1 make_select(const fsim_vpi_handle_v1 parent,
@@ -1604,10 +1695,6 @@ private:
             if (!object.type) {
                 return vpiReg;
             }
-            if (const auto parent = info(object.parent);
-                parent && parent->kind == SystemVerilogVpiObjectKind::Memory) {
-                return vpiMemoryWord;
-            }
             switch (object.type->category) {
             case Category::Real:
             case Category::ShortReal:
@@ -1669,8 +1756,11 @@ private:
             return variable_type();
         case SystemVerilogVpiObjectKind::Parameter:
             return vpiParameter;
+        // An unpacked array is a vpiRegArray, and its words are variables
+        // of their own type; vpiMemory and vpiMemoryWord remain only as
+        // iteration relations (IEEE 1800-2023 37.17 detail 4, 37.20).
         case SystemVerilogVpiObjectKind::Memory:
-            return vpiMemory;
+            return vpiRegArray;
         case SystemVerilogVpiObjectKind::NamedEvent:
             return vpiNamedEvent;
         case SystemVerilogVpiObjectKind::Constant:
@@ -1704,6 +1794,9 @@ private:
         if (constant_of(handle) != nullptr) {
             return vpiConstant;
         }
+        if (range_of(handle) != nullptr) {
+            return vpiRange;
+        }
         if (owned(handle)) {
             return tag_of(handle) == Tag::iterator ? vpiIterator : vpiUndefined;
         }
@@ -1716,6 +1809,46 @@ private:
         return !text.empty()
             && ((text.front() >= '0' && text.front() <= '9')
                 || text.front() == '\'' || text.front() == '-');
+    }
+
+    // The compilation-unit package is `$unit` (IEEE 1800-2023 3.12.1).
+    [[nodiscard]] static std::string package_name(const std::string& name)
+    {
+        return name.starts_with("fsim_unit_") ? std::string { "$unit" }
+                                              : name;
+    }
+
+    // A package's full name ends in `::`, and so begins its members' full
+    // names (IEEE 1800-2023 37.10, 23.6).
+    [[nodiscard]] std::string presented_full_name(
+        const runtime::SystemVerilogVpiObjectInfo& object) const
+    {
+        auto root = std::optional { object };
+        for (std::size_t depth = 0U; root && root->parent != 0U
+             && depth < 4096U; ++depth) {
+            root = info(root->parent);
+        }
+        if (!root || root->kind != SystemVerilogVpiObjectKind::Package) {
+            return object.full_name;
+        }
+        auto package = root->full_name;
+        if (package.ends_with("::")) {
+            package.resize(package.size() - 2U);
+        }
+        const auto presented = package_name(package) + "::";
+        if (object.full_name == root->full_name) {
+            return presented;
+        }
+        auto member = std::string_view { object.full_name };
+        if (member.starts_with(package)) {
+            member.remove_prefix(package.size());
+            if (member.starts_with("::")) {
+                member.remove_prefix(2U);
+            } else if (member.starts_with('.')) {
+                member.remove_prefix(1U);
+            }
+        }
+        return presented + std::string { member };
     }
 
     // Children of a scope that match an iteration type (IEEE 1800-2023
@@ -1735,8 +1868,17 @@ private:
                 || actual == vpiProgram || actual == vpiPackage;
         case vpiInternalScope:
             return scope_kind(object.kind);
+        case vpiMemory:
+        case vpiRegArray:
+            return object.kind == SystemVerilogVpiObjectKind::Memory;
+        case vpiMemoryWord:
+            if (const auto parent = info(object.parent)) {
+                return parent->kind == SystemVerilogVpiObjectKind::Memory;
+            }
+            return false;
         case vpiVariables:
-            return actual == vpiReg || actual == vpiIntegerVar
+            return actual == vpiRegArray || actual == vpiReg
+                || actual == vpiIntegerVar
                 || actual == vpiRealVar || actual == vpiTimeVar
                 || actual == vpiIntVar || actual == vpiByteVar
                 || actual == vpiShortIntVar || actual == vpiLongIntVar
@@ -1747,8 +1889,6 @@ private:
             return actual == vpiNet;
         case vpiPort:
             return object.kind == SystemVerilogVpiObjectKind::Port;
-        case vpiMemoryWord:
-            return true;
         default:
             return actual == type;
         }
@@ -1801,6 +1941,15 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
+        // The dimensions of an array or vector (IEEE 1800-2023 37.17).
+        if (type == vpiRange) {
+            if (reference != 0U && !owned(reference)) {
+                for (const auto& [left, right] : dimension_ranges(reference)) {
+                    objects.push_back(make_range(reference, left, right));
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
         // Only design roots iterate from a NULL reference (IEEE 1800-2023
         // 37.10).
         if (reference == 0U && type != vpiModule && type != vpiInstance
@@ -1808,11 +1957,12 @@ private:
             return succeed(result);
         }
         if (reference == 0U) {
-            for (const auto kind : { SystemVerilogVpiObjectKind::Root,
+            // Packages, `$unit` first, precede the design's top instances.
+            for (const auto kind : { SystemVerilogVpiObjectKind::Package,
+                     SystemVerilogVpiObjectKind::Root,
                      SystemVerilogVpiObjectKind::Module,
                      SystemVerilogVpiObjectKind::Interface,
-                     SystemVerilogVpiObjectKind::Program,
-                     SystemVerilogVpiObjectKind::Package }) {
+                     SystemVerilogVpiObjectKind::Program }) {
                 for (const auto handle : drain(registry_.iterate_objects(kind))) {
                     const auto object = info(handle);
                     if (object && object->parent == 0U && matches(type, *object)) {
@@ -1834,11 +1984,16 @@ private:
                 || object->name.starts_with('@')) {
                 continue;
             }
-            const auto memory_word
-                = parent->kind == SystemVerilogVpiObjectKind::Memory;
-            if ((memory_word && type == vpiMemoryWord)
-                || (!memory_word && matches(type, *object))) {
+            if (matches(type, *object)) {
                 objects.push_back(handle);
+            }
+        }
+        // The words of an array scan from the lowest address up, as other
+        // simulators order them.
+        if (parent->kind == SystemVerilogVpiObjectKind::Memory) {
+            const auto range = declared_range(reference);
+            if (range && range->first > range->second) {
+                std::ranges::reverse(objects);
             }
         }
         return succeed(result, make_iterator(std::move(objects)));
@@ -1923,6 +2078,19 @@ private:
             return succeed(result);
         }
         const auto reference = resolve(request.handle);
+        if (const auto* range = range_of(reference)) {
+            const auto bounds = *range;
+            switch (type) {
+            case vpiParent:
+                return succeed(result, bounds.parent);
+            case vpiLeftRange:
+                return succeed(result, make_constant(bounds.left));
+            case vpiRightRange:
+                return succeed(result, make_constant(bounds.right));
+            default:
+                return succeed(result);
+            }
+        }
         if (const auto* select = select_of(reference)) {
             switch (type) {
             case vpiParent:
@@ -2059,6 +2227,13 @@ private:
         if (property == vpiType) {
             return integer(handle_type(request.handle));
         }
+        if (const auto* range = range_of(request.handle)) {
+            return property == vpiSize
+                ? integer(range->left >= range->right
+                          ? range->left - range->right + 1
+                          : range->right - range->left + 1)
+                : succeed(result, 0U, undefined);
+        }
         if (const auto* site = call_of(request.handle)) {
             switch (property) {
             case vpiLineNo:
@@ -2143,6 +2318,9 @@ private:
             if (object->kind != SystemVerilogVpiObjectKind::Parameter
                 || !object->type) {
                 return succeed(result, 0U, undefined);
+            }
+            if (object->type->string_literal) {
+                return integer(vpiStringConst);
             }
             switch (object->type->category) {
             case runtime::SystemVerilogVpiValueCategory::String:
@@ -2230,6 +2408,10 @@ private:
             return "vpiMemory";
         case vpiMemoryWord:
             return "vpiMemoryWord";
+        case vpiRegArray:
+            return "vpiRegArray";
+        case vpiRange:
+            return "vpiRange";
         case vpiNamedEvent:
             return "vpiNamedEvent";
         case vpiNamedBegin:
@@ -2348,14 +2530,12 @@ private:
                     return text(parent->name + object->name);
                 }
             }
+            if (object->kind == SystemVerilogVpiObjectKind::Package) {
+                return text(package_name(object->name));
+            }
             return text(object->name);
         case vpiFullName:
-            // A package's full name ends in `::` (IEEE 1800-2023 37.10).
-            if (object->kind == SystemVerilogVpiObjectKind::Package
-                && !object->full_name.ends_with("::")) {
-                return text(object->full_name + "::");
-            }
-            return text(object->full_name);
+            return text(presented_full_name(*object));
         case vpiFile:
             return object->source ? text(object->source->file)
                                   : FSIM_VPI_STATUS_NOT_FOUND;
@@ -3151,6 +3331,24 @@ private:
         return succeed(result);
     }
 
+    fsim_vpi_status_v1 check_error(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        if (!error_) {
+            return succeed(result, 0U, 0U);
+        }
+        if (auto* const out = pointer<s_vpi_error_info>(request.user_data)) {
+            out->state = vpiRun;
+            out->level = vpiError;
+            out->message = error_message_.data();
+            out->product = product_.data();
+            out->code = error_code_.data();
+            out->file = nullptr;
+            out->line = 0;
+        }
+        return succeed(result, 0U, static_cast<std::uint64_t>(vpiError));
+    }
+
     fsim_vpi_status_v1 vlog_info(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
@@ -3239,6 +3437,7 @@ private:
     std::vector<std::byte> array_buffer_;
     std::vector<Select> selects_;
     std::vector<Constant> constants_;
+    std::vector<Range> ranges_;
     std::size_t string_cursor_ { };
     std::array<std::vector<s_vpi_vecval>, 16> vectors_;
     std::size_t vector_cursor_ { };
@@ -3248,6 +3447,11 @@ private:
     std::vector<char*> argv_;
     std::string product_ { "FSIM" };
     std::string version_ { "3" };
+    // The message outlives later routines, such as the vpi_printf that
+    // reports it.
+    bool error_ { };
+    std::string error_message_;
+    std::string error_code_ { "FSIM-VPI-001" };
 };
 
 } // namespace
@@ -3287,6 +3491,13 @@ std::unique_ptr<VpiForeignService> attach_vpi_modules(
         return nullptr;
     }
     auto* const live = service.get();
+    if (dpi != nullptr) {
+        // An import's C code on a helper thread may call the VPI too.
+        dpi->set_thread_entry([live](const std::function<void()>& run) {
+            CallScope scope { *live };
+            run();
+        });
+    }
     simulation.set_systemverilog_dpi_function_hook(
         [live, dpi](const std::string_view identity,
             std::vector<PackedLogic4>& actuals,

@@ -609,6 +609,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             "FSIM-SV-PARSE-104");
         Statement statement;
         statement.kind = is_break ? StatementKind::Break : StatementKind::Continue;
+        if (is_break && !foreach_break_targets_.empty()
+            && foreach_break_targets_.back().first == current_loop_depth_) {
+            statement.kind = StatementKind::Disable;
+            statement.task_name = foreach_break_targets_.back().second;
+        }
         statement.span = span_from(start, previous());
         return statement;
     }

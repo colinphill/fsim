@@ -2260,10 +2260,12 @@ void Interpreter::Impl::queue_at(
         return;
     }
     process.queued = true;
+    process.timer_wake = time > scheduler.now();
     const auto phase = process.execution_phase;
     struct ProcessQueueTask {
         Interpreter::Impl* owner { };
         ProcessId process { };
+        std::uint32_t epoch { };
     };
     const auto task =
         fsim::runtime::detail::make_scheduler_task_descriptor<
@@ -2276,12 +2278,17 @@ void Interpreter::Impl::queue_at(
                 } else {
                     auto& state = scheduled.owner->get_process(
                         scheduled.process);
+                    // A disable abandoned this timer (IEEE 1800-2017 9.6.2).
+                    if (state.timer_epoch != scheduled.epoch) {
+                        return;
+                    }
                     state.queued = false;
+                    state.timer_wake = false;
                     state.waiting_on_static = false;
                     scheduled.owner->remove_dynamic_wait(state);
                 }
                 scheduled.owner->execute(scheduled.process);
-            }>(ProcessQueueTask { this, id });
+            }>(ProcessQueueTask { this, id, process.timer_epoch });
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
         scheduler.schedule_internal_systemverilog_at(
@@ -2310,10 +2317,16 @@ void Interpreter::Impl::queue_timeout(
         return;
     }
     process.queued = true;
+    process.timer_wake = true;
     scheduler.schedule_after(time - scheduler.now(), SchedulerPhase::update,
-        process.id, [this, id = process.id](Scheduler&) {
+        process.id,
+        [this, id = process.id, epoch = process.timer_epoch](Scheduler&) {
             auto& state = get_process(id);
+            if (state.timer_epoch != epoch) {
+                return;
+            }
             state.queued = false;
+            state.timer_wake = false;
             queue_next_delta(id);
         });
 }
@@ -2327,6 +2340,7 @@ void Interpreter::Impl::queue_next_delta(
         return;
     }
     process.queued = true;
+    process.timer_wake = false;
     const auto phase = process.execution_phase;
     struct ProcessQueueTask {
         Interpreter::Impl* owner { };
@@ -2620,6 +2634,7 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
         return;
     }
     process.queued = true;
+    process.timer_wake = false;
     const auto phase = process.execution_phase;
     struct ProcessQueueTask {
         Interpreter::Impl* owner { };

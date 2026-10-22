@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_vhpi_foreign.hpp"
 #include "application_vpi_foreign.hpp"
 #include "application_dpi_foreign.hpp"
 #include "application_trace_control.hpp"
@@ -274,7 +275,9 @@ int run_built_project(
     // stay published and the fused nets visible.
     const bool vpi_modules = !config.run.vpi_modules.empty();
     // A DPI context import may use the VPI too.
-    const bool foreign = vpi_modules || !config.run.sv_libs.empty();
+    const bool vhpi_modules = !config.run.vhpi_modules.empty();
+    const bool foreign = vpi_modules || vhpi_modules
+        || !config.run.sv_libs.empty();
     built.cone_fusion = engine != SimulationEngine::debug
         && !built.code_coverage_enabled
         && !(trace_config.run.trace_file && trace_config.run.trace_enabled)
@@ -354,6 +357,20 @@ int run_built_project(
                 return dpi->call(identity, actuals, strings);
             });
     }
+    std::unique_ptr<VhpiForeignService> vhpi_service;
+    if (vhpi_modules) {
+        auto print = sink == SimulationOutputSink::builtin_stdout
+            ? VhpiForeignService::PrintSink { [](const std::string_view text) {
+                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+              } }
+            : VhpiForeignService::PrintSink {
+                  [&output](const std::string_view text) { output << text; } };
+        vhpi_service = attach_vhpi_modules(simulation,
+            config.run.vhpi_modules, std::move(print), plusargs, diagnostics);
+        if (!vhpi_service) {
+            return 1;
+        }
+    }
     const BuiltinStdoutFlush stdout_flush {
         sink == SimulationOutputSink::builtin_stdout
     };
@@ -413,6 +430,12 @@ int run_built_project(
         if (trace && !finish_trace(*trace, diagnostics)) {
             return 1;
         }
+        if (vhpi_service) {
+            vhpi_service->finish();
+            if (sink == SimulationOutputSink::builtin_stdout) {
+                (void)std::fflush(stdout);
+            }
+        }
         output << "simulation "
                << (result.status == runtime::RunStatus::completed
                           ? "completed"
@@ -458,7 +481,7 @@ int run_built_project(
             }
             return static_cast<int>(*result.simulator_status);
         }
-        return 0;
+        return vhpi_service && vhpi_service->failed() ? 1 : 0;
     } catch (const runtime::DeltaCycleLimitError& error) {
         std::ostringstream message;
         message << error.what() << "; active process IDs: ";

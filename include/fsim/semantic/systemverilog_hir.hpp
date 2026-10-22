@@ -2203,6 +2203,8 @@ public:
     [[nodiscard]] const Declaration* find_declaration(
         DeclarationId id) const noexcept;
     [[nodiscard]] const TypeDefinition* find_type(TypeId id) const noexcept;
+    [[nodiscard]] const Expression* find_expression(
+        ExpressionId id) const noexcept;
     [[nodiscard]] const std::vector<Expression>& expressions() const noexcept;
     [[nodiscard]] const std::vector<Statement>& statements() const noexcept;
     [[nodiscard]] const std::vector<Process>& processes() const noexcept;

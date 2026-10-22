@@ -32,6 +32,7 @@ FunctionDeclaration VerilogParser::parse_function(
     function.lifetime_explicit = false;
   }
   const LifetimeScope lifetime_scope { automatic_callable_, function.automatic };
+  const auto return_begin = position();
 
   // A user-defined return type is followed by the function name and then
   // '('. The general declaration lookahead deliberately treats that shape
@@ -105,8 +106,15 @@ FunctionDeclaration VerilogParser::parse_function(
         function.return_type.is_signed = false;
       }
     }
+    const auto name_position = position();
     const auto name = expect_identifier("function name");
     function.name = name.text;
+    auto& recorded = callable_type_tokens_[function.name];
+    recorded = { true, { tokens_.begin()
+                             + static_cast<std::ptrdiff_t>(return_begin),
+                           tokens_.begin()
+                             + static_cast<std::ptrdiff_t>(name_position) },
+        { } };
     while (match(TokenKind::Scope)) {
       function.name += "::";
       function.name += expect_identifier("selected function name").text;
@@ -178,6 +186,8 @@ FunctionDeclaration VerilogParser::parse_function(
                }
                current_procedural_names_.insert(argument_name.text);
              })) {
+      callable_type_tokens_[function.name].formals.emplace_back(
+          std::move(formal.type_tokens), std::move(formal.dimension_tokens));
       auto& argument = function.arguments.emplace_back(FunctionArgument{
           formal.name.text,
           std::move(formal.type),
@@ -612,6 +622,7 @@ VerilogParser::parse_ansi_callable_formals(
     const std::function<void(const Token&)>& declare) {
   std::vector<AnsiCallableFormal> formals;
   Type inherited_type;
+  std::vector<Token> inherited_type_tokens;
   PortDirection inherited_direction { PortDirection::Input };
   bool inherited_reference = false;
   bool inherited_const_reference = false;
@@ -699,6 +710,7 @@ VerilogParser::parse_ansi_callable_formals(
           "direction");
     }
     Type type;
+    const auto type_begin = position();
     if (language_ == Language::SystemVerilog2017 && keyword("virtual")) {
       // A virtual interface formal (IEEE 1800-2017 25.9).
       type = parse_virtual_interface_type(advance());
@@ -721,10 +733,18 @@ VerilogParser::parse_ansi_callable_formals(
     } else {
       type = inherited_type;
     }
+    if (position() != type_begin) {
+      inherited_type_tokens.assign(
+          tokens_.begin() + static_cast<std::ptrdiff_t>(type_begin),
+          tokens_.begin() + static_cast<std::ptrdiff_t>(position()));
+    } else if (explicit_direction || implicit_var_formal) {
+      inherited_type_tokens.clear();
+    }
     have_inherited_formal = true;
     const auto argument_name = expect_identifier(
         std::string { kind } + " argument name");
     declare(argument_name);
+    const auto dimension_begin = position();
     (void)parse_optional_container_dimension(type);
     current_procedural_types_.insert_or_assign(argument_name.text, type);
     auto& formal = formals.emplace_back();
@@ -734,6 +754,10 @@ VerilogParser::parse_ansi_callable_formals(
     formal.reference = reference;
     formal.const_reference = const_reference;
     formal.static_reference = static_reference;
+    formal.type_tokens = inherited_type_tokens;
+    formal.dimension_tokens.assign(
+        tokens_.begin() + static_cast<std::ptrdiff_t>(dimension_begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(position()));
     if (match(TokenKind::Assign)) {
       formal.default_value = parse_expression();
     }
@@ -777,6 +801,7 @@ TaskDeclaration VerilogParser::parse_task(
     task.name += "::";
     task.name += expect_identifier("selected task name").text;
   }
+  callable_type_tokens_[task.name] = { };
   const ImplicitNetDiscard method_scope { implicit_net_references_,
       implicit_net_references_.size(),
       task.name.find("::") != std::string::npos };
@@ -828,6 +853,8 @@ TaskDeclaration VerilogParser::parse_task(
                            + "'");
                }
              })) {
+      callable_type_tokens_[task.name].formals.emplace_back(
+          std::move(formal.type_tokens), std::move(formal.dimension_tokens));
       auto& argument = task.arguments.emplace_back(
           formal.name.text, std::move(formal.type), formal.direction,
           formal.name.span);

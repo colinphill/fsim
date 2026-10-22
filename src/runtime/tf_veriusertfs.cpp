@@ -109,9 +109,14 @@ fsim_tf_argument_bridge_v3 classify(const vpiHandle handle) {
     break;
   case vpiReg:
   case vpiIntegerVar:
-  case vpiTimeVar:
-    argument.kind = tf_readwrite;
+  case vpiTimeVar: {
+    // A word of an array is a memory select (IEEE 1800-2023 37.17).
+    const auto parent = vpi_handle(vpiParent, handle);
+    argument.kind = parent != nullptr && vpi_get(vpiType, parent) == vpiRegArray
+        ? tf_rwmemselect
+        : tf_readwrite;
     break;
+  }
   case vpiMemoryWord:
     argument.kind = tf_rwmemselect;
     break;

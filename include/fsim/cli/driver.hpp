@@ -114,6 +114,8 @@ struct Invocation {
   // design (IEEE 1800-2017 36.9.1, 35.8).
   std::vector<std::string> vpi_modules;
   std::vector<std::string> sv_libs;
+  // VHPI modules (`LIB[:BOOTSTRAP]`, IEEE 1076-2019 20.2).
+  std::vector<std::string> vhpi_modules;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;

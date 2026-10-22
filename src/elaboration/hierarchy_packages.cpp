@@ -2789,7 +2789,20 @@ namespace {
                 const auto element_subtype
                     = semantic::vhdl::constrained_element_subtype(
                         subtype, "", *definition.element_subtype);
-                auto layout = resolve_subtype(element_subtype);
+                // An element left unconstrained has no layout of its own
+                // (IEEE 1076-2008 5.3.2.1); the object's initial value or
+                // element constraints give it one.
+                const auto linked_element = compiled_vhdl_link_subtype(
+                    specialization, element_subtype, owner_scope);
+                const bool open_element = linked_element.unconstrained
+                    && std::ranges::none_of(linked_element.constraints,
+                        [](const semantic::vhdl::RangeConstraint& range) {
+                            return range.kind
+                                == semantic::vhdl::RangeKind::array_index;
+                        });
+                auto layout = open_element
+                    ? Layout { }
+                    : resolve_subtype(element_subtype);
                 for (std::size_t index { };
                     layout && index < definition.array_dimensions.size();
                     ++index) {
@@ -4848,6 +4861,22 @@ namespace {
             ? ResolutionKind::vhdl_user_or
             : ResolutionKind::vhdl_user_and;
         return result;
+    }
+
+    // A subtype resolved by a user resolution function rather than the
+    // STD_LOGIC table (IEEE 1076-2008 4.6).
+    bool compiled_vhdl_user_resolved_subtype(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const std::optional<semantic::ScopeId> owner_scope)
+    {
+        const auto resolution = compiled_vhdl_resolution_function(
+            specialization, subtype, owner_scope);
+        return resolution
+            && compiled_vhdl_resolution_binding(
+                   specialization, subtype, *resolution, owner_scope)
+                    .kind
+                == ResolutionKind::vhdl_user_function;
     }
 
     std::optional<CompiledVhdlSignalLayout> compiled_vhdl_mode_view_layout(
@@ -18040,6 +18069,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         }
     }
     std::optional<SignalId> actual_signal;
+    bool split_signal_actual = false;
     std::optional<std::string> actual_hir_type_identity;
     std::optional<PackedTypeMetadata> actual_hir_type;
     std::optional<semantic::vhdl::SubtypeIndication>
@@ -18157,7 +18187,20 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 }
             }
         }
-        if (const auto actual = find_compiled_vhdl_signal(working_signals, actual_name)) {
+        // A formal whose subtype names a resolution function is a resolved
+        // signal of its own: its sources resolve to its driving value, which
+        // is one source of the actual (IEEE 1076-2008 14.7.3.2). It cannot
+        // share the actual's driver set.
+        const bool resolved_formal = produces_output
+            && formal_declaration.subtype
+            && compiled_vhdl_user_resolved_subtype(
+                child_interface_specialization,
+                *formal_declaration.subtype, formal_declaration.scope);
+        const auto found_actual
+            = find_compiled_vhdl_signal(working_signals, actual_name);
+        // A split formal's signal actual is never folded to a static value.
+        split_signal_actual = resolved_formal && found_actual.has_value();
+        if (const auto actual = resolved_formal ? std::nullopt : found_actual) {
             actual_signal = *actual;
             // An out or inout port's default is its driver's initial value
             // (IEEE 1076-2008 6.5.2). An unresolved actual it alone drives
@@ -18219,7 +18262,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         }
     }
     if (!actual_signal && formal_declaration.subtype) {
-        const auto value = accepts_input
+        const auto value = accepts_input && !split_signal_actual
             ? port_actual_specialization
                   .evaluate_integral_expression(
                       *binding.expression)
@@ -18641,7 +18684,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 && formal_signal_type->integer_range
             ? formal_signal_type->integer_range
             : compiled_integer_range(*formal_declaration.subtype);
-        auto static_value = accepts_input && width
+        auto static_value = accepts_input && !split_signal_actual && width
                 && *width <= 64U
             ? compiled_vhdl_static_port_value(
                   port_actual_specialization,
@@ -18654,7 +18697,8 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         // A static array aggregate actual, possibly qualified or converted
         // between array types with the same element type, is the port's
         // value from the start (IEEE 1076-2008 6.5.6.3, 9.3.6).
-        if (!static_value && accepts_input && width && *width <= 64U
+        if (!static_value && accepts_input && !split_signal_actual && width
+            && *width <= 64U
             && formal_signal_type && formal_signal_type->vhdl_array) {
             if (const auto actual = compiled_vhdl_element_preserving_operand(
                     port_actual_specialization, *binding.expression,
@@ -18732,6 +18776,10 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             info.declaration_span = compiled_source_span(
                 *compiled_, binding.source);
             design_.signal_info_.push_back(std::move(info));
+            if (produces_output) {
+                register_compiled_vhdl_formal_resolution(id,
+                    child_interface_specialization, formal_declaration);
+            }
             // Without a static actual value the formal starts at its
             // default, the initial value of its driver (IEEE 1076-2008
             // 6.5.2, 14.7.3.4).
@@ -18885,12 +18933,15 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     return compiled_vhdl_package_constant_signal(
                         port_actual_specialization, constant);
                 });
+            std::optional<ProcessId> input_adapter;
+            std::optional<ProcessId> appended_adapter;
             const auto append_adapter = [&](
                                             std::optional<Process>
                                                 lowered) {
                 if (!lowered) {
                     return false;
                 }
+                appended_adapter = lowered->id;
                 lowered->language_standard
                     = architecture.standard;
                 lowered->compatibility_profile
@@ -18933,6 +18984,8 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                             concurrent_order++,
                             formal_declaration.subtype))) {
                     actual_signal.reset();
+                } else {
+                    input_adapter = appended_adapter;
                 }
             }
             if (actual_signal && produces_output) {
@@ -18946,6 +18999,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                             working_path,
                             concurrent_order++))) {
                     actual_signal.reset();
+                } else if (input_adapter && appended_adapter) {
+                    vhdl_inout_adapters_.push_back(VhdlInoutAdapters {
+                        id, *input_adapter, *appended_adapter });
                 }
             }
         }
@@ -18969,6 +19025,30 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         std::move(actual_hir_declaration),
         std::move(actual_hir_scope),
     };
+}
+
+void HierarchyBuilder::register_compiled_vhdl_formal_resolution(
+    const SignalId signal,
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::vhdl::Declaration& formal)
+{
+    if (!formal.subtype) {
+        return;
+    }
+    if (const auto resolution = compiled_vhdl_resolution_function(
+            specialization, *formal.subtype, formal.scope)) {
+        const auto binding = compiled_vhdl_resolution_binding(
+            specialization, *formal.subtype, *resolution, formal.scope);
+        if (const auto diagnostic = register_compiled_vhdl_resolution(
+                signal, *formal.subtype, formal.source, binding,
+                specialization)) {
+            report(diagnostic->code, diagnostic->message,
+                compiled_source_span(*compiled_, diagnostic->source));
+        }
+    } else if (compiled_vhdl_std_logic_subtype(
+                   specialization, *formal.subtype, formal.scope)) {
+        resolver_by_signal_.insert_or_assign(signal, "std_logic");
+    }
 }
 
 std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
@@ -22007,6 +22087,27 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         auto evaluated = declaration;
         bool changed { };
         bool complete = true;
+        const auto residual_bound = [](
+            const semantic::vhdl::RangeConstraint& range) {
+            return range.kind == semantic::vhdl::RangeKind::array_index
+                && !range.direction_from_bounds
+                && ((!range.left && range.left_expression)
+                    || (!range.right && range.right_expression));
+        };
+        // Bounds that a named subtype declares are evaluated the same way
+        // once the mark is replaced by the subtype it denotes.
+        if (std::ranges::none_of(
+                evaluated.subtype->constraints, residual_bound)) {
+            if (auto effective = semantic::CompiledDesignResolver {
+                    working_specialization
+                }.effective_vhdl_subtype(*evaluated.subtype,
+                    declaration.scope);
+                effective
+                && std::ranges::any_of(
+                    effective->constraints, residual_bound)) {
+                evaluated.subtype = std::move(*effective);
+            }
+        }
         for (auto& range : evaluated.subtype->constraints) {
             if (range.kind != semantic::vhdl::RangeKind::array_index
                 || range.direction_from_bounds) {

@@ -392,7 +392,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             && process->systemverilog != nullptr
             && process->systemverilog->concurrent_assertion;
         lowerer.diagnose_hir_systemverilog_file_process(
-            process_id);
+            process_id, path);
         const auto& origins = compiled_->semantics.origins();
         const bool parsed_process = process
             && process->systemverilog != nullptr

@@ -246,7 +246,8 @@ ParseResult VerilogParser::run() {
             match_keyword("module")
             || match_keyword("macromodule")) {
             compilation_unit_has_design_item_ = true;
-            design.units.push_back(parse_module(previous()));
+            design.units.push_back(
+                parse_scoped_unit(previous(), UnitKind::VerilogModule));
         } else if (match_keyword("extern")) {
             compilation_unit_has_design_item_ = true;
             const auto extern_token = previous();
@@ -315,7 +316,7 @@ ParseResult VerilogParser::run() {
                     parse_class(previous(), "$unit", false, true),
                     interface_token);
             } else {
-                design.units.push_back(parse_module(
+                design.units.push_back(parse_scoped_unit(
                     interface_token, UnitKind::SystemVerilogInterface));
             }
         } else if (match_keyword("program")) {
@@ -329,7 +330,7 @@ ParseResult VerilogParser::run() {
             if (at(TokenKind::Semicolon)) {
                 parse_anonymous_program(design, program_token);
             } else {
-                design.units.push_back(parse_module(
+                design.units.push_back(parse_scoped_unit(
                     program_token, UnitKind::SystemVerilogProgram));
             }
         } else if (

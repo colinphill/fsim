@@ -8017,6 +8017,24 @@ Lowerer::lower_hir_class_callable_invocation(
         });
     }
     reload_hir_class_container_caches();
+    // A formal of a class specialization has its specialized type, such as
+    // a signed type parameter's actual.
+    const SizeRestoreGuard copy_out_specialization {
+        hir_generic_binding_frames_
+    };
+    if (frame.class_specialization) {
+        hir_generic_binding_frames_.push_back(frame.generic_bindings);
+    }
+    const auto formal_type_signed = [&](const std::size_t index) {
+        const auto formal = index < frame.formals.size()
+            ? specialized_hir_unit_->find_declaration(frame.formals[index])
+            : std::nullopt;
+        return formal && formal->systemverilog
+            && formal->systemverilog->type
+            && (formal->systemverilog->type->signed_value
+                || hir_systemverilog_type_signed(
+                    *formal->systemverilog->type));
+    };
     for (std::size_t index = 0U;
         index < string_copy_outs.size(); ++index) {
         if (frame.argument_is_container[index]
@@ -8060,15 +8078,8 @@ Lowerer::lower_hir_class_callable_invocation(
                 && frontend::is_real_scalar_kind(actual_kind)) {
                 // An integral formal copied out to a real actual converts
                 // as an assignment does (6.12.2).
-                const auto formal = index < frame.formals.size()
-                    ? specialized_hir_unit_->find_declaration(
-                          frame.formals[index])
-                    : std::nullopt;
-                const bool formal_signed = formal && formal->systemverilog
-                    && formal->systemverilog->type
-                    && formal->systemverilog->type->signed_value;
                 copied_value = convert_hir_integral_to_real(
-                    copied_value, formal_signed, actual_kind);
+                    copied_value, formal_type_signed(index), actual_kind);
             } else if (frontend::is_real_scalar_kind(formal_kind)
                 && !frontend::is_real_scalar_kind(actual_kind)) {
                 copied_value = convert_hir_real_to_integral(
@@ -8091,15 +8102,8 @@ Lowerer::lower_hir_class_callable_invocation(
                     profile.actuals[index].expression, hir_process_scope_);
                 if (width && *width != 0U
                     && *width != register_width(copied_value)) {
-                    const auto formal = index < frame.formals.size()
-                        ? specialized_hir_unit_->find_declaration(
-                              frame.formals[index])
-                        : std::nullopt;
-                    const bool formal_signed = formal && formal->systemverilog
-                        && formal->systemverilog->type
-                        && formal->systemverilog->type->signed_value;
                     copied_value = resize_register(
-                        copied_value, *width, formal_signed);
+                        copied_value, *width, formal_type_signed(index));
                 }
             }
             // A two-state actual receives x and z bits as zero (IEEE
@@ -9618,6 +9622,15 @@ Lowerer::hir_callable_formal_binding(
                         vhdl_standard_)
           }
         : std::nullopt;
+    // An empty string literal is a null array of the formal's type (IEEE
+    // 1076-2008 9.3.2); it has no storage.
+    const bool empty_string_literal = contextual_string_literal
+        && (actual_expression->vhdl->text == "\"\""
+            || (actual_expression->vhdl->decoded_string
+                && actual_expression->vhdl->decoded_string->empty()));
+    if (empty_string_literal && !width) {
+        width = 0U;
+    }
     // An unconstrained array formal of wide elements (INTEGER, REAL,
     // records) holds the actual's packed value.
     const auto standard_array_identity
@@ -9784,6 +9797,9 @@ Lowerer::hir_callable_formal_binding(
                              && (range.descending ? *left < *right
                                                   : *left > *right);
                      };
+               if (empty_string_literal) {
+                   return true;
+               }
                const auto shape = hir_vhdl_contextual_shape(
                    actual, *subtype, declaration->vhdl->scope);
                return shape && shape->complete()
@@ -12768,6 +12784,36 @@ Lowerer::hir_interface_function_profile(
         return std::nullopt;
     }
     const auto& call = *expression->systemverilog;
+    // An unqualified call from a function or task of a module instance
+    // called by its path to another of that module runs on the same
+    // instance (IEEE 1800-2023 23.8), as a task call does.
+    if (call.kind == semantic::sv::ExpressionKind::call
+        && !call.text.empty()
+        && call.text.find_first_of(".:$") == std::string::npos
+        && active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()) {
+        const auto& caller = hir_callable_frames_[*active_hir_callable_];
+        const auto callee = caller.interface_receiver
+                && caller.interface_receiver->starts_with("@instance:")
+            ? hir_referenced_declaration(expression_id)
+            : std::nullopt;
+        const auto callee_declaration = callee
+            ? specialized_hir_unit_->find_declaration(*callee)
+            : std::nullopt;
+        const auto caller_declaration = callee_declaration
+            ? specialized_hir_unit_->find_declaration(caller.declaration)
+            : std::nullopt;
+        if (callee_declaration && callee_declaration->systemverilog != nullptr
+            && callee_declaration->systemverilog->callable
+            && callee_declaration->systemverilog->callable->function
+            && caller_declaration
+            && caller_declaration->systemverilog != nullptr
+            && caller_declaration->systemverilog->scope
+                == callee_declaration->systemverilog->scope) {
+            return HirInterfaceFunctionProfile {
+                *callee, *caller.interface_receiver, { } };
+        }
+    }
     if (call.kind != semantic::sv::ExpressionKind::call
         || !call.text.starts_with('.') || call.text.size() == 1U
         || call.operands.empty()) {
@@ -14328,13 +14374,22 @@ Lowerer::resolve_hir_vhdl_procedure_call(
 }
 
 const semantic::sv::DpiDeclaration* Lowerer::hir_dpi_import(
-    const std::string_view name) const
+    const std::string_view name,
+    const std::optional<semantic::ScopeId> scope) const
 {
     if (specialized_hir_unit_ == nullptr || name.empty()) {
         return nullptr;
     }
-    const auto unit = specialized_hir_unit_->design().find_unit(
-        specialized_hir_unit_->unit());
+    // A call names the import visible where it appears: in a callable
+    // lowered for another unit's process, that callable's unit.
+    auto unit_id = specialized_hir_unit_->unit();
+    if (scope) {
+        if (const auto* const found
+            = specialized_hir_unit_->design().find_scope(*scope)) {
+            unit_id = found->unit;
+        }
+    }
+    const auto unit = specialized_hir_unit_->design().find_unit(unit_id);
     if (!unit || unit->systemverilog == nullptr) {
         return nullptr;
     }
@@ -14432,6 +14487,43 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
 {
     HirDpiFunctionProfile result;
     result.linkage_name = declaration.linkage_name;
+    result.owner_scope = declaration.owner_scope;
+    // Typedef names resolve in the declaration's scope (35.5.6).
+    const auto resolver = hir_resolver();
+    DpiTypeContext types;
+    types.named_type = [&](const std::string_view name)
+        -> std::optional<semantic::sv::TypeReference> {
+        if (specialized_hir_unit_ == nullptr) {
+            return std::nullopt;
+        }
+        const auto resolution = resolver.resolve_systemverilog(name,
+            declaration.owner_scope,
+            [](const semantic::CompiledDeclarationView& candidate) {
+                return candidate.systemverilog != nullptr
+                    && candidate.systemverilog->form
+                        == semantic::sv::DeclarationForm::typedef_declaration
+                    && candidate.systemverilog->type.has_value();
+            });
+        const auto found = resolution.unique();
+        const auto view = found
+            ? specialized_hir_unit_->find_declaration(*found)
+            : std::nullopt;
+        return view && view->systemverilog != nullptr
+            ? view->systemverilog->type
+            : std::nullopt;
+    };
+    types.definition = [&](const semantic::TypeId type)
+        -> const semantic::sv::TypeDefinition* {
+        const auto definition = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_type(type)
+            : std::nullopt;
+        return definition ? definition->systemverilog : nullptr;
+    };
+    types.evaluate = [&](const semantic::ExpressionId expression) {
+        return specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->evaluate_integral_expression(expression)
+            : std::nullopt;
+    };
     result.task = declaration.callable_kind
         == semantic::sv::DpiCallableKind::task;
     // A task returns its disable status as a C int; a void function has no
@@ -14448,19 +14540,28 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             result_code = 'v';
         }
     } else {
-        // A function result is a small value, never a vector or a string
-        // here (IEEE 1800-2023 35.5.5).
-        const auto type = dpi_c_type(declaration.return_type_tokens);
-        if (!type || type->string || type->code == 'B' || type->code == 'V'
-            || type->width == 0U
+        // A function result is a small value or a string, never a vector
+        // wider than 32 bits (IEEE 1800-2023 35.5.5).
+        const auto type = dpi_c_type(declaration.return_type_tokens, types);
+        const bool bit_vector = type && type->code == 'B'
+            && type->width != 0U && type->width <= 32U;
+        if (!type
+            || (!bit_vector && (type->code == 'B' || type->code == 'V'))
+            || (!type->string && type->width == 0U)
             || type->width > std::numeric_limits<std::uint32_t>::max()) {
             return std::nullopt;
         }
-        result.result_width = type->width;
-        result.result_domain = type->domain;
+        result.result_string = type->string;
+        result.result_width = type->string ? 1U : type->width;
+        result.result_domain = type->string ? frontend::ValueDomain::String
+                                            : type->domain;
         result.result_signed = type->signed_value;
         result.result_scalar = type->scalar;
         result_code = type->code;
+        if (bit_vector) {
+            result.result_c_width = 32U;
+            result_code = 'I';
+        }
     }
     if (actuals.size() != declaration.formals.size()) {
         return std::nullopt;
@@ -14482,7 +14583,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             }
             ++open_rank;
         }
-        const auto type = dpi_c_type(formal.type_tokens);
+        const auto type = dpi_c_type(formal.type_tokens, types);
         const auto direction = class_method_direction(formal.direction);
         if (!type || direction == frontend::PortDirection::Unknown
             || direction == frontend::PortDirection::Ref
@@ -14597,7 +14698,7 @@ Lowerer::hir_dpi_function_profile(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
-    const auto* declaration = hir_dpi_import(source.text);
+    const auto* declaration = hir_dpi_import(source.text, source.scope);
     if (declaration == nullptr
         || declaration->callable_kind
             != semantic::sv::DpiCallableKind::function) {
@@ -14680,7 +14781,9 @@ bool Lowerer::can_lower_hir_function_call(
 {
     if (can_lower_hir_dpi_function_call(
             expression_id, process_scope, visiting)) {
-        return !string_result;
+        return hir_dpi_function_profile(expression_id, process_scope)
+                   ->result_string
+            == string_result;
     }
     const auto expression = specialized_hir_unit_
         ? specialized_hir_unit_->find_expression(expression_id)
@@ -14935,12 +15038,22 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
         };
         const auto declaration = specialized_hir_unit_->find_declaration(
             formal);
-        const auto& spelling = declaration
+        auto spelling = declaration
                 && declaration->systemverilog != nullptr
                 && declaration->systemverilog->type
                 && !declaration->systemverilog->type->container_form
             ? declaration->systemverilog->type->target.spelling
             : std::string { };
+        // A formal of a type alias of a real type is real (6.18).
+        if (!spelling.empty()
+            && frontend::systemverilog_scalar_kind(spelling) == Kind::None) {
+            if (const auto underlying
+                = hir_resolver().underlying_systemverilog_type(
+                    *declaration->systemverilog->type,
+                    declaration->systemverilog->scope)) {
+                spelling = underlying->target.spelling;
+            }
+        }
         const auto formal_kind = spelling == "real" ? Kind::Real
             : spelling == "realtime"                ? Kind::Realtime
             : spelling == "shortreal"               ? Kind::ShortReal
@@ -17222,7 +17335,8 @@ std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
     const auto expression = specialized_hir_unit_
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
-    if (!profile || !expression || expression->systemverilog == nullptr) {
+    if (!profile || profile->result_string || !expression
+        || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
     auto destination = emit_hir_dpi_call(
@@ -17235,9 +17349,30 @@ std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
     return destination;
 }
 
+std::optional<StringRegisterId> Lowerer::lower_hir_dpi_string_call(
+    const semantic::ExpressionId expression_id)
+{
+    const auto profile = hir_dpi_function_profile(
+        expression_id, hir_process_scope_);
+    const auto expression = specialized_hir_unit_
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!profile || !profile->result_string || !expression
+        || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto text = allocate_string_register();
+    if (!emit_hir_dpi_call(*profile,
+            hir_source_span(expression->systemverilog->source), text)) {
+        return std::nullopt;
+    }
+    return text;
+}
+
 std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     const HirDpiFunctionProfile& profile,
-    const frontend::SourceSpan& span)
+    const frontend::SourceSpan& span,
+    const std::optional<StringRegisterId> string_result)
 {
     std::vector<RegisterId> actuals;
     std::vector<std::string> actual_names;
@@ -17343,17 +17478,62 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         identity += '|' + hir_instance_path() + '|'
             + span.source_name.str() + '|' + std::to_string(span.begin.line);
     }
-    const auto destination = allocate_register(
-        profile.result_width, profile.result_domain);
+    // A string result returns in one more string actual (the DPI
+    // service's convention).
+    if (string_result) {
+        actuals.push_back(*string_result);
+        actual_names.emplace_back();
+        actual_directions.push_back(static_cast<std::uint8_t>(
+            frontend::PortDirection::Output));
+        actual_kinds.push_back(1U);
+    }
+    const auto call_width
+        = profile.result_c_width.value_or(profile.result_width);
+    // A context import of a unit with DPI exports starts its C call, serves
+    // the export calls the C code makes from the calling process (IEEE
+    // 1800-2023 35.5.3), and then finishes the call.
+    const auto* const export_hook = profile.signature.ends_with("@c")
+            && !profile.linkage_name.starts_with("__fsim_dpi_export_")
+            && !lowering_dpi_export_hook_
+        ? hir_dpi_export_hook(profile.owner_scope)
+        : nullptr;
+    if (export_hook != nullptr) {
+        const auto prefix_size = systemverilog_dpi_function_prefix.size();
+        auto start = identity;
+        start.insert(prefix_size, "!x");
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            allocate_register(call_width, frontend::ValueDomain::Bit2),
+            std::move(start),
+            actuals,
+            actual_names,
+            actual_directions,
+            static_cast<std::uint32_t>(call_width),
+            actual_kinds,
+        });
+        lowering_dpi_export_hook_ = true;
+        const bool served = lower_hir_statements(export_hook->statements);
+        lowering_dpi_export_hook_ = false;
+        if (!served) {
+            return std::nullopt;
+        }
+        identity.insert(prefix_size, "!f");
+    }
+    auto destination = allocate_register(call_width,
+        profile.result_string ? frontend::ValueDomain::Bit2
+                              : profile.result_domain);
     process_.operations.emplace_back(ClassStaticMethodCall {
         destination,
         std::move(identity),
         actuals,
         actual_names,
         actual_directions,
-        static_cast<std::uint32_t>(profile.result_width),
+        static_cast<std::uint32_t>(call_width),
         actual_kinds,
     });
+    if (call_width != profile.result_width) {
+        destination = resize_register(destination, profile.result_width,
+            profile.result_signed);
+    }
     for (std::size_t index = 0U;
         index < profile.actuals.size(); ++index) {
         const auto& actual = profile.actuals[index];
@@ -17386,24 +17566,65 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
             }
             continue;
         }
-        const auto copied = actual.domain == frontend::ValueDomain::String
-            ? lower_hir_string_copy_out(
-                  actual.expression, actuals[index])
-            : lower_hir_packed_copy_out(
-                  actual.expression, actuals[index]);
-        if (!copied) {
+        if (actual.domain == frontend::ValueDomain::String) {
+            if (!lower_hir_string_copy_out(
+                    actual.expression, actuals[index])) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        // The formal's value is assigned to the actual (IEEE 1800-2023
+        // 35.5.6.1), widened or truncated to the actual's width.
+        auto value = actuals[index];
+        if (actual.scalar == frontend::SystemVerilogScalarKind::None) {
+            const auto target_width = hir_expression_width(
+                actual.expression, hir_process_scope_);
+            if (target_width && *target_width != 0U
+                && *target_width != register_width(value)) {
+                value = resize_register(
+                    value, *target_width, actual.signed_value);
+            }
+        }
+        if (!lower_hir_packed_copy_out(actual.expression, value)) {
             return std::nullopt;
         }
     }
     return destination;
 }
 
+const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
+    const semantic::ScopeId scope) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
+    // The exports an import's C code calls are those of the import's
+    // instance (IEEE 1800-2023 35.5.3).
+    const auto& design = specialized_hir_unit_->design();
+    const auto* const owner = design.find_scope(scope);
+    const auto unit = design.find_unit(
+        owner != nullptr ? owner->unit : specialized_hir_unit_->unit());
+    if (!unit || unit->systemverilog == nullptr) {
+        return nullptr;
+    }
+    for (const auto id : unit->systemverilog->declarations) {
+        const auto declaration = design.find_declaration(id);
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->callable
+            && declaration->systemverilog->name == "__fsim_dpi_export_hook") {
+            return declaration->systemverilog;
+        }
+    }
+    return nullptr;
+}
+
 std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
     const std::string_view name,
     const std::span<const semantic::sv::TaskAssociation> arguments,
-    const frontend::SourceSpan& span)
+    const frontend::SourceSpan& span,
+    const semantic::ScopeId scope)
 {
-    const auto* declaration = hir_dpi_import(name);
+    const auto* declaration = hir_dpi_import(name, scope);
     if (declaration == nullptr) {
         return std::nullopt;
     }
@@ -17752,6 +17973,11 @@ Lowerer::hir_vhdl_constant_string_literal_range(
 std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     const semantic::ExpressionId expression_id)
 {
+    if (const auto profile = hir_dpi_function_profile(
+            expression_id, hir_process_scope_);
+        profile && profile->result_string) {
+        return lower_hir_dpi_string_call(expression_id);
+    }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     if (expression && expression->vhdl != nullptr
@@ -19784,9 +20010,14 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 = capture_hir_packed_update_target((*actuals)[index]);
         }
         if (callable_copy_in(direction)) {
+            // A null array actual has no elements to copy (IEEE 1076-2008
+            // 5.3.2.1).
             lowered_actuals[index] = copy_out_targets[index]
                 ? std::optional<RegisterId> {
                       copy_out_targets[index]->captured }
+                : formal->width == 0U
+                ? std::optional<RegisterId> {
+                      allocate_register(0U, formal->domain) }
                 : lower_hir_callable_actual(
                       (*actuals)[index], formals[index], formal->width);
             if (!lowered_actuals[index]) {

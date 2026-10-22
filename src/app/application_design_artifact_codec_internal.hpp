@@ -848,7 +848,17 @@ namespace codec_detail {
             value.implicit_driver, value.implicit_drive_strength,
             value.charge_strength, value.charge_decay,
             value.systemverilog_scalar, value.event_variable,
-            value.vhdl_resolver, value.vhdl_scalar_width);
+            value.vhdl_resolver, value.vhdl_scalar_width,
+            value.vhdl_conversion_drivers);
+    }
+
+    template <typename T>
+        requires std::same_as<
+            std::remove_cv_t<T>, runtime::simir::VhdlConversionDriver>
+    auto archive_fields(T& value)
+    {
+        return std::tie(
+            value.stub, value.program, value.output, value.sources);
     }
 
     template <typename T>

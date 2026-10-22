@@ -1174,6 +1174,16 @@ bool Lowerer::initialize_hir_declarations(
                 if (declaration->vhdl->form == Form::constant
                     && declaration->vhdl->initializer
                     && declaration->vhdl->subtype) {
+                    // The constant's value is lowered where it is read; a
+                    // `return <identifier> of` call in it always takes the
+                    // declared subtype (IEEE 1076-2019 4.2.1).
+                    if (auto context = hir_vhdl_return_identifier_context(
+                            *declaration->vhdl->initializer,
+                            *declaration->vhdl->subtype)) {
+                        hir_vhdl_call_contexts_.insert_or_assign(
+                            declaration->vhdl->initializer->value(),
+                            HirVhdlCallContext { std::move(*context) });
+                    }
                     emit_hir_vhdl_initializer_length_checks(
                         *declaration->vhdl->initializer,
                         *declaration->vhdl->subtype,
@@ -1703,6 +1713,18 @@ bool Lowerer::initialize_hir_declarations(
             }
             continue;
         }
+        // A call of a `return <identifier> of` function as the initial
+        // value takes the declared subtype (IEEE 1076-2019 4.2.1).
+        std::optional<HirVhdlCallContextScope> result_context;
+        if (declaration->vhdl != nullptr && declaration->vhdl->initializer
+            && declaration->vhdl->subtype) {
+            if (auto context = hir_vhdl_return_identifier_context(
+                    *declaration->vhdl->initializer,
+                    *declaration->vhdl->subtype)) {
+                result_context.emplace(*this,
+                    *declaration->vhdl->initializer, std::move(*context));
+            }
+        }
         auto binding = hir_runtime_binding(
             declaration_id, hir_process_scope_, false);
         if (active_hir_callable_
@@ -1712,40 +1734,8 @@ bool Lowerer::initialize_hir_declarations(
                 = hir_callable_frames_[*active_hir_callable_];
             const auto callable = specialized_hir_unit_->find_declaration(
                 frame.declaration);
-            const auto return_identifier = callable
-                    && callable->vhdl != nullptr
-                    && callable->vhdl->callable
-                ? callable->vhdl->callable->return_identifier
-                : std::nullopt;
-            auto type_id
-                = declaration->vhdl->subtype->type_mark.target;
-            std::unordered_set<std::uint32_t> visited;
-            bool contextual_result { };
-            if (return_identifier) {
-                const auto result_declaration
-                    = specialized_hir_unit_->find_declaration(
-                        *return_identifier);
-                auto type_name = std::string_view {
-                    declaration->vhdl->subtype->type_mark.spelling
-                };
-                type_name = simple_name_of(type_name);
-                contextual_result = result_declaration
-                    && result_declaration->vhdl != nullptr
-                    && type_name == result_declaration->vhdl->name;
-            }
-            while (return_identifier && type_id.valid()
-                && !contextual_result
-                && visited.insert(type_id.value()).second) {
-                const auto type = specialized_hir_unit_->find_type(type_id);
-                if (!type || type->vhdl == nullptr) {
-                    break;
-                }
-                if (type->vhdl->declaration == *return_identifier) {
-                    contextual_result = true;
-                    break;
-                }
-                type_id = type->vhdl->base.type_mark.target;
-            }
+            const bool contextual_result
+                = hir_vhdl_contextual_result_local(declaration_id);
             // `variable result : result_t` of a `return result_t of T`
             // function has the call's result subtype (IEEE 1076-2019
             // 4.2.1).
@@ -1760,6 +1750,7 @@ bool Lowerer::initialize_hir_declarations(
                 binding->width = frame.type.width;
                 binding->domain = frame.type.domain;
                 binding->signed_value = frame.type.signed_value;
+
                 // A one-dimensional result has the call's length; its index
                 // range starts at the left of the natural index range.
                 const auto return_type = callable && callable->vhdl != nullptr
@@ -1852,8 +1843,11 @@ bool Lowerer::initialize_hir_declarations(
                                           : range->left <= range->right)
                 ? support::index_distance(range->left, range->right) + 1U
                 : 0U;
-            if (shape && length != 0U && shape->complete()
-                && completed && completed->unconstrained) {
+            // Bounded index ranges over an element of open bounds are
+            // completed from the value too (5.3.2.2).
+            if (shape && length != 0U && shape->complete() && completed
+                && (completed->unconstrained
+                    || !vhdl_subtype_width(*completed))) {
                 apply_hir_vhdl_shape(
                     *completed, *shape, declaration->vhdl->scope);
                 // Each element occupies the same number of bits.
@@ -4472,6 +4466,15 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             actual = actual_expression->vhdl->operands.front();
             actual_expression
                 = specialized_hir_unit_->find_expression(actual);
+        }
+        // A call of a `return <identifier> of` function takes the
+        // signal's subtype (IEEE 1076-2019 4.2.1 b, d).
+        std::optional<HirVhdlCallContextScope> result_context;
+        if (description.input_actual_vhdl_context) {
+            if (auto context = hir_vhdl_return_identifier_context(
+                    actual, *description.input_actual_vhdl_context)) {
+                result_context.emplace(*this, actual, std::move(*context));
+            }
         }
         if (actual_expression && actual_expression->vhdl != nullptr
             && !description.actual_slice) {

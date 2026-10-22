@@ -253,7 +253,7 @@ public:
     [[nodiscard]] std::string hir_generic_interface_type(
         std::string_view receiver) const;
     void diagnose_hir_systemverilog_file_process(
-        semantic::ProcessId process);
+        semantic::ProcessId process, std::string_view hierarchy = { });
     [[nodiscard]] std::optional<semantic::SourceSpanId>
     hir_vhdl_unspecified_inference_failure(
         semantic::ProcessId process) const;
@@ -969,6 +969,16 @@ private:
     // The shape of `expression` where `context` is its expected type: a
     // literal or aggregate with an open range takes its bounds from itself
     // (IEEE 1076-2008 9.3.2, 9.3.3.3).
+    // The subtype a fully constrained target gives a call of a `return
+    // <identifier> of <type>` function as its value (IEEE 1076-2019 4.2.1
+    // a, c, d).
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_return_identifier_context(semantic::ExpressionId value,
+        const semantic::vhdl::SubtypeIndication& target) const;
+    // A local of a `return <identifier> of <type>` function declared with
+    // the return identifier's subtype (IEEE 1076-2019 4.2.1).
+    [[nodiscard]] bool hir_vhdl_contextual_result_local(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_contextual_shape(
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication& context,
@@ -2330,6 +2340,11 @@ private:
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_access_type_definition(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    // A whole-range slice `p(p'range)` of an access-to-STRING value `p`:
+    // the access value, whose designated string the slice denotes.
+    [[nodiscard]] std::optional<semantic::ExpressionId>
+    hir_vhdl_access_string_whole_slice(
+        semantic::ExpressionId expression) const;
     // The effective subtype an access subtype designates.
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_designated_subtype(
@@ -3455,6 +3470,8 @@ private:
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;
+        // The scope of the import's declaration.
+        semantic::ScopeId owner_scope;
         std::vector<HirDpiFunctionActual> actuals;
         std::size_t result_width { };
         frontend::ValueDomain result_domain {
@@ -3464,6 +3481,12 @@ private:
         frontend::SystemVerilogScalarKind result_scalar {
             frontend::SystemVerilogScalarKind::None
         };
+        // A packed bit-array result of at most 32 bits returns as a C
+        // svBitVecVal, 32 bits wide (IEEE 1800-2023 H.7.4).
+        std::optional<std::size_t> result_c_width;
+        // A string result (`result_domain` String): it returns in a
+        // string register, and the destination is a placeholder.
+        bool result_string { };
         // A task or void function: the destination is a placeholder.
         bool result_void { };
         bool task { };
@@ -3473,7 +3496,8 @@ private:
     };
     // The DPI import a call names, in the unit or its compilation unit.
     [[nodiscard]] const semantic::sv::DpiDeclaration* hir_dpi_import(
-        std::string_view name) const;
+        std::string_view name,
+        std::optional<semantic::ScopeId> scope = std::nullopt) const;
     [[nodiscard]] std::optional<HirDpiFunctionProfile> hir_dpi_profile(
         const semantic::sv::DpiDeclaration& declaration,
         std::span<const semantic::ExpressionId> actuals) const;
@@ -3482,15 +3506,27 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
     // Emit the call boundary of a DPI import; the destination register.
+    // A string result is written to `string_result`.
+    // The hidden task that serves a context import's DPI export calls in
+    // this unit, if it has exports.
+    [[nodiscard]] const semantic::sv::Declaration* hir_dpi_export_hook(
+        semantic::ScopeId scope) const;
+    bool lowering_dpi_export_hook_ { };
     [[nodiscard]] std::optional<RegisterId> emit_hir_dpi_call(
         const HirDpiFunctionProfile& profile,
-        const frontend::SourceSpan& span);
+        const frontend::SourceSpan& span,
+        std::optional<StringRegisterId> string_result = std::nullopt);
+    // A call of a DPI import whose result is a string (IEEE 1800-2023
+    // 35.5.5, H.7.4).
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_dpi_string_call(
+        semantic::ExpressionId expression);
     // A task-call statement naming a DPI task or function; nullopt when
     // the statement names no DPI import.
     [[nodiscard]] std::optional<bool> lower_hir_dpi_call_statement(
         std::string_view name,
         std::span<const semantic::sv::TaskAssociation> arguments,
-        const frontend::SourceSpan& span);
+        const frontend::SourceSpan& span,
+        semantic::ScopeId scope);
     [[nodiscard]] bool can_lower_hir_dpi_function_call(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,

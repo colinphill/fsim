@@ -1211,9 +1211,12 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
     const auto target_expression
         = specialized_hir_unit_->find_expression(target);
     const auto target_declaration = hir_target_declaration(target);
-    const auto binding = target_declaration
-        ? hir_string_binding(*target_declaration, process_scope, false)
-        : std::nullopt;
+    // A hierarchical reference to a string variable (IEEE 1800-2017 23.6).
+    auto binding = hir_hierarchical_string_binding(target);
+    const bool hierarchical_target = binding.has_value();
+    if (!binding && target_declaration) {
+        binding = hir_string_binding(*target_declaration, process_scope, false);
+    }
     // The output variable may also be integral (IEEE 1800-2017 21.3.3).
     const bool packed_target_type
         = hir_systemverilog_scan_value_kind(target)
@@ -1229,8 +1232,9 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         && *packed_target_width <= (std::size_t { 1 } << 16U);
     if (!packed_target
         && (!target_expression || target_expression->systemverilog == nullptr
-            || target_expression->systemverilog->kind
-                != semantic::sv::ExpressionKind::name
+            || (target_expression->systemverilog->kind
+                    != semantic::sv::ExpressionKind::name
+                && !hierarchical_target)
             || !binding
             || (binding->kind == HirStringBindingKind::object
                 && (!binding->object
@@ -1419,8 +1423,10 @@ bool Lowerer::lower_hir_string_format_task(
     }
     const auto target = *call.task_arguments.front().actual;
     const auto target_declaration = hir_target_declaration(target);
-    const auto string_target = target_declaration
-        && hir_string_binding(*target_declaration, hir_process_scope_, false);
+    const auto string_target = hir_hierarchical_string_binding(target)
+        || (target_declaration
+            && hir_string_binding(
+                *target_declaration, hir_process_scope_, false));
     if (string_target || hir_expression_is_string(target, hir_process_scope_)) {
         return lower_hir_string_copy_out(target, *result);
     }
@@ -1465,10 +1471,15 @@ bool Lowerer::lower_hir_string_format_task(
 }
 
 void Lowerer::diagnose_hir_systemverilog_file_process(
-    const semantic::ProcessId process_id)
+    const semantic::ProcessId process_id, const std::string_view hierarchy)
 {
     if (specialized_hir_unit_ == nullptr) {
         return;
+    }
+    // Hierarchical references resolve from this instance (IEEE 1800-2017
+    // 23.6).
+    if (!hierarchy.empty()) {
+        hierarchy_ = std::string { hierarchy };
     }
     const auto process = specialized_hir_unit_->find_process(process_id);
     if (!process || process->systemverilog == nullptr) {
@@ -2211,14 +2222,20 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                     ? hir_target_declaration(
                         *source.task_arguments.front().actual)
                     : std::nullopt;
-                const auto binding = declaration
-                    ? hir_string_binding(
-                        *declaration, source.scope, false)
+                auto binding = target
+                    ? hir_hierarchical_string_binding(
+                          *source.task_arguments.front().actual)
                     : std::nullopt;
+                const bool hierarchical_target = binding.has_value();
+                if (!binding && declaration) {
+                    binding = hir_string_binding(
+                        *declaration, source.scope, false);
+                }
                 const auto direct_string_target = target
                     && target->systemverilog != nullptr
-                    && target->systemverilog->kind
-                        == semantic::sv::ExpressionKind::name
+                    && (target->systemverilog->kind
+                            == semantic::sv::ExpressionKind::name
+                        || hierarchical_target)
                     && binding.has_value();
                 statement_fail(
                     direct_string_target

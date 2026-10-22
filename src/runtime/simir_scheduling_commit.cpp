@@ -1632,6 +1632,32 @@ void Interpreter::Impl::schedule_vhdl_disconnect(
         });
 }
 
+bool Interpreter::Impl::run_vhdl_conversion_drivers(
+    const SignalId signal_id, const bool initializing)
+{
+    const auto found = vhdl_conversion_drivers.find(signal_id);
+    if (found == vhdl_conversion_drivers.end()) {
+        return false;
+    }
+    const bool resolver = vhdl_resolvers.contains(signal_id);
+    const auto& signal = get_signal(signal_id);
+    for (const auto& driver : found->second) {
+        auto& process = get_process(driver.program);
+        process.pc = 0U;
+        process.halted = false;
+        execute(driver.program);
+        auto value = coerce_value_kind(
+            get_register(process, driver.output), signal.value_kind);
+        if (initializing || resolver) {
+            // The resolver, or the initial resolution, reads the driver.
+            driver_slot(driver.stub, signal_id) = std::move(value);
+        } else {
+            commit_driver(driver.stub, signal_id, std::move(value));
+        }
+    }
+    return true;
+}
+
 void Interpreter::Impl::drain_vhdl_resolutions()
 {
     if (running_vhdl_resolvers || pending_vhdl_resolutions.empty()) {
@@ -1645,6 +1671,10 @@ void Interpreter::Impl::drain_vhdl_resolutions()
     for (std::size_t index = 0U; index < pending_vhdl_resolutions.size();
         ++index) {
         const auto signal_id = pending_vhdl_resolutions[index];
+        if (run_vhdl_conversion_drivers(signal_id, false)
+            && !vhdl_resolvers.contains(signal_id)) {
+            continue;
+        }
         auto value = run_vhdl_resolver(signal_id);
         vhdl_resolved_values.insert_or_assign(signal_id, value);
         commit(signal_id, apply_force(signal_id, std::move(value)));
@@ -1672,6 +1702,16 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
         refresh_direct_signal_planes(signal_id);
     };
     std::vector<SignalId> converted;
+    // A conversion driver starts at its program's result over its sources'
+    // initial values; a signal without a resolver program resolves its
+    // drivers natively.
+    for (const auto& [signal_id, drivers] : vhdl_conversion_drivers) {
+        (void)drivers;
+        run_vhdl_conversion_drivers(signal_id, true);
+        if (!vhdl_resolvers.contains(signal_id)) {
+            publish(signal_id, resolved_driver_value(signal_id));
+        }
+    }
     for (const auto& [signal_id, resolver] : vhdl_resolvers) {
         publish(signal_id, run_vhdl_resolver(signal_id));
         if (!resolver.sources.empty()) {

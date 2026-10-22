@@ -2,6 +2,7 @@
 #include "verilog_parser_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
@@ -661,6 +662,20 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
       known.insert(item.systemverilog_name);
     }
   }
+  // The innermost enclosing unit of a nested unit that declares a name.
+  const auto enclosing_declaration = [&](const std::string& name)
+      -> std::optional<std::string> {
+    for (auto parent = nested_unit_parents_.find(unit.name);
+         parent != nested_unit_parents_.end();
+         parent = nested_unit_parents_.find(parent->second)) {
+      const auto names = nested_parent_known_names_.find(parent->second);
+      if (names != nested_parent_known_names_.end()
+          && names->second.contains(name)) {
+        return parent->second;
+      }
+    }
+    return std::nullopt;
+  };
   std::unordered_set<std::string> rejected;
   // Implicitly declared nets first: a use elsewhere may precede the
   // connection that declares the net.
@@ -675,6 +690,12 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
     }
     if (known.contains(reference.name)
         || rejected.contains(reference.name)) {
+      continue;
+    }
+    if (const auto ancestor = enclosing_declaration(
+            reference.name.substr(0, member_separator))) {
+      nested_upward_references_.push_back({ reference.span,
+          reference.name.substr(0, member_separator), *ancestor });
       continue;
     }
     if (container_iterator_names_.contains(reference.name)) {
@@ -722,6 +743,250 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
         reference.span});
     known.insert(reference.name);
   }
+  // A unit enclosing nested units lends them its declarations (23.4).
+  if (std::ranges::any_of(nested_unit_parents_,
+          [&](const auto& entry) { return entry.second == unit.name; })) {
+    nested_parent_known_names_[unit.name] = std::move(known);
+  }
+}
+
+DesignUnit VerilogParser::parse_scoped_unit(
+    const Token start, const UnitKind kind)
+{
+    const auto body = position();
+    const auto diagnostic_count = diagnostics_.size();
+    nested_upward_references_.clear();
+    auto unit = parse_module(start, kind);
+    if (nested_upward_references_.empty()) {
+        return unit;
+    }
+    // A nested unit sees the declarations of the units enclosing it (IEEE
+    // 1800-2017 23.4); each such name becomes an upward name through the
+    // enclosing unit's definition name (23.8), and the unit is read again.
+    const auto references = std::move(nested_upward_references_);
+    nested_upward_references_.clear();
+    for (auto index = position(); index-- > body;) {
+        const auto& token = tokens_[index];
+        if (token.kind != TokenKind::Identifier
+            || (index > 0U && tokens_[index - 1U].kind == TokenKind::Dot)) {
+            continue;
+        }
+        const auto reference = std::ranges::find_if(references,
+            [&](const NestedUpwardReference& candidate) {
+                return candidate.name == token.text
+                    && candidate.span.begin.offset == token.span.begin.offset
+                    && candidate.span.source_name == token.span.source_name;
+            });
+        if (reference == references.end()) {
+            continue;
+        }
+        auto ancestor = token;
+        ancestor.text = reference->ancestor;
+        auto dot = token;
+        dot.kind = TokenKind::Dot;
+        dot.text = ".";
+        const std::array prefix { std::move(ancestor), std::move(dot) };
+        tokens_.insert(tokens_.begin() + static_cast<std::ptrdiff_t>(index),
+            prefix.begin(), prefix.end());
+    }
+    diagnostics_.erase(
+        diagnostics_.begin() + static_cast<std::ptrdiff_t>(diagnostic_count),
+        diagnostics_.end());
+    rewind(body);
+    return parse_module(start, kind);
+}
+
+void VerilogParser::hoist_nested_units()
+{
+    if (language_ != Language::SystemVerilog2017) {
+        return;
+    }
+    const auto word = [&](const std::size_t index, const std::string_view text) {
+        return index < tokens_.size()
+            && tokens_[index].kind == TokenKind::Identifier
+            && tokens_[index].text == text;
+    };
+    // A unit declaration is an item: it follows `;`, an `end...` keyword or
+    // an end label.
+    const auto opens_unit = [&](const std::size_t index) {
+        if (index == 0U
+            || !(word(index, "module") || word(index, "macromodule")
+                || word(index, "program") || word(index, "interface"))
+            || (word(index, "interface") && word(index + 1U, "class"))) {
+            return false;
+        }
+        const auto& prior = tokens_[index - 1U];
+        return prior.kind == TokenKind::Semicolon
+            || (prior.kind == TokenKind::Identifier
+                && prior.text.starts_with("end"))
+            || (index >= 3U && tokens_[index - 2U].kind == TokenKind::Colon
+                && tokens_[index - 3U].text.starts_with("end"));
+    };
+    const auto closes_unit = [&](const std::size_t index) {
+        return word(index, "endmodule") || word(index, "endprogram")
+            || word(index, "endinterface");
+    };
+    // The position after the end (and end label) of a unit whose body
+    // starts at `from`.
+    const auto unit_end = [&](const std::size_t from)
+        -> std::optional<std::size_t> {
+        std::size_t depth { 1U };
+        for (auto index = from; index < tokens_.size(); ++index) {
+            if (opens_unit(index)) {
+                ++depth;
+            } else if (closes_unit(index) && --depth == 0U) {
+                auto after = index + 1U;
+                if (after + 1U < tokens_.size()
+                    && tokens_[after].kind == TokenKind::Colon
+                    && tokens_[after + 1U].kind == TokenKind::Identifier) {
+                    after += 2U;
+                }
+                return after;
+            }
+        }
+        return std::nullopt;
+    };
+    auto name_at = index_;
+    if (word(name_at, "automatic") || word(name_at, "static")) {
+        ++name_at;
+    }
+    if (name_at >= tokens_.size()
+        || tokens_[name_at].kind != TokenKind::Identifier) {
+        return;
+    }
+    const auto parent = tokens_[name_at].text;
+    for (auto cursor = name_at + 1U; cursor < tokens_.size(); ++cursor) {
+        if (closes_unit(cursor)) {
+            return;
+        }
+        if (!opens_unit(cursor)) {
+            continue;
+        }
+        const auto nested_end = unit_end(cursor + 1U);
+        if (!nested_end) {
+            return;
+        }
+        std::vector<Token> nested(
+            tokens_.begin() + static_cast<std::ptrdiff_t>(cursor),
+            tokens_.begin() + static_cast<std::ptrdiff_t>(*nested_end));
+        std::size_t nested_name { 1U };
+        if (nested.size() > 1U
+            && (nested[1].text == "automatic" || nested[1].text == "static")) {
+            nested_name = 2U;
+        }
+        if (nested_name >= nested.size()
+            || nested[nested_name].kind != TokenKind::Identifier) {
+            return;
+        }
+        const auto original = nested[nested_name].text;
+        const auto hoisted = parent + "$" + original;
+        const auto name_token = nested[nested_name];
+        nested[nested_name].text = hoisted;
+        if (nested.size() >= 2U
+            && nested[nested.size() - 2U].kind == TokenKind::Colon
+            && nested.back().text == original) {
+            nested.back().text = hoisted;
+        }
+        // The header: a parameter port list, then a port list, then `;`.
+        auto header = nested_name + 1U;
+        const auto skip_parenthesized = [&](std::size_t open) {
+            std::size_t depth { };
+            for (; open < nested.size(); ++open) {
+                if (nested[open].kind == TokenKind::LeftParen) {
+                    ++depth;
+                } else if (nested[open].kind == TokenKind::RightParen
+                    && --depth == 0U) {
+                    return open + 1U;
+                }
+            }
+            return open;
+        };
+        if (header < nested.size() && nested[header].kind == TokenKind::Hash) {
+            header = skip_parenthesized(header + 1U);
+        }
+        const bool portless = header >= nested.size()
+            || nested[header].kind != TokenKind::LeftParen
+            || (header + 1U < nested.size()
+                && nested[header + 1U].kind == TokenKind::RightParen);
+        if (header < nested.size()
+            && nested[header].kind == TokenKind::LeftParen) {
+            header = skip_parenthesized(header);
+        }
+        while (header < nested.size()
+            && nested[header].kind != TokenKind::Semicolon) {
+            ++header;
+        }
+        // Without its own time declarations a nested unit has its enclosing
+        // unit's (IEEE 1800-2017 3.14.2.3).
+        const bool own_time = std::ranges::any_of(nested,
+            [](const Token& token) {
+                return token.kind == TokenKind::Identifier
+                    && (token.text == "timeunit"
+                        || token.text == "timeprecision");
+            });
+        if (!own_time && header < nested.size()) {
+            std::vector<Token> inherited;
+            for (auto index = name_at + 1U; index < cursor; ++index) {
+                if (!(word(index, "timeunit") || word(index, "timeprecision"))
+                    || tokens_[index - 1U].kind != TokenKind::Semicolon) {
+                    continue;
+                }
+                for (; index < cursor; ++index) {
+                    inherited.push_back(tokens_[index]);
+                    if (tokens_[index].kind == TokenKind::Semicolon) {
+                        break;
+                    }
+                }
+            }
+            nested.insert(
+                nested.begin() + static_cast<std::ptrdiff_t>(header + 1U),
+                inherited.begin(), inherited.end());
+        }
+        tokens_.erase(tokens_.begin() + static_cast<std::ptrdiff_t>(cursor),
+            tokens_.begin() + static_cast<std::ptrdiff_t>(*nested_end));
+        const auto parent_end = unit_end(name_at + 1U);
+        if (!parent_end) {
+            return;
+        }
+        // Instances of the nested unit in its enclosing unit name the
+        // hoisted unit; one without ports and without instances is
+        // instantiated once under its own name (23.4).
+        bool instantiated = false;
+        for (auto index = name_at + 1U; index < *parent_end; ++index) {
+            if (tokens_[index].kind == TokenKind::Identifier
+                && tokens_[index].text == original
+                && tokens_[index - 1U].kind != TokenKind::Dot
+                && index + 1U < tokens_.size()
+                && (tokens_[index + 1U].kind == TokenKind::Identifier
+                    || tokens_[index + 1U].kind == TokenKind::Hash)) {
+                tokens_[index].text = hoisted;
+                instantiated = true;
+            }
+        }
+        std::vector<Token> implicit;
+        if (portless && !instantiated) {
+            auto make = [&](const TokenKind token_kind, std::string text) {
+                auto token = name_token;
+                token.kind = token_kind;
+                token.text = std::move(text);
+                return token;
+            };
+            implicit = { make(TokenKind::Identifier, hoisted),
+                make(TokenKind::Identifier, original),
+                make(TokenKind::LeftParen, "("),
+                make(TokenKind::RightParen, ")"),
+                make(TokenKind::Semicolon, ";") };
+        }
+        tokens_.insert(
+            tokens_.begin() + static_cast<std::ptrdiff_t>(*parent_end),
+            nested.begin(), nested.end());
+        tokens_.insert(tokens_.begin() + static_cast<std::ptrdiff_t>(cursor),
+            implicit.begin(), implicit.end());
+        nested_unit_parents_[hoisted] = parent;
+        // Resume at the item after the implicit instance.
+        cursor += implicit.size();
+        --cursor;
+    }
 }
 
 DesignUnit VerilogParser::parse_module(
@@ -729,6 +994,9 @@ DesignUnit VerilogParser::parse_module(
     const UnitKind kind,
     const bool extern_declaration)
 {
+    if (!extern_declaration) {
+        hoist_nested_units();
+    }
     non_ansi_ports_.clear();
     non_ansi_port_selections_.clear();
     non_ansi_port_expressions_.clear();
@@ -739,6 +1007,7 @@ DesignUnit VerilogParser::parse_module(
     unit_string_names_.clear();
     unit_associative_index_types_.clear();
     unit_foreach_types_.clear();
+    generate_dpi_declarations_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();
     wildcard_import_uses_.clear();
@@ -1808,6 +2077,21 @@ DesignUnit VerilogParser::parse_module(
     } else {
         resolve_unit_checkers(unit);
     }
+    for (auto& declaration : generate_dpi_declarations_) {
+        declaration.owner_identity = unit.name;
+        // Each generate block repeats the same declaration.
+        if (std::ranges::none_of(unit.systemverilog_dpi_declarations,
+                [&](const SystemVerilogDpiDeclaration& existing) {
+                    return existing.direction == declaration.direction
+                        && existing.systemverilog_name
+                            == declaration.systemverilog_name;
+                })) {
+            unit.systemverilog_dpi_declarations.push_back(
+                std::move(declaration));
+        }
+    }
+    generate_dpi_declarations_.clear();
+    generate_dpi_export_service(unit);
     resolve_dpi_declarations(
         unit.systemverilog_dpi_declarations,
         unit.functions,

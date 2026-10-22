@@ -876,7 +876,14 @@ bool InterpreterProgramAccess::data_only_startup_write(
 bool InterpreterProgramAccess::vhdl_resolver_program(
     const Interpreter& interpreter, const ProcessId process) noexcept
 {
-    return std::ranges::any_of(interpreter.impl_->vhdl_resolvers,
+    const bool conversion = std::ranges::any_of(
+        interpreter.impl_->vhdl_conversion_drivers, [&](const auto& entry) {
+            return std::ranges::any_of(entry.second,
+                [&](const VhdlConversionDriver& driver) {
+                    return driver.program == process;
+                });
+        });
+    return conversion || std::ranges::any_of(interpreter.impl_->vhdl_resolvers,
         [&](const auto& entry) {
             const auto& resolver = entry.second;
             if (resolver.process == process) {

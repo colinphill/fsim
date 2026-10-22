@@ -4061,6 +4061,18 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (!target_expression) {
             return assignment_rejected(__LINE__);
         }
+        // A call of a `return <identifier> of` function takes the target's
+        // subtype (IEEE 1076-2019 4.2.1 a, c).
+        std::optional<HirVhdlCallContextScope> result_context;
+        if (statement->vhdl != nullptr) {
+            if (const auto target_subtype
+                = hir_vhdl_expression_subtype(*target)) {
+                if (auto context = hir_vhdl_return_identifier_context(
+                        *value, *target_subtype)) {
+                    result_context.emplace(*this, *value, std::move(*context));
+                }
+            }
+        }
         // A part-select whose literal bound has unknown bits writes nothing
         // (IEEE 1800-2017 11.5.1).
         if (statement->systemverilog != nullptr
@@ -9027,7 +9039,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
-        if (!declaration && !direct_binding) {
+        // A hierarchical reference to a string variable (`b.s = "x"`) has
+        // no local declaration (IEEE 1800-2017 23.6).
+        if (!declaration && !direct_binding
+            && !hir_hierarchical_string_binding(*target)) {
             trace_generated("target-binding");
             trace_assignment_failure("target-binding");
             return assignment_rejected(__LINE__);
@@ -19917,7 +19932,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             if (!input.task.spelling.starts_with('$')) {
                 if (const auto lowered = lower_hir_dpi_call_statement(
-                        input.task.spelling, input.task_arguments, span)) {
+                        input.task.spelling, input.task_arguments, span,
+                        input.scope)) {
                     return *lowered;
                 }
             }

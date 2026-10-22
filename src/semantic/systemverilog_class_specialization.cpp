@@ -900,6 +900,59 @@ private:
         return std::nullopt;
     }
 
+    // The binding of the class type parameter `name` of `owner` or a class
+    // it derives from.
+    const TypeBinding* bound_type_parameter(const std::string_view name,
+        const Environment& environment, const std::string_view owner)
+    {
+        for (const auto* current : class_chain(owner)) {
+            for (const auto& parameter : current->parameters) {
+                if (!parameter.type_parameter || parameter.name != name) {
+                    continue;
+                }
+                const auto* member = record_for(
+                    declarations_, parameter.declaration);
+                if (member == nullptr || !member->declared_type) {
+                    continue;
+                }
+                if (const auto found
+                    = environment.types.find(*member->declared_type);
+                    found != environment.types.end()) {
+                    return &found->second;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    // `X::name`, `X::nested::name`: the typedef that the class bound to type
+    // parameter X declares (IEEE 1800-2017 8.25.1).
+    std::optional<TypeId> type_parameter_scoped_typedef(
+        const std::string_view spelling, const Environment& environment,
+        const std::string_view owner)
+    {
+        const auto first = spelling.find("::");
+        if (first == std::string_view::npos) {
+            return std::nullopt;
+        }
+        const auto* bound = bound_type_parameter(
+            spelling.substr(0U, first), environment, owner);
+        if (bound == nullptr || bound->type.class_identity.empty()) {
+            return std::nullopt;
+        }
+        std::string named_class = bound->type.class_identity;
+        auto rest = spelling.substr(first + 2U);
+        for (auto cut = rest.find("::"); cut != std::string_view::npos;
+            cut = rest.find("::")) {
+            named_class += "::" + std::string { rest.substr(0U, cut) };
+            rest.remove_prefix(cut + 2U);
+        }
+        if (class_for(named_class) == nullptr) {
+            return std::nullopt;
+        }
+        return inherited_typedef(rest, named_class);
+    }
+
     // The innermost typedef named `name` whose scope encloses `scope`.
     const Declaration* enclosing_typedef(
         const std::string_view name, const ScopeId scope) const
@@ -986,6 +1039,15 @@ private:
                 return type(*named->type, environment, owner, source);
             }
         }
+        if (!input.target.target.valid() && input.class_identity.empty()
+            && !input.container_form && input.unpacked_dimensions.empty()
+            && input.target.spelling.find("::") != std::string::npos) {
+            if (const auto scoped = type_parameter_scoped_typedef(
+                    input.target.spelling, environment, owner)) {
+                input.target.target = *scoped;
+                input.executable_width.reset();
+            }
+        }
         if (input.target.target.valid()) {
             const auto replacement = environment.types.find(
                 input.target.target);
@@ -1025,6 +1087,26 @@ private:
                     return std::nullopt;
                 }
                 return resolved;
+            }
+            // A typedef of a class type parameter, or of a type selected
+            // through one (`typedef X L_t`, `localparam type L_t = X::T`),
+            // denotes what the parameter is bound to in this environment
+            // (IEEE 1800-2017 6.18, 8.25).
+            if (definition != nullptr && definition->members.empty()
+                && input.class_identity.empty() && !input.container_form
+                && input.unpacked_dimensions.empty() && !input.packed_range
+                && (type_parameter_types_.contains(
+                        definition->base.target.target)
+                    || (!definition->base.target.target.valid()
+                        && definition->base.target.spelling.find("::")
+                            != std::string::npos
+                        && type_parameter_scoped_typedef(
+                            definition->base.target.spelling, environment,
+                            owner)
+                               .has_value()))) {
+                auto aliased = definition->base;
+                aliased.target.source = input.target.source;
+                return type(std::move(aliased), environment, owner, source);
             }
         }
         if (!input.target.target.valid() && !input.target.spelling.empty()

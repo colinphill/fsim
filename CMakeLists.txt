@@ -1387,6 +1387,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp
       src/app/application_vpi_foreign.cpp
+      src/app/application_vhpi_foreign.cpp
       src/app/application_dpi_foreign.cpp
       src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
@@ -1607,6 +1608,7 @@ install(
     include/svdpi.h
     include/vpi_user.h
     include/sv_vpi_user.h
+    include/vhpi_user.h
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
 install(
@@ -1642,6 +1644,7 @@ install(
     include/fsim/runtime/acc_user.h
     include/fsim/runtime/vpi_abi.h
     include/fsim/runtime/vpi_bridge.h
+    include/fsim/runtime/vhpi_bridge.h
     include/fsim/runtime/simir_driver_inventory.hpp
     include/fsim/runtime/simir_region_frontier.hpp
     include/fsim/runtime/simir_region_frontier_v2.hpp

@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <iterator>
 #include <set>
 #include <tuple>
@@ -487,6 +488,62 @@ private:
             && contextual_result_declaration(
                 *prefix->vhdl->referenced_name->selected)) {
             return true;
+        }
+        // An element of a record result object (`result.f'range`, a
+        // dotted name or a member selection) takes its bounds from the
+        // call's context too (IEEE 1076-2019 4.2.1).
+        const auto result_object = [&](const auto& candidate) {
+            if (!candidate || candidate->vhdl == nullptr) {
+                return false;
+            }
+            std::optional<semantic::DeclarationId> selected;
+            if (candidate->vhdl->referenced_name
+                && candidate->vhdl->referenced_name->selected) {
+                selected = candidate->vhdl->referenced_name->selected;
+            } else if (const auto dot = candidate->vhdl->text.find('.');
+                dot != std::string::npos) {
+                // A dotted name's root object (`result` of `result.f`).
+                semantic::vhdl::Name root;
+                root.spelling = candidate->vhdl->text.substr(0U, dot);
+                root.canonical = root.spelling;
+                std::ranges::transform(root.canonical,
+                    root.canonical.begin(), [](const unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    });
+                selected = semantic::CompiledDesignResolver { specialization_ }
+                               .resolve_vhdl(root, candidate->vhdl->scope)
+                               .unique();
+            }
+            if (!selected) {
+                return false;
+            }
+            const auto object = specialization_.find_declaration(*selected);
+            if (!object || object->vhdl == nullptr || !object->vhdl->subtype) {
+                return false;
+            }
+            const auto type = subtype_type(
+                specialized_subtype(*object->vhdl->subtype));
+            const auto* definition = type ? type_definition(*type) : nullptr;
+            return definition != nullptr
+                && contextual_result_declaration(definition->declaration);
+        };
+        auto root = prefix;
+        for (std::size_t depth = 0U; root && root->vhdl != nullptr
+             && depth < 64U; ++depth) {
+            if (root->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                && root->vhdl->text.find('.') != std::string::npos) {
+                return result_object(root);
+            }
+            if (root->vhdl->kind != semantic::vhdl::ExpressionKind::call
+                || !root->vhdl->text.starts_with("@vhdl-member:")
+                || root->vhdl->operands.empty()) {
+                break;
+            }
+            root = specialization_.find_expression(
+                root->vhdl->operands.front());
+            if (result_object(root)) {
+                return true;
+            }
         }
         // A direct call returning an unconstrained array is only a candidate
         // for contextual range deferral here. The lowerer must still prove
@@ -11400,6 +11457,29 @@ private:
                     return !dimension.constrained;
                 })) {
             if (!contextual_result) {
+                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                    const auto traced = specialization_.find_expression(
+                        expression.operands.front());
+                    std::cerr << "[fsim-vhdl-validate] array-attribute prefix kind="
+                              << (traced && traced->vhdl
+                                         ? static_cast<int>(traced->vhdl->kind)
+                                         : -1)
+                              << " text='"
+                              << (traced && traced->vhdl ? traced->vhdl->text
+                                                         : std::string {})
+                              << "' selected="
+                              << (traced && traced->vhdl
+                                          && traced->vhdl->referenced_name
+                                          && traced->vhdl->referenced_name
+                                                 ->selected
+                                         ? std::to_string(
+                                               traced->vhdl->referenced_name
+                                                   ->selected->value())
+                                         : std::string { "-" })
+                              << " profile=" << static_cast<int>(
+                                     prefix_profile.kind)
+                              << '\n';
+                }
                 report(
                     "FSIM-ELAB-VHARRAYATTR-001",
                     "VHDL array attribute prefix does not have a concrete "

@@ -250,8 +250,8 @@ class Resolver final {
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
       std::string_view spelling, const Scope& scope,
       const Type* parsed = nullptr) const;
-  [[nodiscard]] static Type specialize_selected_type(
-      Type type, const ClassSelection& selection);
+  [[nodiscard]] Type specialize_selected_type(
+      Type type, const ClassSelection& selection) const;
   [[nodiscard]] Type canonicalize_selected_type(
       Type type, const Scope& scope) const;
   // The actual of type parameter `named` of `owner` seen through a handle

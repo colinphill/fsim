@@ -2384,6 +2384,15 @@ void HierarchyBuilder::validate_process_drivers()
             }
         }
     }
+    std::map<std::pair<ContainerObjectId, std::uint32_t>,
+        std::vector<SignalId>>
+        writable_element_signals;
+    for (const auto& alias : design_.container_element_signal_aliases_) {
+        if (alias.writable) {
+            writable_element_signals[{ alias.object, alias.ordinal }]
+                .push_back(alias.signal);
+        }
+    }
     const auto regions_overlap = [](
                                      const DriverRegion& left,
                                      const DriverRegion& right) {
@@ -2468,8 +2477,96 @@ void HierarchyBuilder::validate_process_drivers()
             }
             process_outputs[region.signal].push_back(region);
         }
+        // Registers that hold a constant in this process: a write through
+        // one names a single element, its own longest static prefix (IEEE
+        // 1800-2017 6.5, 11.5.3).
+        std::unordered_map<RegisterId, std::optional<PackedLogic4>>
+            constant_registers;
+        for (const auto& operation : process.operations()) {
+            const auto record = [&](const RegisterId destination,
+                                    std::optional<PackedLogic4> value) {
+                const auto [entry, inserted] = constant_registers.try_emplace(
+                    destination, std::move(value));
+                if (!inserted) {
+                    entry->second.reset();
+                }
+            };
+            if (const auto* load = operation_get_if<LoadConstant>(&operation)) {
+                record(load->destination, load->value);
+            } else if (const auto* copy
+                = operation_get_if<CopyRegister>(&operation)) {
+                const auto source = constant_registers.find(copy->source);
+                record(copy->destination,
+                    source != constant_registers.end() ? source->second
+                                                       : std::nullopt);
+            }
+        }
+        const auto constant_element = [&](const WriteContainerObjectElement&
+                                              write)
+            -> std::optional<std::uint32_t> {
+            const auto found = constant_registers.find(write.index);
+            if (found == constant_registers.end() || !found->second
+                || !write.members.empty()
+                || write.object >= design_.container_objects_.size()) {
+                return std::nullopt;
+            }
+            const auto& type
+                = design_.container_objects_[write.object].initial_value.type;
+            if (!type.fixed || type.aggregate_value) {
+                return std::nullopt;
+            }
+            std::optional<std::int64_t> index;
+            if (write.signed_index) {
+                index = found->second->known_signed_value();
+            } else if (const auto value
+                = found->second->known_unsigned_value();
+                value
+                && *value <= static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+                index = static_cast<std::int64_t>(*value);
+            }
+            if (!index) {
+                return std::nullopt;
+            }
+            const auto ordinal = write.linear_index
+                ? *index
+                : !type.dimensions.empty() && type.dimensions.size() != 1U
+                ? std::optional<std::int64_t> { }
+                : type.index_left <= type.index_right
+                ? *index - type.index_left
+                : type.index_left - *index;
+            if (!ordinal || *ordinal < 0
+                || *ordinal > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+            return static_cast<std::uint32_t>(*ordinal);
+        };
         const auto record_container_object_write =
-            [&](const ContainerObjectId object) {
+            [&](const ContainerObjectId object,
+                const std::optional<std::uint32_t> element = std::nullopt) {
+                if (element) {
+                    // Only the element's own alias is claimed; the
+                    // aggregate aliases cannot tell elements apart.
+                    const auto found
+                        = writable_element_signals.find({ object, *element });
+                    if (found != writable_element_signals.end()) {
+                        for (const auto signal : found->second) {
+                            if (variable_container_signals.contains(signal)
+                                && !continuous_signals.contains(signal)) {
+                                continue;
+                            }
+                            auto& regions = process_outputs[signal];
+                            if (std::ranges::none_of(regions,
+                                    [](const DriverRegion& region) {
+                                        return region.whole;
+                                    })) {
+                                regions.push_back(DriverRegion {
+                                    signal, 0U, 0U, true });
+                            }
+                        }
+                    }
+                    return;
+                }
                 const auto aliases = writable_container_signals.find(object);
                 if (aliases == writable_container_signals.end()) {
                     return;
@@ -2508,11 +2605,13 @@ void HierarchyBuilder::validate_process_drivers()
                     using OperationType
                         = std::decay_t<decltype(value)>;
                     if constexpr (
-                        std::is_same_v<
-                            OperationType, WriteContainerObject>
-                        || std::is_same_v<
-                            OperationType, WriteContainerObjectElement>) {
+                        std::is_same_v<OperationType, WriteContainerObject>) {
                         record_container_object_write(value.object);
+                    } else if constexpr (
+                        std::is_same_v<
+                            OperationType, WriteContainerObjectElement>) {
+                        record_container_object_write(
+                            value.object, constant_element(value));
                     }
                 },
                 operation);
@@ -2543,6 +2642,38 @@ void HierarchyBuilder::validate_process_drivers()
             selected.value_or(
                 native_resolution(
                     design_.signal_info_.at(signal))));
+    }
+    // An inout formal that no process inside the instance drives has its
+    // default as its driving value (IEEE 1076-2008 14.7.3.2), so its output
+    // adapter contributes that value once instead of following the effective
+    // value the input adapter copies back from the actual.
+    for (const auto& adapters : vhdl_inout_adapters_) {
+        const auto found = driver_processes.find(adapters.formal);
+        if (found != driver_processes.end()
+            && std::ranges::any_of(found->second,
+                [&](const ProcessId process) {
+                    return process != adapters.input;
+                })) {
+            continue;
+        }
+        // The input adapter copies the actual's effective value; it is not
+        // a source of the formal, so nothing is resolved (14.7.3.3).
+        set_resolution(adapters.formal, ResolutionKind::none);
+        vhdl_function_resolvers_.erase(adapters.formal);
+        resolver_by_signal_.erase(adapters.formal);
+        auto process = design_.process_view(adapters.output).materialize();
+        if (process.static_sensitivity.empty()) {
+            continue;
+        }
+        process.static_sensitivity.clear();
+        for (std::size_t index { }; index < process.operations.size();
+            ++index) {
+            if (runtime::simir::operation_holds<WaitSensitivity>(
+                    process.operations.expanded(index))) {
+                process.operations.replace(index, WaitForever { });
+            }
+        }
+        design_.replace_process_record(adapters.output, std::move(process));
     }
     // A resolved signal starts with the resolution of its sources' initial
     // values (IEEE 1076-2008 14.7.3.2, 14.7.5.2): the defaults of its out

@@ -72,6 +72,21 @@ struct VhdlSignalResolver {
       const VhdlSignalResolver&, const VhdlSignalResolver&) = default;
 };
 
+/// A formal-side conversion that drives a resolved actual (IEEE 1076-2008
+/// 6.5.7.1, 14.7.3.2): `program` reads `sources` and leaves the converted
+/// driving value in `output`; the runtime runs it in the simulation cycle a
+/// source changes and assigns the result to the driver of the halted
+/// process `stub`, one source of the resolved signal among its others.
+struct VhdlConversionDriver {
+  ProcessId stub{};
+  ProcessId program{};
+  RegisterId output{};
+  std::vector<SignalId> sources{};
+
+  friend bool operator==(
+      const VhdlConversionDriver&, const VhdlConversionDriver&) = default;
+};
+
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
@@ -90,6 +105,7 @@ struct Signal {
   // point) wider than one bit: its bits form one scalar whose projected
   // transactions are kept or rejected together (IEEE 1076-2008 10.5.2.2).
   std::uint32_t vhdl_scalar_width { };
+  std::vector<VhdlConversionDriver> vhdl_conversion_drivers;
 
   Signal() = default;
   Signal(

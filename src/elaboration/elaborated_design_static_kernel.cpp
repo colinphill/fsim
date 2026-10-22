@@ -711,6 +711,25 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     // signals. The program and the adapters it replaced (halted stubs) are
     // host programs, not VHDL processes the kernel must hold.
     std::vector<std::uint8_t> host_program(process_count, 0U);
+    for (std::size_t index = 0U; index < signals_.size(); ++index) {
+        // A conversion driver's program and stub run on the host too, and
+        // the host writes the resolved actual.
+        for (const auto& driver : signals_[index].vhdl_conversion_drivers) {
+            for (const auto process : { driver.program, driver.stub }) {
+                if (process < process_count) {
+                    host_program[process] = 1U;
+                }
+            }
+            for (const auto source : driver.sources) {
+                if (source < signal_count) {
+                    host_touched[source] = 1U;
+                }
+            }
+            if (index < signal_count) {
+                host_touched[index] = 1U;
+            }
+        }
+    }
     for (const auto& signal : signals_) {
         if (!signal.vhdl_resolver || signal.vhdl_resolver->sources.empty()) {
             continue;

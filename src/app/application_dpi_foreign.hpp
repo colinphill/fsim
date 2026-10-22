@@ -41,6 +41,12 @@ public:
 
     virtual void set_clock(Clock clock) = 0;
 
+    /// Runs the C code of a context import that serves DPI exports on a
+    /// helper thread; the entry wraps that code in the thread's caller
+    /// context (as the VPI context of the calling simulation).
+    using ThreadEntry = std::function<void(const std::function<void()>&)>;
+    virtual void set_thread_entry(ThreadEntry entry) = 0;
+
     /// Call one import. Output and inout actuals are written back in place.
     [[nodiscard]] virtual runtime::PackedLogic4 call(
         std::string_view identity,

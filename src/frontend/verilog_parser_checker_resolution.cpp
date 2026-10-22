@@ -302,6 +302,15 @@ void VerilogParser::parse_generated_items(
         } else if (any_keyword(
                        { "always", "always_ff", "always_comb", "always_latch" })) {
             unit.processes.push_back(parse_always());
+        } else if (dpi_declaration_start("import")) {
+            const auto declaration = advance();
+            parse_dpi_declaration(unit.systemverilog_dpi_declarations,
+                declaration, SystemVerilogDpiDirection::Import,
+                SystemVerilogDpiOwnerKind::DesignUnit, unit.name);
+        } else if (match_keyword("task")) {
+            unit.tasks.push_back(parse_task(previous()));
+        } else if (match_keyword("function")) {
+            unit.functions.push_back(parse_function(previous()));
         } else if (is_declaration_start()) {
             parse_declaration(unit);
         } else if (match_keyword("assign")) {

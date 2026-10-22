@@ -11734,6 +11734,61 @@ private:
                 .effective_vhdl_subtype(
                     *effective_subtype, expression.scope);
         }
+        // An indexed name denotes an element of the named array, so the
+        // attribute is the element subtype's (IEEE 1076-2008 8.4, 16.2.3).
+        // A slice or a nested selection is left to elaboration.
+        // Integer indices of a multidimensional object keep the call form,
+        // the object's name with one actual per index.
+        const bool indexed_call = prefix->vhdl->kind == vhdl::ExpressionKind::call
+            && !prefix->vhdl->operands.empty()
+            && !prefix->vhdl->text.starts_with('\'')
+            && !prefix->vhdl->text.starts_with('@');
+        if (declaration && declaration->vhdl != nullptr
+            && !vhdl_type_declaration_form(declaration->vhdl->form)
+            && !declaration->vhdl->callable
+            && (prefix->vhdl->kind == vhdl::ExpressionKind::index
+                || prefix->vhdl->kind == vhdl::ExpressionKind::slice
+                || indexed_call)) {
+            const auto root = prefix->vhdl->operands.empty() || indexed_call
+                ? std::nullopt
+                : unit_.find_expression(prefix->vhdl->operands.front());
+            if ((!indexed_call
+                    && (prefix->vhdl->kind != vhdl::ExpressionKind::index
+                        || !root || root->vhdl == nullptr
+                        || root->vhdl->kind != vhdl::ExpressionKind::name))
+                || !effective_subtype) {
+                return std::nullopt;
+            }
+            const auto selectors = indexed_call
+                ? prefix->vhdl->operands.size()
+                : prefix->vhdl->operands.size() - 1U;
+            const vhdl::TypeDefinition* array { };
+            std::set<TypeId> visited;
+            for (auto id = std::optional { effective_subtype->type_mark.target };
+                 id && id->valid() && visited.insert(*id).second;) {
+                const auto type = unit_.find_type(*id);
+                if (!type || type->vhdl == nullptr) {
+                    break;
+                }
+                if (type->vhdl->form == vhdl::TypeForm::array) {
+                    array = type->vhdl;
+                    break;
+                }
+                id = type->vhdl->base.type_mark.target;
+            }
+            if (array == nullptr || !array->element_subtype
+                || array->array_dimensions.size() != selectors) {
+                return std::nullopt;
+            }
+            effective_subtype = CompiledDesignResolver { unit_ }
+                .effective_vhdl_subtype(
+                    vhdl::constrained_element_subtype(*effective_subtype, "",
+                        *array->element_subtype),
+                    expression.scope);
+            if (!effective_subtype) {
+                return std::nullopt;
+            }
+        }
         const auto* subtype = effective_subtype
             ? &*effective_subtype
             : nullptr;

@@ -92,6 +92,18 @@ fsim_svdpi_call_context_leave_v3(fsim_svdpi_call_context_v3* context);
 FSIM_SVDPI_BRIDGE_API const fsim_svdpi_call_context_v3* FSIM_SVDPI_CALL
 fsim_svdpi_current_call_context_v3(void);
 
+/* DPI export calls from C (IEEE 1800-2023 35.5.3): the generated export
+   functions pass their name, the address of each argument's C value (the
+   pointer itself for an argument passed by pointer), and the address of
+   the result storage; the simulator's dispatcher runs the export. */
+typedef int(FSIM_SVDPI_CALL* fsim_svdpi_export_dispatcher_v3)(
+    void* user_data, const char* name, void** arguments, void* result);
+FSIM_SVDPI_BRIDGE_API void FSIM_SVDPI_CALL
+fsim_svdpi_set_export_dispatcher_v3(
+    fsim_svdpi_export_dispatcher_v3 dispatcher, void* user_data);
+FSIM_SVDPI_BRIDGE_API int FSIM_SVDPI_CALL
+fsim_svdpi_export_call_v3(const char* name, void** arguments, void* result);
+
 #ifdef __cplusplus
 }
 #endif

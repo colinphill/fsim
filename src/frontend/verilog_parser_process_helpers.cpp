@@ -1096,7 +1096,15 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     std::vector<std::string> names;
     // Associative positions, innermost last, each closed by a next() loop.
     std::vector<std::size_t> associative_positions;
-    emit("begin");
+    // A break in the body jumps out of the entire loop, not just out of the
+    // current dimension (IEEE 1800-2017 12.8): it disables the block that
+    // holds the generated loops.
+    const auto loops = static_cast<std::size_t>(std::ranges::count_if(
+        dimension_names, [&](const std::string& name) {
+            return !(name.empty() && numbered_dimensions);
+        }));
+    const auto break_label = "__fsim_fe_brk" + suffix;
+    emit(loops > 1U ? "begin : " + break_label : std::string { "begin" });
     for (std::size_t dimension = 0; dimension < dimension_names.size();
          ++dimension) {
         // An empty index position does not iterate its dimension (IEEE
@@ -1160,7 +1168,14 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         emit(".next(" + names[*position] + ")); end");
     }
     emit("end");
+    if (loops > 1U) {
+        foreach_break_targets_.emplace_back(
+            current_loop_depth_ + loops, break_label);
+    }
     auto desugared = parse_generated_statement(std::move(out), statement.span);
+    if (loops > 1U) {
+        foreach_break_targets_.pop_back();
+    }
     return desugared ? std::move(*desugared) : statement;
 }
 

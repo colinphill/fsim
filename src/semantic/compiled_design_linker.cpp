@@ -3034,6 +3034,41 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         }
         append_systemverilog_configuration_references(references, unit);
     }
+    // The packages of a compilation unit are part of every design that
+    // elaborates one of its design elements (IEEE 1800-2023 3.12.1, 26.1),
+    // even when no element imports them.
+    std::map<std::string_view, std::vector<const sv::Unit*>> unit_packages;
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        if (unit.kind == sv::UnitKind::package
+            && !unit.compilation_unit_identity.empty()
+            && !unit.name.starts_with("fsim_unit_")) {
+            unit_packages[unit.compilation_unit_identity].push_back(&unit);
+        }
+    }
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        if (unit.kind == sv::UnitKind::package || unit.external) {
+            continue;
+        }
+        const auto packages = unit_packages.find(
+            unit.compilation_unit_identity);
+        if (packages == unit_packages.end()) {
+            continue;
+        }
+        for (const auto* const package : packages->second) {
+            if (package->library != unit.library) {
+                continue;
+            }
+            references.push_back(CompiledReference {
+                CompiledReferenceKind::package,
+                unit.id,
+                package->library,
+                package->name,
+                { },
+                unit.source,
+                std::nullopt,
+            });
+        }
+    }
     append_compiled_class_references(design, references);
     append_systemverilog_package_uses(design, references);
     for (const auto& expression : design.systemverilog_hir.expressions()) {

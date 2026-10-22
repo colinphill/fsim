@@ -5,9 +5,12 @@
 #include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace fsim::elaboration {
 
@@ -30,6 +33,33 @@ struct DpiCType {
 
 [[nodiscard]] std::optional<DpiCType> dpi_c_type(
     std::span<const semantic::sv::SourceToken> tokens);
+
+// What mapping a named or resolved type needs beyond built-in keywords:
+// the type a typedef name denotes in the DPI declaration's scope, a type's
+// definition, and a packed bound's constant value.
+struct DpiTypeContext {
+    std::function<std::optional<semantic::sv::TypeReference>(
+        std::string_view)>
+        named_type;
+    std::function<const semantic::sv::TypeDefinition*(semantic::TypeId)>
+        definition;
+    std::function<std::optional<std::int64_t>(semantic::ExpressionId)>
+        evaluate;
+};
+
+// A formal or result type that may name a typedef: one that resolves to a
+// built-in type maps like it, and a packed structure, union or array maps
+// to a bit or logic vector (IEEE 1800-2023 35.5.6, H.7.6).
+[[nodiscard]] std::optional<DpiCType> dpi_c_type(
+    std::span<const semantic::sv::SourceToken> tokens,
+    const DpiTypeContext& context);
+[[nodiscard]] std::optional<DpiCType> dpi_c_type(
+    const semantic::sv::TypeReference& type, const DpiTypeContext& context);
+
+// The type context of declarations in `scope` of a whole design's HIR: a
+// typedef of that scope, or else the only typedef of that name.
+[[nodiscard]] DpiTypeContext dpi_hir_type_context(
+    const semantic::sv::Hir& hir, semantic::ScopeId scope);
 
 // A C header declaring every validated DPI-C import and export with its
 // Annex H C prototype, like other simulators' DPI header generation. A

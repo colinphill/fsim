@@ -533,6 +533,7 @@ include/fsim/runtime/veriuser.h
 include/fsim/runtime/vhdl_psl.hpp
 include/fsim/runtime/vhpi_abi.h
 include/fsim/runtime/vhpi_association.hpp
+include/fsim/runtime/vhpi_bridge.h
 include/fsim/runtime/vhpi_callback.hpp
 include/fsim/runtime/vhpi_checkpoint.hpp
 include/fsim/runtime/vhpi_composite.hpp
@@ -628,6 +629,7 @@ include/fsim/version.hpp
 include/sv_vpi_user.h
 include/svdpi.h
 include/systemc
+include/vhpi_user.h
 include/vpi_user.h
 packaging/example-output-freeze.tsv
 packaging/package-policy.txt
@@ -825,6 +827,8 @@ src/app/application_vhdl_hir_statements.cpp
 src/app/application_vhdl_hir_types.cpp
 src/app/application_vhdl_mode_view.cpp
 src/app/application_vhdl_psl.cpp
+src/app/application_vhpi_foreign.cpp
+src/app/application_vhpi_foreign.hpp
 src/app/application_vpi.cpp
 src/app/application_vpi_foreign.cpp
 src/app/application_vpi_foreign.hpp
@@ -1407,6 +1411,7 @@ src/runtime/vhpi_io.cpp
 src/runtime/vhpi_object.cpp
 src/runtime/vhpi_plugin.cpp
 src/runtime/vhpi_special.cpp
+src/runtime/vhpi_standard.cpp
 src/runtime/vhpi_time.cpp
 src/runtime/vhpi_type.cpp
 src/runtime/vhpi_value.cpp

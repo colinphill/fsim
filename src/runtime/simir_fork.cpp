@@ -347,8 +347,15 @@ void Interpreter::Impl::disable_process_interval(
         owner.executor->redirect(end);
     }
     owner.status = ProcessStatus::running;
-    // A process already queued resumes at `end` when that wake runs.
+    // A process suspended on a delay resumes at `end` now, not when its
+    // timer expires (IEEE 1800-2017 9.6.2); one already queued in this time
+    // step resumes at `end` when that wake runs.
     if (&owner != &process) {
+        if (owner.queued && owner.timer_wake) {
+            ++owner.timer_epoch;
+            owner.queued = false;
+            owner.timer_wake = false;
+        }
         queue_active_current(owner.id);
     }
 }

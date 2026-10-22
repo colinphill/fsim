@@ -1214,9 +1214,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
         SchedulerPhase execution_phase { SchedulerPhase::active };
         bool queued { };
+        // The queued wake is a timer at a later time; a disable that
+        // redirects the process abandons it by advancing timer_epoch.
+        bool timer_wake { };
         bool waiting_on_static { };
         bool waiting_on_signal { };
         std::uint32_t generation { };
+        std::uint32_t timer_epoch { };
         ProcessStatus status { ProcessStatus::running };
         ProcessStatus suspended_status { ProcessStatus::running };
         bool suspended { };
@@ -2015,6 +2019,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Signals whose port-association conversions read the key signal.
     std::unordered_map<SignalId, std::vector<SignalId>>
         vhdl_conversion_dependents;
+    // Resolved signals driven by formal-side conversions, by signal.
+    std::unordered_map<SignalId, std::vector<VhdlConversionDriver>>
+        vhdl_conversion_drivers;
     // Per signal: nonzero when its bits form one VHDL scalar.
     std::unordered_map<SignalId, std::uint32_t> vhdl_scalar_widths;
     // Drivers of guarded signals disconnected by a null transaction
@@ -5225,6 +5232,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id,
         const ForcedDriverMapView* override_maps = nullptr) const;
     [[nodiscard]] PackedLogic4 run_vhdl_resolver(SignalId signal_id);
+    // Run a signal's conversion-driver programs and assign their results to
+    // the stub drivers; true when the signal has any.
+    bool run_vhdl_conversion_drivers(SignalId signal_id, bool initializing);
     // `@vhdl-disconnect:<signal>:<delay>`: a null transaction on the
     // calling process's driver. Returns false for other identities.
     bool try_vhdl_disconnect_call(

@@ -512,6 +512,7 @@ namespace {
         config.elaboration.vpi_modules = invocation.vpi_modules;
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
+        config.run.vhpi_modules = invocation.vhpi_modules;
         if (!invocation.library_mappings.empty()) {
             config.library_mappings = invocation.library_mappings;
             for (auto& mapping : config.library_mappings) {
@@ -593,6 +594,7 @@ namespace {
         config.elaboration.vpi_modules = invocation.vpi_modules;
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
+        config.run.vhpi_modules = invocation.vhpi_modules;
         if (!invocation.library_mappings.empty()) {
             config.library_mappings = invocation.library_mappings;
             for (auto& mapping : config.library_mappings) {
@@ -706,6 +708,8 @@ namespace {
             << "      --vpi LIB[:BOOTSTRAP]\n"
             << "                           Load a VPI module; repeatable (elaborate, simulate)\n"
             << "      --sv-lib LIB         Load a DPI-C library; repeatable\n"
+            << "      --vhpi LIB[:BOOTSTRAP]\n"
+            << "                           Load a VHPI module; repeatable (simulate)\n"
             << "      --diagnostics text|json\n"
             << "      --color auto|always|never\n"
             << "\n"
@@ -916,6 +920,7 @@ namespace {
             "--link-library",
             "--vpi",
             "--sv-lib",
+            "--vhpi",
             "--cache",
             "--aot-scope",
             "--compiled-processes",
@@ -1276,9 +1281,11 @@ std::optional<Invocation> parse_arguments(
                 }
                 invocation.systemc_link_options.emplace_back(*value);
             } else if (is_option(argument, "", "--vpi")
-                || is_option(argument, "", "--sv-lib")) {
+                || is_option(argument, "", "--sv-lib")
+                || is_option(argument, "", "--vhpi")) {
                 const bool vpi = is_option(argument, "", "--vpi");
-                const auto name = vpi ? "--vpi" : "--sv-lib";
+                const bool vhpi = is_option(argument, "", "--vhpi");
+                const auto name = vpi ? "--vpi" : vhpi ? "--vhpi" : "--sv-lib";
                 const auto value
                     = take_value(index, argc, argv, argument, name, diagnostics);
                 if (!value.has_value() || value->empty()) {
@@ -1286,7 +1293,9 @@ std::optional<Invocation> parse_arguments(
                         std::string { name } + " requires a library path");
                     return std::nullopt;
                 }
-                (vpi ? invocation.vpi_modules : invocation.sv_libs)
+                (vpi       ? invocation.vpi_modules
+                        : vhpi ? invocation.vhpi_modules
+                               : invocation.sv_libs)
                     .emplace_back(*value);
             } else if (is_option(argument, "", "--link-library")) {
                 const auto value = take_value(
@@ -2009,6 +2018,10 @@ std::optional<Invocation> parse_arguments(
     if (!invocation.vpi_modules.empty() && !elaborate && !snapshot_consumer) {
         argument_error(diagnostics,
             "--vpi requires elaborate, simulate, debug, or tcl");
+        return std::nullopt;
+    }
+    if (!invocation.vhpi_modules.empty() && !snapshot_consumer) {
+        argument_error(diagnostics, "--vhpi requires simulate, debug, or tcl");
         return std::nullopt;
     }
     if (!invocation.sv_libs.empty() && !snapshot_consumer) {

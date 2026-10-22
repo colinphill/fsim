@@ -141,6 +141,9 @@ struct SystemVerilogVpiTypeInfo {
     std::uint32_t width { };
     bool is_signed { };
     bool is_constant { };
+    // A parameter whose value is a string literal (IEEE 1800-2023 37.32
+    // vpiStringConst).
+    bool string_literal { };
     // A `celldefine module instance (IEEE 1800-2023 37.10 vpiCellInstance).
     bool is_cell { };
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> descriptor;

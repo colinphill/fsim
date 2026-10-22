@@ -110,6 +110,12 @@ STAGE_ORDER = {"host": -1, "compile": 0, "elaborate": 1, "simulate": 2}
 SV_MODULE_RE = re.compile(
     r"^\s*(?:\(\*.*?\*\)\s*)*(?:extern\s+)?(?:module|macromodule|program)\s+(?:automatic\s+|static\s+)?"
     r"([A-Za-z_][A-Za-z0-9_$]*|\\\S+)", re.M)
+SV_UNIT_SCOPE_RE = re.compile(
+    r"^\s*(?:\(\*.*?\*\)\s*)*(?P<extern>extern\s+)?"
+    r"(?P<kind>module|macromodule|program|interface)\s+"
+    r"(?:automatic\s+|static\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_$]*|\\\S+)"
+    r"(?=\s*(?:[;(#]|import\b))"
+    r"|\b(?P<end>endmodule|endprogram|endinterface)\b", re.M)
 SV_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 SV_SCAN_TRIVIA_RE = re.compile(
     r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\\[^\s]+', re.S)
@@ -134,9 +140,31 @@ def sv_root_modules(texts: Iterable[str]) -> list[str]:
 
     joined = "\n".join(SV_SCAN_TRIVIA_RE.sub(hide_trivia, text)
                        for text in texts)
+    # A module or program nested in another is instantiated by its
+    # enclosing unit (IEEE 1800-2023 23.4), so only outermost declarations
+    # can be roots.
+    # Preprocessor-dependent text can leave declarations and ends
+    # unbalanced; nesting is then not trusted.
+    nested: set[str] = set()
+    depth = 0
+    balanced = True
+    for match in SV_UNIT_SCOPE_RE.finditer(joined):
+        if match.group("end"):
+            if depth == 0:
+                balanced = False
+            depth = max(0, depth - 1)
+            continue
+        if match.group("extern") or match.group("kind") == "interface" \
+                and match.group("name") == "class":
+            continue
+        if depth > 0:
+            nested.add(match.group("name"))
+        depth += 1
+    if not balanced or depth != 0:
+        nested.clear()
     declared: list[str] = []
     for name in SV_MODULE_RE.findall(joined):
-        if name not in declared:
+        if name not in declared and name not in nested:
             declared.append(name)
     roots = []
     for name in declared:
@@ -685,6 +713,18 @@ VERILATOR_NONSTANDARD = {
         "may only be the source of an assignment-like context "
         "(IEEE 1800-2017 10.10)"
        for name in ("t_hier_block_struct", "t_hier_block_struct_nohier")},
+    **{name: "expects integer, byte, shortint, int and longint variables to "
+        "report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, "
+        "vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17)"
+       for name in ("t_vpi_var", "t_vpi_var2", "t_vpi_var3",
+                    "t_vpi_forceable_var")},
+    "t_vpi_package": "looks up '$unit::' names with vpi_handle_by_name, "
+        "which shall not reach objects of a compilation unit (IEEE "
+        "1800-2023 37.10 detail 6)",
+    "t_dpi_arg_input_unpack": "its SystemVerilog branch for simulators "
+        "other than Verilator and NC passes the undeclared variable "
+        "shotreal_array1 (data shall be declared before use, IEEE 1800-2023 "
+        "6.5)",
     "t_timescale_nobackwards": "expects Verilator's default 1ps/1ps time "
         "unit; the default is implementation-specific (IEEE 1800-2017 "
         "3.14.2.3)",
@@ -1130,6 +1170,10 @@ VERILATOR_NONSTANDARD = {
         "implicit data type, which is a net (IEEE 1800-2017 23.2.2.3)"
         for name in ("t_langext_2", "t_langext_4", "t_langext_2012ext",
             "t_langext_2017ext", "t_langext_2023ext")},
+    **{name: "procedurally assigns the wire tmp of barshift_bitslice and "
+        "the output wire of unpack2pack; a net cannot be procedurally "
+        "assigned (IEEE 1800-2023 6.5)"
+        for name in ("t_split_var_0", "t_split_var_2_trace")},
     "t_math_pow6": "initializes output net ports with nonconstant "
         "expressions (IEEE 1800-2017 A.2.1.2 list_of_port_identifiers)",
     **{name: "assigns the net words_i from an always_ff procedure; a "
@@ -1560,6 +1604,10 @@ def verilator_cases(root: Path) -> list[Case]:
                 # svLogicVecVal fields (aval/bval), so it is preferred.
                 build += ["-DVCS", "-Iobj_dir"] if "VCS" in tested else (
                     ["-D" + simulator for simulator in tested] or ["-DCADENCE"])
+                if "VCS" in tested:
+                    # VCS predefines its name for the design too, so both
+                    # halves of the test take the same simulator branch.
+                    compile_args[2:2] = ["-D", "VCS"]
             build += [str(path) for path in companions]
             build += ["{fsim_dir}/libfsim_tf.so.3", "-Wl,-rpath,{fsim_dir}"]
             if foreign == "dpi":
@@ -2269,10 +2317,30 @@ NVC_NONSTANDARD = {
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",
     "wide7": "uses ~& and ~| as binary operators",
+    # VHPI tests (test/vhpi) that rely on nvc behaviour the standard leaves
+    # open or does not define.
+    "vhpi1": "expects nvc's tool name, its vhpiRandomSeedP property and its "
+        "unit-name spelling; vhpiRandomSeedP is an nvc extension absent from "
+        "IEEE 1076-2019 clause 19 and Annex B",
+    "issue1060": "expects vhpi_assert with severity vhpiError to end the "
+        "simulation; whether an error stops it is implementation-defined "
+        "(IEEE 1076-2019 23.2, 10.3)",
+    **{name: "binds a foreign subprogram with nvc's single-token VHPIDIRECT "
+        "form and calling convention; IEEE 1076-2019 20.2.4.3 defines "
+        "VHPIDIRECT with an object library and execution specifier"
+       for name in ("vhpi4", "issue612", "issue988")},
+    "issue1301": "uses GHDL's foreign attribute form; IEEE 1076-2019 20.2.4 "
+        "defines only the VHPI and VHPIDIRECT forms",
+    "issue1473": "binds a VHDL component to a Verilog module through nvc's "
+        "vhpiVerilogModuleK extension class, outside IEEE 1076-2019",
+    # Owner decision (Batch 81): VHDL integer types stay 32-bit (IEEE
+    # 1076-2019 5.2.3.1).
+    **{name: "reads 64-bit integer and physical values through VHPI"
+       for name in ("issue978", "vhpi18")},
 }
 
 NVC_SKIP_FLAGS = {
-    "vhpi", "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
+    "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
     "dump-arrays", "export", "define", "H", "exit",
 }
 
@@ -2283,6 +2351,27 @@ NVC_SKIP_FLAGS = {
 NVC_EXPECTED_RUNTIME_ERRORS = {
     "issue502": ("FSIM-RUN-0001", "VHDL integer subtype range check failed", 1),
 }
+
+
+def nvc_vhpi_build(root: Path) -> Command:
+    """Build nvc's shared VHPI test library (test/vhpi, extracted from the
+    nvc checkout into sources/nvc-vhpi) against fsim's vhpi_user.h and
+    libfsim_tf, once per fsim build, and link it into the case directory
+    (IEEE 1076-2019 20.2)."""
+    root = root.resolve()
+    tree = root / "sources" / "nvc-vhpi"
+    sources = " ".join(shlex.quote(str(p))
+                       for p in sorted((tree / "test" / "vhpi").glob("*.c")))
+    cache = shlex.quote(str(root / "generated" / "nvc-vhpi"))
+    build = (f"cc -shared -fPIC -o \"$d/vhpi_test.so.$$\" -I{{repo}}/include "
+             f"-I{shlex.quote(str(tree / 'src' / 'vhpi'))} {sources} "
+             "{fsim_dir}/libfsim_tf.so.3 -Wl,-rpath,{fsim_dir} "
+             "&& mv \"$d/vhpi_test.so.$$\" \"$d/vhpi_test.so\"")
+    script = (f"export d={cache}/$(printf %s {{fsim_dir}} | cksum | cut -d' ' -f1) "
+              "&& mkdir -p \"$d\" && flock \"$d/.lock\" sh -c "
+              f"'test -f \"$d/vhpi_test.so\" || {{ {build}; }}' "
+              "&& ln -sf \"$d/vhpi_test.so\" vhpi_test.so")
+    return Command("host", ["sh", "-c", script])
 
 
 def nvc_cases(root: Path) -> list[Case]:
@@ -2301,6 +2390,7 @@ def nvc_cases(root: Path) -> list[Case]:
         skip = None
         verilog = False
         mixed = False
+        vhpi = False
         kinds = set()
         for flag in flags:
             key, _, value = flag.partition("=")
@@ -2310,6 +2400,8 @@ def nvc_cases(root: Path) -> list[Case]:
                 kinds.add(key)
             elif key == "verilog":
                 verilog = True
+            elif key == "vhpi":
+                vhpi = True
             elif key == "mixed":
                 # A VHDL top instantiating a same-named Verilog module through
                 # a component declaration (default binding across languages,
@@ -2375,6 +2467,13 @@ def nvc_cases(root: Path) -> list[Case]:
         sim = ["simulate", "--engine", "{engine}"]
         if stop_time:
             sim += ["--duration", stop_time]
+        env = {}
+        if vhpi:
+            if not (root / "sources" / "nvc-vhpi" / "test" / "vhpi").is_dir():
+                skip = skip or "source not present"
+            commands.insert(0, nvc_vhpi_build(root))
+            sim += ["--vhpi", "vhpi_test.so"]
+            env["TEST_NAME"] = name
         gold = base / "gold" / f"{name}.txt"
         cases.append(Case(
             suite="nvc",
@@ -2389,6 +2488,7 @@ def nvc_cases(root: Path) -> list[Case]:
             expected_runtime_error=NVC_EXPECTED_RUNTIME_ERRORS.get(name),
             checker="vhdl_clean",
             checker_data={"nvc_gold": str(gold) if "gold" in kinds and gold.exists() else None},
+            env=env,
             skip=skip,
         ))
     return cases

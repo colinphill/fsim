@@ -624,4 +624,155 @@ void VerilogParser::resolve_dpi_declarations(
   }
 }
 
+void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
+  // A context import's C code may call the exports of its instance (IEEE
+  // 1800-2023 35.5.3). Each export gets a hidden task that takes its
+  // actuals from the pending C call, calls the export, and hands its
+  // result and outputs back; the service task runs those tasks until the
+  // import's C code returns. The `__fsim_dpi_export_` imports are served by
+  // the DPI runtime, not by C code.
+  const auto words = [](const std::vector<Token>& tokens) {
+    std::string text;
+    for (const auto& token : tokens) {
+      text += token.text;
+      text += ' ';
+    }
+    return text;
+  };
+  const auto data_type = [&](const std::vector<Token>& tokens) {
+    const bool implicit = tokens.empty()
+        || tokens.front().kind == TokenKind::LeftBracket
+        || dpi_word(tokens.front(), "signed")
+        || dpi_word(tokens.front(), "unsigned");
+    return (implicit ? std::string { "logic " } : std::string { })
+        + words(tokens);
+  };
+  // Functions serve function exports, so that an import function called
+  // from a function can call them (13.4.4); task exports need tasks.
+  const bool task_exports = std::ranges::any_of(
+      unit.systemverilog_dpi_declarations,
+      [](const SystemVerilogDpiDeclaration& declaration) {
+        return declaration.direction == SystemVerilogDpiDirection::Export
+            && declaration.callable_kind
+                == SystemVerilogDpiCallableKind::Task;
+      });
+  const std::string callable =
+      task_exports ? "task automatic " : "function automatic void ";
+  const std::string end_callable =
+      task_exports ? "endtask\n" : "endfunction\n";
+  std::string text;
+  std::string linkages;
+  std::size_t exports {};
+  std::optional<SourceSpan> span;
+  for (const auto& declaration : unit.systemverilog_dpi_declarations) {
+    if (declaration.direction != SystemVerilogDpiDirection::Export
+        || !declaration.validated) {
+      continue;
+    }
+    const bool function_export = declaration.callable_kind
+        == SystemVerilogDpiCallableKind::Function;
+    const auto& name = declaration.systemverilog_name;
+    const auto linkage = declaration.c_identifier.value_or(name);
+    const auto recorded = callable_type_tokens_.find(name);
+    if (recorded == callable_type_tokens_.end()
+        || recorded->second.function != function_export
+        || linkage.starts_with("__fsim_dpi_export_")) {
+      continue;
+    }
+    std::vector<std::pair<PortDirection, bool>> formals;
+    if (function_export) {
+      const auto function = std::ranges::find_if(unit.functions,
+          [&](const FunctionDeclaration& candidate) {
+            return candidate.name == name;
+          });
+      if (function == unit.functions.end()) continue;
+      for (const auto& argument : function->arguments) {
+        formals.emplace_back(argument.direction, argument.reference);
+      }
+    } else {
+      const auto task = std::ranges::find_if(unit.tasks,
+          [&](const TaskDeclaration& candidate) {
+            return candidate.name == name;
+          });
+      if (task == unit.tasks.end()) continue;
+      for (const auto& argument : task->arguments) {
+        formals.emplace_back(argument.direction, argument.reference);
+      }
+    }
+    const auto& tokens = recorded->second;
+    if (formals.size() != tokens.formals.size()) continue;
+    const bool result = function_export
+        && !(tokens.result.size() == 1U
+            && dpi_word(tokens.result.front(), "void"));
+    std::string mask { result ? 'r' : 'v' };
+    std::string outputs;
+    std::string inputs;
+    std::string locals;
+    std::string actuals;
+    for (std::size_t index = 0; index < formals.size(); ++index) {
+      const auto formal = "__a" + std::to_string(index);
+      const auto type = data_type(tokens.formals[index].first);
+      const auto dimensions = words(tokens.formals[index].second);
+      const auto separator = index == 0 ? "" : ", ";
+      // i: the export reads the C value; o: C reads the export's value;
+      // b: both.
+      mask += formals[index].second ? 'b'
+          : formals[index].first == PortDirection::Input  ? 'i'
+          : formals[index].first == PortDirection::Output ? 'o'
+                                                          : 'b';
+      outputs += separator + ("output " + type + formal + ' ' + dimensions);
+      inputs += ", input " + type + formal + ' ' + dimensions;
+      locals += type + formal + ' ' + dimensions + ";\n";
+      actuals += separator + formal;
+    }
+    const auto arguments_import =
+        "__fsim_dpi_export_args_" + mask + "__" + linkage;
+    const auto return_import =
+        "__fsim_dpi_export_return_" + mask + "__" + linkage;
+    text += "import \"DPI-C\" function void " + arguments_import + "("
+        + outputs + ");\n";
+    text += "import \"DPI-C\" function void " + return_import + "("
+        + (result ? "input " + data_type(tokens.result) + "__r" : "")
+        + (result ? inputs : inputs.empty() ? "" : inputs.substr(2))
+        + ");\n";
+    text += callable + "__fsim_dpi_export_call__" + linkage + "();\n"
+        + locals + (result ? data_type(tokens.result) + "__r;\n" : "")
+        + arguments_import + "(" + actuals + ");\n"
+        + (result ? "__r = " : "") + name + "(" + actuals + ");\n"
+        + return_import + "(" + (result ? "__r" : "")
+        + (result && !actuals.empty() ? ", " : "") + actuals + ");\n"
+        + end_callable;
+    linkages += (linkages.empty() ? "" : " ") + linkage;
+    ++exports;
+    if (!span) span = declaration.span;
+  }
+  callable_type_tokens_.clear();
+  if (exports == 0) {
+    return;
+  }
+  text += "import \"DPI-C\" context function int __fsim_dpi_export_next("
+          "input string names);\n"
+      + callable + "__fsim_dpi_export_service();\n"
+          "int __k;\n"
+          "__k = __fsim_dpi_export_next(\"" + linkages + "\");\n"
+          "while (__k != 0) begin\n"
+          "case (__k)\n";
+  std::size_t ordinal {};
+  std::string_view rest { linkages };
+  while (!rest.empty()) {
+    const auto space = rest.find(' ');
+    const auto linkage = rest.substr(0, space);
+    text += std::to_string(++ordinal) + ": __fsim_dpi_export_call__"
+        + std::string { linkage } + "();\n";
+    rest = space == std::string_view::npos ? std::string_view { }
+                                           : rest.substr(space + 1U);
+  }
+  text += "endcase\n"
+          "__k = __fsim_dpi_export_next(\"" + linkages + "\");\n"
+          "end\n"
+      + end_callable + callable + "__fsim_dpi_export_hook();\n"
+      + "__fsim_dpi_export_service();\n" + end_callable;
+  parse_generated_items(synthetic_tokens(text, *span), *span, unit);
+}
+
 }  // namespace fsim::frontend

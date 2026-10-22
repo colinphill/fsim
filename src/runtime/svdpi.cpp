@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,8 @@ constexpr std::size_t maximum_context_depth = 64U;
 thread_local std::array<fsim_svdpi_call_context_v3*, maximum_context_depth>
     context_stack{};
 thread_local std::size_t context_depth{};
+std::atomic<fsim_svdpi_export_dispatcher_v3> export_dispatcher{};
+std::atomic<void*> export_user_data{};
 
 [[nodiscard]] constexpr bool valid_index(const int index) noexcept {
   return index >= 0;
@@ -810,6 +813,23 @@ fsim_svdpi_call_context_leave_v3(
 FSIM_SVDPI_BRIDGE_API const fsim_svdpi_call_context_v3* FSIM_SVDPI_CALL
 fsim_svdpi_current_call_context_v3(void) {
   return current_context();
+}
+
+FSIM_SVDPI_BRIDGE_API void FSIM_SVDPI_CALL
+fsim_svdpi_set_export_dispatcher_v3(
+    const fsim_svdpi_export_dispatcher_v3 dispatcher, void* const user_data) {
+  export_user_data.store(user_data);
+  export_dispatcher.store(dispatcher);
+}
+
+FSIM_SVDPI_BRIDGE_API int FSIM_SVDPI_CALL
+fsim_svdpi_export_call_v3(
+    const char* const name, void** const arguments, void* const result) {
+  const auto dispatcher = export_dispatcher.load();
+  if (dispatcher == nullptr || name == nullptr) {
+    return -1;
+  }
+  return dispatcher(export_user_data.load(), name, arguments, result);
 }
 
 }  // extern "C"
