@@ -84,6 +84,10 @@ private:
   std::string parse_vhdl_selected_name(
       std::string_view description, std::string* source_spelling = nullptr);
 
+  // The resolution indication before a subtype's type mark, if any:
+  // `f T`, `(f) T` or `((f)) T` (IEEE 1076-2008 6.3).
+  std::string parse_vhdl_resolution_indication(bool signal_kind_follows);
+
   void
   parse_vhdl_package_generic_map(std::vector<ParameterOverride> &associations,
                                  bool &box, const Token &start);

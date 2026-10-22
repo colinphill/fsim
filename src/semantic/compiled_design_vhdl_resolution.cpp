@@ -105,12 +105,29 @@ constexpr std::string_view null_type { "@null" };
     return std::ranges::find(names, name) != names.end();
 }
 
+// IEEE.NUMERIC_BIT's UNSIGNED and SIGNED are array types of BIT, distinct
+// from IEEE.NUMERIC_STD's over STD_ULOGIC (IEEE 1076-2019 16.8.5).
+[[nodiscard]] std::string_view numeric_bit_vector_name(
+    const std::string_view spelling)
+{
+    const auto text = lowered(spelling);
+    const auto names = [&](const std::string_view member) {
+        const auto qualified = "numeric_bit." + std::string { member };
+        return text == qualified || text.ends_with("." + qualified);
+    };
+    if (names("unsigned")) {
+        return "bit_unsigned";
+    }
+    return names("signed") ? "bit_signed" : std::string_view { };
+}
+
 [[nodiscard]] std::string_view predefined_element(const std::string_view name)
 {
     if (name == "string") {
         return "character";
     }
-    if (name == "bit_vector") {
+    if (name == "bit_vector" || name == "bit_unsigned"
+        || name == "bit_signed") {
         return "bit";
     }
     if (name == "std_ulogic_vector" || name == "std_logic_vector"
@@ -445,6 +462,10 @@ private:
                 return builtin(
                     standard_scalar_name(identity.standard_scalar_type));
             }
+        }
+        if (const auto bit_vector = numeric_bit_vector_name(spelling);
+            !bit_vector.empty()) {
+            return builtin(bit_vector);
         }
         const auto name = simple_name(spelling);
         if (predefined_name(name)) {

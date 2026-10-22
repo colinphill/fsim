@@ -813,13 +813,21 @@ Expression VerilogParser::parse_primary_impl()
                 // A replication pattern `'{n{a, b}}` (IEEE 1800-2017
                 // 10.10.1) repeats its items n times.
                 std::uint64_t count { };
-                if (pattern.operands.empty() && at(TokenKind::LeftBrace)
-                    && first.kind == ExpressionKind::IntegerLiteral
+                const bool literal_count
+                    = first.kind == ExpressionKind::IntegerLiteral
                     && std::from_chars(first.text.data(),
                            first.text.data() + first.text.size(), count)
                                .ec
                         == std::errc { }
-                    && count > 0U && count <= 65536U) {
+                    && count > 0U && count <= 65536U;
+                // A constant count other than a literal (`'{N{x}}`) fills
+                // every element with one item, as its N copies do.
+                const bool constant_count = first.kind
+                        == ExpressionKind::Identifier
+                    || first.kind == ExpressionKind::Binary
+                    || first.kind == ExpressionKind::Call;
+                if (pattern.operands.empty() && at(TokenKind::LeftBrace)
+                    && (literal_count || constant_count)) {
                     advance();
                     std::vector<Expression> items;
                     do {
@@ -829,6 +837,22 @@ Expression VerilogParser::parse_primary_impl()
                         TokenKind::RightBrace,
                         "'}' after replicated assignment-pattern items",
                         "FSIM-SV-PARSE-164");
+                    if (!literal_count) {
+                        if (items.size() != 1U) {
+                            error(
+                                previous(),
+                                "FSIM-SV-PARSE-164",
+                                "a replication of several assignment-pattern "
+                                "items requires a literal count");
+                            break;
+                        }
+                        pattern.aggregate_choices.push_back("default");
+                        pattern.aggregate_choice_expressions.push_back(
+                            { Expression { ExpressionKind::DefaultChoice,
+                                "default", { }, first.span } });
+                        pattern.operands.push_back(std::move(items.front()));
+                        break;
+                    }
                     for (std::uint64_t copy = 0; copy < count; ++copy) {
                         for (const auto& item : items) {
                             pattern.aggregate_choices.emplace_back();

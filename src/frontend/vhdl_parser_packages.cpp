@@ -446,6 +446,61 @@ std::string VhdlParser::parse_vhdl_selected_name(
   return result;
 }
 
+std::string VhdlParser::parse_vhdl_resolution_indication(
+    const bool signal_kind_follows) {
+  // An element resolution `(f) T` or `((f)) T` resolves each element of
+  // the array (or of its elements) with `f`; the function's result width
+  // sets the granularity (IEEE 1076-2008 6.3).
+  if (at(TokenKind::LeftParen)) {
+    std::size_t depth = 0;
+    while (at(TokenKind::LeftParen, depth)) {
+      ++depth;
+    }
+    std::size_t lookahead = depth;
+    if (!at(TokenKind::Identifier, lookahead)) {
+      return {};
+    }
+    ++lookahead;
+    while (at(TokenKind::Dot, lookahead) &&
+           at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    for (std::size_t closing = 0; closing < depth; ++closing) {
+      if (!at(TokenKind::RightParen, lookahead + closing)) {
+        return {};
+      }
+    }
+    if (!at(TokenKind::Identifier, lookahead + depth)) {
+      return {};
+    }
+    for (std::size_t opening = 0; opening < depth; ++opening) {
+      match(TokenKind::LeftParen);
+    }
+    auto name = parse_vhdl_selected_name("resolution function name");
+    for (std::size_t closing = 0; closing < depth; ++closing) {
+      match(TokenKind::RightParen);
+    }
+    // The parentheses stay in the spelling: each level resolves one
+    // element level deeper.
+    return std::string(depth, '(') + name + std::string(depth, ')');
+  }
+  if (!at(TokenKind::Identifier)) {
+    return {};
+  }
+  std::size_t lookahead = 1;
+  while (at(TokenKind::Dot, lookahead) &&
+         at(TokenKind::Identifier, lookahead + 1)) {
+    lookahead += 2;
+  }
+  if (!at(TokenKind::Identifier, lookahead) ||
+      keyword("range", lookahead, true) ||
+      (signal_kind_follows && (keyword("bus", lookahead, true) ||
+                               keyword("register", lookahead, true)))) {
+    return {};
+  }
+  return parse_vhdl_selected_name("resolution function name");
+}
+
 void VhdlParser::parse_vhdl_generic_associations(
     std::vector<ParameterOverride>& associations,
     const VhdlGenericAssociationText& text) {

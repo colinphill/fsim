@@ -175,7 +175,8 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
                       : semantic::DeclarationKind::signal,
         input.is_port ? semantic::ValueKind::port
                       : semantic::ValueKind::signal,
-        vh::ObjectClass::signal,
+        input.vhdl_variable_port ? vh::ObjectClass::variable
+                                 : vh::ObjectClass::signal,
         vhdl_direction(input.direction),
         input.default_value);
     declaration(id).linkage = input.vhdl_linkage;
@@ -400,7 +401,7 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     const semantic::ScopeId scope,
     const semantic::OriginId parent)
 {
-    return add_object(
+    const auto id = add_object(
         input,
         scope,
         parent,
@@ -410,6 +411,8 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         vhdl_object_class(input.object_class),
         vhdl_direction(input.direction),
         input.default_value);
+    attach_interface_view(id, input, scope);
+    return id;
 }
 
 [[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_component_port(

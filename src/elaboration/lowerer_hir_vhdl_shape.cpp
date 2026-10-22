@@ -545,7 +545,14 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
                 && subtype_shape->element_constraints.empty()
                 && object.element_constraints.empty()
                 && !vhdl_subtype_width(*declared->vhdl->subtype);
-            if (!subtype_shape || !subtype_shape->complete() || open_element) {
+            // A record subtype that leaves element bounds open takes them
+            // from the initial value too (IEEE 1076-2019 6.4.2.2).
+            const auto effective = hir_effective_vhdl_subtype(
+                *declared->vhdl->subtype);
+            const bool open_record = effective
+                && hir_vhdl_partially_constrained_record(*effective);
+            if (!subtype_shape || !subtype_shape->complete() || open_element
+                || open_record) {
                 auto initial = hir_vhdl_shape(*declared->vhdl->initializer);
                 // A literal or aggregate has the declared subtype as its
                 // context (9.3.2, 9.3.3.3).
@@ -560,8 +567,12 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
                             *initialized, declared->vhdl->scope);
                     }
                 }
+                // A record value's shape is its element constraints,
+                // whatever the rank of the member being shaped.
                 if (initial && initial->complete()
-                    && initial->ranges.size() == dimensions) {
+                    && (initial->ranges.size() == dimensions
+                        || (open_record && initial->ranges.empty()
+                            && !initial->element_constraints.empty()))) {
                     if (object.ranges.empty()) {
                         object = std::move(*initial);
                     } else {

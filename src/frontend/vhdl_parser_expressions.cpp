@@ -1277,8 +1277,15 @@ Expression VhdlParser::parse_primary()
             saw_dereference = true;
         }
         while (match(TokenKind::Dot)) {
-            const auto part = expect_identifier("selected name");
-            const auto canonical_part = vhdl_name(part.text);
+            // A selected name's suffix can be a character literal, which is
+            // case sensitive (IEEE 1076-2019 8.3).
+            const bool character_part = at(TokenKind::CharacterLiteral);
+            const auto part = character_part
+                ? advance()
+                : expect_identifier("selected name");
+            const auto canonical_part = character_part
+                ? part.text
+                : vhdl_name(part.text);
             // A parenthesized range after `.all` is a slice, which stays an
             // explicit dereference.
             const auto parenthesized_range = [&] {
@@ -1527,7 +1534,9 @@ Expression VhdlParser::parse_primary()
                                 std::move(value), name.span, "')' after slice",
                                 "')' after index", "FSIM-VHDL-PARSE-033");
                         }
-                        return value;
+                        // The value is itself a prefix (`x'a'right`).
+                        return parse_vhdl_name_suffixes(
+                            std::move(value), name.span);
                     }
                 }
                 error(attribute, "FSIM-VHDL-SEM-030",

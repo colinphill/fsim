@@ -108,6 +108,44 @@ std::optional<std::string_view> vhdl_logic_string_function_name(
     return std::nullopt;
 }
 
+std::optional<std::string> vhdl_builtin_alias_call_name(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::vhdl::Expression& source)
+{
+    if (source.kind != semantic::vhdl::ExpressionKind::call
+        || source.text.find_first_of(".'@:") != std::string::npos) {
+        return std::nullopt;
+    }
+    semantic::vhdl::Name reference;
+    reference.spelling = source.text;
+    reference.canonical = source.text;
+    const semantic::CompiledDeclarationPredicate alias_predicate
+        = [](const semantic::CompiledDeclarationView& candidate) {
+              return candidate.vhdl != nullptr
+                  && candidate.vhdl->form
+                      == semantic::vhdl::DeclarationForm::alias
+                  && candidate.vhdl->alias_signature
+                  && candidate.vhdl->alias_target;
+          };
+    const semantic::CompiledDesignResolver resolver { unit };
+    const auto resolved = resolver
+        .resolve_vhdl(reference, source.scope, alias_predicate).unique();
+    const auto alias = resolved ? unit.find_declaration(*resolved)
+                                : std::nullopt;
+    if (!alias || alias->vhdl == nullptr || !alias->vhdl->alias_target) {
+        return std::nullopt;
+    }
+    auto target = *alias->vhdl->alias_target;
+    target.selected.reset();
+    target.overloads.clear();
+    // A declared target resolves as an ordinary call.
+    if (!resolver.resolve_vhdl_callable_candidates(
+            target, alias->vhdl->scope).candidates.empty()) {
+        return std::nullopt;
+    }
+    return std::string { target.text() };
+}
+
 RegisterId Lowerer::widen_enumeration_ordinal(const RegisterId source)
 {
     const auto source_width = register_width(source);
@@ -2436,8 +2474,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
             BinaryOperator::subtract_signed, last, sum, one });
         return as_integer(last);
     }
-    // A call path vector, or an access value designating one, is indexed
-    // from 0 (IEEE 1076-2019 16.5.6.2, 8.3).
+    // A call path vector, or an access value designating one, and the
+    // ITEMS of a DIRECTORY are indexed from 0 (IEEE 1076-2019 16.5.6.2,
+    // 16.5.5, 8.3).
     if (expression && expression->vhdl != nullptr
         && expression->vhdl->operands.size() == 1U
         && (expression->vhdl->text == "'length"
@@ -2445,31 +2484,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
             || expression->vhdl->text == "'low"
             || expression->vhdl->text == "'right"
             || expression->vhdl->text == "'high")) {
-        if (const auto container
-            = lower_hir_vhdl_environment_call_path_container_expression(
+        if (const auto vector = lower_hir_vhdl_environment_vector(
                 expression->vhdl->operands.front())) {
-            const auto width = expected_width != 0U ? expected_width : 32U;
-            const auto size = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(ContainerSize {
-                size, *container });
-            auto value = size;
-            if (expression->vhdl->text == "'left"
-                || expression->vhdl->text == "'low") {
-                value = load_integer(0, 32U, frontend::ValueDomain::Bit2);
-            } else if (expression->vhdl->text != "'length") {
-                const auto one
-                    = load_integer(1, 32U, frontend::ValueDomain::Bit2);
-                value = allocate_register(32U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(Binary {
-                    BinaryOperator::subtract_signed, value, size, one });
-            }
-            const auto destination = allocate_register(
-                width, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(CopyRegister {
-                destination,
-                width == 32U ? value : resize_register(value, width, true) });
-            return destination;
+            return lower_hir_vhdl_environment_vector_attribute(*vector,
+                expression->vhdl->text,
+                expected_width != 0U ? expected_width : 32U);
         }
     }
     HirVhdlAttributeFailure failure { HirVhdlAttributeFailure::none };
@@ -4962,6 +4981,141 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             effective->unconstrained = false;
             effective->executable_width = aggregate_expected_width;
         }
+    }
+    // STD.ENV.TIME_RECORD is compiler-owned and has no type definition
+    // (IEEE 1076-2019 16.5).
+    const bool time_record_context = effective && definition == nullptr
+        && !predefined_array_element
+        && vhdl_environment_time_record_subtype(
+            *specialized_hir_unit_, *effective, aggregate.scope);
+    if (time_record_context) {
+        // Its members pack in declaration order from the most significant
+        // bit, as vhdl_environment_time_record_member reads them.
+        struct Member {
+            std::string_view name;
+            std::size_t width;
+        };
+        static constexpr auto members = std::to_array<Member>({
+            { "microsecond", 64U }, { "second", 64U }, { "minute", 64U },
+            { "hour", 64U }, { "day", 64U }, { "month", 64U },
+            { "year", 64U }, { "weekday", 3U }, { "dayofyear", 64U },
+        });
+        std::size_t total { };
+        for (const auto& member : members) {
+            total += member.width;
+        }
+        if (aggregate_expected_width != total) {
+            return std::nullopt;
+        }
+        std::array<std::optional<RegisterId>, members.size()> values { };
+        std::optional<std::size_t> others;
+        std::size_t positional { };
+        bool valid = true;
+        const auto assign = [&](const std::size_t index,
+                                const semantic::ExpressionId value,
+                                const frontend::SourceSpan& span) {
+            if (index >= members.size() || values[index]) {
+                report(
+                    "FSIM-ELAB-VHAGG-004",
+                    index < members.size()
+                        ? "record aggregate element '"
+                            + std::string { members[index].name }
+                            + "' is assigned more than once"
+                        : "record aggregate has too many positional associations",
+                    span);
+                valid = false;
+                return;
+            }
+            const auto width = members[index].width;
+            auto lowered = lower_hir_expression(value, width);
+            if (!lowered) {
+                valid = false;
+                return;
+            }
+            if (register_width(*lowered) != width) {
+                lowered = resize_register(*lowered, width, width == 64U);
+            }
+            values[index] = *lowered;
+        };
+        for (std::size_t index = 0U; index < aggregate.associations.size();
+            ++index) {
+            const auto& association = aggregate.associations[index];
+            const auto span = hir_source_span(association.source);
+            const auto spelling = normalized_vhdl_choice(
+                association.choice_spelling);
+            const auto names = association_names(association);
+            if (spelling.empty() && names.empty()) {
+                assign(positional++, association.value, span);
+            } else if (spelling == "others"
+                || (names.size() == 1U
+                    && same_vhdl_identifier(names.front(), "others"))) {
+                others = index;
+            } else if (names.empty()) {
+                report(
+                    "FSIM-ELAB-VHAGG-008",
+                    "record aggregate choices must be element names",
+                    span);
+                valid = false;
+            } else {
+                for (const auto& name : names) {
+                    const auto found = std::ranges::find_if(
+                        members, [&](const Member& member) {
+                            return same_vhdl_identifier(member.name, name);
+                        });
+                    if (found == members.end()) {
+                        report(
+                            "FSIM-ELAB-VHAGG-003",
+                            "record aggregate type 'time_record' has no "
+                            "element '" + name + "'",
+                            span);
+                        valid = false;
+                        continue;
+                    }
+                    assign(
+                        static_cast<std::size_t>(
+                            std::distance(members.begin(), found)),
+                        association.value, span);
+                }
+            }
+        }
+        if (others) {
+            const auto& association = aggregate.associations[*others];
+            for (std::size_t index = 0U; index < values.size(); ++index) {
+                if (!values[index]) {
+                    assign(index, association.value,
+                        hir_source_span(association.source));
+                }
+            }
+        }
+        for (std::size_t index = 0U; index < values.size(); ++index) {
+            if (!values[index]) {
+                report(
+                    "FSIM-ELAB-VHAGG-005",
+                    "record aggregate is missing element '"
+                        + std::string { members[index].name } + "'",
+                    aggregate_span);
+                valid = false;
+            }
+        }
+        if (!valid) {
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            aggregate_expected_width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            destination,
+            PackedLogic4(aggregate_expected_width, Logic4::zero) });
+        auto remaining = aggregate_expected_width;
+        for (std::size_t index = 0U; index < members.size(); ++index) {
+            remaining -= members[index].width;
+            process_.operations.emplace_back(Insert {
+                destination,
+                destination,
+                *values[index],
+                static_cast<std::uint32_t>(remaining),
+            });
+        }
+        return destination;
     }
     if (!effective
         || (definition == nullptr && !predefined_array_element)
@@ -12218,6 +12372,13 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
 std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_member_handle(
     const HirVirtualInterfaceMember& member)
 {
+    if (member.handle_signal) {
+        const auto handle = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ReadSignal {
+            handle, *member.handle_signal, SignalReadKind::current });
+        record_implicit_signal_dependency(*member.handle_signal);
+        return handle;
+    }
     if (!member.object) {
         return lower_hir_virtual_interface_handle(member.receiver);
     }
@@ -12761,6 +12922,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && (numeric_operand(comparison->vhdl->operands[0])
                 || numeric_operand(comparison->vhdl->operands[1]));
         if (numeric_relation) {
+            // The package warns of its null argument (IEEE 1076-2019
+            // 16.8.5.3, NUMERIC_STD relational operators).
+            process_.operations.emplace_back(Assert {
+                load_integer(0, 1U, frontend::ValueDomain::Boolean),
+                "NUMERIC_STD.\"" + relation
+                    + "\": null argument detected, returning "
+                    + (relation == "/=" ? "TRUE" : "FALSE"),
+                AssertionSeverity::warning,
+                runtime_source_location(
+                    hir_source_span(comparison->vhdl->source)),
+            });
             return constant_relation(relation == "/=");
         }
         if (left_null && right_null) {
@@ -13577,8 +13749,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     == frontend::ValueDomain::Logic9);
         const auto context_dependent_domain = aggregate_operand
             || contextual_string_domain || contextual_character;
+        // An INTEGER operand of another storage width (a literal is 32 bits
+        // where VHDL-2019 INTEGER is 64) is resized to the mark's width.
+        const bool integer_resize = operand_domain
+            && *operand_domain == frontend::ValueDomain::Integer
+            && qualified_profile->domain == frontend::ValueDomain::Integer;
         const auto layout_mismatch = operands.size() != 1U
-            || (!aggregate_operand && operand_width
+            || (!aggregate_operand && !integer_resize && operand_width
                 && *operand_width != qualified_profile->width)
             || (!context_dependent_domain
                 && operand_domain
@@ -18061,10 +18238,31 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             || expression->vhdl->text == "/=")
         && hir_vhdl_string_comparison_operands(
             expression->vhdl->operands[0], expression->vhdl->operands[1])) {
+        // An aggregate operand has the other operand's string subtype as
+        // its context (IEEE 1076-2008 9.3.3.1).
+        const auto operand_context = [&](const semantic::ExpressionId self,
+                                         const semantic::ExpressionId other)
+            -> std::optional<semantic::vhdl::SubtypeIndication> {
+            const auto record = specialized_hir_unit_->find_expression(self);
+            if (!record || record->vhdl == nullptr
+                || record->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::aggregate) {
+                return std::nullopt;
+            }
+            const auto subtype = hir_vhdl_expression_subtype(other);
+            return subtype ? hir_effective_vhdl_subtype(*subtype)
+                           : std::nullopt;
+        };
+        const auto left_context = operand_context(
+            expression->vhdl->operands[0], expression->vhdl->operands[1]);
+        const auto right_context = operand_context(
+            expression->vhdl->operands[1], expression->vhdl->operands[0]);
         const auto lhs = lower_hir_string_expression(
-            expression->vhdl->operands[0]);
+            expression->vhdl->operands[0],
+            left_context ? &*left_context : nullptr);
         const auto rhs = lower_hir_string_expression(
-            expression->vhdl->operands[1]);
+            expression->vhdl->operands[1],
+            right_context ? &*right_context : nullptr);
         if (!lhs || !rhs) {
             return std::nullopt;
         }
@@ -25813,6 +26011,48 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                           : domain);
                         process_.operations.emplace_back(Binary {
                             *operation, destination, *lhs, *rhs });
+                        // numeric_std's relations warn when an operand holds
+                        // a metavalue (IEEE 1076-2019 16.8.5.3).
+                        if (language_ == frontend::Language::Vhdl2008
+                            && (vhdl_ordering
+                                || ((source.text == "=" || source.text == "/=")
+                                    && (!is_two_state_domain(
+                                            register_domain(*lhs))
+                                        || !is_two_state_domain(
+                                            register_domain(*rhs)))
+                                    && (numeric_std_operand(source.operands[0])
+                                        || numeric_std_operand(
+                                            source.operands[1]))))) {
+                            const auto known_operand = [&](const RegisterId operand) {
+                                const auto self_equal = allocate_register(
+                                    1U, frontend::ValueDomain::Logic4);
+                                process_.operations.emplace_back(Binary {
+                                    BinaryOperator::equal, self_equal, operand,
+                                    operand });
+                                const auto known = allocate_register(
+                                    1U, frontend::ValueDomain::Boolean);
+                                process_.operations.emplace_back(Binary {
+                                    BinaryOperator::case_equal, known,
+                                    self_equal,
+                                    load_constant(unsigned_value(1U, 1U),
+                                        frontend::ValueDomain::Logic4) });
+                                return known;
+                            };
+                            const auto known = allocate_register(
+                                1U, frontend::ValueDomain::Boolean);
+                            process_.operations.emplace_back(Binary {
+                                BinaryOperator::bit_and, known,
+                                known_operand(*lhs), known_operand(*rhs) });
+                            process_.operations.emplace_back(Assert {
+                                known,
+                                "NUMERIC_STD.\"" + std::string { source.text }
+                                    + "\": metavalue detected, returning "
+                                    + (source.text == "/=" ? "TRUE" : "FALSE"),
+                                AssertionSeverity::warning,
+                                runtime_source_location(
+                                    hir_source_span(source.source)),
+                            });
+                        }
                         if (vhdl_ordering) {
                             const auto one = load_constant(
                                 unsigned_value(1U, 1U),
@@ -26689,6 +26929,36 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
             destination, { destination, suffix } });
         return destination;
     }
+    // A composite value without scalar subelements has a static image.
+    if (definition != nullptr
+        && (definition->form == semantic::vhdl::TypeForm::record
+            || definition->form == semantic::vhdl::TypeForm::array)) {
+        auto composite = hir_vhdl_expression_subtype(value_id);
+        if (!composite) {
+            composite = subtype;
+        }
+        const auto effective = composite
+            ? hir_effective_vhdl_subtype(*composite)
+            : std::nullopt;
+        const auto declared_width = effective
+            ? vhdl_subtype_storage_width(*effective)
+            : std::nullopt;
+        const auto value_width = hir_expression_width(
+            value_id, hir_process_scope_);
+        if (composite
+            && ((value_width && *value_width == 0U)
+                || (!value_width && declared_width && *declared_width == 0U)
+                || (definition->form == semantic::vhdl::TypeForm::record
+                    && definition->record_elements.empty()))) {
+            if (const auto text = hir_vhdl_null_composite_image(
+                    *composite, image_quotes)) {
+                const auto destination = allocate_string_register();
+                process_.operations.emplace_back(LoadStringConstant {
+                    destination, *text });
+                return destination;
+            }
+        }
+    }
     // A composite value other than a character string images as its
     // parenthesized elements (IEEE 1076-2019 5.7).
     if (definition != nullptr && hir_vhdl_parenthesized_image_type(*definition)) {
@@ -26706,8 +26976,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
             ? lower_hir_expression(value_id, *composite_width)
             : std::nullopt;
         if (const auto image = lowered
-                ? lower_hir_vhdl_value_image(
-                      *lowered, *composite, vector_format, span)
+                ? lower_hir_vhdl_value_image(*lowered, *composite,
+                      vector_format, image_quotes, span)
                 : std::nullopt) {
             return image;
         }
@@ -26795,10 +27065,65 @@ bool Lowerer::hir_vhdl_parenthesized_image_type(
             || element->form == semantic::vhdl::TypeForm::scalar);
 }
 
+std::optional<std::string> Lowerer::hir_vhdl_null_composite_image(
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const bool image_quotes,
+    const std::size_t depth) const
+{
+    // The image of a composite value without scalar subelements: a record
+    // without elements or with only such elements, or a null array (IEEE
+    // 1076-2019 5.7, 16.2.2).
+    if (depth > 16U) {
+        return std::nullopt;
+    }
+    const auto effective = hir_effective_vhdl_subtype(subtype).value_or(subtype);
+    const semantic::vhdl::TypeDefinition* definition { };
+    auto type_id = effective.type_mark.target;
+    std::set<std::uint32_t> visited;
+    while (type_id.valid() && visited.insert(type_id.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            break;
+        }
+        definition = type->vhdl;
+        if (definition->form != semantic::vhdl::TypeForm::subtype
+            && definition->form != semantic::vhdl::TypeForm::alias) {
+            break;
+        }
+        type_id = definition->base.type_mark.target;
+    }
+    if (definition == nullptr) {
+        // A predefined null character or bit string.
+        return image_quotes ? std::string { "\"\"" } : std::string { };
+    }
+    if (definition->form == semantic::vhdl::TypeForm::array) {
+        if (!hir_vhdl_parenthesized_image_type(*definition)) {
+            return image_quotes ? std::string { "\"\"" } : std::string { };
+        }
+        return std::string { "()" };
+    }
+    if (definition->form != semantic::vhdl::TypeForm::record) {
+        return std::nullopt;
+    }
+    std::string text = "(";
+    for (const auto& element : definition->record_elements) {
+        const auto element_subtype = semantic::vhdl::constrained_element_subtype(
+            effective, element.name, element.subtype);
+        const auto image = hir_vhdl_null_composite_image(
+            element_subtype, image_quotes, depth + 1U);
+        if (!image) {
+            return std::nullopt;
+        }
+        text += (text.size() == 1U ? "" : ",") + *image;
+    }
+    return text + ")";
+}
+
 std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_value_image(
     const RegisterId value,
     const semantic::vhdl::SubtypeIndication& subtype,
     const runtime::simir::OutputFormat vector_format,
+    const bool image_quotes,
     const frontend::SourceSpan& span)
 {
     const auto effective = hir_effective_vhdl_subtype(subtype).value_or(subtype);
@@ -26830,7 +27155,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_value_image(
             effective.builtin_type != semantic::vhdl::BuiltinTypeIdentity::none,
             std::string_view { terminal_spelling }.substr(
                 separator == std::string::npos ? 0U : separator + 1U),
-            hir_vhdl_subtype_is_real(effective), vector_format, false, span);
+            hir_vhdl_subtype_is_real(effective), vector_format, image_quotes,
+            span);
     }
     // Element values in declaration order for a record and left to right
     // for an array; the first is most significant (IEEE 1076-2008 5.3.3).
@@ -26884,8 +27210,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_value_image(
         process_.operations.emplace_back(Extract {
             item, value, static_cast<std::uint32_t>(offset),
             static_cast<std::uint32_t>(element_width) });
+        // An element images as Y'SUBTYPE'IMAGE(Y) (IEEE 1076-2019 16.2.2).
         const auto image = lower_hir_vhdl_value_image(
-            item, element_subtype, vector_format, span);
+            item, element_subtype, vector_format, image_quotes, span);
         if (!image) {
             return std::nullopt;
         }
@@ -26961,6 +27288,21 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
         return result;
     };
 
+    // T'IMAGE of a one-dimensional array of character literals is its
+    // string representation in double quotes (IEEE 1076-2019 16.2.2).
+    const auto string_quoted = [&](const StringRegisterId inner) {
+        if (!image_quotes) {
+            return inner;
+        }
+        const auto result = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant {
+            result, "\"" });
+        process_.operations.emplace_back(ConcatenateStrings {
+            result, { result, inner } });
+        append_constant(result, "\"");
+        return result;
+    };
+
     if (real_value) {
         // The standard form of TEXTIO.WRITE with DIGITS = 0.
         append_formatted(runtime::simir::OutputFormat::real_scientific, false,
@@ -26992,6 +27334,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
                 * character_elements->images.size()
             <= 4096U) {
         const auto element_width = character_elements->element_width;
+        // Double quotes in a quoted image are doubled.
+        const auto element_text = [&](const std::string& text) {
+            return image_quotes && text == "\"" ? std::string { "\"\"" }
+                                                 : text;
+        };
         for (std::size_t offset = width; offset >= element_width;
              offset -= element_width) {
             const auto item = allocate_register(
@@ -27001,7 +27348,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
                 static_cast<std::uint32_t>(element_width) });
             const auto text = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
-                text, character_elements->images.back() });
+                text, element_text(character_elements->images.back()) });
             std::vector<InstructionIndex> exits;
             for (std::size_t ordinal = 0;
                  ordinal + 1U < character_elements->images.size(); ++ordinal) {
@@ -27020,7 +27367,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
                 const auto selected = static_cast<InstructionIndex>(
                     process_.operations.size());
                 process_.operations.emplace_back(LoadStringConstant {
-                    text, character_elements->images[ordinal] });
+                    text, element_text(character_elements->images[ordinal]) });
                 exits.push_back(static_cast<InstructionIndex>(
                     process_.operations.size()));
                 process_.operations.emplace_back(Jump { });
@@ -27039,14 +27386,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
             process_.operations.emplace_back(ConcatenateStrings {
                 destination, { destination, text } });
         }
-        return destination;
+        return string_quoted(destination);
     }
     if (array_value) {
         // TO_STRING/TO_HSTRING/TO_OSTRING of a bit or logic vector; digits
         // and metavalues are upper case (IEEE 1076-2008 5.3.2.4).
         append_formatted(vector_format, false,
             frontend::SystemVerilogScalarKind::None);
-        return upper();
+        return string_quoted(upper());
     }
     if (domain == frontend::ValueDomain::Logic9
         || simple_type == "bit" || simple_type == "std_ulogic"
@@ -28100,16 +28447,25 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             == frontend::VhdlSimulatorApi::get_vhdl_assert_format) {
             return lower_hir_vhdl_assert_string_expression(expression_id);
         }
-        // TO_STRING of a REAL value is the predefined STD.STANDARD
-        // operation, never the STD.ENV TIME_RECORD one (IEEE 1076-2019
-        // 5.2.6, 16.5.5).
+        // TO_STRING of a REAL or INTEGER value is the predefined
+        // STD.STANDARD operation, never the STD.ENV TIME_RECORD one (IEEE
+        // 1076-2019 5.2.6, 16.5.5).
         const auto real_operand = [&] {
             if (source.operands.empty()) {
                 return false;
             }
             const auto subtype
                 = hir_vhdl_expression_subtype(source.operands.front());
-            return subtype && hir_vhdl_subtype_is_real(*subtype);
+            if (subtype && hir_vhdl_subtype_is_real(*subtype)) {
+                return true;
+            }
+            const auto selection
+                = hir_vhdl_environment_call_path_member_selection(
+                    source.operands.front());
+            return (selection && selection->member == 3U)
+                || hir_expression_domain(
+                       source.operands.front(), hir_process_scope_)
+                == frontend::ValueDomain::Integer;
         };
         if (api == frontend::VhdlSimulatorApi::to_string
             && !real_operand()) {
@@ -28308,9 +28664,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 destination, { *left, *right } });
             return destination;
         }
+        const auto builtin_alias_name
+            = vhdl_builtin_alias_call_name(*specialized_hir_unit_, source);
         auto logic_string_function
             = source.kind == semantic::vhdl::ExpressionKind::call
-            ? vhdl_logic_string_function_name(source.text)
+            ? vhdl_logic_string_function_name(builtin_alias_name
+                      ? std::string_view { *builtin_alias_name }
+                      : std::string_view { source.text })
             : std::nullopt;
         // A design's own TO_STRING (or TO_HSTRING ...) overload is called
         // rather than the predefined one (IEEE 1076-2008 12.3).
@@ -30725,6 +31085,12 @@ bool Lowerer::lower_hir_packed_copy_out(
         : std::nullopt;
     if (!expression) {
         return false;
+    }
+    if (expression->vhdl != nullptr && register_width(copied_source) == 8U) {
+        if (const auto written = lower_hir_vhdl_string_element_write(
+                target, copied_source)) {
+            return *written;
+        }
     }
     // A two-state actual receives x and z bits as zero (IEEE 1800-2017
     // 6.11.2, 13.3).

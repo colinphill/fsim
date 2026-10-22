@@ -1612,6 +1612,7 @@ SchedulerBatchResult Interpreter::Impl::execute_generic_projected_region(
                 while (pending_updates.size() > pending_update_count) {
                     pending_updates.pop_back();
                 }
+                reset_pending_update_driver_scan();
                 while (pending_update_values.size() > pending_value_count) {
                     pending_update_values.pop_back();
                 }

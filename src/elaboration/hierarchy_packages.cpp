@@ -2010,38 +2010,64 @@ namespace {
     }
 
     // A subtype whose type mark chain reaches STD_LOGIC or STD_LOGIC_VECTOR
-    // inherits that subtype's resolution function (IEEE 1076-2008 6.3).
+    // inherits that subtype's resolution function (IEEE 1076-2008 6.3). A
+    // composite whose scalar subelements are all STD_LOGIC resolves each of
+    // them with that function (14.7.3.2), as the STD_LOGIC table does.
     bool compiled_vhdl_std_logic_subtype(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::vhdl::SubtypeIndication& root,
         const std::optional<semantic::ScopeId> owner_scope = std::nullopt)
     {
-        std::unordered_set<std::uint32_t> visiting;
-        const auto* input = &root;
-        semantic::vhdl::SubtypeIndication subtype;
-        for (;;) {
-            subtype = compiled_vhdl_link_subtype(
-                specialization, *input, owner_scope);
+        const auto leaves = [&](const auto& self,
+                                const semantic::vhdl::SubtypeIndication& input,
+                                const std::optional<semantic::ScopeId> scope,
+                                const std::size_t depth) -> bool {
+            if (depth > 16U) {
+                return false;
+            }
+            const auto subtype = compiled_vhdl_link_subtype(
+                specialization, input, scope);
             const auto name = simple_name_of(subtype.type_mark.spelling);
             if (compiled_vhdl_name_equal(name, "std_logic")
                 || compiled_vhdl_name_equal(name, "std_logic_vector")) {
                 return true;
             }
             if (!subtype.type_mark.target.valid()
-                || !visiting.insert(subtype.type_mark.target.value())
-                        .second) {
+                || !subtype.resolution_function.spelling.empty()) {
                 return false;
             }
             const auto type = specialization.find_type(
                 subtype.type_mark.target);
-            if (!type || type->vhdl == nullptr
-                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
-                    && type->vhdl->form
-                        != semantic::vhdl::TypeForm::alias)) {
+            if (!type || type->vhdl == nullptr) {
                 return false;
             }
-            input = &type->vhdl->base;
-        }
+            const auto& definition = *type->vhdl;
+            if (definition.form == semantic::vhdl::TypeForm::subtype
+                || definition.form == semantic::vhdl::TypeForm::alias) {
+                return self(self, definition.base, scope, depth + 1U);
+            }
+            const auto declaration = specialization.find_declaration(
+                definition.declaration);
+            const auto type_scope = declaration
+                    && declaration->vhdl != nullptr
+                ? std::optional { declaration->vhdl->scope }
+                : scope;
+            if (definition.form == semantic::vhdl::TypeForm::array) {
+                return definition.element_subtype
+                    && self(self, *definition.element_subtype, type_scope,
+                        depth + 1U);
+            }
+            if (definition.form == semantic::vhdl::TypeForm::record) {
+                return !definition.record_elements.empty()
+                    && std::ranges::all_of(definition.record_elements,
+                        [&](const auto& element) {
+                            return self(self, element.subtype, type_scope,
+                                depth + 1U);
+                        });
+            }
+            return false;
+        };
+        return leaves(leaves, root, owner_scope, 0U);
     }
 
     std::optional<CompiledVhdlSignalLayout>
@@ -2742,7 +2768,7 @@ namespace {
                 && definition.form == semantic::vhdl::TypeForm::record) {
                 std::size_t width { };
                 auto record_domain = frontend::ValueDomain::Unknown;
-                bool valid = !definition.record_elements.empty();
+                bool valid = true;
                 for (const auto& element : definition.record_elements) {
                     const auto layout = resolve_subtype(element.subtype);
                     const auto merged = layout
@@ -2759,8 +2785,13 @@ namespace {
                     width += layout->width;
                     record_domain = *merged;
                 }
-                if (valid && width != 0U
-                    && compiled_vhdl_scalar_domain(record_domain)) {
+                // A record without elements (IEEE 1076-2019 5.3.3) or with
+                // only null array elements has no scalar subelements.
+                if (valid && width == 0U
+                    && record_domain == frontend::ValueDomain::Unknown) {
+                    record_domain = frontend::ValueDomain::Bit2;
+                }
+                if (valid && compiled_vhdl_scalar_domain(record_domain)) {
                     result = CompiledVhdlSignalLayout {
                         width, record_domain
                     };
@@ -4357,6 +4388,27 @@ namespace {
             result.named_type = result.spelling;
             result.nominal_type = nominal_identity(definition);
             result.vhdl_type_declaration = result.nominal_type;
+            // An element subtype names a predefined vector visible where
+            // the composite type is declared, which the signal's owner may
+            // not see (IEEE 1076-2008 12.3).
+            const auto declared_element = [&](
+                                              semantic::vhdl::SubtypeIndication element) {
+                if (element.type_mark.target.valid()
+                    || element.builtin_type
+                        != semantic::vhdl::BuiltinTypeIdentity::none) {
+                    return element;
+                }
+                const auto declaration = specialization.find_declaration(
+                    definition.declaration);
+                if (!declaration || declaration->vhdl == nullptr) {
+                    return element;
+                }
+                if (const auto effective = type_resolver.effective_vhdl_subtype(
+                        element, declaration->vhdl->scope)) {
+                    element.builtin_type = effective->builtin_type;
+                }
+                return element;
+            };
             using TypeForm = semantic::vhdl::TypeForm;
             if (definition.form == TypeForm::subtype
                 || definition.form == TypeForm::alias
@@ -4481,9 +4533,9 @@ namespace {
                 }
                 std::uint64_t remaining = layout ? layout->width : 0U;
                 for (const auto& element : definition.record_elements) {
-                    const auto element_subtype
-                        = semantic::vhdl::constrained_element_subtype(
-                            subtype, element.name, element.subtype);
+                    const auto element_subtype = declared_element(
+                        semantic::vhdl::constrained_element_subtype(
+                            subtype, element.name, element.subtype));
                     auto nested = self(self, element_subtype);
                     const auto nested_layout
                         = compiled_vhdl_named_signal_layout(
@@ -4509,9 +4561,9 @@ namespace {
                 }
             } else if (definition.form == TypeForm::array
                 && definition.element_subtype) {
-                auto element_subtype
-                    = semantic::vhdl::constrained_element_subtype(
-                        subtype, "", *definition.element_subtype);
+                auto element_subtype = declared_element(
+                    semantic::vhdl::constrained_element_subtype(
+                        subtype, "", *definition.element_subtype));
                 auto element = self(self, element_subtype);
                 if (element_subtype.type_mark.target.valid()) {
                     const auto element_definition
@@ -4860,7 +4912,95 @@ namespace {
         result.kind = compiled_vhdl_name_equal(value->vhdl->text, "or")
             ? ResolutionKind::vhdl_user_or
             : ResolutionKind::vhdl_user_and;
+        result.body = bodies.front();
         return result;
+    }
+
+    // The resolved elements of a record subtype that is itself unresolved,
+    // each with the function its subtype names; nested records of resolved
+    // elements included (IEEE 1076-2008 4.6, 14.7.3.2). Empty when no
+    // element is resolved or the layout is not static.
+    std::vector<VhdlResolverSegment> compiled_vhdl_record_resolution_segments(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& root,
+        const std::optional<semantic::ScopeId> owner_scope)
+    {
+        std::vector<VhdlResolverSegment> segments;
+        const auto collect = [&](const auto& self,
+                                 const semantic::vhdl::SubtypeIndication& input,
+                                 const std::optional<semantic::ScopeId> scope,
+                                 const std::size_t offset,
+                                 const std::size_t depth) -> bool {
+            if (depth > 16U) {
+                return false;
+            }
+            const auto layout = compiled_vhdl_named_signal_layout(
+                specialization, input, scope);
+            if (!layout || layout->width == 0U) {
+                return false;
+            }
+            auto subtype = compiled_vhdl_link_subtype(
+                specialization, input, scope);
+            const semantic::vhdl::TypeDefinition* record = nullptr;
+            for (std::size_t step { }; step < 16U && record == nullptr;
+                ++step) {
+                const auto type = subtype.type_mark.target.valid()
+                    ? specialization.find_type(subtype.type_mark.target)
+                    : std::nullopt;
+                if (!type || type->vhdl == nullptr) {
+                    return true;
+                }
+                if (type->vhdl->form == semantic::vhdl::TypeForm::record) {
+                    record = type->vhdl;
+                } else if (type->vhdl->form
+                        == semantic::vhdl::TypeForm::subtype
+                    || type->vhdl->form == semantic::vhdl::TypeForm::alias) {
+                    subtype = compiled_vhdl_link_subtype(
+                        specialization, type->vhdl->base, scope);
+                } else {
+                    return true;
+                }
+            }
+            if (record == nullptr) {
+                return true;
+            }
+            const auto declaration = specialization.find_declaration(
+                record->declaration);
+            const auto record_scope = declaration
+                    && declaration->vhdl != nullptr
+                ? std::optional { declaration->vhdl->scope }
+                : scope;
+            // The first element is the most significant.
+            auto remaining = layout->width;
+            for (const auto& element : record->record_elements) {
+                const auto element_layout = compiled_vhdl_named_signal_layout(
+                    specialization, element.subtype, record_scope);
+                if (!element_layout || element_layout->width > remaining) {
+                    return false;
+                }
+                remaining -= element_layout->width;
+                const auto element_offset = offset + remaining;
+                if (const auto resolution = compiled_vhdl_resolution_function(
+                        specialization, element.subtype, record_scope)) {
+                    const auto binding = compiled_vhdl_resolution_binding(
+                        specialization, element.subtype, *resolution,
+                        record_scope);
+                    if (!binding.kind || !binding.body.valid()) {
+                        return false;
+                    }
+                    segments.push_back(VhdlResolverSegment {
+                        element_offset, element_layout->width, binding.body });
+                } else if (!self(self, element.subtype, record_scope,
+                               element_offset, depth + 1U)) {
+                    return false;
+                }
+            }
+            return remaining == 0U;
+        };
+        if (!collect(collect, root, owner_scope, 0U, 0U)) {
+            return { };
+        }
+        return segments;
     }
 
     // A subtype resolved by a user resolution function rather than the
@@ -5298,11 +5438,16 @@ namespace {
                 auto member_type
                     = compiled_vhdl_mode_view_member_type(*member);
                 if (element.subtype) {
+                    // An unconstrained element subtype keeps the
+                    // associated signal's elaborated element layout (IEEE
+                    // 1076-2008 6.5.6.3).
                     if (const auto contextual_type
                         = compiled_vhdl_signal_type(
                             specialization,
                             *element.subtype,
-                            scope)) {
+                            scope);
+                        contextual_type
+                        && contextual_type->width().value_or(0U) != 0U) {
                         member_type = *contextual_type;
                     }
                 }
@@ -18362,10 +18507,11 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     }
                 }
             }
-            if (produces_output && resolved_actual) {
+            if (produces_output) {
                 vhdl_port_sources_[*actual].push_back(
                     VhdlPortSource { child_path, port_default });
-            } else if (port_default) {
+            }
+            if (!resolved_actual && port_default) {
                 design_.signals_[*actual].initial_value = *port_default;
             }
         }
@@ -19157,6 +19303,11 @@ void HierarchyBuilder::register_compiled_vhdl_formal_resolution(
     } else if (compiled_vhdl_std_logic_subtype(
                    specialization, *formal.subtype, formal.scope)) {
         resolver_by_signal_.insert_or_assign(signal, "std_logic");
+    } else if (auto segments = compiled_vhdl_record_resolution_segments(
+                   specialization, *formal.subtype, formal.scope);
+        !segments.empty()) {
+        register_compiled_vhdl_record_resolution(
+            signal, std::move(segments), formal.source, specialization);
     }
 }
 
@@ -21041,6 +21192,26 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         }
     };
     using Form = semantic::vhdl::DeclarationForm;
+    // A variable port denotes the shared variable associated with it (IEEE
+    // 1076-2019 6.5.6.3): its name reaches that object's anchor.
+    if (declaration.form == Form::port
+        && declaration.object_class == semantic::vhdl::ObjectClass::variable) {
+        auto key = working_path + "." + declaration.name;
+        lowercase_ascii(key);
+        const auto actual = vhdl_variable_port_anchors_.find(key);
+        if (actual == vhdl_variable_port_anchors_.end()) {
+            report(
+                "FSIM-ELAB-VHPORT-007",
+                "VHDL variable port '" + declaration.name
+                    + "' is not associated with a shared variable or "
+                      "variable port",
+                compiled_source_span(*compiled_, declaration.source));
+            return false;
+        }
+        container_objects.emplace(
+            declaration.name + ".@protected", actual->second);
+        return true;
+    }
     if (declaration.form == Form::alias) {
         // A subprogram alias (6.6.3) denotes no object.
         if (!declaration.alias_target || declaration.alias_signature) {
@@ -22888,6 +23059,12 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     } else if (compiled_vhdl_std_logic_subtype(working_specialization,
                    *declaration.subtype, declaration.scope)) {
         resolver_by_signal_.insert_or_assign(id, "std_logic");
+    } else if (auto segments = compiled_vhdl_record_resolution_segments(
+                   working_specialization, *declaration.subtype,
+                   declaration.scope);
+        !segments.empty()) {
+        register_compiled_vhdl_record_resolution(id, std::move(segments),
+            declaration.source, working_specialization);
     }
     design_.signals_.push_back(runtime::simir::Signal {
         full_name,
@@ -23282,9 +23459,40 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
         }
         state = 2U;
     };
+    // Whether a declaration in the unit, or in an architecture of the
+    // entity, names the type by its simple name.
+    const auto unit_names_type = [&](const semantic::vhdl::Unit& owner,
+                                     const std::string_view name) {
+        const auto& design = specialized->design();
+        const auto& scopes = design.semantics.scopes();
+        return std::ranges::any_of(design.vhdl_hir.declarations(),
+            [&](const semantic::vhdl::Declaration& candidate) {
+                if (!candidate.subtype
+                    || !compiled_vhdl_name_equal(
+                        candidate.subtype->type_mark.spelling, name)
+                    || !candidate.scope.valid()
+                    || candidate.scope.value() >= scopes.size()) {
+                    return false;
+                }
+                const auto* unit = compiled_vhdl_unit(
+                    design, scopes[candidate.scope.value()].unit);
+                return unit != nullptr
+                    && (unit->id == owner.id
+                        || (owner.kind == semantic::vhdl::UnitKind::entity
+                            && unit->kind
+                                == semantic::vhdl::UnitKind::architecture
+                            && compiled_vhdl_name_equal(
+                                unit->primary_name, owner.name)
+                            && compiled_vhdl_name_equal(
+                                unit->library, owner.library)));
+            });
+    };
     validate_items = [&](const semantic::vhdl::Unit& owner) {
         std::unordered_map<std::string, std::string>
             visible_constants;
+        // A type is keyed by the type it denotes: an alias of a type and
+        // the type itself are the same named entity, not homographs (IEEE
+        // 1076-2008 6.6.1, 12.4).
         std::unordered_map<std::string, std::string>
             visible_types;
         const auto owner_library = owner.library.empty()
@@ -23425,13 +23633,73 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                             }
                             if (form == Form::type
                                 || form == Form::subtype) {
+                                const auto& vhdl = *declaration->vhdl;
+                                // An alias denotes the declaration its
+                                // target selects.
+                                const auto aliased = vhdl.alias_target
+                                        && vhdl.alias_target->selected
+                                    ? specialized->find_declaration(
+                                          *vhdl.alias_target->selected)
+                                    : std::nullopt;
+                                const auto type_identity
+                                    = aliased && aliased->vhdl != nullptr
+                                        && aliased->vhdl->declared_type
+                                    ? std::optional<std::uint32_t> {
+                                          aliased->vhdl->declared_type
+                                              ->value() }
+                                    : vhdl.declared_type
+                                    ? std::optional<std::uint32_t> {
+                                          vhdl.declared_type->value() }
+                                    : vhdl.subtype
+                                        && vhdl.subtype->type_mark.target
+                                               .valid()
+                                    ? std::optional<std::uint32_t> {
+                                          vhdl.subtype->type_mark.target
+                                              .value() }
+                                    : std::nullopt;
+                                // An alias of a type (6.6.3) is projected
+                                // as a subtype that only renames it: no
+                                // constraint and no resolution function.
+                                const auto* definition = vhdl.declared_type
+                                    ? specialized->design().vhdl_hir.find_type(
+                                          *vhdl.declared_type)
+                                    : nullptr;
+                                const auto alias_definition
+                                    = definition != nullptr
+                                    && (definition->form
+                                            == semantic::vhdl::TypeForm::alias
+                                        || (definition->form
+                                                == semantic::vhdl::TypeForm::
+                                                    subtype
+                                            && definition->base.constraints
+                                                   .empty()
+                                            && definition->base
+                                                   .element_constraints.empty()
+                                            && definition->base
+                                                   .resolution_function
+                                                   .spelling.empty()))
+                                    && definition->base.type_mark.target
+                                           .valid();
+                                const auto denoted = alias_definition
+                                    ? "type:"
+                                        + std::to_string(definition->base
+                                                .type_mark.target.value())
+                                    : type_identity
+                                        && (form == Form::type
+                                            || vhdl.alias_target)
+                                    ? "type:" + std::to_string(*type_identity)
+                                    : package_owner;
                                 auto [known, inserted]
                                     = visible_types.emplace(
                                         declaration->vhdl->name,
-                                        package_owner);
+                                        denoted);
+                                // Homographs of different types are
+                                // neither directly visible; only a use
+                                // of the simple name is an error (12.4).
                                 if (!inserted
-                                    && known->second
-                                        != package_owner) {
+                                    && known->second != denoted
+                                    && unit_names_type(
+                                        owner, declaration->vhdl->name)) {
                                     report(
                                         "FSIM-ELAB-VHTYPE-003",
                                         "VHDL type '"
@@ -23841,9 +24109,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
                       *specialized, std::move(element), element_scope);
               };
         if (definition.form == semantic::vhdl::TypeForm::record) {
-            if (definition.record_elements.empty()) {
-                issues |= unresolved_composite_type;
-            }
+            // A VHDL-2019 record may have no elements (5.3.3).
             for (const auto& element : definition.record_elements) {
                 issues |= inspect(
                     element_subtype(
@@ -23972,10 +24238,16 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
                 // occurrence's associated actual supplies their concrete
                 // bounds.  Other objects still require a fully concrete
                 // executable layout here.
-                // A constant takes its bounds from its initial value.
-                if (form != Form::port
-                    && !(form == Form::constant
-                        && declaration->vhdl->initializer)) {
+                // A constant takes its bounds from its initial value, as
+                // does a VHDL-2019 signal or variable (IEEE 1076-2019
+                // 6.4.2.3, 6.4.2.4).
+                const bool initialized_object
+                    = declaration->vhdl->initializer
+                    && (form == Form::constant
+                        || (unit.standard == "2019"
+                            && (form == Form::signal
+                                || form == Form::variable)));
+                if (form != Form::port && !initialized_object) {
                     report(
                         "FSIM-ELAB-VHRECORD-001",
                         "VHDL object '" + declaration->vhdl->name
@@ -30648,6 +30920,40 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
                 compiled_source_span(*compiled_, binding.source));
             return false;
         }
+        // The actual of a variable port is a shared variable or a formal
+        // variable port (IEEE 1076-2019 6.5.6.3); the formal denotes it.
+        if (formal_declaration.object_class
+            == semantic::vhdl::ObjectClass::variable) {
+            const auto actual = port_actual_specialization.find_expression(
+                *binding.expression);
+            const auto actual_declaration = actual && actual->vhdl != nullptr
+                    && actual->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::name
+                    && actual->vhdl->referenced_name
+                    && actual->vhdl->referenced_name->selected
+                ? port_actual_specialization.find_declaration(
+                      *actual->vhdl->referenced_name->selected)
+                : std::nullopt;
+            const auto anchor = actual_declaration
+                    && actual_declaration->vhdl != nullptr
+                ? container_objects.find(
+                      actual_declaration->vhdl->name + ".@protected")
+                : container_objects.end();
+            if (anchor == container_objects.end()) {
+                report(
+                    "FSIM-ELAB-VHPORT-007",
+                    "VHDL variable port '" + formal_declaration.name
+                        + "' is not associated with a shared variable or "
+                          "variable port",
+                    compiled_source_span(*compiled_, binding.source));
+                return false;
+            }
+            auto key = child_path + "." + formal_declaration.name;
+            lowercase_ascii(key);
+            vhdl_variable_port_anchors_.insert_or_assign(
+                std::move(key), anchor->second);
+            continue;
+        }
         // An alias of a signal element or slice denotes that element
         // (IEEE 1076-2008 6.6.2): associate the aliased name.
         if (const auto named = port_actual_specialization.find_expression(
@@ -31118,12 +31424,29 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
             std::string endpoint_error;
             const auto& actual_info
                 = design_.signal_info_[*actual_signal];
-            if (!formal_type
+            // A record formal with an unconstrained element has no packed
+            // width for it, and so no member offsets of its own; the
+            // associated signal's elaborated layout is the occurrence
+            // layout (IEEE 1076-2008 6.5.6.3, 5.3.3).
+            auto endpoint_type = formal_type;
+            if (endpoint_type && !actual_info.packed_members.empty()
+                && std::ranges::any_of(endpoint_type->packed_members,
+                    [](const PackedMemberMetadata& view_member) {
+                        const auto member_width
+                            = compiled_vhdl_mode_view_member_type(
+                                view_member)
+                                  .width();
+                        return !member_width || *member_width == 0U;
+                    })) {
+                endpoint_type->packed_members = actual_info.packed_members;
+                endpoint_type->packed_range = actual_info.packed_range;
+            }
+            if (!endpoint_type
                 || !materialize_compiled_vhdl_mode_view_endpoints(
                     *compiled_,
                     *child_interface_specialization,
                     formal_declaration.scope,
-                    *formal_type,
+                    *endpoint_type,
                     *formal_declaration.interface_view,
                     *actual_signal,
                     actual_info.width,

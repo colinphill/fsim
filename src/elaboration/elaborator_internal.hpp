@@ -40,6 +40,18 @@ inline constexpr std::uint64_t maximum_compiled_event_array_elements
 
 using support::vhdl_time_units;
 
+// A resolved subelement of a composite VHDL signal whose own subtype is
+// unresolved: `width` bits at `offset` from the least significant bit,
+// resolved by `function` (IEEE 1076-2008 4.6, 14.7.3.2).
+struct VhdlResolverSegment {
+    std::size_t offset { };
+    std::size_t width { };
+    semantic::DeclarationId function;
+};
+// The bits (offset, width) one driver of a composite signal drives; empty
+// when it drives the whole signal.
+using VhdlDriverRegions = std::vector<std::pair<std::size_t, std::size_t>>;
+
 // ASCII case folding of identifiers (VHDL basic identifiers are
 // case-insensitive, IEEE 1076-2008 15.4.2).
 inline void lowercase_ascii(std::string& text) noexcept

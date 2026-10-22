@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/constraint_solver.hpp"
 
+#include <array>
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <compare>
 #include <span>
 #include <utility>
@@ -70,6 +72,9 @@ namespace {
 }
 
 [[nodiscard]] bool known(const PackedLogic4& value) {
+  if (value.width() > 0U && value.width() <= 64U && !value.is_logic9()) {
+    return value.low_word().bval == 0U;
+  }
   for (std::size_t index = 0; index < value.width(); ++index) {
     const auto bit = value.get(index);
     if (bit == Logic4::x || bit == Logic4::z) return false;
@@ -81,6 +86,20 @@ namespace {
     const PackedLogic4& left,
     const PackedLogic4& right,
     const bool signed_value) {
+  // Known single-word values compare as integers.
+  if (left.width() > 0U && left.width() <= 64U
+      && left.width() == right.width() && !left.is_logic9()
+      && !right.is_logic9()) {
+    const auto l = left.low_word();
+    const auto r = right.low_word();
+    if ((l.bval | r.bval) == 0U) {
+      const auto flip = signed_value
+          ? std::uint64_t{1} << (left.width() - 1U) : std::uint64_t{};
+      const auto a = l.aval ^ flip;
+      const auto b = r.aval ^ flip;
+      return a < b ? -1 : (a > b ? 1 : 0);
+    }
+  }
   if (signed_value) {
     const auto left_negative = left.get(left.width() - 1U) == Logic4::one;
     const auto right_negative = right.get(right.width() - 1U) == Logic4::one;
@@ -749,6 +768,118 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
   for (std::size_t index = 0; index < clauses_.size(); ++index) {
     enforced[index] = !clauses_[index].soft;
   }
+  // Values solved for a variable beyond its domain; candidate index
+  // `domain.size() + k` names the k-th.
+  std::vector<std::vector<PackedLogic4>> synthesized(variables_.size());
+  const auto value_at = [&](const std::size_t variable,
+                            const std::size_t index) -> const PackedLogic4& {
+    const auto& domain = variables_[variable].domain;
+    return index < domain.size()
+        ? domain[index]
+        : synthesized[variable][index - domain.size()];
+  };
+  // A hard `lhs == rhs` clause left with one open variable, affine in it
+  // with slope +-1 (sums, differences), is solved for that variable: a
+  // sampled domain rarely holds the solution (IEEE 1800-2023 18.5).
+  const auto synthesize = [&](const SystemVerilogConstraintClause& clause,
+                              const std::size_t unit) -> bool {
+    if (!clause.expression || clause.soft || guarded_variable[unit]) {
+      return false;
+    }
+    const auto& graph = *clause.expression;
+    const auto unit_width = variables_[unit].profile.width;
+    if (unit_width == 0U || unit_width > 64U
+        || graph.root >= graph.nodes.size()) {
+      return false;
+    }
+    // An implication whose antecedent already holds constrains by its
+    // consequent (`a -> x % 16 == 0`, IEEE 1800-2017 18.5.6).
+    auto root_id = graph.root;
+    for (std::size_t depth = 0; depth < 8U; ++depth) {
+      const auto& node = graph.nodes[root_id];
+      if (node.operation != SystemVerilogConstraintExpressionOperator::LogicalOr
+          || node.operands.size() != 2U
+          || node.operands[0] >= graph.nodes.size()) {
+        break;
+      }
+      const auto& inverted = graph.nodes[node.operands[0]];
+      if (inverted.operation
+              != SystemVerilogConstraintExpressionOperator::LogicalNot
+          || inverted.operands.size() != 1U) {
+        break;
+      }
+      auto antecedent = graph;
+      antecedent.root = inverted.operands.front();
+      ++clause_evaluations;
+      const auto holds =
+          evaluate_systemverilog_constraint_expression(antecedent, assignment);
+      if (holds.is_logic9() || holds.width() == 0U || holds.width() > 64U
+          || holds.low_word().bval != 0U || holds.low_word().aval == 0U) {
+        return false;
+      }
+      root_id = node.operands[1];
+    }
+    const auto& root = graph.nodes[root_id];
+    if (root.operation != SystemVerilogConstraintExpressionOperator::Equal
+        || root.operands.size() != 2U) {
+      return false;
+    }
+    const auto width = graph.nodes[root.operands[0]].profile.width;
+    if (width == 0U || width > 64U
+        || graph.nodes[root.operands[1]].profile.width != width) {
+      return false;
+    }
+    const auto mask = width == 64U ? ~std::uint64_t{}
+                                   : (std::uint64_t{1} << width) - 1U;
+    const auto difference = [&](const std::uint64_t at)
+        -> std::optional<std::uint64_t> {
+      assigned_values[unit] = PackedLogic4::from_aval_bval(unit_width, at, 0U);
+      std::array<std::uint64_t, 2U> side{};
+      for (std::size_t operand = 0; operand < 2U; ++operand) {
+        auto sub = graph;
+        sub.root = root.operands[operand];
+        ++clause_evaluations;
+        const auto value =
+            evaluate_systemverilog_constraint_expression(sub, assignment);
+        if (value.is_logic9() || value.width() == 0U || value.width() > 64U
+            || value.low_word().bval != 0U) {
+          return std::nullopt;
+        }
+        side[operand] = value.low_word().aval;
+      }
+      return (side[0] - side[1]) & mask;
+    };
+    const auto at_zero = difference(0U);
+    const auto at_one = difference(1U);
+    assigned_values[unit].reset();
+    if (!at_zero || !at_one) return false;
+    const auto slope = (*at_one - *at_zero) & mask;
+    std::uint64_t solution{};
+    if (slope == 1U) {
+      solution = (std::uint64_t{} - *at_zero) & mask;
+    } else if (slope == mask) {
+      solution = *at_zero;
+    } else {
+      return false;
+    }
+    if (unit_width < 64U) solution &= (std::uint64_t{1} << unit_width) - 1U;
+    auto value = PackedLogic4::from_aval_bval(unit_width, solution, 0U);
+    assigned_values[unit] = value;
+    ++clause_evaluations;
+    const bool satisfied = clause.evaluate(assignment) == State::Satisfied;
+    assigned_values[unit].reset();
+    if (!satisfied) return false;
+    if (std::ranges::find(variables_[unit].domain, value)
+            != variables_[unit].domain.end()
+        || std::ranges::find(synthesized[unit], value)
+            != synthesized[unit].end()) {
+      return true;
+    }
+    synthesized[unit].push_back(std::move(value));
+    candidates[unit].insert(candidates[unit].begin(),
+        variables_[unit].domain.size() + synthesized[unit].size() - 1U);
+    return true;
+  };
   // A clause left with one unassigned variable must allow one of its
   // values; otherwise no completion of the assignment satisfies it.
   constexpr std::size_t forward_check_values = 4096U;
@@ -761,12 +892,14 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       if (open && *open != variable) return true;
       open = variable;
     }
-    if (!open || candidates[*open].size() > forward_check_values) {
+    if (!open) return true;
+    if (candidates[*open].size() > forward_check_values) {
+      (void)synthesize(clause, *open);
       return true;
     }
     bool found{};
     for (const auto index : candidates[*open]) {
-      assigned_values[*open] = variables_[*open].domain[index];
+      assigned_values[*open] = value_at(*open, index);
       ++clause_evaluations;
       if (clause.evaluate(assignment) != State::Violated) {
         found = true;
@@ -774,7 +907,7 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       }
     }
     assigned_values[*open].reset();
-    return found;
+    return found || synthesize(clause, *open);
   };
   const auto violated_after = [&](const SystemVerilogConstraintVariableId
                                       assigned) {
@@ -826,8 +959,8 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
         exhausted_resource = SystemVerilogConstraintResource::SearchSteps;
         return Outcome::Exhausted;
       }
-      assigned_values[variable] = variables_[variable].domain[
-          candidates[variable][next_index[depth]++]];
+      assigned_values[variable] = value_at(
+          variable, candidates[variable][next_index[depth]++]);
       ++search_steps;
       if (violated_after(variable)) continue;
       if (depth + 1U < variables_.size()) {

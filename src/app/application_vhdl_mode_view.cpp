@@ -152,6 +152,36 @@ private:
         return nullptr;
     }
 
+    // The context clause of a primary unit also applies to its secondary
+    // units (IEEE 1076-2008 13.1).
+    [[nodiscard]] std::vector<const vh::ContextItem*> context_items(
+        const vh::Unit& owner) const
+    {
+        std::vector<const vh::ContextItem*> items;
+        for (const auto& item : owner.context) {
+            items.push_back(&item);
+        }
+        if (owner.primary_name.empty()) {
+            return items;
+        }
+        const auto primary = std::ranges::find_if(
+            hir_.units(),
+            [&](const vh::Unit& unit) {
+                return (unit.kind == vh::UnitKind::entity
+                           || unit.kind == vh::UnitKind::package)
+                    && unit.primary_name.empty()
+                    && unit.library == owner.library
+                    && support::canonical_vhdl_spelling(unit.name)
+                    == support::canonical_vhdl_spelling(owner.primary_name);
+            });
+        if (primary != hir_.units().end()) {
+            for (const auto& item : primary->context) {
+                items.push_back(&item);
+            }
+        }
+        return items;
+    }
+
     [[nodiscard]] const vh::Unit* package_unit(
         std::string_view library,
         std::string_view name) const
@@ -232,7 +262,8 @@ private:
             lexical_scope = *parent;
         }
         const vh::TypeDefinition* selected = nullptr;
-        for (const auto& item : owner->context) {
+        for (const auto* context_item : context_items(*owner)) {
+            const auto& item = *context_item;
             if (item.kind != vh::ContextKind::use_clause) {
                 continue;
             }
@@ -338,7 +369,8 @@ private:
             lexical_scope = *parent;
         }
         const vh::Declaration* selected = nullptr;
-        for (const auto& item : owner->context) {
+        for (const auto* context_item : context_items(*owner)) {
+            const auto& item = *context_item;
             if (item.kind != vh::ContextKind::use_clause) {
                 continue;
             }

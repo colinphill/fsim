@@ -309,9 +309,14 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
     if (!flatten(element, 0U, true, leaves) || leaves.empty()) {
         return HirVhdlFileImageResult::unsupported;
     }
+    // Only an unconstrained array of characters (a STRING file element) is
+    // one run of characters; a character array inside a composite element
+    // keeps its own length.
+    const bool character_run = unconstrained_top && leaves.size() == 1U
+        && leaves.front().kind == Kind::characters;
     std::uint64_t part_width { };
     for (const auto& leaf : leaves) {
-        part_width += leaf.kind == Kind::characters && unconstrained_top
+        part_width += leaf.kind == Kind::characters && character_run
             ? 8U
             : leaf.width;
     }
@@ -482,7 +487,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             && leaves.front().kind != Kind::characters;
         for (std::size_t repeat { }; repeat < repeats; ++repeat) {
             for (const auto& leaf : leaves) {
-                const auto leaf_width = leaf.kind == Kind::characters && unconstrained_top
+                const auto leaf_width = leaf.kind == Kind::characters && character_run
                     ? std::size_t { 8U }
                     : std::size_t { leaf.width };
                 used += leaf_width;
@@ -494,7 +499,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
                 process_.operations.emplace_back(Extract { part, *lowered,
                     static_cast<std::uint32_t>(total - used),
                     static_cast<std::uint32_t>(leaf_width) });
-                const bool run_continues = leaf.kind == Kind::characters && unconstrained_top
+                const bool run_continues = leaf.kind == Kind::characters && character_run
                     && repeat != 0U;
                 const bool separator = !first && !run_continues;
                 first = false;
@@ -648,9 +653,31 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             span);
         return HirVhdlFileImageResult::failed;
     }
-    const auto target = declaration
+    auto target = declaration
         ? hir_runtime_binding(*declaration, hir_process_scope_, true)
         : std::nullopt;
+    // An element or member of a variable (`read(h, s(i))`) is read into a
+    // temporary and stored through the ordinary target path (IEEE
+    // 1076-2008 5.5.2: READ's VALUE is a variable of the element type).
+    std::optional<semantic::ExpressionId> element_target;
+    if (!unconstrained_top
+        && (!target || !target->local || target->width != part_width)) {
+        const auto node = specialized_hir_unit_->find_expression(value);
+        if (node && node->vhdl != nullptr
+            && hir_expression_width(value, hir_process_scope_)
+                == std::optional<std::size_t> { part_width }) {
+            HirRuntimeBinding read_element;
+            read_element.kind = HirRuntimeBindingKind::local;
+            read_element.width = part_width;
+            read_element.domain
+                = hir_expression_domain(value, hir_process_scope_)
+                      .value_or(frontend::ValueDomain::Bit2);
+            read_element.local
+                = allocate_register(part_width, read_element.domain);
+            target = std::move(read_element);
+            element_target = value;
+        }
+    }
     if (!target || !target->local || target->width == 0U
         || target->width > std::numeric_limits<std::uint32_t>::max()
         || target->width % part_width != 0U
@@ -911,6 +938,11 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         }
         process_.operations.emplace_back(CopyRegister {
             *target->local, assemble(parts, part_width) });
+        if (element_target
+            && !lower_hir_packed_copy_out(
+                *element_target, *target->local)) {
+            return HirVhdlFileImageResult::unsupported;
+        }
         const auto discarded_line = allocate_register(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(FileReadLine {
@@ -953,7 +985,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         bool first = index == 0U || string_element;
         for (const auto& leaf : leaves) {
             auto single = leaf;
-            if (single.kind == Kind::characters) {
+            if (single.kind == Kind::characters && character_run) {
                 single.count = 1U;
                 single.width = 8U;
             }

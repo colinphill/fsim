@@ -708,7 +708,48 @@ void VhdlParser::analyze_vhdl_psl(ParsedDesign& design)
 
         std::unordered_set<std::string> seen_references;
         std::unordered_set<std::string> seen_samples;
-        for (const auto& token : tokens) {
+        // A name that is an operand of a relation, an arithmetic operator
+        // or a call is part of a VHDL expression whose result is the
+        // Boolean; only a name standing as a Boolean itself must be one
+        // (IEEE 1076-2019 PSL HDL expressions, IEEE 1850 4.2.1).
+        const auto operand_token = [](const TokenKind kind) {
+            switch (kind) {
+            case TokenKind::Assign:
+            case TokenKind::Less:
+            case TokenKind::Greater:
+            case TokenKind::LessEqual:
+            case TokenKind::GreaterEqual:
+            case TokenKind::EqualEqual:
+            case TokenKind::NotEqual:
+            case TokenKind::Plus:
+            case TokenKind::Minus:
+            case TokenKind::Star:
+            case TokenKind::Slash:
+            case TokenKind::Power:
+            case TokenKind::Ampersand:
+            case TokenKind::Apostrophe:
+                return true;
+            default:
+                return false;
+            }
+        };
+        const auto expression_operand = [&](const std::size_t index) {
+            if (index + 1U < tokens.size()
+                && operand_token(tokens[index + 1U].kind)) {
+                return true;
+            }
+            if (index == 0U) {
+                return false;
+            }
+            const auto previous = tokens[index - 1U].kind;
+            return operand_token(previous) || previous == TokenKind::Comma
+                || (previous == TokenKind::LeftParen && index >= 2U
+                    && tokens[index - 2U].kind == TokenKind::Identifier
+                    && !reserved_word(tokens[index - 2U].text));
+        };
+        for (std::size_t token_index { }; token_index < tokens.size();
+            ++token_index) {
+            const auto& token = tokens[token_index];
             if (token.kind != TokenKind::Identifier || reserved_word(token.text)) {
                 continue;
             }
@@ -747,11 +788,13 @@ void VhdlParser::analyze_vhdl_psl(ParsedDesign& design)
             }
             const auto* signal = find_signal(context, name);
             const auto* parameter = find_parameter(context, name);
-            if (signal && !sampled_scalar_type(signal->type)) {
+            const bool operand = expression_operand(token_index);
+            if (signal && !operand && !sampled_scalar_type(signal->type)) {
                 error(token, "FSIM-VHDL-PSL-012",
                     "PSL sampled Boolean name '" + name
                         + "' is not a scalar Boolean/bit/logic object");
-            } else if (parameter && !sampled_scalar_type(parameter->type)) {
+            } else if (parameter && !operand
+                && !sampled_scalar_type(parameter->type)) {
                 error(token, "FSIM-VHDL-PSL-012",
                     "PSL sampled Boolean constant '" + name
                         + "' is not scalar Boolean/bit/logic");

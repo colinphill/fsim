@@ -933,6 +933,9 @@ struct SignalDeclaration {
     // A VHDL port of mode linkage, which connects like inout but is never
     // read or updated (IEEE 1076-2008 6.5.2).
     bool vhdl_linkage { };
+    // A VHDL-2019 variable port, a reference to a shared variable (IEEE
+    // 1076-2019 6.5.6.3).
+    bool vhdl_variable_port { };
 
     SignalDeclaration() = default;
     SignalDeclaration(
@@ -1060,6 +1063,8 @@ struct ProcedureArgument {
     InterfaceObjectClass object_class { InterfaceObjectClass::Constant };
     SourceSpan span;
     std::optional<Expression> default_value;
+    // A signal formal of mode view (IEEE 1076-2019 6.5.2).
+    std::optional<VhdlModeViewIndication> vhdl_mode_view;
 };
 
 // A lexical VHDL block-port alias created during generate expansion. The

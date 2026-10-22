@@ -556,6 +556,15 @@ SystemVerilogConstraintExpressionBuilder::resize(
   if (operand >= nodes_.size() || profile.width == 0U) {
     throw std::invalid_argument{"invalid constraint expression conversion"};
   }
+  // A converted constant is the constant of the target type (`65'(-37)`),
+  // so domain analysis sees it as one (IEEE 1800-2017 6.24.1).
+  if (const auto& source = nodes_[operand];
+      source.operation == Operator::Constant && !source.constant.is_logic9()
+      && !profile.nominal_type.empty()) {
+    auto value = resized(
+        source.constant, profile.width, source.profile.signed_value);
+    return constant(std::move(value), std::move(profile));
+  }
   SystemVerilogConstraintExpressionNode node;
   node.operation = Operator::UnaryPlus;
   node.profile = std::move(profile);
@@ -638,9 +647,14 @@ SystemVerilogConstraintExpressionBuilder::finish(
   return {std::move(nodes_), root};
 }
 
-PackedLogic4 evaluate_systemverilog_constraint_expression(
+namespace {
+
+// With `partial`, an unassigned variable reads as all X. Evaluation is
+// X-pessimistic, so a known result holds for every completion.
+PackedLogic4 evaluate_graph(
     const SystemVerilogConstraintExpression& expression,
-    const SystemVerilogConstraintAssignment& assignment) {
+    const SystemVerilogConstraintAssignment& assignment,
+    const bool partial) {
   if (expression.nodes.empty() || expression.root >= expression.nodes.size()) {
     throw std::invalid_argument{"constraint expression graph has no root"};
   }
@@ -673,6 +687,10 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
                       != node.profile.four_state))) {
         throw std::invalid_argument{
             "constraint expression variable profile does not match the solver"};
+      }
+      if (partial && !assignment.assigned(node.variable)) {
+        values.emplace_back(node.profile.width, Logic4::x);
+        continue;
       }
       values.push_back(assignment.value(node.variable));
       continue;
@@ -805,6 +823,14 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
   return values[expression.root];
 }
 
+}  // namespace
+
+PackedLogic4 evaluate_systemverilog_constraint_expression(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintAssignment& assignment) {
+  return evaluate_graph(expression, assignment, false);
+}
+
 SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
     std::string canonical_identity,
     std::vector<SystemVerilogConstraintVariableId> variables,
@@ -858,13 +884,41 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
   clause.variables = std::move(variables);
   clause.expression = std::make_shared<const SystemVerilogConstraintExpression>(
       std::move(expression));
+  // A clause selecting or combining terms (`?:`, `&&`, `||`, as for an
+  // indexed element `q[idx]`) can be decided before all of its variables
+  // are assigned; `===` reads X as a value, so it cannot.
+  const bool resolves_early = [&] {
+    bool resolving{};
+    for (const auto& node : clause.expression->nodes) {
+      if (node.operation == Operator::CaseEqual
+          || node.operation == Operator::CaseNotEqual) {
+        return false;
+      }
+      resolving = resolving || node.operation == Operator::Conditional
+          || node.operation == Operator::LogicalAnd
+          || node.operation == Operator::LogicalOr;
+    }
+    return resolving;
+  }();
   clause.evaluate = [expression = clause.expression,
-                     dependencies = clause.variables](
+                     dependencies = clause.variables, resolves_early](
       const SystemVerilogConstraintAssignment& assignment) {
-    for (const auto variable : dependencies) {
-      if (!assignment.assigned(variable)) {
+    const bool complete = std::ranges::all_of(
+        dependencies, [&](const SystemVerilogConstraintVariableId variable) {
+          return assignment.assigned(variable);
+        });
+    if (!complete) {
+      if (!resolves_early) {
         return SystemVerilogConstraintClauseState::Undetermined;
       }
+      const auto partial = evaluate_graph(*expression, assignment, true);
+      if (partial.width() != 1U) {
+        return SystemVerilogConstraintClauseState::Undetermined;
+      }
+      const auto bit = partial.get(0);
+      return bit == Logic4::one ? SystemVerilogConstraintClauseState::Satisfied
+          : bit == Logic4::zero ? SystemVerilogConstraintClauseState::Violated
+                                : SystemVerilogConstraintClauseState::Undetermined;
     }
     const auto result = evaluate_systemverilog_constraint_expression(
         *expression, assignment);

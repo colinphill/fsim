@@ -895,7 +895,49 @@ void VerilogParser::parse_modport(
           expect(TokenKind::LeftParen, "'(' after modport expression name",
               "FSIM-SV-PARSE-213");
         }
-        auto member = expect_identifier("modport member name");
+        // An input modport expression may select part of an interface
+        // signal (`.in(a[7:0])`, IEEE 1800-2017 25.5.4): the alias reads a
+        // net as wide as the select, driven by it.
+        std::optional<Expression> selected_signal;
+        auto member = [&] {
+          if (!alias_token || direction != PortDirection::Input
+              || !at(TokenKind::Identifier)
+              || !at(TokenKind::LeftBracket, 1U)
+              || (at(TokenKind::Number, 2U)
+                  && at(TokenKind::RightBracket, 3U)
+                  && at(TokenKind::Dot, 4U))) {
+            return expect_identifier("modport member name");
+          }
+          auto head = current();
+          selected_signal = parse_expression();
+          head.text = "__modport_" + declaration.name + "_" + alias;
+          return head;
+        }();
+        if (selected_signal) {
+          const auto span = selected_signal->span;
+          SignalDeclaration net;
+          net.name = member.text;
+          net.type = Type{ValueDomain::Logic4, "wire", std::nullopt, false};
+          net.type.packed_range_expression = PackedRangeExpression{
+              Expression{ExpressionKind::Binary, "-",
+                  {Expression{ExpressionKind::Call, "$bits",
+                       {*selected_signal}, span},
+                      Expression{ExpressionKind::IntegerLiteral, "1", {},
+                          span}},
+                  span},
+              Expression{ExpressionKind::IntegerLiteral, "0", {}, span},
+              span, std::nullopt};
+          net.span = member.span;
+          unit.signals.push_back(std::move(net));
+          Statement driver;
+          driver.kind = StatementKind::Assignment;
+          driver.assignment_kind = AssignmentKind::Continuous;
+          driver.target = Expression{
+              ExpressionKind::Identifier, member.text, {}, member.span};
+          driver.value = std::move(*selected_signal);
+          driver.span = span;
+          unit.concurrent_statements.push_back(std::move(driver));
+        }
         // The expression may name a signal of a nested interface instance
         // (`.r(inner.val)`).
         bool hierarchical_member = false;

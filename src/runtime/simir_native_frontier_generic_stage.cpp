@@ -911,6 +911,7 @@ bool Interpreter::Impl::stage_generic_frontier_update_batch(
             while (pending_updates.size() > saved_pending_update_count) {
                 pending_updates.pop_back();
             }
+            reset_pending_update_driver_scan();
             while (pending_update_values.size() > saved_pending_value_count) {
                 pending_update_values.pop_back();
             }

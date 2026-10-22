@@ -2730,6 +2730,100 @@ void HierarchyBuilder::validate_process_drivers()
         }
         initial = std::move(*resolved);
     }
+    // A port is a source of its actual (IEEE 1076-2008 14.7.3.2): a scalar
+    // subelement of an out or inout port that no source inside its instance
+    // drives has the port's default as its driving value (6.5.2, NOTE 3 of
+    // 14.7.3.2). A constant driver contributes that value.
+    for (const auto& [signal, ports] : vhdl_port_sources_) {
+        const auto& state = design_.signals_.at(signal);
+        if (state.resolution != ResolutionKind::std_logic
+            || state.vhdl_resolver
+            || !state.vhdl_conversion_drivers.empty()
+            || !design_.signal_info_[signal].vhdl_mode_view_bindings.empty()) {
+            continue;
+        }
+        const auto width = state.initial_value.width();
+        const auto found = driver_processes.find(signal);
+        std::vector<ProcessId> added;
+        for (const auto& port : ports) {
+            std::vector<bool> covered(width);
+            const auto cover = [&](const std::size_t offset,
+                                   const std::size_t count) {
+                for (std::size_t bit = offset;
+                    bit < std::min(width, offset + count); ++bit) {
+                    covered[bit] = true;
+                }
+            };
+            if (found != driver_processes.end()) {
+                for (const auto process : found->second) {
+                    const auto view = design_.process_view(process);
+                    if (!inside(view.name(), port.instance)) {
+                        continue;
+                    }
+                    for (const auto& region : view.driver_regions()) {
+                        if (region.signal != signal) {
+                            continue;
+                        }
+                        if (region.whole || region.width == 0U) {
+                            cover(0U, width);
+                        } else {
+                            cover(region.offset, region.width);
+                        }
+                    }
+                }
+            }
+            // A nested instance's port is a source inside this one.
+            if (std::ranges::any_of(ports, [&](const VhdlPortSource& other) {
+                    return inside(other.instance, port.instance);
+                })) {
+                cover(0U, width);
+            }
+            if (std::ranges::all_of(covered, std::identity { })) {
+                continue;
+            }
+            auto value = port.initial && port.initial->width() == width
+                ? *port.initial
+                : PackedLogic4(width, Logic4::x);
+            if (!port.initial || port.initial->width() != width) {
+                value.fill(runtime::Logic9::u);
+            }
+            Process driver;
+            driver.id = static_cast<ProcessId>(design_.process_count());
+            driver.name = port.instance + ".$port_default_driver_"
+                + std::to_string(driver.id);
+            if (found != driver_processes.end() && !found->second.empty()) {
+                driver.language_standard = design_.process_view(
+                    found->second.front()).language_standard();
+            }
+            for (std::size_t bit { }; bit < width;) {
+                if (covered[bit]) {
+                    ++bit;
+                    continue;
+                }
+                auto end = bit;
+                while (end < width && !covered[end]) {
+                    ++end;
+                }
+                const auto reg = static_cast<RegisterId>(
+                    driver.register_count++);
+                driver.register_value_kinds.push_back(value_kind(
+                    design_.signal_info_[signal].source_domain));
+                driver.operations.emplace_back(LoadConstant {
+                    reg, value.extract_bits(bit, end - bit) });
+                driver.operations.emplace_back(WriteUpdateSlice {
+                    signal, reg, static_cast<std::uint32_t>(bit) });
+                driver.driver_regions.push_back(Process::DriverRegion {
+                    signal, static_cast<std::uint32_t>(bit),
+                    static_cast<std::uint32_t>(end - bit), false });
+                bit = end;
+            }
+            driver.operations.emplace_back(Halt { });
+            added.push_back(driver.id);
+            design_.append_process_record(std::move(driver));
+        }
+        auto& processes = driver_processes[signal];
+        processes.insert(processes.end(), added.begin(), added.end());
+    }
     lower_compiled_vhdl_resolvers(driver_processes);
     for (const auto& [signal, process_drivers] : drivers) {
         const auto& info = design_.signal_info_.at(signal);
@@ -2911,6 +3005,11 @@ HierarchyBuilder::compiled_instance_target(
                     nullptr,
                 });
             }
+        }
+        // The library of the cell containing the instance is searched
+        // first (IEEE 1800-2023 33.4.1.5); a cell found there is bound.
+        if (index == 0U && !candidates.empty()) {
+            break;
         }
     }
     std::stable_sort(

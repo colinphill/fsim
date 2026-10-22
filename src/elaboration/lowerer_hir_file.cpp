@@ -513,6 +513,18 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
         || name == "read_write_mode") {
         return 3U;
     }
+    // STD.ENV.DAYOFWEEK is compiler-owned as well (IEEE 1076-2019 16.5).
+    constexpr auto days = std::to_array<std::string_view>({
+        "sunday", "monday", "tuesday", "wednesday", "thursday", "friday",
+        "saturday",
+    });
+    if (const auto day = std::ranges::find(days, name);
+        day != days.end()
+        && semantic::CompiledDesignResolver { *specialized_hir_unit_ }
+               .vhdl_builtin_type_visible("dayofweek", source.scope)) {
+        return static_cast<std::uint64_t>(
+            std::distance(days.begin(), day));
+    }
     return std::nullopt;
 }
 
@@ -4237,6 +4249,18 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 return true;
             }
         }
+        // A BIT_VECTOR slice with run-time bounds has no fixed width: its
+        // characters are those of the prefix at the slice's positions
+        // (IEEE 1076-2019 8.5, 16.4).
+        if (textio_scalar_class(*value) == TextioScalarClass::bit_vector
+            && !hir_expression_width(*value, hir_process_scope_)) {
+            const auto text = lower_hir_vhdl_bit_slice_text(*value);
+            if (!text || !lower_dynamic_field()) {
+                return false;
+            }
+            append_string(*text);
+            return true;
+        }
         const auto domain = hir_expression_domain(
             *value, hir_process_scope_);
         const auto width = hir_expression_width(
@@ -4443,6 +4467,102 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             "elements with text images");
     }
     return result == HirVhdlFileImageResult::lowered;
+}
+
+std::optional<Lowerer::HirVhdlSlicePositions>
+Lowerer::lower_hir_vhdl_slice_positions(const semantic::ExpressionId slice_id)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(slice_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice
+        || expression->vhdl->operands.size() != 3U
+        || (expression->vhdl->text != "to"
+            && expression->vhdl->text != "downto")) {
+        return std::nullopt;
+    }
+    const auto& slice = *expression->vhdl;
+    const bool descending = slice.text == "downto";
+    const auto prefix_subtype
+        = hir_vhdl_expression_subtype(slice.operands.front());
+    if (!prefix_subtype) {
+        return std::nullopt;
+    }
+    const auto range = std::ranges::find_if(prefix_subtype->constraints,
+        [](const semantic::vhdl::RangeConstraint& constraint) {
+            return constraint.kind == semantic::vhdl::RangeKind::array_index;
+        });
+    if (range == prefix_subtype->constraints.end()
+        || range->descending != descending) {
+        return std::nullopt;
+    }
+    const auto base_left = hir_range_left(*range);
+    if (!base_left) {
+        return std::nullopt;
+    }
+    auto first = lower_hir_expression(slice.operands[1], 32U);
+    auto last = lower_hir_expression(slice.operands[2], 32U);
+    if (!first || !last) {
+        return std::nullopt;
+    }
+    if (register_width(*first) != 32U) {
+        first = resize_register(*first, 32U, true);
+    }
+    if (register_width(*last) != 32U) {
+        last = resize_register(*last, 32U, true);
+    }
+    const auto base
+        = load_integer(*base_left, 32U, frontend::ValueDomain::Integer);
+    const auto position = [&](const RegisterId bound) {
+        const auto result
+            = allocate_register(32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(IntegerBinary {
+            IntegerBinaryOperator::subtract, result,
+            descending ? base : bound, descending ? bound : base });
+        return result;
+    };
+    return HirVhdlSlicePositions { position(*first), position(*last) };
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_bit_slice_text(
+    const semantic::ExpressionId slice_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(slice_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::slice
+        || expression->vhdl->operands.size() != 3U) {
+        return std::nullopt;
+    }
+    const auto prefix = expression->vhdl->operands.front();
+    const auto width = hir_expression_width(prefix, hir_process_scope_);
+    const auto domain = hir_expression_domain(prefix, hir_process_scope_);
+    if (!width || *width == 0U || *width > maximum_string_bytes || !domain
+        || *domain != frontend::ValueDomain::Bit2) {
+        return std::nullopt;
+    }
+    const auto positions = lower_hir_vhdl_slice_positions(slice_id);
+    const auto packed
+        = positions ? lower_hir_expression(prefix, *width) : std::nullopt;
+    if (!packed) {
+        return std::nullopt;
+    }
+    const auto characters = allocate_string_register();
+    process_.operations.emplace_back(
+        LoadStringConstant { characters, std::string { } });
+    process_.operations.emplace_back(
+        hir_format_packed(characters, *packed, *width, OutputFormat::binary));
+    StringMethod method;
+    method.operation = StringMethodOperator::substr;
+    method.source = characters;
+    method.string_destination = allocate_string_register();
+    method.first = positions->first;
+    method.second = positions->last;
+    process_.operations.emplace_back(method);
+    return method.string_destination;
 }
 
 bool Lowerer::lower_hir_systemverilog_file_statement(

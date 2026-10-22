@@ -2106,6 +2106,114 @@ bool Lowerer::lower_hir_vhdl_environment_call_path_assignment(
     return true;
 }
 
+// The DIRECTORY variable whose member `name` selects: `dir.name` or
+// `dir.items` (IEEE 1076-2019 16.5.5).
+std::optional<semantic::DeclarationId>
+Lowerer::hir_vhdl_environment_directory_member(
+    const semantic::ExpressionId name_id, const std::string_view suffix) const
+{
+    // `dir.items(i)` may be held as a call of the selected name.
+    const auto name = specialized_hir_unit_->find_expression(name_id);
+    if (!name || name->vhdl == nullptr
+        || (name->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            && (name->vhdl->kind != semantic::vhdl::ExpressionKind::call
+                || name->vhdl->text.starts_with('@')))
+        || name->vhdl->text.size() <= suffix.size()
+        || !equal_ignoring_ascii_case(
+            std::string_view { name->vhdl->text }.substr(
+                name->vhdl->text.size() - suffix.size()),
+            suffix)) {
+        return std::nullopt;
+    }
+    auto declaration = hir_referenced_declaration(name_id);
+    if (!declaration
+        || !is_hir_vhdl_environment_directory(*declaration)) {
+        const auto base = std::string_view { name->vhdl->text }.substr(
+            0U, name->vhdl->text.size() - suffix.size());
+        semantic::vhdl::Name reference;
+        reference.spelling = base;
+        reference.canonical = base;
+        reference.source = name->vhdl->source;
+        declaration = hir_resolver()
+                          .resolve_vhdl(reference, name->vhdl->scope)
+                          .unique();
+    }
+    return declaration
+            && is_hir_vhdl_environment_directory(*declaration)
+        ? declaration : std::nullopt;
+}
+
+std::optional<Lowerer::HirVhdlEnvironmentVector>
+Lowerer::lower_hir_vhdl_environment_vector(
+    const semantic::ExpressionId expression_id)
+{
+    if (const auto container
+        = lower_hir_vhdl_environment_call_path_container_expression(
+            expression_id)) {
+        return HirVhdlEnvironmentVector { *container, 0U };
+    }
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    // DIR.ITEMS, or its implicit dereference; the container holds the
+    // directory name before the items.
+    auto name_id = expression_id;
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->text == "@vhdl-dereference"
+        && expression->vhdl->operands.size() == 1U) {
+        name_id = expression->vhdl->operands.front();
+    }
+    const auto directory = hir_vhdl_environment_directory_member(
+        name_id, ".items");
+    if (!directory) {
+        return std::nullopt;
+    }
+    const auto local = hir_local_container_registers_.find(
+        directory->value());
+    if (local == hir_local_container_registers_.end()) {
+        return std::nullopt;
+    }
+    return HirVhdlEnvironmentVector { local->second, 1U };
+}
+
+// 'LENGTH, 'LEFT, 'LOW, 'RIGHT or 'HIGH of a STD.ENV array value indexed
+// upwards from 0, as an INTEGER of `width` bits.
+RegisterId Lowerer::lower_hir_vhdl_environment_vector_attribute(
+    const HirVhdlEnvironmentVector& vector, const std::string_view attribute,
+    const std::size_t width)
+{
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, vector.container });
+    auto value = size;
+    const auto subtract = [&](const RegisterId from, const std::int64_t amount) {
+        if (amount == 0) {
+            return from;
+        }
+        const auto constant
+            = load_integer(amount, 32U, frontend::ValueDomain::Bit2);
+        const auto result = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_signed, result, from, constant });
+        return result;
+    };
+    if (attribute == "'left" || attribute == "'low") {
+        value = load_integer(0, 32U, frontend::ValueDomain::Bit2);
+    } else if (attribute == "'length") {
+        value = subtract(size, vector.skipped);
+    } else {
+        value = subtract(size, vector.skipped + 1);
+    }
+    const auto destination = allocate_register(
+        width, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(CopyRegister {
+        destination,
+        width == 32U ? value : resize_register(value, width, true) });
+    return destination;
+}
+
 std::optional<Lowerer::HirVhdlDirectoryStringSelection>
 Lowerer::hir_vhdl_environment_directory_string_selection(
     const semantic::ExpressionId expression_id) const
@@ -2119,34 +2227,8 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
         return std::nullopt;
     }
     const auto directory_name = [&](const semantic::ExpressionId name_id,
-                                    const std::string_view suffix)
-        -> std::optional<semantic::DeclarationId> {
-        const auto name = specialized_hir_unit_->find_expression(name_id);
-        if (!name || name->vhdl == nullptr
-            || name->vhdl->kind != semantic::vhdl::ExpressionKind::name
-            || name->vhdl->text.size() <= suffix.size()
-            || !equal_ignoring_ascii_case(
-                std::string_view { name->vhdl->text }.substr(
-                    name->vhdl->text.size() - suffix.size()),
-                suffix)) {
-            return std::nullopt;
-        }
-        auto declaration = hir_referenced_declaration(name_id);
-        if (!declaration
-            || !is_hir_vhdl_environment_directory(*declaration)) {
-            const auto base = std::string_view { name->vhdl->text }.substr(
-                0U, name->vhdl->text.size() - suffix.size());
-            semantic::vhdl::Name reference;
-            reference.spelling = base;
-            reference.canonical = base;
-            reference.source = name->vhdl->source;
-            declaration = hir_resolver()
-                              .resolve_vhdl(reference, name->vhdl->scope)
-                              .unique();
-        }
-        return declaration
-                && is_hir_vhdl_environment_directory(*declaration)
-            ? declaration : std::nullopt;
+                                    const std::string_view suffix) {
+        return hir_vhdl_environment_directory_member(name_id, suffix);
     };
 
     const auto& source = *expression->vhdl;
@@ -2167,21 +2249,32 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
     }
     const auto indexed = specialized_hir_unit_->find_expression(
         source.operands.front());
+    if (indexed && indexed->vhdl != nullptr
+        && indexed->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && indexed->vhdl->operands.size() == 1U) {
+        const auto directory = directory_name(
+            source.operands.front(), ".items");
+        return directory
+            ? std::optional { HirVhdlDirectoryStringSelection {
+                  *directory, indexed->vhdl->operands.front() } }
+            : std::nullopt;
+    }
     if (!indexed || indexed->vhdl == nullptr
         || indexed->vhdl->kind != semantic::vhdl::ExpressionKind::index
         || indexed->vhdl->operands.size() != 2U) {
         return std::nullopt;
     }
-    const auto dereference = specialized_hir_unit_->find_expression(
-        indexed->vhdl->operands.front());
-    if (!dereference || dereference->vhdl == nullptr
-        || dereference->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || dereference->vhdl->text != "@vhdl-dereference"
-        || dereference->vhdl->operands.size() != 1U) {
-        return std::nullopt;
+    // DIR.ITEMS(I) indexes the designated array, with the dereference
+    // explicit or implicit (IEEE 1076-2008 8.3).
+    auto items = indexed->vhdl->operands.front();
+    const auto dereference = specialized_hir_unit_->find_expression(items);
+    if (dereference && dereference->vhdl != nullptr
+        && dereference->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && dereference->vhdl->text == "@vhdl-dereference"
+        && dereference->vhdl->operands.size() == 1U) {
+        items = dereference->vhdl->operands.front();
     }
-    const auto directory = directory_name(
-        dereference->vhdl->operands.front(), ".items");
+    const auto directory = directory_name(items, ".items");
     return directory
         ? std::optional { HirVhdlDirectoryStringSelection {
               *directory, indexed->vhdl->operands.back() } }
@@ -3542,6 +3635,20 @@ bool Lowerer::is_hir_vhdl_reflection_expression(
         || equal_ignoring_ascii_case(selected->member, "to_protected")
         || equal_ignoring_ascii_case(selected->member, "element_subtype")
         || equal_ignoring_ascii_case(selected->member, "get");
+}
+
+bool Lowerer::is_hir_vhdl_reflection_boolean_expression(
+    const semantic::ExpressionId expression_id) const
+{
+    if (!is_hir_vhdl_reflection_expression(expression_id)) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    const auto selected = selected_vhdl_name(expression->vhdl->text);
+    return selected
+        && (equal_ignoring_ascii_case(selected->member, "ascending")
+            || equal_ignoring_ascii_case(selected->member, "is_null"));
 }
 
 bool Lowerer::is_hir_vhdl_reflection_string_expression(

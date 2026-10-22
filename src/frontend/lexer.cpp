@@ -701,6 +701,13 @@ class Lexer {
                    || previous.kind == TokenKind::RightBracket) {
                    return true;
                }
+               // `p.'1''a'right`: a character literal selected from a name
+               // is a prefix (IEEE 1076-2019 8.3, 16.2).
+               if (previous.kind == TokenKind::CharacterLiteral) {
+                   const auto count = result_.tokens.size();
+                   return count >= 2U
+                       && result_.tokens[count - 2U].kind == TokenKind::Dot;
+               }
                if (previous.kind != TokenKind::Identifier) {
                    return false;
                }

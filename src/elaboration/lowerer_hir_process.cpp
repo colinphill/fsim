@@ -599,9 +599,11 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
                 (void)identity;
                 dependencies.push_back(signal);
             }
-            const auto binding = hir_runtime_binding(
-                member->receiver, process_scope, false);
-            if (binding && binding->signal) {
+            if (member->handle_signal) {
+                dependencies.push_back(*member->handle_signal);
+            } else if (const auto binding = hir_runtime_binding(
+                           member->receiver, process_scope, false);
+                binding && binding->signal) {
                 dependencies.push_back(*binding->signal);
             }
         }
@@ -1828,7 +1830,9 @@ bool Lowerer::initialize_hir_declarations(
             }
         }
         // A constant whose subtype leaves index ranges open has the shape
-        // of its initial value (IEEE 1076-2008 6.4.2.2). A computed vector
+        // of its initial value (IEEE 1076-2008 6.4.2.2), as has a variable
+        // of a generic or 'SUBTYPE array type that the initial value
+        // constrains (6.4.2.4, 16.2). A computed vector
         // of one-bit elements is held whole; literals, aggregates and other
         // composites keep their composite storage.
         const auto initial_value = declaration->vhdl != nullptr
@@ -1838,8 +1842,10 @@ bool Lowerer::initialize_hir_declarations(
             : std::nullopt;
         if ((!binding || binding->kind != HirRuntimeBindingKind::local)
             && declaration->vhdl != nullptr
-            && declaration->vhdl->form
-                == semantic::vhdl::DeclarationForm::constant
+            && (declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::constant
+                || declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::variable)
             && declaration->vhdl->subtype && initial_value
             && initial_value->vhdl != nullptr
             && initial_value->vhdl->kind
@@ -3317,7 +3323,9 @@ std::optional<Process> Lowerer::lower_hir_package_initializer(
 std::optional<Lowerer::HirVhdlResolverProgram>
 Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
     const semantic::DeclarationId function, const std::size_t driver_count,
-    const std::string_view hierarchy)
+    const std::string_view hierarchy,
+    std::vector<VhdlResolverSegment> segments,
+    std::vector<VhdlDriverRegions> driver_regions)
 {
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
@@ -3337,7 +3345,8 @@ Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
         + name.substr(name.find_last_of('.') + 1U);
     description.kind = frontend::ProcessKind::VhdlProcess;
     description.vhdl_resolver = HirProcessDescription::VhdlResolver {
-        signal, function, driver_count };
+        signal, function, driver_count, std::move(segments),
+        std::move(driver_regions) };
     hir_vhdl_resolver_registers_.reset();
     auto process = lower_hir_process_body(
         description, frontend::Language::Vhdl2008, hierarchy);
@@ -4421,38 +4430,116 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             && signal.width / element_width <= 4096U;
         const auto output = allocate_register(
             signal.width, signal.source_domain);
-        if (per_element) {
+        // The parts resolved on their own: each element of an array of a
+        // resolved element subtype, or each resolved element (or element
+        // of an element) of a record.
+        std::vector<VhdlResolverSegment> pieces;
+        if (!resolver.segments.empty()) {
+            for (const auto& segment : resolver.segments) {
+                const auto type = hir_callable_type(
+                    segment.function, segment.width);
+                const auto width = type ? type->width : std::size_t { };
+                if (width == 0U || segment.width % width != 0U
+                    || segment.width / width > 4096U
+                    || segment.offset + segment.width > signal.width) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                for (std::size_t offset { }; offset < segment.width;
+                    offset += width) {
+                    pieces.push_back(VhdlResolverSegment {
+                        segment.offset + offset, width, segment.function });
+                }
+            }
+        } else if (per_element) {
+            for (std::size_t offset { }; offset < signal.width;
+                offset += element_width) {
+                pieces.push_back(VhdlResolverSegment {
+                    offset, element_width, resolver.function });
+            }
+        }
+        if (!pieces.empty()) {
             const auto drivers
                 = std::max<std::size_t>(resolver.driver_count, 1U);
-            const auto elements = signal.width / element_width;
-            process_.operations.emplace_back(CopyRegister {
-                output,
-                load_constant(unsigned_value(0U, signal.width),
-                    signal.source_domain) });
-            for (std::size_t element { }; element < elements; ++element) {
-                const auto offset = element * element_width;
+            // An unresolved record element has the value of the driver
+            // that drives it; the resolved elements are written over.
+            // A driver of the whole signal gives the base value.
+            std::size_t base { };
+            while (base < resolver.driver_regions.size()
+                && base < resolver.driver_count
+                && !resolver.driver_regions[base].empty()) {
+                ++base;
+            }
+            if (base >= resolver.driver_count
+                || base >= resolver.driver_regions.size()) {
+                base = 0U;
+            }
+            const auto first = allocate_register(
+                signal.width, signal.source_domain);
+            // The first driver is the most significant element of the
+            // driving values.
+            const auto driver_offset = [&](const std::size_t driver) {
+                return static_cast<std::uint32_t>(
+                    (drivers - 1U - driver) * signal.width);
+            };
+            process_.operations.emplace_back(Extract {
+                first, input, driver_offset(base),
+                static_cast<std::uint32_t>(signal.width) });
+            process_.operations.emplace_back(CopyRegister { output, first });
+            for (std::size_t driver { };
+                driver < resolver.driver_count
+                && driver < resolver.driver_regions.size()
+                && !resolver.segments.empty();
+                ++driver) {
+                if (driver == base) {
+                    continue;
+                }
+                for (const auto& [offset, width] :
+                    resolver.driver_regions[driver]) {
+                    if (width == 0U || offset + width > signal.width) {
+                        continue;
+                    }
+                    const auto part = allocate_register(
+                        width, signal.source_domain);
+                    process_.operations.emplace_back(Extract {
+                        part, input,
+                        driver_offset(driver)
+                            + static_cast<std::uint32_t>(offset),
+                        static_cast<std::uint32_t>(width) });
+                    const auto updated = allocate_register(
+                        signal.width, signal.source_domain);
+                    process_.operations.emplace_back(Insert {
+                        updated, output, part,
+                        static_cast<std::uint32_t>(offset) });
+                    process_.operations.emplace_back(
+                        CopyRegister { output, updated });
+                }
+            }
+            for (const auto& piece : pieces) {
+                const auto offset = piece.offset;
+                const auto piece_width = piece.width;
                 auto driving = load_constant(
-                    unsigned_value(0U, element_width * drivers),
+                    unsigned_value(0U, piece_width * drivers),
                     signal.source_domain);
                 for (std::size_t driver { }; driver < drivers; ++driver) {
                     const auto part = allocate_register(
-                        element_width, signal.source_domain);
+                        piece_width, signal.source_domain);
                     process_.operations.emplace_back(Extract {
                         part, input,
                         static_cast<std::uint32_t>(
                             driver * signal.width + offset),
-                        static_cast<std::uint32_t>(element_width) });
+                        static_cast<std::uint32_t>(piece_width) });
                     const auto updated = allocate_register(
-                        element_width * drivers, signal.source_domain);
+                        piece_width * drivers, signal.source_domain);
                     process_.operations.emplace_back(Insert {
                         updated, driving, part,
-                        static_cast<std::uint32_t>(driver * element_width) });
+                        static_cast<std::uint32_t>(driver * piece_width) });
                     driving = updated;
                 }
                 const auto resolved = lower_hir_vhdl_resolution_call(
-                    resolver.function, driving, resolver.driver_count,
-                    element_width);
-                if (!resolved || register_width(*resolved) != element_width) {
+                    piece.function, driving, resolver.driver_count,
+                    piece_width);
+                if (!resolved || register_width(*resolved) != piece_width) {
                     process_ = { };
                     return std::nullopt;
                 }

@@ -2764,26 +2764,59 @@ Lowerer::hir_named_clocking_event(
     // `@(vif.cb)`: the clocking event of the instance the
     // virtual interface names (IEEE 1800-2017 14.3, 25.9),
     // waited on through that instance's clock.
-    const auto separator = name.find('.');
-    if (separator == std::string::npos
-        || name.find('.', separator + 1U) != std::string::npos) {
+    // `@(t.vif.cb)` names the handle hierarchically (23.6).
+    const auto separator = name.rfind('.');
+    if (separator == std::string::npos) {
         return std::nullopt;
     }
-    const auto handle = hir_resolver().resolve_systemverilog(
-        std::string_view { name }.substr(0U, separator),
-        scope,
-        [](const semantic::CompiledDeclarationView& candidate) {
-            return candidate.systemverilog != nullptr
-                && candidate.systemverilog->type.has_value();
-        }, false).unique();
-    const auto handle_declaration = handle
-        ? specialized_hir_unit_->find_declaration(*handle)
-        : std::nullopt;
-    const auto interface_type = handle_declaration
-            && handle_declaration->systemverilog != nullptr
-        ? hir_systemverilog_virtual_interface_type(
-              *handle_declaration->systemverilog)
-        : std::nullopt;
+    const auto handle_path = std::string_view { name }.substr(0U, separator);
+    std::optional<semantic::sv::TypeReference> interface_type;
+    if (name.find('.') != separator) {
+        if (auto hierarchical
+            = hir_hierarchical_virtual_interface(handle_path)) {
+            interface_type = std::move(hierarchical->type);
+        } else if (systemverilog_interface_types_ != nullptr) {
+            // `@(t.ifc.cb)`: a clocking block of an interface instance
+            // named hierarchically, from the innermost scope outward.
+            for (std::string_view ancestor = hierarchy_;;) {
+                const auto path = ancestor.empty()
+                    ? std::string { handle_path }
+                    : std::string { ancestor } + "."
+                        + std::string { handle_path };
+                if (const auto found
+                    = systemverilog_interface_types_->find(path);
+                    found != systemverilog_interface_types_->end()) {
+                    semantic::sv::TypeReference type;
+                    type.interface_type = found->second;
+                    interface_type = std::move(type);
+                    break;
+                }
+                if (ancestor.empty()) {
+                    break;
+                }
+                const auto up = ancestor.find_last_of('.');
+                ancestor = up == std::string_view::npos
+                    ? std::string_view { }
+                    : ancestor.substr(0U, up);
+            }
+        }
+    } else {
+        const auto handle = hir_resolver().resolve_systemverilog(
+            std::string_view { name }.substr(0U, separator),
+            scope,
+            [](const semantic::CompiledDeclarationView& candidate) {
+                return candidate.systemverilog != nullptr
+                    && candidate.systemverilog->type.has_value();
+            }, false).unique();
+        const auto handle_declaration = handle
+            ? specialized_hir_unit_->find_declaration(*handle)
+            : std::nullopt;
+        interface_type = handle_declaration
+                && handle_declaration->systemverilog != nullptr
+            ? hir_systemverilog_virtual_interface_type(
+                  *handle_declaration->systemverilog)
+            : std::nullopt;
+    }
     if (!interface_type) {
         return std::nullopt;
     }
@@ -10127,8 +10160,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     == HirStringFormatStatus::invalid) {
                 return true;
             }
-            // An element of a STRING variable held as a runtime string: the
-            // index is converted to the zero-based character offset.
+            // An element of a STRING variable held as a runtime string.
             if (target_expression->vhdl != nullptr
                 && target_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::index
@@ -10139,57 +10171,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && value && !signal_assignment
                 && string_binding->kind == HirStringBindingKind::local
                 && string_binding->local) {
-                const auto prefix_declaration
-                    = specialized_hir_unit_->find_declaration(*declaration);
-                std::int64_t prefix_left = 1;
-                bool prefix_descending { };
-                if (prefix_declaration && prefix_declaration->vhdl != nullptr
-                    && prefix_declaration->vhdl->subtype) {
-                    const auto subtype = hir_effective_vhdl_subtype(
-                        *prefix_declaration->vhdl->subtype);
-                    for (const auto& constraint : subtype
-                             ? subtype->constraints
-                             : prefix_declaration->vhdl->subtype
-                                   ->constraints) {
-                        if (constraint.kind
-                            != semantic::vhdl::RangeKind::array_index) {
-                            continue;
-                        }
-                        const auto left = hir_range_left(constraint);
-                        if (!left) {
-                            return assignment_rejected(__LINE__);
-                        }
-                        prefix_left = *left;
-                        prefix_descending = constraint.descending;
-                        break;
-                    }
-                }
-                auto index = lower_hir_expression(
-                    target_expression->vhdl->operands[1], 32U);
-                auto byte = lower_hir_expression(*value, 8U);
-                if (!index || !byte) {
-                    return assignment_rejected(__LINE__);
-                }
-                if (register_width(*index) != 32U) {
-                    index = resize_register(*index, 32U, true);
-                }
-                const auto base = load_integer(
-                    prefix_left, 32U, frontend::ValueDomain::Integer);
-                const auto offset = allocate_register(
-                    32U, frontend::ValueDomain::Integer);
-                process_.operations.emplace_back(IntegerBinary {
-                    IntegerBinaryOperator::subtract,
-                    offset,
-                    prefix_descending ? base : *index,
-                    prefix_descending ? *index : base,
-                });
-                process_.operations.emplace_back(StringReplaceByte {
-                    *string_binding->local,
-                    offset,
-                    resize_register(*byte, 32U, false),
-                    true,
-                });
-                return true;
+                const auto byte = lower_hir_expression(*value, 8U);
+                const auto written = byte
+                    ? lower_hir_vhdl_string_element_write(*target, *byte)
+                    : std::nullopt;
+                return (written && *written) || assignment_rejected(__LINE__);
             }
             if (string_element) {
                 const auto& input = *statement->systemverilog;
@@ -10512,7 +10498,67 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             first, width, base_width };
                     }();
                     if (!selection) {
-                        return assignment_rejected(__LINE__);
+                        // Bounds known only at run time (`s(1 to n) := v`,
+                        // IEEE 1076-2019 8.5, 10.6.2.1): the value, whose
+                        // length must equal the slice's, replaces positions
+                        // first .. first+length-1 of the string.
+                        const auto positions
+                            = lower_hir_vhdl_slice_positions(*target);
+                        const auto selected = positions
+                            ? lower_hir_string_expression(*target)
+                            : std::nullopt;
+                        if (!selected) {
+                            return assignment_rejected(__LINE__);
+                        }
+                        emit_hir_vhdl_string_length_check(
+                            *selected, *lowered, span);
+                        const auto length = [&](const StringRegisterId text) {
+                            const auto result = allocate_register(
+                                32U, frontend::ValueDomain::Integer);
+                            process_.operations.emplace_back(
+                                StringLength { result, text });
+                            return result;
+                        };
+                        const auto arithmetic
+                            = [&](const IntegerBinaryOperator operation,
+                                  const RegisterId lhs, const RegisterId rhs) {
+                                  const auto result = allocate_register(
+                                      32U, frontend::ValueDomain::Integer);
+                                  process_.operations.emplace_back(
+                                      IntegerBinary {
+                                          operation, result, lhs, rhs });
+                                  return result;
+                              };
+                        const auto substring = [&](const RegisterId from,
+                                                   const RegisterId to) {
+                            StringMethod method;
+                            method.operation = StringMethodOperator::substr;
+                            method.source = *string_binding->local;
+                            method.string_destination
+                                = allocate_string_register();
+                            method.first = from;
+                            method.second = to;
+                            process_.operations.emplace_back(method);
+                            return method.string_destination;
+                        };
+                        const auto zero = load_integer(
+                            0, 32U, frontend::ValueDomain::Integer);
+                        const auto one = load_integer(
+                            1, 32U, frontend::ValueDomain::Integer);
+                        const auto head = substring(zero,
+                            arithmetic(IntegerBinaryOperator::subtract,
+                                positions->first, one));
+                        const auto tail = substring(
+                            arithmetic(IntegerBinaryOperator::add,
+                                positions->first, length(*lowered)),
+                            arithmetic(IntegerBinaryOperator::subtract,
+                                length(*string_binding->local), one));
+                        const auto updated = allocate_string_register();
+                        process_.operations.emplace_back(ConcatenateStrings {
+                            updated, { head, *lowered, tail } });
+                        process_.operations.emplace_back(CopyStringRegister {
+                            *string_binding->local, updated });
+                        return true;
                     }
                     // The length constraint applies to the selected slice,
                     // while the destination remains the entire base STRING.
@@ -11309,6 +11355,56 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return true;
             }
         }
+        // A dynamic slice of a dynamically indexed element (`v(i)(h downto
+        // l)`): the slice within the element plus the element's runtime
+        // offset (IEEE 1076-2008 8.4, 8.5).
+        if (!dynamic_vhdl_selection && vhdl_dynamic_slice_width
+            && !member_offset && binding->width != 0U
+            && binding->width - 1U
+                <= static_cast<std::size_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+            const auto element = specialized_hir_unit_->find_expression(
+                target_operands[0]);
+            const auto element_width = hir_expression_width(
+                target_operands[0], hir_process_scope_);
+            if (element && element->vhdl != nullptr
+                && element->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                && element->vhdl->operands.size() == 2U
+                && !hir_constant_integer(element->vhdl->operands[1])
+                && element_width && *element_width != 0U
+                && *element_width < binding->width
+                && *vhdl_dynamic_slice_width != 0U
+                && *vhdl_dynamic_slice_width <= *element_width) {
+                const auto within = lower_hir_vhdl_dynamic_slice(
+                    *target, *element_width, *vhdl_dynamic_slice_width);
+                if (!within) {
+                    return !diagnostics_.empty();
+                }
+                const auto offset = lower_hir_vhdl_dynamic_element_offset(
+                    element->vhdl->operands[0], element->vhdl->operands[1],
+                    *element_width);
+                if (!offset) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto base = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::add, base, within->base,
+                    register_width(*offset) == 32U
+                        ? *offset
+                        : resize_register(*offset, 32U, true) });
+                dynamic_vhdl_selection = DynamicPartIndex {
+                    base,
+                    static_cast<std::int64_t>(binding->width - 1U),
+                    0,
+                    0U,
+                    within->width,
+                    true,
+                    true,
+                };
+            }
+        }
         if (!dynamic_vhdl_selection && vhdl_dynamic_slice_width) {
             if (*vhdl_dynamic_slice_width == 0U
                 || *vhdl_dynamic_slice_width
@@ -11533,6 +11629,35 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (element.target.target.valid()) {
                 packed_pattern_type = std::move(element);
             }
+        }
+        // An element of an anonymous multi-dimensional packed array
+        // (`a[0] = '{...}` for `logic [1:0][3:0][3:0] a`) has the array's
+        // type less its first packed dimension (IEEE 1800-2017 7.4.1,
+        // 10.9.1).
+        if (!packed_pattern_type && index && !member_width
+            && target_expression->systemverilog != nullptr
+            && target_expression->systemverilog->text == "index"
+            && target_operands.size() == 2U
+            && target_declaration
+            && target_declaration->systemverilog != nullptr
+            && target_declaration->systemverilog->type
+            && !target_declaration->systemverilog->type->container_form
+            && target_declaration->systemverilog->type
+                   ->unpacked_dimensions.empty()
+            && target_declaration->systemverilog->type
+                   ->packed_dimensions.size() >= 2U
+            && hir_referenced_declaration(target_operands[0])
+                == binding->declaration) {
+            auto element = *target_declaration->systemverilog->type;
+            element.packed_dimensions.erase(element.packed_dimensions.begin());
+            element.packed_range = element.packed_dimensions.size() == 1U
+                ? std::optional { element.packed_dimensions.front() }
+                : std::nullopt;
+            if (element.packed_dimensions.size() == 1U) {
+                element.packed_dimensions.clear();
+            }
+            element.executable_width.reset();
+            packed_pattern_type = std::move(element);
         }
         const auto packed_pattern = packed_pattern_type
             ? hir_systemverilog_packed_pattern_operand(
@@ -18863,19 +18988,46 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             : std::nullopt;
                     }
                 }
-                if (local != nullptr && dimension
+                // A call path vector, or an access value designating one, and
+                // the ITEMS of a DIRECTORY are indexed upwards from 0 (IEEE
+                // 1076-2019 16.5.6.2, 16.5.5).
+                const auto environment_vector = local == nullptr && attribute
+                        && attribute->vhdl != nullptr
+                        && attribute->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::call
+                        && (attribute->vhdl->text == "'range" || reverse)
+                        && attribute->vhdl->operands.size() == 1U
+                    ? lower_hir_vhdl_environment_vector(
+                          attribute->vhdl->operands.front())
+                    : std::nullopt;
+                if (((local != nullptr && dimension) || environment_vector)
                     && parameter != hir_local_registers_.end()
                     && register_domain(parameter->second)
                         == frontend::ValueDomain::Integer) {
                     const auto parameter_register = parameter->second;
                     const auto width = register_width(parameter_register);
-                    const auto bound = bind_hir_vhdl_shaped(*local, span);
-                    if (!bound) {
+                    const auto bound = environment_vector
+                        ? std::nullopt
+                        : bind_hir_vhdl_shaped(*local, span);
+                    if (!environment_vector && !bound) {
                         restore_scope();
                         return false;
                     }
                     const auto query = [&](const VhdlShapedAttribute which,
                                            const std::size_t query_width) {
+                        if (environment_vector) {
+                            if (which == VhdlShapedAttribute::ascending) {
+                                return load_integer(
+                                    1, 1U, frontend::ValueDomain::Boolean);
+                            }
+                            return lower_hir_vhdl_environment_vector_attribute(
+                                *environment_vector,
+                                which == VhdlShapedAttribute::left ? "'left"
+                                    : which == VhdlShapedAttribute::right
+                                    ? "'right"
+                                    : "'length",
+                                query_width);
+                        }
                         const auto destination = allocate_register(query_width,
                             which == VhdlShapedAttribute::ascending
                                 ? frontend::ValueDomain::Boolean
@@ -25982,6 +26134,82 @@ bool Lowerer::lower_hir_sv_stream_target_bits(
             return false;
         }
     }
+    return true;
+}
+
+std::optional<bool> Lowerer::lower_hir_vhdl_string_element_write(
+    const semantic::ExpressionId target, const RegisterId byte)
+{
+    // An element of a STRING variable held as a runtime string: the index
+    // is converted to the zero-based character offset.
+    const auto target_expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(target)
+        : std::nullopt;
+    if (!target_expression || target_expression->vhdl == nullptr
+        || target_expression->vhdl->kind
+            != semantic::vhdl::ExpressionKind::index
+        || target_expression->vhdl->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto declaration = hir_target_declaration(
+        target_expression->vhdl->operands.front());
+    const auto string_binding = declaration
+        ? hir_string_binding(*declaration, hir_process_scope_, true)
+        : std::nullopt;
+    if (!string_binding || string_binding->kind != HirStringBindingKind::local
+        || !string_binding->local) {
+        return std::nullopt;
+    }
+    const auto prefix_declaration
+        = specialized_hir_unit_->find_declaration(*declaration);
+    std::int64_t prefix_left = 1;
+    bool prefix_descending { };
+    if (prefix_declaration && prefix_declaration->vhdl != nullptr
+        && prefix_declaration->vhdl->subtype) {
+        const auto subtype = hir_effective_vhdl_subtype(
+            *prefix_declaration->vhdl->subtype);
+        for (const auto& constraint : subtype
+                 ? subtype->constraints
+                 : prefix_declaration->vhdl->subtype->constraints) {
+            if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                continue;
+            }
+            const auto left = hir_range_left(constraint);
+            if (!left) {
+                return false;
+            }
+            prefix_left = *left;
+            // `string(s'range)` takes its direction from the bounds of `s`
+            // (IEEE 1076-2008 5.2.1).
+            prefix_descending = constraint.direction_from_bounds
+                ? hir_vhdl_range_direction(constraint, hir_process_scope_)
+                      .value_or(false)
+                : constraint.descending;
+            break;
+        }
+    }
+    auto index = lower_hir_expression(target_expression->vhdl->operands[1], 32U);
+    if (!index) {
+        return false;
+    }
+    if (register_width(*index) != 32U) {
+        index = resize_register(*index, 32U, true);
+    }
+    const auto base = load_integer(
+        prefix_left, 32U, frontend::ValueDomain::Integer);
+    const auto offset = allocate_register(32U, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(IntegerBinary {
+        IntegerBinaryOperator::subtract,
+        offset,
+        prefix_descending ? base : *index,
+        prefix_descending ? *index : base,
+    });
+    process_.operations.emplace_back(StringReplaceByte {
+        *string_binding->local,
+        offset,
+        resize_register(byte, 32U, false),
+        true,
+    });
     return true;
 }
 

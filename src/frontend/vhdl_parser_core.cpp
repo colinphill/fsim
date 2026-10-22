@@ -351,6 +351,17 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item()
         error(start, "FSIM-VHDL-PARSE-044",
             "malformed or unterminated VHDL context clause");
     }
+    // A use clause in a declarative region makes the package's names visible
+    // for the rest of the design unit (IEEE 1076-2008 12.4); the unit's
+    // context clause resets these flags for the next unit.
+    if (item.kind == VhdlContextItemKind::UseClause) {
+        for (const auto& name : item.selected_names) {
+            std_env_context_ = std_env_context_ || name == "std.env.all";
+            numeric_bit_context_ = numeric_bit_context_
+                || name == "ieee.numeric_bit"
+                || name.starts_with("ieee.numeric_bit.");
+        }
+    }
     item.span = span_from(start, previous());
     return item;
 }
@@ -989,8 +1000,13 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
     }
     while (!at_end() && !at(TokenKind::RightParen)) {
         // A port is an interface signal declaration, which may name its
-        // class (IEEE 1076-2008 6.5.2).
-        (void)match_keyword("signal", true);
+        // class (IEEE 1076-2008 6.5.2), or a VHDL-2019 interface variable
+        // declaration of a shared variable (IEEE 1076-2019 6.5.6.3).
+        const bool variable_port = vhdl_standard_ >= VhdlStandard::Vhdl2019
+            && match_keyword("variable", true);
+        if (!variable_port) {
+            (void)match_keyword("signal", true);
+        }
         std::vector<Token> names;
         names.push_back(expect_identifier("port name"));
         while (match(TokenKind::Comma)) {
@@ -1027,20 +1043,8 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
         }
 
         std::string resolution_function;
-        if (!mode_view && at(TokenKind::Identifier)
-            && !keyword("type", 0, true)) {
-            std::size_t lookahead = 1;
-            while (at(TokenKind::Dot, lookahead) &&
-                   at(TokenKind::Identifier, lookahead + 1)) {
-                lookahead += 2;
-            }
-            if (at(TokenKind::Identifier, lookahead) &&
-                !keyword("range", lookahead, true) &&
-                !keyword("bus", lookahead, true) &&
-                !keyword("register", lookahead, true)) {
-                resolution_function =
-                    parse_vhdl_selected_name("resolution function name");
-            }
+        if (!mode_view && !keyword("type", 0, true)) {
+            resolution_function = parse_vhdl_resolution_indication(true);
         }
         if (!mode_view) {
             type = parse_vhdl_type(true, true);
@@ -1088,6 +1092,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
                     mode_view });
                 unit.ports.back().vhdl_linkage = linkage;
                 unit.ports.back().vhdl_guarded_kind = guarded_kind;
+                unit.ports.back().vhdl_variable_port = variable_port;
             }
         }
 

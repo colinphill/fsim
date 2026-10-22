@@ -3847,6 +3847,20 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SimulationTick, std::uint64_t>>>
         signal_transactions;
     std::vector<PendingUpdate> pending_updates;
+    // The first driver per signal among pending_updates[0, cursor) and the
+    // signals with a second driver there, so each staged update is scanned
+    // once. Eligibility of a signal is checked when the scan is consumed.
+    std::size_t pending_update_driver_scan_cursor { };
+    // Per signal: its first driver and whether a second one was seen.
+    std::unordered_map<SignalId, std::pair<ProcessId, bool>>
+        pending_update_first_drivers;
+    std::vector<SignalId> pending_update_multi_driver_signals;
+    void reset_pending_update_driver_scan() noexcept
+    {
+        pending_update_driver_scan_cursor = 0U;
+        pending_update_first_drivers.clear();
+        pending_update_multi_driver_signals.clear();
+    }
     std::vector<PackedLogic4> pending_update_values;
     // Update-phase scratch is indexed by the dense signal identity and reused
     // across deltas. Only touched entries are reset after publication, avoiding

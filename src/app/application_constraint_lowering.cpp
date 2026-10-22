@@ -1258,6 +1258,23 @@ class Lowerer final {
     }
     if (expression.kind == Kind::distribution
         && expression.operands.size() >= 2U && !soft) {
+      // `(c ? a : b) dist D` is `c -> a dist D` and `!c -> b dist D`
+      // (IEEE 1800-2023 18.5.3, 11.4.11): each arm's variable is weighted
+      // where its condition selects it.
+      if (const auto& subject = expression.operands.front();
+          subject.kind == Kind::conditional && subject.operands.size() == 3U) {
+        for (std::size_t arm = 0U; arm < 2U; ++arm) {
+          auto selected = expression;
+          selected.operands.front() = subject.operands[arm + 1U];
+          guards_.push_back({&subject.operands[0], arm == 0U});
+          const bool lowered = split(selected, clauses, soft);
+          guards_.pop_back();
+          if (!lowered) {
+            return false;
+          }
+        }
+        return true;
+      }
       // A dist below guards or in a loop weights its variable where the
       // guards hold (IEEE 1800-2017 18.5.4).
       if (auto weighted = guarded_distribution(expression)) {

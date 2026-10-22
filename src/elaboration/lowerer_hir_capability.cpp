@@ -6290,6 +6290,50 @@ Lowerer::hir_systemverilog_virtual_interface_type(
         : std::nullopt;
 }
 
+std::optional<Lowerer::HirHierarchicalVirtualInterface>
+Lowerer::hir_hierarchical_virtual_interface(const std::string_view path) const
+{
+    // `t.vif`: a virtual interface variable named hierarchically (IEEE
+    // 1800-2023 23.6, 25.9); its handle is that variable's signal.
+    if (specialized_hir_unit_ == nullptr
+        || path.find('.') == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto signal = hir_hierarchical_signal(path);
+    if (!signal || design_.signal_info_[*signal].width != 64U) {
+        return std::nullopt;
+    }
+    const auto& full = design_.signal_info_[*signal].name;
+    const auto cut = full.rfind('.');
+    if (cut == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto owner = std::ranges::find(design_.specializations_,
+        std::string_view { full }.substr(0U, cut),
+        &SpecializationInfo::instance);
+    if (owner == design_.specializations_.end() || !owner->source_unit) {
+        return std::nullopt;
+    }
+    const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
+    const auto unit = std::ranges::find(
+        hir.units(), *owner->source_unit, &semantic::sv::Unit::id);
+    if (unit == hir.units().end()) {
+        return std::nullopt;
+    }
+    for (const auto id : unit->declarations) {
+        const auto* candidate = hir.find_declaration(id);
+        if (candidate == nullptr
+            || candidate->name != std::string_view { full }.substr(cut + 1U)) {
+            continue;
+        }
+        if (auto type = hir_systemverilog_virtual_interface_type(*candidate)) {
+            return HirHierarchicalVirtualInterface {
+                id, *signal, std::move(*type) };
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<Lowerer::HirVirtualInterfaceMember>
 Lowerer::hir_virtual_interface_member(
     const std::string_view name, const semantic::ScopeId scope) const
@@ -6324,6 +6368,18 @@ Lowerer::hir_virtual_interface_member(
         : std::nullopt;
     auto member_separator = separator;
     std::optional<semantic::DeclarationId> object;
+    std::optional<SignalId> handle_signal;
+    for (auto dot = text.find('.', separator + 1U);
+         !virtual_type && dot != std::string::npos;
+         dot = text.find('.', dot + 1U)) {
+        if (auto handle = hir_hierarchical_virtual_interface(
+                std::string_view { text }.substr(0U, dot))) {
+            declaration_id = handle->declaration;
+            handle_signal = handle->signal;
+            virtual_type = std::move(handle->type);
+            member_separator = dot;
+        }
+    }
     if (!virtual_type) {
         // `obj.vif.m`: a virtual interface property of a class object
         // (IEEE 1800-2017 8.4, 25.9).
@@ -6378,8 +6434,8 @@ Lowerer::hir_virtual_interface_member(
         }
         object = *object_id;
         member_separator = property_separator;
-    } else if (declaration->systemverilog->name
-        != text.substr(0U, separator)) {
+    } else if (!handle_signal
+        && declaration->systemverilog->name != text.substr(0U, separator)) {
         return std::nullopt;
     }
     // Every interface instance must be elaborated: resolve in the second
@@ -6393,6 +6449,7 @@ Lowerer::hir_virtual_interface_member(
     HirVirtualInterfaceMember result;
     result.receiver = *declaration_id;
     result.object = object;
+    result.handle_signal = handle_signal;
     std::set<std::uint64_t> handles;
     std::vector<std::string> paths;
     for (const auto& [path, type] : *systemverilog_interface_types_) {
@@ -11435,6 +11492,13 @@ bool Lowerer::hir_expression_is_string(
             && vhdl_logic_string_function_name(source.text)) {
             return true;
         }
+        if (const auto aliased = source.kind
+                    == semantic::vhdl::ExpressionKind::call
+                ? vhdl_builtin_alias_call_name(*specialized_hir_unit_, source)
+                : std::nullopt;
+            aliased && vhdl_logic_string_function_name(*aliased)) {
+            return true;
+        }
         // A function name without actuals is a call (IEEE 1076-2008 9.3.4).
         // Keep a retained object declaration authoritative: looking only for
         // callable candidates could otherwise see an outer function hidden by
@@ -15348,7 +15412,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         || hir_vhdl_runtime_string_bound(expression_id)) {
         return frontend::ValueDomain::Integer;
     }
-    if (hir_vhdl_boolean_loop_parameter(expression_id)) {
+    if (hir_vhdl_boolean_loop_parameter(expression_id)
+        || is_hir_vhdl_reflection_boolean_expression(expression_id)) {
         return frontend::ValueDomain::Boolean;
     }
     if (const auto status = hir_process_status_query(expression_id)) {
@@ -18439,7 +18504,8 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     if (hir_vhdl_runtime_string_bound(expression_id)) {
         return 32U;
     }
-    if (hir_vhdl_boolean_loop_parameter(expression_id)) {
+    if (hir_vhdl_boolean_loop_parameter(expression_id)
+        || is_hir_vhdl_reflection_boolean_expression(expression_id)) {
         return 1U;
     }
     if (const auto status = hir_process_status_query(expression_id)) {
@@ -20426,7 +20492,11 @@ Lowerer::hir_systemverilog_cast_profile(
                 *specialized_hir_unit_, *size_operand)) {
             return std::nullopt;
         }
-        const auto width = specialized_hir_unit_->evaluate_integral_expression(
+        // A class parameter of the running specialization is bound by the
+        // callable frame, not seen by the unit's evaluator (8.25).
+        const auto width = hir_range_bound(
+            specialized_hir_unit_->evaluate_integral_expression(
+                *size_operand),
             *size_operand);
         if (!width || *width <= 0
             || static_cast<std::uint64_t>(*width)
@@ -20558,8 +20628,22 @@ Lowerer::hir_systemverilog_cast_profile(
                 *declaration->systemverilog)) {
             return std::nullopt;
         }
-        const auto width = specialized_hir_unit_
-                               ->evaluate_integral_declaration(candidate);
+        // A class parameter of the running specialization is bound by the
+        // callable frame, not seen by the unit's evaluator (8.25).
+        auto width = specialized_hir_unit_
+                         ->evaluate_integral_declaration(candidate);
+        for (auto frame = hir_generic_binding_frames_.rbegin();
+            frame != hir_generic_binding_frames_.rend(); ++frame) {
+            const auto binding = std::ranges::find(
+                *frame, candidate, &HirGenericBinding::formal);
+            if (binding != frame->end() && binding->expression) {
+                if (const auto bound
+                    = hir_constant_integer(*binding->expression)) {
+                    width = bound;
+                }
+                break;
+            }
+        }
         if (!width || *width <= 0
             || static_cast<std::uint64_t>(*width)
                 > std::numeric_limits<std::size_t>::max()
@@ -20734,6 +20818,18 @@ Lowerer::hir_vhdl_conversion_profile(
     auto canonical = std::string { type_name };
     lowercase_ascii(canonical);
     const auto selected = hir_vhdl_type_declaration(expression_id);
+    // STD.REFLECTION's INDEX types are integer ranges (IEEE 1076-2019
+    // 16.12.3.2).
+    const bool reflection_index = !selected
+        && (canonical == "index" || canonical == "natural_index"
+            || canonical == "positive_index" || canonical == "dimension")
+        && hir_resolver().vhdl_builtin_package_member_imported(
+            "std", "reflection", canonical, source.scope);
+    if (reflection_index) {
+        canonical = canonical == "index" ? "integer"
+            : canonical == "natural_index" ? "natural"
+                                           : "positive";
+    }
     if (canonical == "integer" || canonical == "natural"
         || canonical == "positive") {
         const auto width = static_cast<std::size_t>(
@@ -20848,6 +20944,36 @@ Lowerer::hir_vhdl_conversion_profile(
         }
         return HirVhdlConversionProfile {
             *width, *predefined_array_domain, false, std::nullopt
+        };
+    }
+    // A type mark that denotes a generic type of a package instance
+    // (`pi.t'(1)`) has the subtype that instance binds (IEEE 1076-2008
+    // 6.5.7.2).
+    const auto marked = selected
+        ? specialized_hir_unit_->find_declaration(*selected)
+        : std::nullopt;
+    if ((marked && marked->vhdl != nullptr
+            && marked->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_type)
+        || (!selected && type_name.find('.') != std::string_view::npos)) {
+        semantic::vhdl::SubtypeIndication mark;
+        mark.type_mark.spelling = std::string { type_name };
+        mark.type_mark.source = source.source;
+        const auto mark_subtype = hir_effective_vhdl_subtype(mark);
+        const auto mark_width = mark_subtype
+            ? vhdl_subtype_width(*mark_subtype)
+            : std::nullopt;
+        if (!mark_subtype || !mark_width || *mark_width == 0U
+            || !scalar_domain(vhdl_value_domain(mark_subtype->domain))) {
+            return std::nullopt;
+        }
+        return HirVhdlConversionProfile {
+            *mark_width,
+            vhdl_value_domain(mark_subtype->domain),
+            mark_subtype->signed_value
+                || mark_subtype->domain
+                    == semantic::vhdl::ValueDomain::integer,
+            vhdl_integer_range(*mark_subtype),
         };
     }
     if (!selected) {
@@ -22359,8 +22485,17 @@ Lowerer::hir_vhdl_expression_subtype(
             const auto member = unsigned_conversion
                 ? std::string_view { "to_unsigned" }
                 : std::string_view { "to_signed" };
+            // NUMERIC_BIT declares the same conversions over BIT (IEEE
+            // 1076-2008 G.3); the package is the one that names the call.
+            const auto numeric_bit_name
+                = std::string { "ieee.numeric_bit." } + std::string { member };
+            const bool explicitly_numeric_bit
+                = same_hir_identifier(call_name, numeric_bit_name, true);
+            const std::string_view package_name = explicitly_numeric_bit
+                ? std::string_view { "numeric_bit" }
+                : std::string_view { "numeric_std" };
             const auto qualified_name
-                = std::string { "ieee.numeric_std." }
+                = std::string { "ieee." } + std::string { package_name } + "."
                 + std::string { member };
             const bool explicitly_numeric_std
                 = same_hir_identifier(call_name, qualified_name, true);
@@ -22375,6 +22510,17 @@ Lowerer::hir_vhdl_expression_subtype(
                 && same_hir_identifier(profile->name, member, true)
                 && (explicitly_numeric_std || unqualified_name)) {
                 const auto resolver = hir_resolver();
+                const auto std_imported = unqualified_name
+                    && resolver.vhdl_builtin_package_member_imported(
+                        "ieee", "numeric_std", member, source.scope);
+                const auto bit_imported = unqualified_name
+                    && resolver.vhdl_builtin_package_member_imported(
+                        "ieee", "numeric_bit", member, source.scope);
+                const std::string_view owner = explicitly_numeric_std
+                    ? package_name
+                    : bit_imported && !std_imported
+                    ? std::string_view { "numeric_bit" }
+                    : std::string_view { "numeric_std" };
                 const auto package_function = [&](const auto id) {
                     const auto declaration
                         = specialized_hir_unit_->find_declaration(
@@ -22389,7 +22535,7 @@ Lowerer::hir_vhdl_expression_subtype(
                     }
                     return specialized_hir_unit_->design()
                         .vhdl_scope_in_package(
-                            declaration->vhdl->scope, "ieee", "numeric_std");
+                            declaration->vhdl->scope, "ieee", owner);
                 };
                 const auto visible_candidates = hir_vhdl_callable_candidates(
                     *source.referenced_name, source.scope);
@@ -22405,30 +22551,32 @@ Lowerer::hir_vhdl_expression_subtype(
                     && std::ranges::all_of(
                         visible_candidates, package_function);
                 semantic::vhdl::Name standard_member;
-                standard_member.spelling = qualified_name;
+                standard_member.spelling = std::string { "ieee." }
+                    + std::string { owner } + "." + std::string { member };
                 standard_member.canonical = standard_member.spelling;
                 const bool package_member_visible
                     = explicitly_numeric_std
                     ? resolver.vhdl_standard_package_member_visible(
                           standard_member, source.scope)
-                    : unqualified_name
-                        && resolver.vhdl_builtin_package_member_imported(
-                            "ieee", "numeric_std", member, source.scope)
-                        && !resolver.vhdl_builtin_package_member_imported(
-                            "ieee", "numeric_bit", member, source.scope);
+                    : std_imported != bit_imported;
                 if (package_member_visible
                     && declarations_are_numeric_std) {
-                    // IEEE 1076-2019 numeric_std D.3-D.4 constrains each
-                    // unresolved result to SIZE-1 downto 0.
+                    // IEEE 1076-2019 numeric_std D.3-D.4 (and numeric_bit
+                    // D.1-D.2) constrain each result to SIZE-1 downto 0.
+                    const bool bit_result = owner == "numeric_bit";
                     semantic::vhdl::SubtypeIndication projected;
                     projected.type_mark.spelling
-                        = std::string { "ieee.numeric_std." }
-                        + (unsigned_conversion
-                                ? "unresolved_unsigned"
-                                : "unresolved_signed");
+                        = std::string { "ieee." } + std::string { owner }
+                        + "."
+                        + (bit_result
+                                ? (unsigned_conversion ? "unsigned" : "signed")
+                                : (unsigned_conversion
+                                        ? "unresolved_unsigned"
+                                        : "unresolved_signed"));
                     projected.type_mark.source = source.source;
-                    projected.domain
-                        = semantic::vhdl::ValueDomain::logic9;
+                    projected.domain = bit_result
+                        ? semantic::vhdl::ValueDomain::bit2
+                        : semantic::vhdl::ValueDomain::logic9;
                     projected.executable_width = profile->width;
                     projected.signed_value = signed_conversion;
                     projected.unconstrained = false;

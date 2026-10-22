@@ -206,7 +206,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
                                             probe.clauses(), id, input.profile,
                                             [&selection] {
                                                 return next_selection(selection);
-                                            }));
+                                            },
+                                            fixed));
                                     continue;
                                 }
                                 auto domain

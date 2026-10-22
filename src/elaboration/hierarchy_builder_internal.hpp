@@ -1030,6 +1030,12 @@ private:
         semantic::SourceSpanId declaration_source,
         const CompiledVhdlResolutionBinding& binding,
         const semantic::SpecializedHirUnit& specialization);
+    // A signal of an unresolved record subtype with resolved elements
+    // resolves each of them on its own (IEEE 1076-2008 14.7.3.2).
+    void register_compiled_vhdl_record_resolution(SignalId signal,
+        std::vector<VhdlResolverSegment> segments,
+        semantic::SourceSpanId source,
+        const semantic::SpecializedHirUnit& specialization);
     // Register the resolution of a port formal materialized as its own
     // signal, as for a declared signal of the formal's subtype.
     void register_compiled_vhdl_formal_resolution(SignalId signal,
@@ -2042,8 +2048,14 @@ private:
         semantic::DeclarationId body;
         semantic::SourceSpanId source;
         std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
+        // A record of resolved elements resolves each on its own.
+        std::vector<VhdlResolverSegment> segments;
     };
     std::map<SignalId, PendingVhdlResolver> vhdl_function_resolvers_;
+    // The anchor of the shared variable each VHDL variable port (keyed by
+    // its lowercase instance path and name) denotes.
+    std::unordered_map<std::string, ContainerObjectId>
+        vhdl_variable_port_anchors_;
     // Guarded signals: 1 for bus, 2 for register (IEEE 1076-2008 6.4.2.3).
     std::unordered_map<SignalId, std::uint8_t> vhdl_guarded_signal_kinds_;
     std::unordered_map<std::string, ResolutionKind>

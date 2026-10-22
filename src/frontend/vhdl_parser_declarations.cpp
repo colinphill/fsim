@@ -1046,7 +1046,13 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     }
     expect(TokenKind::Colon, "':' after record element names",
            "FSIM-VHDL-PARSE-128");
-    const auto member_type = parse_vhdl_type(true, true);
+    // An element subtype indication may name a resolution function
+    // (IEEE 1076-2008 6.3).
+    auto resolution_function = parse_vhdl_resolution_indication(false);
+    auto member_type = parse_vhdl_type(true, true);
+    if (!resolution_function.empty()) {
+      member_type.vhdl_resolution_function = std::move(resolution_function);
+    }
     const bool supported = !member_type.named_type.empty() ||
                            member_type.domain != ValueDomain::Unknown;
     if (!supported) {
@@ -1072,6 +1078,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
           member_type.packed_range_expression, 0,
           cover(member_start.span, previous().span),
           member_type.named_type.empty() && !member_type.integer_range
+                  && member_type.vhdl_resolution_function.empty()
                   && !member_type.integer_range_expression
                   && !member_type.discrete_range_expression
                   && !member_type.enumeration_range_expression
@@ -1692,19 +1699,7 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
           "duplicate bounded type declaration '" + canonical_name + "'");
   }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-134");
-  std::string resolution_function;
-  if (at(TokenKind::Identifier)) {
-    std::size_t lookahead = 1;
-    while (at(TokenKind::Dot, lookahead) &&
-           at(TokenKind::Identifier, lookahead + 1)) {
-      lookahead += 2;
-    }
-    if (at(TokenKind::Identifier, lookahead) &&
-        !keyword("range", lookahead, true)) {
-      resolution_function =
-          parse_vhdl_selected_name("resolution function name");
-    }
-  }
+  auto resolution_function = parse_vhdl_resolution_indication(false);
   auto type = parse_vhdl_type(true, true);
   type.vhdl_resolution_function = std::move(resolution_function);
   type.vhdl_type_declaration = start.span.source_name + ":" +
@@ -1749,21 +1744,7 @@ void VhdlParser::parse_signal_declaration(
   expect(TokenKind::Colon, "':' after signal name", "FSIM-VHDL-PARSE-017");
   // A resolved subtype indication names its resolution function before the
   // type mark (IEEE 1076-2008 6.3).
-  std::string resolution_function;
-  if (at(TokenKind::Identifier)) {
-    std::size_t lookahead = 1;
-    while (at(TokenKind::Dot, lookahead) &&
-           at(TokenKind::Identifier, lookahead + 1)) {
-      lookahead += 2;
-    }
-    if (at(TokenKind::Identifier, lookahead) &&
-        !keyword("range", lookahead, true) &&
-        !keyword("bus", lookahead, true) &&
-        !keyword("register", lookahead, true)) {
-      resolution_function =
-          parse_vhdl_selected_name("resolution function name");
-    }
-  }
+  auto resolution_function = parse_vhdl_resolution_indication(true);
   Type type = parse_vhdl_type(true, true);
   if (!resolution_function.empty()) {
     type.vhdl_resolution_function = std::move(resolution_function);

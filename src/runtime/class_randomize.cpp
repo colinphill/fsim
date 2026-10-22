@@ -241,6 +241,18 @@ using PropertyDomains
 [[nodiscard]] bool value_less(const PackedLogic4& left,
                               const PackedLogic4& right,
                               const bool signed_value) {
+  // Known single-word values compare as integers.
+  if (left.width() > 0U && left.width() <= 64U
+      && left.width() == right.width() && !left.is_logic9()
+      && !right.is_logic9()) {
+    const auto l = left.low_word();
+    const auto r = right.low_word();
+    if ((l.bval | r.bval) == 0U) {
+      const auto flip = signed_value
+          ? std::uint64_t{1} << (left.width() - 1U) : std::uint64_t{};
+      return (l.aval ^ flip) < (r.aval ^ flip);
+    }
+  }
   for (std::size_t bit = left.width(); bit-- > 0U;) {
     auto a = left.get(bit) == Logic4::one;
     auto b = right.get(bit) == Logic4::one;
@@ -879,13 +891,6 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
               request.call_identity + "::"
                   + node.object->property_names[key.second] + "::$bounded");
           const auto& profile = probe.variables()[id].profile;
-          if (profile.width > 64U) {
-            bounded.insert_or_assign(key,
-                systemverilog_constraint_wide_variable_domain(
-                    probe.clauses(), id, profile,
-                    [&stream] { return stream.next_u64(); }));
-            continue;
-          }
           // State variables hold their current values during the call.
           std::map<SystemVerilogConstraintVariableId, PackedLogic4> fixed;
           for (const auto& [fixed_id, owner] : owners) {
@@ -896,6 +901,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           }
           for (const auto& [derived_id, value] : derived) {
             if (derived_id != id) fixed.emplace(derived_id, value);
+          }
+          if (profile.width > 64U) {
+            bounded.insert_or_assign(key,
+                systemverilog_constraint_wide_variable_domain(
+                    probe.clauses(), id, profile,
+                    [&stream] { return stream.next_u64(); }, fixed));
+            continue;
           }
           auto domain = systemverilog_constraint_variable_domain_with_fixed(
               probe.clauses(), id, profile,
@@ -950,22 +962,18 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
                   profile.width, (single - 1U) & mask, 0U));
             }
           }
-          // The domain lists each value once.
-          std::vector<PackedLogic4> unique;
-          unique.reserve(domain.size());
-          for (auto& value : domain) {
-            if (std::ranges::find(unique, value) == unique.end()) {
-              unique.push_back(std::move(value));
-            }
-          }
           // The domain is ordered, so its first and last values bound the
-          // implicit uniform distribution.
-          {
-            std::ranges::sort(unique, [&](const auto& left, const auto& right) {
-              return (left.low_word().aval ^ sign)
-                  < (right.low_word().aval ^ sign);
-            });
-          }
+          // implicit uniform distribution, and lists each value once.
+          std::ranges::sort(domain, [&](const auto& left, const auto& right) {
+            const auto a = left.low_word();
+            const auto b = right.low_word();
+            const auto left_key = a.aval ^ sign;
+            const auto right_key = b.aval ^ sign;
+            return left_key != right_key ? left_key < right_key
+                                         : a.bval < b.bval;
+          });
+          domain.erase(std::ranges::unique(domain).begin(), domain.end());
+          std::vector<PackedLogic4> unique = std::move(domain);
           if (preserved.contains(key)) {
             // A size is not negative; a size bounded only from below takes
             // one of the smallest allowed sizes.

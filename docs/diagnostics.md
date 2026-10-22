@@ -2513,6 +2513,7 @@ scheduler.
 | `FSIM-ELAB-VHPORT-004` | error | A port of mode linkage is read or updated other than as the actual of a port association (IEEE 1076-1993 4.3.2). |
 | `FSIM-ELAB-VHPORT-005` | error | The actual of a VHDL port association is a name whose index expressions read a signal, port or variable; it must be a static name (IEEE 1076-1993 1.1.1.2). |
 | `FSIM-ELAB-VHPORT-006` | error | A positional actual of a VHDL component port is an array where the formal is scalar, or a scalar where the formal is an array (IEEE 1076-2008 6.5.7.1). |
+| `FSIM-ELAB-VHPORT-007` | error | A VHDL-2019 variable port is not associated with a shared variable or a formal variable port (IEEE 1076-2019 6.5.6.3). |
 | `FSIM-ELAB-VHVIEW-001` | error | A VHDL view-based interface names no unique visible mode-view declaration during elaboration. |
 | `FSIM-ELAB-VHVIEW-002` | error | A VHDL view-based interface has a recursive composed leaf-direction map. |
 | `FSIM-ELAB-VHVIEW-003` | error | A VHDL view root is invalid or incomplete, or a nested view is incompatible with its record member or array element subtype. |

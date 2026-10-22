@@ -978,40 +978,125 @@ predefined_subtype_attribute(
         // subprogram formal, takes its index ranges from `obj'range`.
         const auto canonical
             = support::canonical_vhdl_spelling(type.vhdl_object_subtype);
-        const vh::Declaration* object = nullptr;
-        auto visible_scope = std::optional<semantic::ScopeId> { scope };
-        while (visible_scope && object == nullptr) {
-            const auto& declarations = hir_.declarations();
-            for (auto candidate = declarations.rbegin();
-                candidate != declarations.rend(); ++candidate) {
-                if (candidate->scope == *visible_scope && candidate->subtype
-                    && support::canonical_vhdl_spelling(candidate->name)
-                        == canonical) {
-                    object = &*candidate;
-                    break;
-                }
-            }
-            if (!visible_scope->valid()
-                || visible_scope->value() >= model_.scopes().size()) {
-                break;
-            }
-            visible_scope = model_.scopes()[visible_scope->value()].parent;
-        }
-        if (object == nullptr) {
-            // An architecture sees its entity's ports and generics, which
-            // live in the entity's scope.
-            for (const auto& candidate : hir_.declarations()) {
-                if ((candidate.form == vh::DeclarationForm::port
-                        || candidate.form
-                            == vh::DeclarationForm::generic_constant)
-                    && candidate.subtype
-                    && support::canonical_vhdl_spelling(candidate.name)
-                        == canonical) {
-                    if (object != nullptr) {
-                        object = nullptr;
+        const auto find_object = [&](const std::string_view name)
+            -> const vh::Declaration* {
+            const vh::Declaration* found = nullptr;
+            auto visible_scope = std::optional<semantic::ScopeId> { scope };
+            while (visible_scope && found == nullptr) {
+                const auto& declarations = hir_.declarations();
+                for (auto candidate = declarations.rbegin();
+                    candidate != declarations.rend(); ++candidate) {
+                    if (candidate->scope == *visible_scope
+                        && candidate->subtype
+                        && support::canonical_vhdl_spelling(candidate->name)
+                            == name) {
+                        found = &*candidate;
                         break;
                     }
-                    object = &candidate;
+                }
+                if (!visible_scope->valid()
+                    || visible_scope->value() >= model_.scopes().size()) {
+                    break;
+                }
+                visible_scope = model_.scopes()[visible_scope->value()].parent;
+            }
+            if (found == nullptr) {
+                // An architecture sees its entity's ports and generics,
+                // which live in the entity's scope.
+                for (const auto& candidate : hir_.declarations()) {
+                    if ((candidate.form == vh::DeclarationForm::port
+                            || candidate.form
+                                == vh::DeclarationForm::generic_constant)
+                        && candidate.subtype
+                        && support::canonical_vhdl_spelling(candidate.name)
+                            == name) {
+                        if (found != nullptr) {
+                            return nullptr;
+                        }
+                        found = &candidate;
+                    }
+                }
+            }
+            return found;
+        };
+        const vh::Declaration* object = find_object(canonical);
+        // A selected name `obj.f` denotes an element of a record object; its
+        // subtype is the element's, with the object's element constraints
+        // for that element (IEEE 1076-2008 6.4.2.1, 8.3).
+        std::optional<vh::Declaration> selected_element;
+        if (object == nullptr) {
+            const auto dot = canonical.find('.');
+            const auto* root = dot == std::string::npos || dot == 0U
+                ? nullptr
+                : find_object(std::string_view { canonical }.substr(0U, dot));
+            if (root != nullptr
+                && root->form != vh::DeclarationForm::type
+                && root->form != vh::DeclarationForm::subtype) {
+                auto current = *root->subtype;
+                auto remaining = std::string_view { canonical }.substr(dot + 1U);
+                bool resolved = true;
+                while (resolved && !remaining.empty()) {
+                    const auto next = remaining.find('.');
+                    const auto member = remaining.substr(0U, next);
+                    remaining = next == std::string_view::npos
+                        ? std::string_view { }
+                        : remaining.substr(next + 1U);
+                    resolved = false;
+                    auto type_id = current.type_mark.target;
+                    std::unordered_set<std::uint32_t> visited;
+                    while (type_id.valid()
+                        && visited.insert(type_id.value()).second) {
+                        const auto definition = std::ranges::find_if(
+                            hir_.types(),
+                            [&](const vh::TypeDefinition& candidate) {
+                                return candidate.id == type_id;
+                            });
+                        if (definition == hir_.types().end()) {
+                            break;
+                        }
+                        if (definition->form != vh::TypeForm::record) {
+                            type_id = definition->base.type_mark.target;
+                            continue;
+                        }
+                        const auto element = std::ranges::find_if(
+                            definition->record_elements,
+                            [&](const vh::RecordElement& candidate) {
+                                return support::canonical_vhdl_spelling(
+                                           candidate.name)
+                                    == member;
+                            });
+                        if (element == definition->record_elements.end()) {
+                            break;
+                        }
+                        auto element_subtype = element->subtype;
+                        for (const auto& constraint :
+                            current.element_constraints) {
+                            if (constraint.path.empty()
+                                || support::canonical_vhdl_spelling(
+                                       constraint.path.front())
+                                    != member) {
+                                continue;
+                            }
+                            if (constraint.path.size() == 1U) {
+                                element_subtype.constraints
+                                    = constraint.constraints;
+                                element_subtype.unconstrained = false;
+                            } else {
+                                auto nested = constraint;
+                                nested.path.erase(nested.path.begin());
+                                element_subtype.element_constraints.push_back(
+                                    std::move(nested));
+                            }
+                        }
+                        current = std::move(element_subtype);
+                        resolved = true;
+                        break;
+                    }
+                }
+                if (resolved) {
+                    selected_element = *root;
+                    selected_element->subtype = std::move(current);
+                    object = &*selected_element;
                 }
             }
         }
@@ -1370,8 +1455,16 @@ predefined_subtype_attribute(
             parent);
     }
     if (!type.vhdl_resolution_function.empty()) {
+        // An element resolution `(f)` names `f`; its spelling keeps the
+        // parentheses that select the element level (IEEE 1076-2008 6.3).
+        auto designator = std::string_view { type.vhdl_resolution_function };
+        while (designator.size() > 2U && designator.front() == '('
+            && designator.back() == ')') {
+            designator = designator.substr(1U, designator.size() - 2U);
+        }
         result.resolution_function = name(
-            type.vhdl_resolution_function, fallback, scope);
+            std::string { designator }, fallback, scope);
+        result.resolution_function.spelling = type.vhdl_resolution_function;
     }
     result.signed_value = type.is_signed;
     result.unconstrained = type.vhdl_array

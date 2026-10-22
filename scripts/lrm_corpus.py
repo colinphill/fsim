@@ -725,6 +725,31 @@ VERILATOR_NONSTANDARD = {
         "other than Verilator and NC passes the undeclared variable "
         "shotreal_array1 (data shall be declared before use, IEEE 1800-2023 "
         "6.5)",
+    "t_dpi_open": "passes packed vectors (bit [7:0] i_oba_b8) to the open "
+        "unpacked-array formals of dpii_oba; an unsized formal dimension "
+        "matches only an actual unpacked dimension (IEEE 1800-2023 "
+        "35.5.6.1)",
+    "t_dpi_arg_inout_unpack": "applies $bits to real variables through "
+        "ARE_SAME (real is not a bit-stream type, IEEE 1800-2023 20.6.2, "
+        "6.24.3) and takes the C typedef unpack_struct_t from a "
+        "tool-generated header the LRM does not define (H.7.8)",
+    "t_dpi_arg_output_unpack": "applies $bits to real variables through "
+        "ARE_SAME (real is not a bit-stream type, IEEE 1800-2023 20.6.2, "
+        "6.24.3) and takes the C typedef unpack_struct_t from a "
+        "tool-generated header the LRM does not define (H.7.8)",
+    "t_sys_sformat": "expects %p to print an integer structure member as "
+        "'h0; singular members print as they would unformatted, in decimal "
+        "(IEEE 1800-2023 21.2.1.6)",
+    "t_sys_sformat_noopt": "expects %p to print an integer structure member "
+        "as 'h0; singular members print as they would unformatted, in "
+        "decimal (IEEE 1800-2023 21.2.1.6)",
+    "t_config_rules": "its configuration has two default clauses with "
+        "liblist expansion clauses; there cannot be more than one default "
+        "clause that specifies the expansion clause (IEEE 1800-2023 "
+        "33.4.1.2)",
+    "t_config_libmap": "declares its configuration inside its library map "
+        "file; a lib.map file is limited to library specifications, include "
+        "statements and comments (IEEE 1800-2023 33.3.2)",
     "t_timescale_nobackwards": "expects Verilator's default 1ps/1ps time "
         "unit; the default is implementation-specific (IEEE 1800-2017 "
         "3.14.2.3)",
@@ -1094,6 +1119,9 @@ VERILATOR_NONSTANDARD = {
     "t_constraint_real_struct_field": "expects members of a rand unpacked "
         "struct declared without rand to be random; only members with a rand "
         "or randc modifier are (IEEE 1800-2017 18.4)",
+    "t_event_class_fire": "expects failure from Verilator issue #8303; a "
+        "`->>` trigger occurs in the same time step's NBA region, so "
+        "wait(e.triggered) completes (IEEE 1800-2017 15.5.2, 15.5.3)",
     "t_randomize_method_with_scoping": "expects `get_x() == local::get_x()` "
         "to solve x through the function body; a constraint function's "
         "result is state computed before the solve (IEEE 1800-2017 18.5.12)",
@@ -2252,6 +2280,15 @@ NVC_NONSTANDARD = {
         "function whose parameter subtype is unconstrained; it shall define "
         "the index constraint (IEEE 1076-2008 5.3.2.2)"
        for name in ("conv20", "conv21")},
+    "image2": "asserts the 'IMAGE of a record with a REAL element as "
+        "\"((42,-5),true,2.5)\"; the image of a floating-point value has "
+        "implementation-defined digits and notation (IEEE 1076-2019 16.2.2, "
+        "5.2.5.1)",
+    "protected9": "asserts the shared variable's count after a parent "
+        "and a child process both resume at 5 ns, so the result depends on "
+        "which runs first; a description that depends on the order of "
+        "execution of concurrent statements is erroneous (IEEE 1076-2019 "
+        "11.1)",
     "view7": "leaves subelement p.y of an individually associated port "
         "unassociated; every scalar subelement shall be associated exactly "
         "once (IEEE 1076-2019 6.5.7.1)",
@@ -2304,6 +2341,15 @@ NVC_NONSTANDARD = {
         "1076-2019 16.2 defines O'REFLECT only for an object prefix",
     "reflect5": "expects nvc's 1-based physical unit index (unit_index(\"ns\") "
         "= 3); IEEE 1076-2019 16.12.3.6 gives the primary unit index zero",
+    "reflect4": "asserts rstm.element_subtype(\"A\") = integer'reflect, "
+        "access equality of two separately created subtype mirrors; mirror "
+        "instances are created when 'REFLECT is evaluated (IEEE 1076-2019 "
+        "16.12.1) and access values are equal only when they designate the "
+        "same object (9.2.3)",
+    "issue1213": "expects a case generate statement to have kind "
+        "vhpiIfGenerateK, which the test notes has no VHPI kind; the VHPI "
+        "generateStmt class has only the forGenerate and ifGenerate classes "
+        "(IEEE 1076-2019 19.11, Figure 38)",
     "protected13": "asserts a 'PATH_NAME of a protected-type variable "
         "that the test notes the LRM does not specify",
     # Owner decision (Batch 81): VHDL integer types stay 32-bit; an

@@ -971,6 +971,30 @@ void Resolver::retain_task_profile(
             }
             return;
           }
+          // A class-scoped name, `C::m`, names a member of class C, such as
+          // a class enum literal (IEEE 1800-2017 8.23).
+          if (const auto scoped = node.text.rfind("::");
+              !deferring && scoped != std::string::npos
+              && node.text.find('.') == std::string::npos
+              && resolve_class_name(node.text.substr(0, scoped), scope).size()
+                  == 1U) {
+            resolve_expression(node, scope);
+            return;
+          }
+          // A class constant of the randomized object, such as an enum
+          // literal declared in its class, is that constant (18.5.1, 18.7).
+          if (const auto constant = node.text.find_first_of(".:")
+                      == std::string::npos
+                  ? find_property(receiver_identity, node.text)
+                  : PropertyMatch{};
+              !deferring && constant.property && constant.property->is_static
+              && constant.property->is_const
+              && constant.property->declaration.initializer
+              && constant.owner->parameters.empty()) {
+            node.text = constant.owner->canonical_identity + "::" + node.text;
+            resolve_expression(node, scope);
+            return;
+          }
           if (!deferring && node.text.find("::") == std::string::npos
               && std::ranges::find(bound_iterators, head(node.text))
                   == bound_iterators.end()

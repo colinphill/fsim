@@ -289,23 +289,33 @@ void Interpreter::Impl::schedule_update_commit()
         }
     }
     // Two drivers updating one signal in this delta: remember the first
-    // driver seen per signal, so the scan is linear in the updates.
+    // driver seen per signal across calls, so each update is scanned once.
+    // A signal's eligibility can change between calls, so it is checked
+    // here for every signal with a second driver.
     if (!has_disjoint_owner_group_candidate) {
-        using Driver = std::remove_cvref_t<
-            decltype(pending_updates.front().driver)>;
-        std::unordered_map<std::size_t, Driver> first_driver;
-        for (const auto& update : pending_updates) {
-            if (!update.driver_present() || update.signal >= signals.size()
-                || !can_try_wide_disjoint_signal_commit(update.signal)) {
+        if (pending_update_driver_scan_cursor > pending_updates.size()) {
+            // A staged update was withdrawn; rescan.
+            reset_pending_update_driver_scan();
+        }
+        for (; pending_update_driver_scan_cursor < pending_updates.size();
+             ++pending_update_driver_scan_cursor) {
+            const auto& update
+                = pending_updates[pending_update_driver_scan_cursor];
+            if (!update.driver_present() || update.signal >= signals.size()) {
                 continue;
             }
-            const auto [entry, inserted]
-                = first_driver.try_emplace(update.signal, update.driver);
-            if (!inserted && entry->second != update.driver) {
-                has_disjoint_owner_group_candidate = true;
-                break;
+            auto [entry, inserted] = pending_update_first_drivers.try_emplace(
+                update.signal, update.driver, false);
+            if (!inserted && !entry->second.second
+                && entry->second.first != update.driver) {
+                entry->second.second = true;
+                pending_update_multi_driver_signals.push_back(update.signal);
             }
         }
+        has_disjoint_owner_group_candidate = std::ranges::any_of(
+            pending_update_multi_driver_signals, [&](const SignalId signal) {
+                return can_try_wide_disjoint_signal_commit(signal);
+            });
     }
     if (has_disjoint_owner_group_candidate) {
         try {
@@ -1059,6 +1069,7 @@ void Interpreter::Impl::schedule_update_commit()
             }
             pending_updates.clear();
             pending_update_values.clear();
+            reset_pending_update_driver_scan();
             update_commit_scheduled = false;
             const bool native_publication_phase
                 = native_word_publication_phase_eligible();

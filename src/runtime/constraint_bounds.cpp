@@ -883,19 +883,26 @@ node_interval(const SystemVerilogConstraintExpression& expression,
   for (const auto& clause : clauses) {
     if (!depends(clause)) continue;
     const auto& nodes = clause.expression->nodes;
-    const auto is_variable = [&](std::size_t id) {
-      for (std::size_t depth = 0; depth < 4U && id < nodes.size(); ++depth) {
-        const auto& node = nodes[id];
-        if (node.operation == Operator::Variable) {
-          return node.variable == variable;
-        }
-        if (node.operation != Operator::UnaryPlus
-            || node.operands.size() != 1U) {
-          return false;
-        }
-        id = node.operands.front();
+    // The compared operand reads the variable, possibly as an arm of a
+    // conditional (`(b ? x : y) == 5` offers 5 to both x and y).
+    const auto reads_variable = [&](const auto& self, const std::size_t id,
+                                    const std::size_t depth) -> bool {
+      if (depth >= 4U || id >= nodes.size()) return false;
+      const auto& node = nodes[id];
+      if (node.operation == Operator::Variable) {
+        return node.variable == variable;
       }
-      return false;
+      if (node.operation == Operator::UnaryPlus
+          && node.operands.size() == 1U) {
+        return self(self, node.operands.front(), depth + 1U);
+      }
+      return node.operation == Operator::Conditional
+          && node.operands.size() == 3U
+          && (self(self, node.operands[1], depth + 1U)
+              || self(self, node.operands[2], depth + 1U));
+    };
+    const auto is_variable = [&](const std::size_t id) {
+      return reads_variable(reads_variable, id, 0U);
     };
     for (const auto& node : nodes) {
       // A comparison with a constant under a guard (`if (c) {x > 4;
@@ -991,11 +998,18 @@ std::vector<PackedLogic4> systemverilog_constraint_wide_variable_domain(
     const std::span<const SystemVerilogConstraintClause> clauses,
     const SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintVariableProfile& profile,
-    const std::function<std::uint64_t()>& random) {
+    const std::function<std::uint64_t()>& random,
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed) {
   const auto width = profile.width;
   if (width <= 64U || !random) {
     throw std::invalid_argument{
         "a wide constraint domain requires a variable wider than 64 bits"};
+  }
+  // A state variable is a constant during the call (18.3).
+  if (!fixed.empty()) {
+    return systemverilog_constraint_wide_variable_domain(
+        clauses_with_fixed(clauses, variable, fixed), variable, profile,
+        random);
   }
   const auto words = (width + 63U) / 64U;
   const auto widened = [&](const std::uint64_t low) {
@@ -1123,6 +1137,18 @@ std::vector<PackedLogic4> systemverilog_constraint_wide_variable_domain(
     for (auto& word : aval) word = random();
     values.push_back(PackedLogic4::from_word_planes(width, aval, bval));
   }
+  // The corner values follow the samples, as a bounded domain's endpoints
+  // do: zero, all ones, and either side of the sign bit.
+  {
+    PackedLogic4 sign_bit(width, Logic4::zero);
+    sign_bit.set(width - 1U, Logic4::one);
+    PackedLogic4 below_sign(width, Logic4::one);
+    below_sign.set(width - 1U, Logic4::zero);
+    values.emplace_back(width, Logic4::zero);
+    values.emplace_back(width, Logic4::one);
+    values.push_back(std::move(sign_bit));
+    values.push_back(std::move(below_sign));
+  }
   std::vector<PackedLogic4> unique;
   for (auto& value : values) {
     if (std::ranges::find(unique, value) == unique.end()) {
@@ -1172,6 +1198,14 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
   if (fixed.empty()) {
     return variable_domain(clauses, variable, profile, random, intervals);
   }
+  return variable_domain(clauses_with_fixed(clauses, variable, fixed),
+      variable, profile, random, intervals);
+}
+
+std::vector<SystemVerilogConstraintClause> clauses_with_fixed(
+    const std::span<const SystemVerilogConstraintClause> clauses,
+    const SystemVerilogConstraintVariableId variable,
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed) {
   std::vector<SystemVerilogConstraintClause> substituted;
   substituted.reserve(clauses.size());
   for (const auto& clause : clauses) {
@@ -1231,7 +1265,7 @@ std::vector<PackedLogic4> systemverilog_constraint_variable_domain_with_fixed(
     }
     substituted.push_back(std::move(copy));
   }
-  return variable_domain(substituted, variable, profile, random, intervals);
+  return substituted;
 }
 
 }  // namespace fsim::runtime

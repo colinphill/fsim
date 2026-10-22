@@ -1017,6 +1017,9 @@ end context ieee_std_context;
                     "to_ufixed",
                     "to_sfixed",
                     "resize",
+                    "from_string",
+                    "from_bstring",
+                    "from_binary_string",
                     "+",
                     "-",
                     "*",
@@ -1856,6 +1859,26 @@ void inject_vhdl_standard_libraries(
         unit.library = "ieee";
         unit.vhdl_predefined_environment
             = predefined_environment(standard, "ieee");
+        // The injected context is analyzed with the referencing units, so
+        // it carries their compatibility profile into unit provenance.
+        const auto name = "ieee." + std::string { context };
+        const auto referencing = std::ranges::find_if(
+            checked.parsed.units, [&](const frontend::DesignUnit& item) {
+                return item.language == frontend::Language::Vhdl2008
+                    && std::ranges::any_of(
+                        item.vhdl_context, [&](const auto& context_item) {
+                            return context_item.kind
+                                == frontend::VhdlContextItemKind::
+                                    ContextReference
+                                && std::ranges::find(
+                                       context_item.selected_names, name)
+                                != context_item.selected_names.end();
+                        });
+            });
+        unit.vhdl_compatibility_profile
+            = referencing == checked.parsed.units.end()
+            ? vhdl_compatibility_profile()
+            : referencing->vhdl_compatibility_profile;
         std::vector<frontend::DesignUnit> context_units;
         context_units.push_back(std::move(unit));
         auto source = checked_source(path, source_text);

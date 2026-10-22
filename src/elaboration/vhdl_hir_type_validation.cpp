@@ -26,6 +26,13 @@
 #include <unordered_set>
 
 namespace fsim::elaboration {
+
+// Defined with the lowerer's STD.ENV support (lowerer_hir_capability.cpp).
+[[nodiscard]] bool vhdl_environment_time_record_subtype(
+    const semantic::SpecializedHirUnit&,
+    const semantic::vhdl::SubtypeIndication&,
+    semantic::ScopeId use_scope);
+
 namespace {
 
 using elaboration_detail::equal_ignoring_ascii_case;
@@ -2601,6 +2608,18 @@ private:
                 : std::vector<semantic::DeclarationId> { };
             auto resolved = type.base;
             resolved.resolution_function = { };
+            // `(f) T` resolves T's elements, `((f)) T` their elements.
+            const auto& spelling = type.base.resolution_function.spelling;
+            const auto levels = spelling.find_first_not_of('(');
+            for (std::size_t level { }; level < levels; ++level) {
+                const auto* definition = root_definition(resolved);
+                if (definition == nullptr || definition->form != TypeForm::array
+                    || !definition->element_subtype) {
+                    resolved = { };
+                    break;
+                }
+                resolved = *definition->element_subtype;
+            }
             const auto expected = subtype_operand_type(resolved, 0U);
             const auto mismatched = [&](const semantic::DeclarationId id) {
                 const auto function = specialization_.find_declaration(id);
@@ -5854,10 +5873,54 @@ private:
                 && equal_ignoring_ascii_case(formal->vhdl->name, choice->vhdl->text)) {
                 using Direction = semantic::vhdl::Direction;
                 const auto direction = formal->vhdl->direction;
-                return direction == Direction::output
-                        || direction == Direction::inout
-                    ? std::optional<std::size_t> { index }
-                    : std::nullopt;
+                if (direction != Direction::output && direction != Direction::inout) {
+                    return std::nullopt;
+                }
+                // The conversion function has one parameter of the formal's
+                // type and returns the actual's type (6.5.7.1).
+                semantic::vhdl::Name function_name;
+                function_name.spelling = std::string { name };
+                function_name.canonical = function_name.spelling;
+                const semantic::CompiledDesignResolver resolver { specialization_ };
+                const auto actual_type = operand_type(
+                    aggregate->vhdl->associations.front().value);
+                const auto conforms = [&](const auto& candidate) {
+                    const auto function = specialization_.find_declaration(candidate.body);
+                    if (!function || function->vhdl == nullptr
+                        || !function->vhdl->callable
+                        || !function->vhdl->callable->function
+                        || !function->vhdl->callable->return_type
+                        || function->vhdl->callable->formals.size() != 1U) {
+                        return false;
+                    }
+                    const auto parameter = specialization_.find_declaration(
+                        function->vhdl->callable->formals.front());
+                    if (!parameter || parameter->vhdl == nullptr
+                        || !parameter->vhdl->subtype || !formal->vhdl->subtype) {
+                        return true;
+                    }
+                    const auto parameter_type
+                        = subtype_operand_type(*parameter->vhdl->subtype, 0U);
+                    const auto formal_type
+                        = subtype_operand_type(*formal->vhdl->subtype, 0U);
+                    const auto result_type = subtype_operand_type(
+                        *function->vhdl->callable->return_type, 0U);
+                    const auto conflict = [&](const OperandType& left,
+                                              const OperandType& right) {
+                        return scalar_class(left.kind) && scalar_class(right.kind)
+                            && types_conflict(left, right);
+                    };
+                    return !conflict(parameter_type, formal_type)
+                        && !conflict(result_type, actual_type);
+                };
+                const auto candidates = resolver.resolve_vhdl_callables(
+                    function_name, aggregate->vhdl->scope).candidates;
+                // A type conversion `T(formal)` has no callable candidates.
+                if (!candidates.empty()
+                    && std::ranges::none_of(candidates, conforms)) {
+                    return std::nullopt;
+                }
+                return index;
             }
         }
         return std::nullopt;
@@ -11152,6 +11215,14 @@ private:
             validate_record_aggregate(aggregate, *definition);
             return;
         }
+        // STD.ENV.TIME_RECORD is compiler-owned and has no type definition
+        // (IEEE 1076-2019 16.5); the lowerer lays out and checks its
+        // aggregate.
+        if (definition == nullptr
+            && vhdl_environment_time_record_subtype(
+                specialization_, target, aggregate.scope)) {
+            return;
+        }
         report(
             "FSIM-ELAB-VHAGG-001",
             "a VHDL aggregate requires an array or record context",
@@ -11340,6 +11411,16 @@ private:
                             return actual.declaration == selected_id
                                 && actual.actual_expression.has_value();
                         });
+            }
+            // So does a VHDL-2019 signal or variable (IEEE 1076-2019
+            // 6.4.2.3, 6.4.2.4).
+            if (vhdl_declaration.initializer
+                && architecture_.standard == "2019"
+                && (vhdl_declaration.form
+                        == semantic::vhdl::DeclarationForm::signal
+                    || vhdl_declaration.form
+                        == semantic::vhdl::DeclarationForm::variable)) {
+                return true;
             }
             if (vhdl_declaration.form
                     != semantic::vhdl::DeclarationForm::constant) {

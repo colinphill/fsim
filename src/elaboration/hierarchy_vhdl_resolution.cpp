@@ -35,7 +35,8 @@ HierarchyBuilder::register_compiled_vhdl_resolution(
         vhdl_function_resolvers_.insert_or_assign(signal,
             PendingVhdlResolver { binding.body, source,
                 std::make_shared<const semantic::SpecializedHirUnit>(
-                    specialization) });
+                    specialization),
+                { } });
     }
     if (binding.kind) {
         const auto [existing, inserted]
@@ -92,6 +93,24 @@ HierarchyBuilder::register_compiled_vhdl_resolution(
     return std::nullopt;
 }
 
+void HierarchyBuilder::register_compiled_vhdl_record_resolution(
+    const SignalId signal,
+    std::vector<VhdlResolverSegment> segments,
+    const semantic::SourceSpanId source,
+    const semantic::SpecializedHirUnit& specialization)
+{
+    static const std::string designator { "@vhdl-record-resolution" };
+    resolver_by_signal_.insert_or_assign(signal, designator);
+    vhdl_resolution_kinds_.insert_or_assign(
+        designator, ResolutionKind::vhdl_user_function);
+    const auto body = segments.front().function;
+    vhdl_function_resolvers_.insert_or_assign(signal,
+        PendingVhdlResolver { body, source,
+            std::make_shared<const semantic::SpecializedHirUnit>(
+                specialization),
+            std::move(segments) });
+}
+
 void HierarchyBuilder::lower_compiled_vhdl_resolvers(
     const std::unordered_map<SignalId, std::vector<ProcessId>>& drivers)
 {
@@ -129,8 +148,23 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
         const auto hierarchy = separator == std::string::npos
             ? std::string { }
             : name.substr(0U, separator);
+        // Each driver of a record of resolved elements drives its own
+        // parts of the unresolved ones.
+        std::vector<VhdlDriverRegions> driver_regions;
+        if (!pending.segments.empty()) {
+            for (const auto process : found->second) {
+                auto& regions = driver_regions.emplace_back();
+                for (const auto& region :
+                    design_.process_view(process).driver_regions()) {
+                    if (region.signal == signal && !region.whole) {
+                        regions.emplace_back(region.offset, region.width);
+                    }
+                }
+            }
+        }
         auto program = lowerer.lower_hir_vhdl_resolver_process(
-            signal, pending.body, found->second.size(), hierarchy);
+            signal, pending.body, found->second.size(), hierarchy,
+            pending.segments, driver_regions);
         if (!program) {
             report("FSIM-ELAB-VHRESOLVE-004",
                 "the VHDL resolution function of '" + name
@@ -158,7 +192,8 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
                 }
                 const auto diagnostics_before = diagnostics_.size();
                 auto variant = lowerer.lower_hir_vhdl_resolver_process(
-                    signal, pending.body, count, hierarchy);
+                    signal, pending.body, count, hierarchy,
+                    pending.segments, driver_regions);
                 if (count == 0U && diagnostics_.size() != diagnostics_before) {
                     variant.reset();
                 }

@@ -93,6 +93,12 @@ systemverilog_random_distribution_kind(std::string_view spelling) noexcept;
     std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<std::string_view>
 vhdl_logic_string_function_name(std::string_view spelling) noexcept;
+// The target name of a call through a subprogram alias whose target has no
+// declaration, a predefined or IEEE subprogram (IEEE 1076-2008 6.6.3):
+// `alias s is to_string [std_ulogic return string]` makes `s(x)` a call of
+// TO_STRING.
+[[nodiscard]] std::optional<std::string> vhdl_builtin_alias_call_name(
+    const semantic::SpecializedHirUnit&, const semantic::vhdl::Expression&);
 [[nodiscard]] bool vhdl_environment_time_record_subtype(
     const semantic::SpecializedHirUnit&,
     const semantic::vhdl::SubtypeIndication&,
@@ -380,7 +386,9 @@ public:
     [[nodiscard]] std::optional<HirVhdlResolverProgram>
     lower_hir_vhdl_resolver_process(SignalId signal,
         semantic::DeclarationId function, std::size_t driver_count,
-        std::string_view hierarchy);
+        std::string_view hierarchy,
+        std::vector<VhdlResolverSegment> segments = { },
+        std::vector<VhdlDriverRegions> driver_regions = { });
     // A VHDL conversion of a port association (IEEE 1076-2008 6.5.7.1,
     // 14.7.3): the program computes `destination`'s effective value from
     // the signals it reads, in the same simulation cycle they change.
@@ -594,6 +602,8 @@ private:
             SignalId signal { };
             semantic::DeclarationId function;
             std::size_t driver_count { };
+            std::vector<VhdlResolverSegment> segments;
+            std::vector<VhdlDriverRegions> driver_regions;
         };
         std::optional<VhdlResolver> vhdl_resolver;
     };
@@ -794,6 +804,20 @@ private:
     // (`v(i*8+7 downto i*8)`), or nullopt.
     [[nodiscard]] std::optional<std::size_t> hir_vhdl_symbolic_slice_length(
         semantic::ExpressionId slice) const;
+    // The positions, counted from the left end of the prefix, of the bounds
+    // of a VHDL slice `p(l to r)` or `p(l downto r)`. The bounds may be
+    // run-time values; the prefix's left bound must be static (IEEE
+    // 1076-2019 8.5). A null slice has last < first.
+    struct HirVhdlSlicePositions {
+        RegisterId first;
+        RegisterId last;
+    };
+    [[nodiscard]] std::optional<HirVhdlSlicePositions>
+    lower_hir_vhdl_slice_positions(semantic::ExpressionId slice_id);
+    // The binary characters of a run-time slice of a BIT_VECTOR, for TextIO
+    // WRITE (IEEE 1076-2019 16.4).
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_vhdl_bit_slice_text(semantic::ExpressionId slice_id);
     // The element width of a one-dimensional array subtype, or nullopt.
     [[nodiscard]] std::optional<std::size_t> hir_vhdl_vector_element_width(
         const semantic::vhdl::SubtypeIndication& subtype) const;
@@ -1150,6 +1174,8 @@ private:
         // A class object whose property `receiver` holds the handle
         // (`obj.vif.m`).
         std::optional<semantic::DeclarationId> object;
+        // A handle variable named hierarchically (`t.vif.m`): its signal.
+        std::optional<SignalId> handle_signal;
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
         // A parameter of the interface (`vif.P`): each instance's value.
         std::vector<std::pair<std::uint64_t, PackedLogic4>> parameters;
@@ -1164,6 +1190,14 @@ private:
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
     hir_systemverilog_virtual_interface_type(
         const semantic::sv::Declaration& declaration) const;
+    struct HirHierarchicalVirtualInterface {
+        semantic::DeclarationId declaration;
+        SignalId signal { };
+        semantic::sv::TypeReference type;
+    };
+    // A virtual interface variable named by a hierarchical path (`t.vif`).
+    [[nodiscard]] std::optional<HirHierarchicalVirtualInterface>
+    hir_hierarchical_virtual_interface(std::string_view path) const;
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(semantic::ExpressionId expression_id) const;
     [[nodiscard]] std::optional<RegisterId>
@@ -2315,6 +2349,20 @@ private:
     [[nodiscard]] std::optional<HirVhdlDirectoryStringSelection>
     hir_vhdl_environment_directory_string_selection(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    hir_vhdl_environment_directory_member(
+        semantic::ExpressionId name, std::string_view suffix) const;
+    // A STD.ENV array value indexed upwards from 0: its container and the
+    // number of container elements stored before index 0.
+    struct HirVhdlEnvironmentVector {
+        ContainerRegisterId container;
+        std::uint32_t skipped { };
+    };
+    [[nodiscard]] std::optional<HirVhdlEnvironmentVector>
+    lower_hir_vhdl_environment_vector(semantic::ExpressionId expression);
+    [[nodiscard]] RegisterId lower_hir_vhdl_environment_vector_attribute(
+        const HirVhdlEnvironmentVector& vector, std::string_view attribute,
+        std::size_t width);
     [[nodiscard]] bool is_hir_vhdl_environment_directory_statement(
         semantic::StatementId statement) const;
     [[nodiscard]] bool lower_hir_vhdl_environment_directory_statement(
@@ -2345,6 +2393,9 @@ private:
     lower_hir_vhdl_environment_string_expression(
         semantic::ExpressionId expression);
     [[nodiscard]] bool is_hir_vhdl_reflection_expression(
+        semantic::ExpressionId expression) const;
+    // A mirror method returning BOOLEAN (ASCENDING, IS_NULL).
+    [[nodiscard]] bool is_hir_vhdl_reflection_boolean_expression(
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool is_hir_vhdl_reflection_string_expression(
         semantic::ExpressionId expression) const;
@@ -3137,6 +3188,10 @@ private:
     [[nodiscard]] bool lower_hir_output_actual_write(
         semantic::ExpressionId target,
         RegisterId source);
+    // Writes one character to an element of a STRING variable held as a
+    // runtime string; nullopt when the target is no such element.
+    [[nodiscard]] std::optional<bool> lower_hir_vhdl_string_element_write(
+        semantic::ExpressionId target, RegisterId byte);
     [[nodiscard]] bool lower_hir_string_copy_out(
         semantic::ExpressionId target,
         StringRegisterId source);
@@ -3321,6 +3376,12 @@ private:
         std::optional<std::uint32_t> specialization = std::nullopt) const;
     [[nodiscard]] bool hir_class_derives_from_uvm(
         std::string_view identity) const;
+    // Whether `identity` names a declaration of the UVM library, which the
+    // design contains only when it declares `uvm_pkg::uvm_object`: a user
+    // package that is merely named `uvm_pkg` is ordinary code.
+    [[nodiscard]] bool hir_uvm_library_identity(
+        std::string_view identity) const;
+    mutable std::optional<bool> hir_uvm_library_declared_;
     // Run the constructor of `declaration` on `receiver` with the call
     // actuals: the explicit constructor body, or the implicit base
     // construction and property initializers.
@@ -3696,8 +3757,12 @@ private:
     // a composite one: `(e1,e2,...)` (IEEE 1076-2019 5.7).
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_value_image(
         RegisterId value, const semantic::vhdl::SubtypeIndication& subtype,
-        runtime::simir::OutputFormat vector_format,
+        runtime::simir::OutputFormat vector_format, bool image_quotes,
         const frontend::SourceSpan& span);
+    // The image of a composite value that has no scalar subelements.
+    [[nodiscard]] std::optional<std::string> hir_vhdl_null_composite_image(
+        const semantic::vhdl::SubtypeIndication& subtype, bool image_quotes,
+        std::size_t depth = 0U) const;
     // Whether values of the type have the parenthesized composite string
     // representation rather than a character string (IEEE 1076-2019 5.7).
     [[nodiscard]] bool hir_vhdl_parenthesized_image_type(

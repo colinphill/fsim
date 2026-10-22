@@ -39,7 +39,16 @@ systemverilog_constraint_wide_variable_domain(
     std::span<const SystemVerilogConstraintClause> clauses,
     SystemVerilogConstraintVariableId variable,
     const SystemVerilogConstraintVariableProfile& profile,
-    const std::function<std::uint64_t()>& random);
+    const std::function<std::uint64_t()>& random,
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed
+    = {});
+
+/// `clauses` with each variable in `fixed` other than `variable` read as the
+/// constant it holds (IEEE 1800-2017 18.3).
+[[nodiscard]] std::vector<SystemVerilogConstraintClause> clauses_with_fixed(
+    std::span<const SystemVerilogConstraintClause> clauses,
+    SystemVerilogConstraintVariableId variable,
+    const std::map<SystemVerilogConstraintVariableId, PackedLogic4>& fixed);
 
 /// The bounded domain of `variable`, reading each variable in `fixed` as the
 /// constant it holds: a state variable of the randomized object or scope is

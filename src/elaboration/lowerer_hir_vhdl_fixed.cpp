@@ -87,6 +87,14 @@ PackedLogic4 fixed_integer_value(
     return result.promoted_to_logic9();
 }
 
+// FROM_STRING and FROM_BSTRING read a binary string whose leftmost
+// character is the LEFT_INDEX bit (IEEE 1076-2019 fixed_generic_pkg).
+bool fixed_binary_string_function(const std::string_view name)
+{
+    return name == "from_string" || name == "from_bstring"
+        || name == "from_binary_string";
+}
+
 PackedLogic4 one_hot_value(
     const std::size_t bit,
     const std::size_t width)
@@ -114,8 +122,8 @@ bool Lowerer::is_hir_vhdl_fixed_function(
     }
     const auto& source = *expression->vhdl;
     const auto name = lowercase_vhdl_simple_name(source.text);
-    if (name != "to_ufixed" && name != "to_sfixed"
-        && name != "resize") {
+    if (name != "to_ufixed" && name != "to_sfixed" && name != "resize"
+        && !fixed_binary_string_function(name)) {
         return false;
     }
     if (name == "resize" && source.operands.size() != 3U) {
@@ -283,6 +291,33 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
         return { true, std::nullopt };
     }
 
+    if (fixed_binary_string_function(name)) {
+        const auto text = specialized_hir_unit_->evaluate_string_expression(
+            source.operands.front());
+        if (!text || text->size() != result_width
+            || !std::ranges::all_of(*text, [](const char character) {
+                   return character == '0' || character == '1';
+               })) {
+            report(
+                "FSIM-ELAB-VHFIX-001",
+                name
+                    + " requires a locally static binary string of the "
+                      "fixed-point width in this bounded profile",
+                operand_span(source.operands.front()));
+            return { true, std::nullopt };
+        }
+        PackedLogic4 value(result_width, Logic4::zero);
+        for (std::size_t index { }; index < result_width; ++index) {
+            if ((*text)[index] == '1') {
+                value.set(result_width - 1U - index, Logic4::one);
+            }
+        }
+        const auto result = allocate_register(
+            result_width, frontend::ValueDomain::Logic9);
+        process_.operations.emplace_back(
+            LoadConstant { result, value.promoted_to_logic9() });
+        return { true, result };
+    }
     if (conversion) {
         const auto integer = hir_constant_integer(source.operands.front());
         if (!integer) {

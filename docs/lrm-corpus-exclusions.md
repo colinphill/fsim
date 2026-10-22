@@ -10,10 +10,10 @@ Exclusions never count as closures.
 
 | suite | not run | out of scope |
 |---|---:|---:|
-| verilator | 70 | 281 |
+| verilator | 70 | 289 |
 | ivtest | 20 | 299 |
 | vests | 2 | 0 |
-| nvc | 222 | 0 |
+| nvc | 226 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## verilator
@@ -51,6 +51,8 @@ Exclusions never count as closures.
 | `t_clocked_release_combo` | out of scope | expects release to restore a variable (IEEE 1800-2017 10.6.2 keeps the forced value) |
 | `t_clocking_drive_concat` | out of scope | drives a concatenation of clockvars |
 | `t_config_inst_missing` | not run | lint-only test |
+| `t_config_libmap` | out of scope | declares its configuration inside its library map file; a lib.map file is limited to library specifications, include statements and comments (IEEE 1800-2023 33.3.2) |
+| `t_config_rules` | out of scope | its configuration has two default clauses with liblist expansion clauses; there cannot be more than one default clause that specifies the expansion clause (IEEE 1800-2023 33.4.1.2) |
 | `t_const_string_func` | out of scope | calls $sformatf in a constant function |
 | `t_constraint_array_limit` | out of scope | depends on Verilator --constraint-array-limit |
 | `t_constraint_dist_foreach_if` | out of scope | writes a dist inside parentheses, which IEEE 1800-2017 A.1.10 does not allow (dist is a constraint item, not an expression) |
@@ -85,7 +87,9 @@ Exclusions never count as closures.
 | `t_display_string_noopt` | out of scope | calls $sformatf in a constant function |
 | `t_display_time` | out of scope | calls $timeformat with one to three or empty arguments; IEEE 1800-2017 20.4.2 requires all four or none |
 | `t_dpi_accessors` | not run | needs the Verilator C++ model API |
+| `t_dpi_arg_inout_unpack` | out of scope | applies $bits to real variables through ARE_SAME (real is not a bit-stream type, IEEE 1800-2023 20.6.2, 6.24.3) and takes the C typedef unpack_struct_t from a tool-generated header the LRM does not define (H.7.8) |
 | `t_dpi_arg_input_unpack` | out of scope | its SystemVerilog branch for simulators other than Verilator and NC passes the undeclared variable shotreal_array1 (data shall be declared before use, IEEE 1800-2023 6.5) |
+| `t_dpi_arg_output_unpack` | out of scope | applies $bits to real variables through ARE_SAME (real is not a bit-stream type, IEEE 1800-2023 20.6.2, 6.24.3) and takes the C typedef unpack_struct_t from a tool-generated header the LRM does not define (H.7.8) |
 | `t_dpi_context` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_context_noopt` | out of scope | the companion's non-Verilator branch gives the import dpic_final C++ linkage, so no C function implements it (IEEE 1800-2023 35.5.1 links imports by their C name) |
 | `t_dpi_decl` | not run | needs the Verilator C++ model API |
@@ -100,6 +104,7 @@ Exclusions never count as closures.
 | `t_dpi_import_hdr_only` | not run | requires SystemC, PLI/VPI or DPI harness |
 | `t_dpi_inline_new` | not run | needs the Verilator C++ model API |
 | `t_dpi_lib` | out of scope | reads 40-bit part-selects with svGetPartselBit and svGetPartselLogic, which IEEE 1800-2023 H.10.1.2 limits to w <= 32 |
+| `t_dpi_open` | out of scope | passes packed vectors (bit [7:0] i_oba_b8) to the open unpacked-array formals of dpii_oba; an unsized formal dimension matches only an actual unpacked dimension (IEEE 1800-2023 35.5.6.1) |
 | `t_dpi_qw` | out of scope | an imported function calls an exported task; IEEE 1800-2023 35.8 makes that never legal |
 | `t_dpi_sys` | out of scope | calls imports named with escaped identifiers such as \$dpii_sys as system tasks, which only Verilator supports (the test `error's for other simulators) |
 | `t_dpi_vams` | not run | needs the Verilator C++ model API |
@@ -116,6 +121,7 @@ Exclusions never count as closures.
 | `t_enum_large_methods` | out of scope | compares %p of an unnamed enumeration value |
 | `t_enum_public` | not run | needs the Verilator C++ model API |
 | `t_enum_type_methods` | out of scope | prints an enumeration with %s as its name (non-standard) |
+| `t_event_class_fire` | out of scope | expects failure from Verilator issue #8303; a `->>` trigger occurs in the same time step's NBA region, so wait(e.triggered) completes (IEEE 1800-2017 15.5.2, 15.5.3) |
 | `t_event_control_expr` | out of scope | Verilator $c extension |
 | `t_event_control_expr_noinl` | out of scope | Verilator $c extension |
 | `t_event_control_pass` | out of scope | triggers a function call result (->b.get_event()); -> takes a hierarchical event identifier (IEEE 1800-2017 A.6.5) |
@@ -291,6 +297,8 @@ Exclusions never count as closures.
 | `t_sys_psprintf` | out of scope | calls $psprintf, a Verilator extension; the LRM string formatting function is $sformatf (IEEE 1800-2017 21.3.3) |
 | `t_sys_readmem` | out of scope | its memory file has a '#' comment line, a Verilator extension; a $readmem file holds only white space, // and /* */ comments, addresses and numbers (IEEE 1800-2017 21.4.3) |
 | `t_sys_readmem_eof` | out of scope | reads a file the Verilator driver generates |
+| `t_sys_sformat` | out of scope | expects %p to print an integer structure member as 'h0; singular members print as they would unformatted, in decimal (IEEE 1800-2023 21.2.1.6) |
+| `t_sys_sformat_noopt` | out of scope | expects %p to print an integer structure member as 'h0; singular members print as they would unformatted, in decimal (IEEE 1800-2023 21.2.1.6) |
 | `t_sys_stacktrace` | out of scope | uses the Verilator $stacktrace task |
 | `t_sys_system` | out of scope | expects an implementation-defined $system result |
 | `t_sys_writemem` | out of scope | reads the same '#'-commented memory file as t_sys_readmem (IEEE 1800-2017 21.4.3) |
@@ -773,6 +781,7 @@ Exclusions never count as closures.
 | `elab39` | not run | nvc-specific test kind shell |
 | `file1` | not run | expects READ's LENGTH to be 3 for the 5-character value "hello" (IEEE 1076-2008 5.5.2) and reads a character file through a string file type, whose format is implementation-defined |
 | `ieee2` | not run | nvc stop-delta option |
+| `image2` | not run | asserts the 'IMAGE of a record with a REAL element as "((42,-5),true,2.5)"; the image of a floating-point value has implementation-defined digits and notation (IEEE 1076-2019 16.2.2, 5.2.5.1) |
 | `integer1` | not run | declares a 64-bit integer type |
 | `integer2` | not run | expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; out-of-range INTEGER arithmetic is erroneous (IEEE 1076-2019 5.2.3.1) |
 | `integer3` | not run | asserts nvc's repeated range evaluation count, which the test notes should be 1 |
@@ -781,6 +790,7 @@ Exclusions never count as closures.
 | `issue1060` | not run | expects vhpi_assert with severity vhpiError to end the simulation; whether an error stops it is implementation-defined (IEEE 1076-2019 23.2, 10.3) |
 | `issue1071` | not run | nvc-specific test kind wave |
 | `issue1175` | not run | nvc-specific test kind relaxed |
+| `issue1213` | not run | expects a case generate statement to have kind vhpiIfGenerateK, which the test notes has no VHPI kind; the VHPI generateStmt class has only the forGenerate and ifGenerate classes (IEEE 1076-2019 19.11, Figure 38) |
 | `issue1218` | not run | uses nvc's own library packages |
 | `issue1287` | not run | nvc-specific test kind shell |
 | `issue1294` | not run | expects nvc's mapping of a Verilog x to std_logic 'U'; neither IEEE 1076-2019 nor IEEE 1800-2023 defines cross-language value mapping, and fsim maps x to 'X' (the value of the same name) |
@@ -876,6 +886,7 @@ Exclusions never count as closures.
 | `order3` | not run | nvc-specific test kind shell |
 | `order4` | not run | nvc-specific test kind shell |
 | `protected13` | not run | asserts a 'PATH_NAME of a protected-type variable that the test notes the LRM does not specify |
+| `protected9` | not run | asserts the shared variable's count after a parent and a child process both resume at 5 ns, so the result depends on which runs first; a description that depends on the order of execution of concurrent statements is erroneous (IEEE 1076-2019 11.1) |
 | `psl14` | not run | declares a PSL default clock among concurrent statements |
 | `psl15` | not run | declares a PSL default clock among concurrent statements |
 | `psl16` | not run | declares a PSL default clock among concurrent statements |
@@ -889,6 +900,7 @@ Exclusions never count as closures.
 | `real14` | not run | copy of ivtest itor_rtoi; expects results the test notes are not defined by the standard (IEEE 1800-2017 20.5) |
 | `reflect1` | not run | applies 'REFLECT to the enumeration literal TRUE; IEEE 1076-2019 16.2 defines O'REFLECT only for an object prefix |
 | `reflect2` | not run | documents nvc reflection bounds the test calls incorrect |
+| `reflect4` | not run | asserts rstm.element_subtype("A") = integer'reflect, access equality of two separately created subtype mirrors; mirror instances are created when 'REFLECT is evaluated (IEEE 1076-2019 16.12.1) and access values are equal only when they designate the same object (9.2.3) |
 | `reflect5` | not run | expects nvc's 1-based physical unit index (unit_index("ns") = 3); IEEE 1076-2019 16.12.3.6 gives the primary unit index zero |
 | `shared4` | not run | nvc-specific test kind relax |
 | `shuffle1` | not run | nvc --shuffle process order |

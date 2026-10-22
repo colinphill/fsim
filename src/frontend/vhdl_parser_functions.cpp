@@ -491,7 +491,25 @@ VhdlParser::parse_vhdl_procedure_parameters() {
 
     auto direction = PortDirection::Input;
     bool explicit_mode = false;
-    if (match_keyword("in", true)) {
+    std::optional<VhdlModeViewIndication> mode_view;
+    Type type;
+    if (match_keyword("view", true)) {
+      // A mode view formal is a signal of a composite type whose
+      // elements carry the view's modes (IEEE 1076-2019 6.5.2).
+      explicit_mode = true;
+      direction = PortDirection::Inout;
+      auto parsed = parse_vhdl_mode_view_indication(previous());
+      type = std::move(parsed.type);
+      mode_view = std::move(parsed.indication);
+      if (explicit_class.value_or(InterfaceObjectClass::Signal)
+          != InterfaceObjectClass::Signal) {
+        supported_class = false;
+        error(
+            previous(),
+            "FSIM-VHDL-SEM-049",
+            "a VHDL mode view parameter must be of class signal");
+      }
+    } else if (match_keyword("in", true)) {
       explicit_mode = true;
       direction = PortDirection::Input;
     } else if (match_keyword("out", true)) {
@@ -511,10 +529,12 @@ VhdlParser::parse_vhdl_procedure_parameters() {
           "bounded VHDL procedures support only in, out, and inout "
           "parameter modes");
     }
-    const auto object_class = explicit_class.value_or(
-        direction == PortDirection::Input
-            ? InterfaceObjectClass::Constant
-            : InterfaceObjectClass::Variable);
+    const auto object_class = mode_view
+        ? InterfaceObjectClass::Signal
+        : explicit_class.value_or(
+              direction == PortDirection::Input
+                  ? InterfaceObjectClass::Constant
+                  : InterfaceObjectClass::Variable);
     if (object_class == InterfaceObjectClass::File
         && explicit_mode) {
       supported_class = false;
@@ -532,7 +552,9 @@ VhdlParser::parse_vhdl_procedure_parameters() {
           "a constant-class VHDL procedure parameter must have mode in");
     }
 
-    const auto type = parse_vhdl_type(true, true);
+    if (!mode_view) {
+      type = parse_vhdl_type(true, true);
+    }
     // A signal formal may be of kind bus (IEEE 1076-2008 6.5.2).
     if (object_class == InterfaceObjectClass::Signal) {
       (void)match_keyword("bus", true);
@@ -576,7 +598,8 @@ VhdlParser::parse_vhdl_procedure_parameters() {
             direction,
             object_class,
             span_from(name, previous()),
-            default_value});
+            default_value,
+            mode_view});
       }
     }
 

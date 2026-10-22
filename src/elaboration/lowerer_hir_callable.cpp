@@ -4622,7 +4622,7 @@ Lowerer::hir_class_method_profile(
               call.class_member_identity, static_call,
               semantic::sv::ClassMethodKind::function).unique();
     const auto native_uvm = !scoped
-        && support::is_uvm_library_identity(call.class_member_identity);
+        && hir_uvm_library_identity(call.class_member_identity);
     // A virtual call dispatches to the object's override, so a pure
     // virtual prototype supplies only the signature (IEEE 1800-2017 8.21).
     const auto dispatched = instance_call
@@ -4807,7 +4807,7 @@ Lowerer::hir_class_task_profile(
         return std::nullopt;
     }
     const auto native_uvm
-        = class_call && support::is_uvm_library_identity(identity);
+        = class_call && hir_uvm_library_identity(identity);
     // A uvm_config_db or uvm_resource_db call runs on the native UVM
     // database.
     if (static_call && identity.starts_with("@uvm-")) {
@@ -5450,6 +5450,28 @@ bool Lowerer::hir_class_function_interpreted(
         });
 }
 
+bool Lowerer::hir_uvm_library_identity(const std::string_view identity) const
+{
+    if (!support::is_uvm_library_identity(identity)) {
+        return false;
+    }
+    if (identity.starts_with("@uvm-")) {
+        return true;
+    }
+    if (!hir_uvm_library_declared_) {
+        const auto& classes
+            = specialized_hir_unit_->design().systemverilog_hir.classes();
+        hir_uvm_library_declared_ = std::ranges::any_of(classes,
+            [](const semantic::sv::ClassDeclaration& item) {
+                return support::is_uvm_library_identity(
+                           item.canonical_identity)
+                    && item.canonical_identity.ends_with(
+                        "uvm_pkg::uvm_object");
+            });
+    }
+    return *hir_uvm_library_declared_;
+}
+
 bool Lowerer::hir_class_derives_from_uvm(
     const std::string_view identity) const
 {
@@ -5459,7 +5481,7 @@ bool Lowerer::hir_class_derives_from_uvm(
         = specialized_hir_unit_->design().systemverilog_hir.classes();
     std::set<std::string_view> visited;
     for (auto current = identity; !current.empty();) {
-        if (support::is_uvm_library_identity(current)) {
+        if (hir_uvm_library_identity(current)) {
             return true;
         }
         if (!visited.insert(current).second) {
@@ -5517,7 +5539,7 @@ Lowerer::hir_lowerable_constructor_class(const std::string_view identity,
         if (!visited.insert(current->canonical_identity).second
             || (!current->parameters.empty() && !specialized)
             || current->interface_class
-            || support::is_uvm_library_identity(
+            || hir_uvm_library_identity(
                 current->canonical_identity)
             || (current->base && !current->base->actuals.empty()
                 && !specialized)) {
@@ -6375,7 +6397,7 @@ Lowerer::lower_hir_class_function_call(
     if ((!lower_class_functions_ && !retry_input_container_actuals)
         || profile.static_method != !receiver
         || profile.identity.empty() || profile.identity.starts_with('@')
-        || support::is_uvm_library_identity(profile.identity)) {
+        || hir_uvm_library_identity(profile.identity)) {
         return std::nullopt;
     }
     if (const auto separator = profile.identity.rfind("::");
@@ -7573,7 +7595,7 @@ bool Lowerer::lower_hir_class_task_call(
         return false;
     }
     const auto native_uvm
-        = support::is_uvm_library_identity(profile->identity);
+        = hir_uvm_library_identity(profile->identity);
     std::optional<RegisterId> receiver;
     if (profile->receiver) {
         receiver = lower_hir_expression(*profile->receiver, 64U);
@@ -7623,7 +7645,7 @@ bool Lowerer::lower_hir_class_task_call(
         };
         std::vector<std::pair<std::size_t, HirClassOverride>> writers;
         for (const auto& candidate : classes) {
-            if (support::is_uvm_library_identity(
+            if (hir_uvm_library_identity(
                     candidate.canonical_identity)) {
                 continue;
             }
@@ -7744,7 +7766,7 @@ bool Lowerer::lower_hir_class_task_call(
     if (native_uvm && receiver && !profile->static_method && !base_call()) {
         for (const auto& item :
             hir_class_method_overrides(profile->declaration)) {
-            if (support::is_uvm_library_identity(item.identity)) {
+            if (hir_uvm_library_identity(item.identity)) {
                 continue;
             }
             const auto selected = allocate_register(
@@ -7934,7 +7956,7 @@ bool Lowerer::lower_hir_class_task_call(
                 std::vector<InstructionIndex> callback_exits;
                 for (const auto& item : hir_class_method_overrides(
                          callback_method->declaration)) {
-                    if (support::is_uvm_library_identity(item.identity)) {
+                    if (hir_uvm_library_identity(item.identity)) {
                         continue;
                     }
                     const auto selected = allocate_register(
@@ -13538,6 +13560,20 @@ Lowerer::hir_vhdl_returned_result_shape(
                 }
                 returned.push_back(*source.value);
                 continue;
+            }
+            // An if statement whose condition folds under this call's
+            // actuals returns only from the branch it takes (IEEE 1076-2008
+            // 10.8).
+            if (source.kind == semantic::vhdl::StatementKind::conditional
+                && source.condition && source.alternatives.empty()) {
+                if (const auto folded
+                    = hir_constant_integer(*source.condition)) {
+                    self(self,
+                        *folded != 0 ? source.statements
+                                     : source.else_statements,
+                        depth + 1U);
+                    continue;
+                }
             }
             self(self, source.statements, depth + 1U);
             self(self, source.else_statements, depth + 1U);
@@ -19911,9 +19947,21 @@ bool Lowerer::hir_vhdl_string_comparison_operands(
     const bool left_string = hir_expression_is_string(left, hir_process_scope_);
     const bool right_string
         = hir_expression_is_string(right, hir_process_scope_);
+    // An aggregate compared with a string of run-time length (a function
+    // result) takes that operand's string type (IEEE 1076-2008 9.3.3.1).
+    const auto aggregate_against = [&](const semantic::ExpressionId id,
+                                       const semantic::ExpressionId string) {
+        const auto record = specialized_hir_unit_->find_expression(id);
+        const auto width = hir_expression_width(string, hir_process_scope_);
+        return record && record->vhdl != nullptr
+            && record->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+            && (!width || *width == 0U);
+    };
     return (left_string && right_string)
-        || (left_string && file_line(right))
-        || (right_string && file_line(left));
+        || (left_string
+            && (file_line(right) || aggregate_against(right, left)))
+        || (right_string
+            && (file_line(left) || aggregate_against(left, right)));
 }
 
 frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(

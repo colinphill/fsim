@@ -1497,6 +1497,7 @@ bool builtin_standard_package_exports(const std::string_view library,
     if (same_vhdl_identifier(package, "reflection")) {
         constexpr auto members = std::to_array<std::string_view>({
             "type_class", "value_class",
+            "index", "natural_index", "positive_index", "dimension",
             "value_mirror", "subtype_mirror",
             "enumeration_value_mirror", "enumeration_subtype_mirror",
             "integer_value_mirror", "integer_subtype_mirror",
@@ -2967,6 +2968,32 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         }
         return std::nullopt;
     };
+    // An alias of a type (6.6.3), projected as a subtype that only renames
+    // its type mark, denotes that type; homographs that denote the same
+    // named entity are both made directly visible (IEEE 1076-2008 12.4 c).
+    const auto denoted_type = [&](TypeId id) {
+        for (std::size_t depth { }; depth < 16U; ++depth) {
+            const auto renamed = find_type(id);
+            if (!renamed || renamed->vhdl == nullptr) {
+                break;
+            }
+            const auto& definition = *renamed->vhdl;
+            const bool renaming = definition.form == vhdl::TypeForm::alias
+                || (definition.form == vhdl::TypeForm::subtype
+                    && definition.base.constraints.empty()
+                    && definition.base.element_constraints.empty()
+                    && definition.base.resolution_function.spelling.empty());
+            if (!renaming || !definition.base.type_mark.target.valid()) {
+                break;
+            }
+            id = definition.base.type_mark.target;
+        }
+        return id;
+    };
+    const auto same_denotation = [&](const std::optional<TypeId> left,
+                                     const TypeId right) {
+        return left && denoted_type(*left) == denoted_type(right);
+    };
     for (const auto stored_id : named_type_ids) {
         const auto type = find_type(stored_id);
         if (!type || type->vhdl == nullptr
@@ -3086,7 +3113,8 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
                     selected_score = score;
                     ambiguous = false;
                 } else if (score == selected_score
-                    && selected != definition.id) {
+                    && selected != definition.id
+                    && !same_denotation(selected, definition.id)) {
                     ambiguous = true;
                 }
             }
@@ -3096,7 +3124,8 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
                 selected_score = score;
                 ambiguous = false;
             } else if (score == selected_score
-                && selected != definition.id) {
+                && selected != definition.id
+                && !same_denotation(selected, definition.id)) {
                 ambiguous = true;
             }
         }
@@ -7143,6 +7172,71 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 binding.systemverilog_type = actual.systemverilog_type;
                 binding.vhdl_type = actual.vhdl_type;
                 consider_binding(binding);
+            }
+        }
+        if (!candidates.empty()) {
+            std::ranges::sort(candidates, {},
+                [](const CompiledVhdlPackageMember& candidate) {
+                    return std::tuple { candidate.member,
+                        candidate.package_instance };
+                });
+            const auto duplicate = std::ranges::unique(candidates, { },
+                [](const CompiledVhdlPackageMember& candidate) {
+                    return std::tuple { candidate.member,
+                        candidate.package_instance };
+                });
+            candidates.erase(duplicate.begin(), duplicate.end());
+            return { status_for(candidates.size()),
+                std::move(candidates) };
+        }
+    }
+
+    // `inst.p.m`: member `m` of the package instance bound to the package
+    // generic `p` of `inst` (IEEE 1076-2008 6.5.7.2, 8.3).
+    if (parts.size() == 3U) {
+        vhdl::Name head;
+        head.spelling
+            = std::string { parts[0] } + "." + std::string { parts[1] };
+        head.canonical = head.spelling;
+        const auto generic_package_formals = resolve_vhdl_package_members(
+            head, use_scope, [](const CompiledDeclarationView& view) {
+                return view.vhdl != nullptr
+                    && view.vhdl->form
+                        == vhdl::DeclarationForm::generic_package;
+            });
+        const CompiledDeclarationPredicate instance_declaration
+            = [](const CompiledDeclarationView& view) {
+                  return view.vhdl != nullptr
+                      && (view.vhdl->form
+                              == vhdl::DeclarationForm::package_instance
+                          || view.vhdl->form
+                              == vhdl::DeclarationForm::generic_package);
+              };
+        for (const auto& formal_candidate :
+            generic_package_formals.candidates) {
+            for (const auto& binding_item :
+                formal_candidate.generic_bindings) {
+                if (binding_item.formal != formal_candidate.member) {
+                    continue;
+                }
+                auto bound = binding_item.actual_declaration;
+                if (!bound && binding_item.expression) {
+                    bound = resolve_expression_name(*binding_item.expression,
+                        instance_declaration, true)
+                                .unique();
+                }
+                if (!bound) {
+                    continue;
+                }
+                const auto inner
+                    = actual_declaration(*bound).value_or(*bound);
+                const auto inner_view
+                    = find_declaration(*design_, effective_, inner);
+                if (inner_view && inner_view->vhdl != nullptr
+                    && inner_view->vhdl->form
+                        == vhdl::DeclarationForm::package_instance) {
+                    append_instance(inner, parts.back());
+                }
             }
         }
         if (!candidates.empty()) {
