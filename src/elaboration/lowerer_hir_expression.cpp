@@ -2350,9 +2350,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         ? hir_referenced_declaration(
               expression->vhdl->operands.front())
         : std::nullopt;
+    // A formal whose actual is a runtime string has no proven bounds; its
+    // runtime length gives them (IEEE 1076-2019 4.2.2.3).
     const bool has_callable_formal_range = prefix_declaration
-        && hir_vhdl_callable_formal_range(
-            *prefix_declaration, 0U)
+        && hir_vhdl_callable_formal_range(*prefix_declaration, 0U)
+               .value_or(std::nullopt)
                .has_value();
     // The bounds of a STRING held as a runtime string, such as a local
     // `string(1 to size)` sized by a formal: an ascending range from its
@@ -2433,6 +2435,42 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         process_.operations.emplace_back(Binary {
             BinaryOperator::subtract_signed, last, sum, one });
         return as_integer(last);
+    }
+    // A call path vector, or an access value designating one, is indexed
+    // from 0 (IEEE 1076-2019 16.5.6.2, 8.3).
+    if (expression && expression->vhdl != nullptr
+        && expression->vhdl->operands.size() == 1U
+        && (expression->vhdl->text == "'length"
+            || expression->vhdl->text == "'left"
+            || expression->vhdl->text == "'low"
+            || expression->vhdl->text == "'right"
+            || expression->vhdl->text == "'high")) {
+        if (const auto container
+            = lower_hir_vhdl_environment_call_path_container_expression(
+                expression->vhdl->operands.front())) {
+            const auto width = expected_width != 0U ? expected_width : 32U;
+            const auto size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize {
+                size, *container });
+            auto value = size;
+            if (expression->vhdl->text == "'left"
+                || expression->vhdl->text == "'low") {
+                value = load_integer(0, 32U, frontend::ValueDomain::Bit2);
+            } else if (expression->vhdl->text != "'length") {
+                const auto one
+                    = load_integer(1, 32U, frontend::ValueDomain::Bit2);
+                value = allocate_register(32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::subtract_signed, value, size, one });
+            }
+            const auto destination = allocate_register(
+                width, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(CopyRegister {
+                destination,
+                width == 32U ? value : resize_register(value, width, true) });
+            return destination;
+        }
     }
     HirVhdlAttributeFailure failure { HirVhdlAttributeFailure::none };
     const auto attribute = hir_vhdl_attribute_profile(
@@ -27626,7 +27664,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             const auto value = api == frontend::VhdlSimulatorApi::file_name
                 ? path.filename().generic_string()
                 : api == frontend::VhdlSimulatorApi::file_path
-                ? path.generic_string()
+                ? support::vhdl_environment_file_path(path)
                 : std::to_string(span.begin.line);
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {

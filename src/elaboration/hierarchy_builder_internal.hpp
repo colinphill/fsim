@@ -1932,6 +1932,11 @@ private:
     std::unordered_map<std::string,
         std::vector<std::pair<std::string, std::string>>>
         systemverilog_interface_parameter_identities_;
+    // Each interface instance's type parameter actuals, by parameter name,
+    // for the hidden type parameters bound through an interface port.
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, semantic::SpecializedHirActualIdentity>>
+        systemverilog_interface_type_actuals_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_types_;
     // Each instance's and loop-generate iteration's specialization; an

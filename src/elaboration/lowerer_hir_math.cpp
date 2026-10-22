@@ -313,8 +313,9 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
             && (name == "realmax" || name == "realmin"))) {
         return std::nullopt;
     }
-    // A user function of that name hides nothing in IEEE.MATH_REAL unless
-    // it is that package's own declaration.
+    // A user function of that name hides the IEEE.MATH_REAL function only
+    // as a homograph, with REAL formals (IEEE 1076-2008 12.3); another
+    // overload (`SQRT(COMPLEX)`) leaves it visible.
     if (source.referenced_name) {
         std::vector<semantic::DeclarationId> candidates
             = source.referenced_name->overloads;
@@ -324,9 +325,27 @@ std::optional<std::string> Lowerer::hir_vhdl_math_real_function(
         for (const auto candidate : candidates) {
             const auto declaration
                 = specialized_hir_unit_->find_declaration(candidate);
-            if (!declaration || declaration->vhdl == nullptr
-                || !specialized_hir_unit_->design().vhdl_scope_in_package(
+            if (!declaration || declaration->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            if (specialized_hir_unit_->design().vhdl_scope_in_package(
                     declaration->vhdl->scope, "ieee", "math_real")) {
+                continue;
+            }
+            const auto& callable = declaration->vhdl->callable;
+            const bool homograph = !callable
+                || (callable->formals.size() == source.operands.size()
+                    && std::ranges::all_of(callable->formals,
+                        [&](const semantic::DeclarationId formal) {
+                            const auto view
+                                = specialized_hir_unit_->find_declaration(
+                                    formal);
+                            return !view || view->vhdl == nullptr
+                                || !view->vhdl->subtype
+                                || hir_vhdl_subtype_is_real(
+                                    *view->vhdl->subtype);
+                        }));
+            if (homograph) {
                 return std::nullopt;
             }
         }

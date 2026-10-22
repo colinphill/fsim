@@ -145,6 +145,11 @@ void Resolver::run() {
     }
     add_objects(scope, unit.parameters);
     add_objects(scope, unit.ports);
+    for (const auto& port : unit.ports) {
+      if (!port.interface_type.empty()) {
+        scope.interface_ports.insert(port.name);
+      }
+    }
     for (const auto& instance : unit.instances) {
       scope.instances.emplace(instance.name, instance.unit_name);
     }
@@ -307,6 +312,10 @@ void Resolver::run() {
       }
       for (auto& function : process.functions) {
         resolve_function(function, process_scope);
+      }
+      for (auto& sensitivity : process.sensitivities) {
+        resolve_member_sensitivity(sensitivity, process_scope);
+        resolve_expression(sensitivity.expression, process_scope);
       }
       for (auto& statement : process.statements) {
         resolve_statement(statement, process_scope, std::nullopt);
@@ -631,6 +640,10 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
     }
     for (auto& function : process.functions) {
       resolve_function(function, process_scope);
+    }
+    for (auto& sensitivity : process.sensitivities) {
+      resolve_member_sensitivity(sensitivity, process_scope);
+      resolve_expression(sensitivity.expression, process_scope);
     }
     for (auto& statement : process.statements) {
       resolve_statement(statement, process_scope, std::nullopt);
@@ -1273,6 +1286,7 @@ void Resolver::resolve_class_scope_constants(
           if (!selection->type.systemverilog_class_parameter_actuals.empty()) {
             expression.systemverilog_class_owner =
                 std::make_shared<const Type>(selection->type);
+            resolve_class_owner_constants(expression, scope, depth);
           }
           retain_result_type(expression, type);
           return;
@@ -1280,9 +1294,70 @@ void Resolver::resolve_class_scope_constants(
       }
     }
   }
+  // A static method of a class specialization (`C#(7)::f()`) is a
+  // constant function call (IEEE 1800-2017 11.2.1, 8.25.1).
+  if (expression.kind == ExpressionKind::Call
+      && !expression.text.starts_with('$')
+      && !expression.text.starts_with('@')
+      && expression.text.find('.') == std::string::npos) {
+    const auto at = expression.text.rfind("::");
+    if (at != std::string::npos && at != 0U
+        && resolve_class_selection(
+            std::string_view{expression.text}.substr(0U, at), scope,
+            expression.systemverilog_class_selection.get())) {
+      (void)resolve_expression(expression, scope);
+      resolve_class_owner_constants(expression, scope, depth);
+    }
+  }
   for (auto& operand : expression.operands) {
     resolve_class_scope_constants(operand, scope, depth + 1U);
   }
+}
+// An event control on a member of a structure variable (`@(negedge
+// s.clk)`) is an event expression on that member, not a hierarchical
+// name (IEEE 1800-2017 9.4.2, 7.2).
+void Resolver::resolve_member_sensitivity(
+    Sensitivity& sensitivity, const Scope& scope) const {
+  const auto& name = sensitivity.signal;
+  const auto dot = name.find('.');
+  if (dot == std::string::npos || dot == 0U || name.front() == '\\'
+      || name.find("::") != std::string::npos
+      || sensitivity.expression.valid()) {
+    return;
+  }
+  const auto root = std::string_view{name}.substr(0U, dot);
+  const auto* type = scope.objects.find(root);
+  if (type == nullptr || scope.instances.contains(root)
+      || scope.interface_ports.contains(root)
+      || (type->packed_aggregate == PackedAggregateKind::None
+          && type->named_type.empty())
+      || !type->systemverilog_class_name.empty()
+      || type->systemverilog_virtual_interface
+      || type->systemverilog_container
+      || (!type->named_type.empty()
+          && !resolve_class_name(type->named_type, scope).empty())) {
+    return;
+  }
+  sensitivity.expression = Expression{
+      ExpressionKind::Identifier, name, {}, sensitivity.span};
+  sensitivity.expression.systemverilog_source_order
+      = sensitivity.systemverilog_source_order;
+  sensitivity.signal.clear();
+}
+// An actual of a class selection naming another class's constant
+// (`D#(c13::b)::v`) is itself a class-scoped constant (IEEE 1800-2017
+// 8.25.1).
+void Resolver::resolve_class_owner_constants(
+    Expression& expression, const Scope& scope, const std::size_t depth) {
+  if (!expression.systemverilog_class_owner) return;
+  auto owner = *expression.systemverilog_class_owner;
+  for (auto& actual : owner.systemverilog_class_parameter_actuals) {
+    if (actual.value.valid()) {
+      resolve_class_scope_constants(actual.value, scope, depth + 1U);
+    }
+  }
+  expression.systemverilog_class_owner
+      = std::make_shared<const Type>(std::move(owner));
 }
 void Resolver::resolve_module_constant(
     Expression& expression, const Scope& scope) {
@@ -1312,7 +1387,8 @@ void Resolver::resolve_range_constants(Type& type, const Scope& scope) {
   }
 }
 void Resolver::substitute_class_parameter_references(
-    Expression& expression, const Scope& scope, const std::size_t depth) {
+    Expression& expression, const Scope& scope,
+    const std::size_t depth) const {
   if (depth > 16U) return;
   if (expression.kind == ExpressionKind::Identifier
       && expression.text.find('#') != std::string::npos) {
@@ -1395,7 +1471,7 @@ std::optional<std::string> Resolver::class_specialization_spelling(
   return spelling + ")";
 }
 std::optional<Expression> Resolver::class_scoped_parameter_value(
-    const Type& type, const Scope& scope) {
+    const Type& type, const Scope& scope) const {
   const auto selected = type.named_type.rfind("::");
   if (selected == std::string::npos) return std::nullopt;
   const auto spelling = class_specialization_spelling(
@@ -1679,9 +1755,28 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         retained.type_actual = std::make_shared<Type>(std::move(unfolded));
       }
       if (formal.kind != ParameterKind::Type && retained.type_actual) {
-        // A name read as a type is a value here.
-        retained.value = Expression{ExpressionKind::Identifier,
-            retained.type_actual->named_type, {}, actual.span};
+        // A name read as a type is a value here; `D#(C#(9)::b)` names a
+        // parameter of a class specialization (IEEE 1800-2017 8.25.1).
+        if (auto value = class_scoped_parameter_value(
+                *retained.type_actual, scope)) {
+          retained.value = std::move(*value);
+          substitute_class_parameter_references(retained.value, scope);
+        } else {
+          retained.value = Expression{ExpressionKind::Identifier,
+              retained.type_actual->named_type, {}, actual.span};
+          // `D#(D#(9)::v)` keeps the inner specialization's actuals.
+          if (!retained.type_actual->systemverilog_class_parameter_actuals
+                   .empty()) {
+            auto owner_type = *retained.type_actual;
+            if (const auto cut = owner_type.named_type.rfind("::");
+                cut != std::string::npos) {
+              owner_type.named_type.resize(cut);
+            }
+            owner_type.spelling = owner_type.named_type;
+            retained.value.systemverilog_class_selection
+                = std::make_shared<const Type>(std::move(owner_type));
+          }
+        }
         retained.type_actual.reset();
       }
       if (formal.kind != ParameterKind::Type && !retained.value.valid()) {
@@ -1970,6 +2065,17 @@ void Resolver::normalize_selection_actuals(
     }
     if (formal_index >= selection.declaration->parameters.size()) continue;
     const auto& formal = selection.declaration->parameters[formal_index];
+    // `D#(C#(9)::b)` names a parameter of a class specialization: a value
+    // actual of a value formal (IEEE 1800-2017 8.25.1).
+    if (formal.kind == ParameterKind::Value && actual.type_actual) {
+      if (auto value = class_scoped_parameter_value(
+              *actual.type_actual, scope)) {
+        actual.value = std::move(*value);
+        actual.type_actual.reset();
+        substitute_class_parameter_references(actual.value, scope);
+      }
+      continue;
+    }
     if (formal.kind == ParameterKind::Type && !actual.type_actual
         && actual.value.valid()) {
       actual.type_actual = std::make_shared<Type>(

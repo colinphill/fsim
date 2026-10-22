@@ -3254,7 +3254,16 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_direct_range(
         const auto declaration = specialized_hir_unit_->find_declaration(
             *expression->vhdl->referenced_name->selected);
         if (declaration && declaration->vhdl != nullptr && declaration->vhdl->subtype) {
-            for (const auto& constraint : declaration->vhdl->subtype->constraints) {
+            // A named constrained subtype (`alias a : half is w(2 to 3)`)
+            // gives its range through its declaration.
+            auto own = std::optional { *declaration->vhdl->subtype };
+            if (std::ranges::none_of(own->constraints, [](const auto& range) {
+                    return range.kind == semantic::vhdl::RangeKind::array_index;
+                })) {
+                own = hir_effective_vhdl_subtype(*own);
+            }
+            for (const auto& constraint : own ? own->constraints
+                     : std::vector<semantic::vhdl::RangeConstraint> { }) {
                 if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
                     continue;
                 }

@@ -1554,9 +1554,10 @@ void test_systemverilog_metadata(
     const auto root = registry.find("vpi_metadata");
     const auto interface_instance = registry.find("vpi_metadata.bus");
     const auto program_instance = registry.find("vpi_metadata.stimulus");
-    const auto package = registry.find("vpi_metadata_pkg");
-    const auto packet = registry.find("vpi_metadata_pkg.packet");
-    const auto payload = registry.find("vpi_metadata_pkg.packet.payload");
+    // A package's scope is `pkg::` (IEEE 1800-2023 3.13, 37.10).
+    const auto package = registry.find("vpi_metadata_pkg::");
+    const auto packet = registry.find("vpi_metadata_pkg::packet");
+    const auto payload = registry.find("vpi_metadata_pkg::packet.payload");
     assert(root && interface_instance && program_instance && package && packet
         && payload);
     const auto has_2005_profile = [&](const fsim_vpi_handle_v1 handle) {

@@ -5,6 +5,8 @@
 
 #include <array>
 #include <cctype>
+#include <filesystem>
+#include <string>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -45,6 +47,24 @@ namespace fsim::support {
         }
     }
     return std::nullopt;
+}
+
+/// The STD.ENV FILE_PATH value for a source file: its fully resolved
+/// absolute directory, without the file name and without a trailing
+/// directory separator (IEEE 1076-2019 16.5.6).
+[[nodiscard]] inline std::string vhdl_environment_file_path(
+    const std::filesystem::path& source)
+{
+    std::error_code error;
+    auto resolved = std::filesystem::absolute(source, error);
+    if (error) {
+        resolved = source;
+    }
+    if (auto canonical = std::filesystem::weakly_canonical(resolved, error);
+        !error) {
+        resolved = std::move(canonical);
+    }
+    return resolved.lexically_normal().parent_path().generic_string();
 }
 
 } // namespace fsim::support

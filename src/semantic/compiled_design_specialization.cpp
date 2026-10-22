@@ -435,6 +435,23 @@ std::string systemverilog_string_identity(const std::string_view bytes)
 
 namespace {
 
+enum class InferredVhdlTypeClass : std::uint8_t {
+    unknown,
+    discrete,
+    integer,
+    physical,
+    floating,
+    array,
+    access,
+    file,
+    composite,
+    protected_type,
+};
+
+InferredVhdlTypeClass vhdl_declaration_type_class(
+    const CompiledDesign& design, DeclarationId declaration,
+    std::string_view fallback_spelling);
+
 // The design's resolution pass chose the predefined operator for this VHDL
 // operator expression, although the design overloads its symbol (IEEE
 // 1076-2008 12.5).
@@ -4382,6 +4399,17 @@ private:
         return base.elements[static_cast<std::size_t>(position)];
     }
 
+    // An integer, enumeration or physical object (IEEE 1076-2008 5.2).
+    [[nodiscard]] bool vhdl_scalar_declaration(
+        const DeclarationId declaration) const
+    {
+        const auto type_class = vhdl_declaration_type_class(
+            unit_.design(), declaration, { });
+        return type_class == InferredVhdlTypeClass::integer
+            || type_class == InferredVhdlTypeClass::discrete
+            || type_class == InferredVhdlTypeClass::physical;
+    }
+
     [[nodiscard]] std::optional<VhdlConstantValue>
     evaluate_vhdl_declaration(const DeclarationId declaration)
     {
@@ -4392,6 +4420,15 @@ private:
                 return value->second.kind == VhdlConstantValue::Kind::invalid
                     ? std::nullopt
                     : std::optional { value->second };
+            }
+            // The integral evaluator binds a scalar formal or local by its
+            // value alone; a nested typed evaluation reads it from there.
+            if (const auto value = frame->values.find(declaration);
+                value != frame->values.end()
+                && vhdl_scalar_declaration(declaration)) {
+                return value->second
+                    ? std::optional { vhdl_integer_value(*value->second) }
+                    : std::nullopt;
             }
         }
         ensure_actual(declaration);
@@ -5100,8 +5137,10 @@ private:
     }
 
     [[nodiscard]] std::optional<VhdlConstantValue>
-    evaluate_vhdl_overloaded_operator(const vhdl::Expression& expression)
+    evaluate_vhdl_overloaded_operator(
+        const vhdl::Expression& expression, bool& predefined_only)
     {
+        predefined_only = false;
         if (expression.builtin_operator != vhdl::BuiltinOperatorIdentity::none
             || (!expression.argument_names.empty()
                 && std::ranges::any_of(expression.argument_names,
@@ -5402,12 +5441,91 @@ private:
             return true;
         };
 
+        // A numeric literal, a generate parameter, or a scalar-typed actual
+        // can never be an actual of a composite formal; a candidate with
+        // such a pairing is excluded whatever the other operands are.
+        const auto composite_type = [&](const vhdl::SubtypeIndication& subtype,
+                                        const ScopeId scope) {
+            if (predefined_profile_identity(subtype, scope)) {
+                return true;
+            }
+            const auto root = base_type(subtype, scope);
+            const auto type = root ? unit_.find_type(*root) : std::nullopt;
+            if (!type || type->vhdl == nullptr) {
+                return false;
+            }
+            const auto form = type->vhdl->form;
+            return form == vhdl::TypeForm::array
+                || form == vhdl::TypeForm::record
+                || form == vhdl::TypeForm::access
+                || form == vhdl::TypeForm::file
+                || form == vhdl::TypeForm::protected_type;
+        };
+        const auto scalar_operand = [&](const std::size_t index) {
+            const auto operand = unit_.find_expression(
+                expression.operands[index]);
+            if (!operand || operand->vhdl == nullptr) {
+                return false;
+            }
+            const auto& value = *operand->vhdl;
+            if (value.kind == vhdl::ExpressionKind::integer_literal
+                || value.kind == vhdl::ExpressionKind::real_literal) {
+                return true;
+            }
+            if (value.kind == vhdl::ExpressionKind::name
+                && (!value.referenced_name || !value.referenced_name->selected)
+                && vhdl_generate_iterator_visible(value.text, value.scope)) {
+                return true;
+            }
+            const auto actual = actual_subtype(expression.operands[index]);
+            if (!actual) {
+                return false;
+            }
+            const auto root = base_type(*actual, expression.scope);
+            const auto type = root ? unit_.find_type(*root) : std::nullopt;
+            return type && type->vhdl != nullptr
+                && (type->vhdl->form == vhdl::TypeForm::scalar
+                    || type->vhdl->form == vhdl::TypeForm::enumeration
+                    || type->vhdl->form == vhdl::TypeForm::physical);
+        };
+        const auto excluded = [&](const auto& candidate) {
+            const auto callable = unit_.find_declaration(candidate.body);
+            if (!callable || callable->vhdl == nullptr
+                || !callable->vhdl->callable) {
+                return false;
+            }
+            const auto& formals = callable->vhdl->callable->formals;
+            if (formals.size() != arity) {
+                return true;
+            }
+            for (std::size_t index { }; index < arity; ++index) {
+                const auto formal = unit_.find_declaration(formals[index]);
+                const auto formal_subtype = formal && formal->vhdl != nullptr
+                    ? vhdl_declaration_subtype(*formal->vhdl)
+                    : std::nullopt;
+                if (formal_subtype && scalar_operand(index)
+                    && composite_type(*formal_subtype, formal->vhdl->scope)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
         std::vector<CompiledVhdlCallableResolution> candidates;
+        bool every_candidate_excluded = true;
         for (const auto& candidate : visible.candidates) {
-            if (allowed_by_hir(candidate) && profile_matches(candidate)) {
+            if (!allowed_by_hir(candidate)) {
+                continue;
+            }
+            if (profile_matches(candidate)) {
                 candidates.push_back(candidate);
             }
+            every_candidate_excluded
+                = every_candidate_excluded && excluded(candidate);
         }
+        // No user operator can apply: the predefined operator does (IEEE
+        // 1076-2008 9.2.1, 12.5).
+        predefined_only = candidates.empty() && every_candidate_excluded;
         return candidates.size() == 1U
             ? evaluate_vhdl_callable(expression, candidates.front().body)
             : std::nullopt;
@@ -5561,7 +5679,12 @@ private:
         if ((source.kind == Kind::unary || source.kind == Kind::binary)
             && vhdl_operator_overloaded_by_design(unit_.design(), source.text)
             && !vhdl_predefined_operator_selected(source)) {
-            return evaluate_vhdl_overloaded_operator(source);
+            bool predefined_only { };
+            auto overloaded
+                = evaluate_vhdl_overloaded_operator(source, predefined_only);
+            if (!predefined_only) {
+                return overloaded;
+            }
         }
         if (source.kind == Kind::unary && source.operands.size() == 1U) {
             const auto operand = evaluate_vhdl_value(
@@ -12794,12 +12917,24 @@ private:
             }
             return parse_integral_identity(expression.text);
         }
-        // A VHDL operator the design overloads is a function call.
-        if (!systemverilog
-            && (expression.kind == Kind::unary || expression.kind == Kind::binary)
-            && vhdl_operator_overloaded_by_design(unit_.design(), expression.text)
-            && !vhdl_predefined_operator_selected(expression)) {
-            return std::nullopt;
+        // A VHDL operator the design overloads is a function call, unless
+        // no user overload can accept the operands.
+        if constexpr (!systemverilog) {
+            if ((expression.kind == Kind::unary
+                    || expression.kind == Kind::binary)
+                && vhdl_operator_overloaded_by_design(
+                    unit_.design(), expression.text)
+                && !vhdl_predefined_operator_selected(expression)) {
+                bool predefined_only { };
+                const auto value = evaluate_vhdl_overloaded_operator(
+                    expression, predefined_only);
+                if (!predefined_only) {
+                    return value
+                            && value->kind == VhdlConstantValue::Kind::integer
+                        ? std::optional { value->integer }
+                        : std::nullopt;
+                }
+            }
         }
         // An increment or decrement in a constant function updates its
         // variable and yields the old (post) or new (pre) value (IEEE
@@ -15187,19 +15322,6 @@ std::string vhdl_type_identity(const CompiledDesign& design,
     return result;
 }
 
-enum class InferredVhdlTypeClass : std::uint8_t {
-    unknown,
-    discrete,
-    integer,
-    physical,
-    floating,
-    array,
-    access,
-    file,
-    composite,
-    protected_type,
-};
-
 InferredVhdlTypeClass vhdl_builtin_type_class(
     const std::string_view spelling, const vhdl::ValueDomain domain)
 {
@@ -17173,8 +17295,11 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
         && (instance.systemverilog != nullptr
             || instance.vhdl != nullptr)) {
         for (std::size_t index = 0U; index < formals.size(); ++index) {
+            // A hidden parameter of an interface port is bound from the
+            // connected interface when the instance is elaborated.
             if (bound[index] || !formals[index].type_parameter
-                || association_formal_has_default(design, formals[index])) {
+                || association_formal_has_default(design, formals[index])
+                || formals[index].name.starts_with("__fsim_ifp_")) {
                 continue;
             }
             AssociationActual missing;

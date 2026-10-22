@@ -2329,6 +2329,10 @@ NVC_NONSTANDARD = {
         "form and calling convention; IEEE 1076-2019 20.2.4.3 defines "
         "VHPIDIRECT with an object library and execution specifier"
        for name in ("vhpi4", "issue612", "issue988")},
+    "stdenv3": "expects the call-path name element in nvc's uppercase "
+        "form (\"P1\"); IEEE 1076-2019 16.5.6 does not define its case, and "
+        "fsim gives basic identifiers in lowercase as E'SIMPLE_NAME does "
+        "(16.2.5)",
     "issue1301": "uses GHDL's foreign attribute form; IEEE 1076-2019 20.2.4 "
         "defines only the VHPI and VHPIDIRECT forms",
     "issue1473": "binds a VHDL component to a Verilog module through nvc's "

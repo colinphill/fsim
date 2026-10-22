@@ -876,6 +876,16 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start);
   std::optional<Statement> parse_statement_unhoisted();
   std::optional<Type> import_interface_type(DesignUnit& unit);
+  enum class InterfaceMemberKind { type, parameter, object };
+  [[nodiscard]] const DesignUnit* interface_path_unit(
+      const DesignUnit& unit, std::string_view first,
+      const std::vector<std::string>& path, std::size_t count,
+      std::size_t* failed) const;
+  std::optional<std::string> import_interface_member(
+      DesignUnit& unit, const std::string& first,
+      const std::vector<std::string>& path, const SourceSpan& anchor,
+      InterfaceMemberKind kind);
+  void import_interface_member_references(DesignUnit& unit);
   // The design being parsed; earlier units are visible to later ones.
   ParsedDesign* parsed_design_{};
   [[gnu::noinline]] void prepend_hoisted_statements(

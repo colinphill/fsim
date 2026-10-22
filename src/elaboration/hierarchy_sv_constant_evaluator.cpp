@@ -2032,9 +2032,14 @@ private:
             }
         }
         // A class local parameter is evaluated in the innermost class
-        // frame and kept there, never in the specialization caches.
-        if (!frames_.empty() && frames_.back().class_owner != nullptr) {
-            const auto& properties = frames_.back().class_owner->properties;
+        // frame and kept there, never in the specialization caches; a
+        // static method's body reads its class's frame.
+        const auto class_frame = std::ranges::find_if(frames_.rbegin(),
+            frames_.rend(), [](const Frame& frame) {
+                return frame.class_owner != nullptr;
+            });
+        if (class_frame != frames_.rend()) {
+            const auto& properties = class_frame->class_owner->properties;
             const auto property = std::ranges::find(properties, declaration,
                 &semantic::sv::ClassProperty::declaration);
             if (property != properties.end()) {
@@ -2044,9 +2049,11 @@ private:
                     return std::nullopt;
                 }
                 const auto depth = frames_.size();
+                const auto owner_index = static_cast<std::size_t>(
+                    std::distance(class_frame, frames_.rend()) - 1);
                 auto value = evaluate(*property->initializer);
                 if (value && frames_.size() == depth) {
-                    frames_.back().values.insert_or_assign(
+                    frames_[owner_index].values.insert_or_assign(
                         declaration, *value);
                 }
                 return value;
@@ -2992,6 +2999,68 @@ private:
     // An element of an unpacked array parameter (`P[1]` for `parameter int
     // P[3:1] = '{10, 20, 30}`, IEEE 1800-2017 6.20.1, 7.4): the positional
     // pattern lists the elements from the left bound.
+    /// `P.m[i]`: an element of an unpacked array member of the structure
+    /// constant P (IEEE 1800-2017 7.2.1, 7.4). Null for any other index.
+    [[nodiscard]] std::optional<Value> evaluate_member_array_element(
+        const semantic::sv::Expression& record)
+    {
+        const auto base_view = specialization_.find_expression(
+            record.operands.front());
+        if (!base_view || base_view->systemverilog == nullptr
+            || base_view->systemverilog->kind != ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const auto& text = base_view->systemverilog->text;
+        const auto dot = text.find('.');
+        const auto resolved = dot == std::string::npos
+            ? std::nullopt
+            : systemverilog_constant_name_declaration(
+                  specialization_, *base_view->systemverilog);
+        if (!resolved) {
+            return std::nullopt;
+        }
+        const auto selected = *resolved;
+        const auto declaration = specialization_.find_declaration(selected);
+        // A package-qualified prefix (`pkg::P.m`) names P.
+        auto prefix = std::string_view { text }.substr(0U, dot);
+        if (const auto scope = prefix.rfind("::");
+            scope != std::string_view::npos) {
+            prefix.remove_prefix(scope + 2U);
+        }
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->type
+            || declaration->systemverilog->name != prefix
+            || !unpacked_aggregate(*declaration->systemverilog->type)) {
+            return std::nullopt;
+        }
+        const auto index = evaluate(record.operands.back());
+        const auto integer = index ? index->integer_value() : std::nullopt;
+        if (!integer) {
+            return std::nullopt;
+        }
+        const auto slice = aggregate_slice(*declaration->systemverilog->type,
+            text.substr(dot) + "[" + std::to_string(*integer) + "]");
+        if (!slice) {
+            return std::nullopt;
+        }
+        const auto whole = value_for_declaration(selected);
+        if (!whole) {
+            return std::nullopt;
+        }
+        runtime::PackedLogic4 element {
+            static_cast<std::size_t>(slice->width), Logic4::x };
+        for (std::uint64_t bit = 0U; bit < slice->width; ++bit) {
+            if (slice->offset + bit < whole->packed.width()) {
+                element.set(bit, whole->packed.get(slice->offset + bit));
+            }
+        }
+        Value result;
+        result.packed = std::move(element);
+        result.width = static_cast<std::uint32_t>(slice->width);
+        result.domain = whole->domain;
+        return result;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_array_parameter_element(
         const semantic::sv::Expression& record)
     {
@@ -3200,6 +3269,9 @@ private:
             }
             if (!error_.empty()) {
                 return std::nullopt;
+            }
+            if (auto element = evaluate_member_array_element(record)) {
+                return element;
             }
             // An index of a multidimensional packed array selects an element
             // of its outermost dimension (IEEE 1800-2017 7.4.5).
@@ -3980,6 +4052,41 @@ private:
             }
             result->packed = std::move(packed);
             return result;
+        }
+        // A static method of a class specialization (`C#(7)::f()`) runs
+        // with the selection's parameters (IEEE 1800-2017 8.25.1, 13.4.3).
+        if (constexpr std::string_view prefix { "@sv-static-method:" };
+            std::string_view { record.text }.starts_with(prefix)) {
+            const auto identity
+                = std::string_view { record.text }.substr(prefix.size());
+            for (const auto& candidate :
+                specialization_.design().systemverilog_hir.classes()) {
+                if (candidate.forward_declaration) continue;
+                const auto method = std::ranges::find(candidate.methods,
+                    identity, &semantic::sv::ClassMethod::canonical_identity);
+                if (method == candidate.methods.end()) continue;
+                const auto declaration
+                    = specialization_.find_declaration(method->declaration);
+                if (!method->static_method || !declaration
+                    || declaration->systemverilog == nullptr
+                    || declaration->systemverilog->form
+                        != semantic::sv::DeclarationForm::function) {
+                    break;
+                }
+                const auto* selection = record.class_owner.empty()
+                    ? nullptr : &record.class_owner.front();
+                if (!push_class_frame(candidate, selection)) {
+                    return std::nullopt;
+                }
+                struct Pop {
+                    std::vector<Frame>& frames;
+                    ~Pop() { frames.pop_back(); }
+                } pop { frames_ };
+                return evaluate_callable(*declaration->systemverilog, record);
+            }
+            error_ = "unsupported SystemVerilog static method constant call '"
+                + std::string { identity } + "'";
+            return std::nullopt;
         }
         if (record.referenced_name && record.referenced_name->selected) {
             const auto declaration = specialization_.find_declaration(
@@ -6107,6 +6214,74 @@ private:
         return real_value(result, kind);
     }
 
+    // Pushes a frame holding a parameterized class's parameters in the
+    // selected specialization (IEEE 1800-2017 8.25.1): the selection's
+    // actuals, else the parameters' defaults. The actuals are written where
+    // the selection is, so they are evaluated before the class frame. The
+    // caller pops the frame when the result is true.
+    [[nodiscard]] bool push_class_frame(
+        const semantic::sv::ClassDeclaration& owner,
+        const semantic::sv::TypeReference* const selection)
+    {
+        if (selection != nullptr && !selection->class_identity.empty()
+            && selection->class_identity
+                != semantic::sv::class_declaration_identity(owner)) {
+            error_ = "class constant inherited through a parameterized base";
+            return false;
+        }
+        std::vector<std::optional<Value>> bound(owner.parameters.size());
+        if (selection != nullptr) {
+            std::size_t position { };
+            for (const auto& actual : selection->interface_parameter_actuals) {
+                auto index = position++;
+                if (actual.formal) {
+                    index = static_cast<std::size_t>(std::distance(
+                        owner.parameters.begin(),
+                        std::ranges::find(owner.parameters, *actual.formal,
+                            &semantic::sv::ClassParameter::name)));
+                }
+                if (index >= bound.size()) {
+                    error_ = "class specialization actual has no formal";
+                    return false;
+                }
+                const auto& parameter = owner.parameters[index];
+                if (parameter.type_parameter
+                    || actual.kind != semantic::sv::ActualKind::expression
+                    || !actual.expression) {
+                    continue;
+                }
+                bound[index] = parameter.type
+                    ? evaluate_for_type(*actual.expression, *parameter.type)
+                    : evaluate(*actual.expression);
+                if (!bound[index]) return false;
+            }
+        }
+        frames_.push_back(Frame { });
+        frames_.back().class_owner = &owner;
+        for (std::size_t index { }; index < bound.size(); ++index) {
+            const auto& parameter = owner.parameters[index];
+            if (parameter.type_parameter) continue;
+            auto value = std::move(bound[index]);
+            if (!value && parameter.default_value) {
+                value = parameter.type
+                    ? evaluate_for_type(*parameter.default_value,
+                          *parameter.type)
+                    : evaluate(*parameter.default_value);
+            }
+            if (!value) {
+                if (error_.empty()) {
+                    error_ = "class parameter '" + parameter.name
+                        + "' has no value";
+                }
+                frames_.pop_back();
+                return false;
+            }
+            frames_.back().values.insert_or_assign(
+                parameter.declaration, std::move(*value));
+        }
+        return true;
+    }
+
     // A class's local parameter or enumeration literal (`C::E_A`) has its
     // initializer's value (IEEE 1800-2017 8.25.1, 6.19); a parameter of a
     // parameterized class has a value only in a specialization.
@@ -6159,71 +6334,24 @@ private:
         if (owner->parameters.empty() && property != nullptr) {
             return evaluate(*property->initializer);
         }
-        // A parameterized class's constant has a value in the selected
-        // specialization (IEEE 1800-2017 8.25.1): the selection's actuals,
-        // else the parameters' defaults. The actuals are written where the
-        // selection is, so they are evaluated before the class frame.
-        const auto* selection = record.class_owner.empty()
-            ? nullptr : &record.class_owner.front();
-        if (selection != nullptr && !selection->class_identity.empty()
-            && selection->class_identity
-                != semantic::sv::class_declaration_identity(*owner)) {
-            error_ = "class constant inherited through a parameterized base";
-            return std::nullopt;
-        }
-        std::vector<std::optional<Value>> bound(owner->parameters.size());
-        if (selection != nullptr) {
-            std::size_t position { };
-            for (const auto& actual : selection->interface_parameter_actuals) {
-                auto index = position++;
-                if (actual.formal) {
-                    index = static_cast<std::size_t>(std::distance(
-                        owner->parameters.begin(),
-                        std::ranges::find(owner->parameters, *actual.formal,
-                            &semantic::sv::ClassParameter::name)));
-                }
-                if (index >= bound.size()) {
-                    error_ = "class specialization actual has no formal";
-                    return std::nullopt;
-                }
-                const auto& parameter = owner->parameters[index];
-                if (parameter.type_parameter
-                    || actual.kind != semantic::sv::ActualKind::expression
-                    || !actual.expression) {
-                    continue;
-                }
-                bound[index] = parameter.type
-                    ? evaluate_for_type(*actual.expression, *parameter.type)
-                    : evaluate(*actual.expression);
-                if (!bound[index]) return std::nullopt;
+        // A value parameter retained as a constant property takes the
+        // specialization's actual, not its default (IEEE 1800-2017 8.25).
+        if (formal == nullptr) {
+            if (const auto found = std::ranges::find(owner->parameters,
+                    member, &semantic::sv::ClassParameter::name);
+                found != owner->parameters.end() && !found->type_parameter) {
+                formal = &*found;
             }
         }
-        frames_.push_back(Frame { });
-        frames_.back().class_owner = owner;
+        const auto* selection = record.class_owner.empty()
+            ? nullptr : &record.class_owner.front();
+        if (!push_class_frame(*owner, selection)) {
+            return std::nullopt;
+        }
         struct Pop {
             std::vector<Frame>& frames;
             ~Pop() { frames.pop_back(); }
         } pop { frames_ };
-        for (std::size_t index { }; index < bound.size(); ++index) {
-            const auto& parameter = owner->parameters[index];
-            if (parameter.type_parameter) continue;
-            auto value = std::move(bound[index]);
-            if (!value && parameter.default_value) {
-                value = parameter.type
-                    ? evaluate_for_type(*parameter.default_value,
-                          *parameter.type)
-                    : evaluate(*parameter.default_value);
-            }
-            if (!value) {
-                if (error_.empty()) {
-                    error_ = "class parameter '" + parameter.name
-                        + "' has no value";
-                }
-                return std::nullopt;
-            }
-            frames_.back().values.insert_or_assign(
-                parameter.declaration, std::move(*value));
-        }
         if (formal != nullptr) {
             return frames_.back().values.at(formal->declaration);
         }

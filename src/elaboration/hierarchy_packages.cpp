@@ -11487,8 +11487,9 @@ namespace {
                 }
                 const auto& value = *view->systemverilog;
                 if (value.kind == ExpressionKind::call
-                    && !value.text.starts_with("$")
-                    && !value.text.starts_with("@")) {
+                    && ((!value.text.starts_with("$")
+                            && !value.text.starts_with("@"))
+                        || value.text.starts_with("@sv-static-method:"))) {
                     return true;
                 }
                 for (const auto operand : value.operands) {
@@ -16913,8 +16914,10 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             const auto declaration
                 = compiled_->find_declaration(declaration_id);
             if (!declaration || declaration->systemverilog == nullptr
-                || declaration->systemverilog->form
-                    != semantic::sv::DeclarationForm::parameter
+                || (declaration->systemverilog->form
+                        != semantic::sv::DeclarationForm::parameter
+                    && declaration->systemverilog->form
+                        != semantic::sv::DeclarationForm::type_parameter)
                 || !declaration->systemverilog->name.starts_with(
                     interface_parameter_prefix)
                 || std::ranges::any_of(child_actuals,
@@ -16946,9 +16949,19 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                     || !binding.expression) {
                     continue;
                 }
-                const auto actual_expression
+                auto actual_expression
                     = working_specialization.find_expression(
                         *binding.expression);
+                // An element of an interface array (`bus[0]`) names the
+                // array, whose instances share its parameters.
+                while (actual_expression
+                    && actual_expression->systemverilog != nullptr
+                    && actual_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::index
+                    && !actual_expression->systemverilog->operands.empty()) {
+                    actual_expression = working_specialization.find_expression(
+                        actual_expression->systemverilog->operands.front());
+                }
                 if (!actual_expression
                     || actual_expression->systemverilog == nullptr
                     || actual_expression->systemverilog->kind
@@ -16972,6 +16985,24 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                 }
                 if (identities
                     == systemverilog_interface_parameter_identities_.end()) {
+                    break;
+                }
+                if (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::type_parameter) {
+                    // A type actual keeps its type record (the parameter's
+                    // default needs no binding).
+                    const auto types
+                        = systemverilog_interface_type_actuals_.find(
+                            identities->first);
+                    if (types != systemverilog_interface_type_actuals_.end()) {
+                        if (const auto type = types->second.find(
+                                std::string { parameter_name });
+                            type != types->second.end()) {
+                            auto bound = type->second;
+                            bound.declaration = declaration_id;
+                            child_actuals.push_back(std::move(bound));
+                        }
+                    }
                     break;
                 }
                 const auto identity = std::ranges::find_if(
@@ -17180,6 +17211,20 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                 = nested_configuration;
             active_compiled_systemverilog_configuration_root_
                 = child_path;
+        }
+        if (child->systemverilog->kind
+            == semantic::sv::UnitKind::interface) {
+            auto& types = systemverilog_interface_type_actuals_[child_path];
+            types.clear();
+            for (const auto& actual : child_actuals) {
+                const auto declaration
+                    = compiled_->find_declaration(actual.declaration);
+                if (actual.systemverilog_type && declaration
+                    && declaration->systemverilog != nullptr) {
+                    types.insert_or_assign(
+                        declaration->systemverilog->name, actual);
+                }
+            }
         }
         const auto instantiated = instantiate_compiled_systemverilog_unit(
             CompiledSystemVerilogInstantiationContext {
@@ -24548,7 +24593,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             || compiled_vhdl_name_equal(name, "unresolved_sfixed")
             || compiled_vhdl_name_equal(name, "float")
             || compiled_vhdl_name_equal(name, "unresolved_float")
-            || compiled_vhdl_name_equal(name, "u_float");
+            || compiled_vhdl_name_equal(name, "u_float")
+            // The frontend gives FLOAT32 as FLOAT with its 8 downto -23
+            // constraint inlined (IEEE 1076-2008 G.5).
+            || compiled_vhdl_name_equal(name, "float32")
+            || compiled_vhdl_name_equal(name, "unresolved_float32")
+            || compiled_vhdl_name_equal(name, "u_float32");
         if (array) {
             return SubtypeProfile {
                 SubtypeClass::array,

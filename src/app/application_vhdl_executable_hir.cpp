@@ -1591,6 +1591,49 @@ class VhdlExecutableBuilder final {
           return false;
       }
     };
+    // `obj.f(i)` of a protected object whose type declares `f` only as
+    // functions without parameters calls `f` and indexes its result (IEEE
+    // 1076-2008 9.3.4, 5.6.2).
+    const auto parameterless_protected_function = [&](
+        const vh::Expression& call) {
+      const auto dot = call.text.rfind('.');
+      if (dot == std::string::npos || dot == 0U) {
+        return false;
+      }
+      const auto object = support::canonical_vhdl_spelling(
+          call.text.substr(0U, dot));
+      const auto method = support::canonical_vhdl_spelling(
+          call.text.substr(dot + 1U));
+      bool found = false;
+      for (const auto& declaration : hir_.declarations()) {
+        if (!declaration.subtype || declaration.callable
+            || support::canonical_vhdl_spelling(declaration.name) != object) {
+          continue;
+        }
+        const auto type = std::ranges::find_if(hir_.types(),
+            [&](const vh::TypeDefinition& candidate) {
+              return candidate.id == declaration.subtype->type_mark.target;
+            });
+        if (type == hir_.types().end()
+            || type->form != vh::TypeForm::protected_type) {
+          continue;
+        }
+        for (const auto member_id : type->protected_members) {
+          const auto* member = find_declaration(member_id);
+          if (member == nullptr
+              || support::canonical_vhdl_spelling(member->name) != method) {
+            continue;
+          }
+          if (!member->callable || !member->callable->function
+              || !member->callable->formals.empty()
+              || !member->callable->return_type) {
+            return false;
+          }
+          found = true;
+        }
+      }
+      return found;
+    };
     std::vector<vh::Expression> indexed_prefixes;
     for (auto& expression : hir_.mutable_expressions()) {
       // One actual per index of a multidimensional object (`t('1', '0')`).
@@ -1598,15 +1641,22 @@ class VhdlExecutableBuilder final {
           || expression.operands.empty()
           || std::ranges::any_of(expression.argument_names,
               [](const std::string& argument) { return !argument.empty(); })
-          || !expression.referenced_name
-          || !expression.referenced_name->selected) {
+          || !expression.referenced_name) {
         continue;
       }
-      const auto* declaration = find_declaration(
-          *expression.referenced_name->selected);
+      const bool protected_result = !expression.referenced_name->selected
+          && expression.referenced_name->overloads.empty()
+          && parameterless_protected_function(expression);
+      if (!expression.referenced_name->selected && !protected_result) {
+        continue;
+      }
+      const auto* declaration = protected_result
+          ? nullptr
+          : find_declaration(*expression.referenced_name->selected);
       // A function without parameters called with actuals is called and
       // its result indexed (IEEE 1076-2008 8.1, 9.3.4).
-      const bool indexed_result = declaration != nullptr
+      const bool indexed_result = protected_result
+          || (declaration != nullptr
           && declaration->callable && declaration->callable->function
           && declaration->callable->formals.empty()
           && declaration->callable->return_type
@@ -1616,7 +1666,7 @@ class VhdlExecutableBuilder final {
                 return candidate != nullptr && candidate->callable
                     && candidate->callable->function
                     && candidate->callable->formals.empty();
-              });
+              }));
       if (indexed_result) {
         const auto prefix_origin = origin(
             expression.source, expression.origin, "VHDL indexed function result");

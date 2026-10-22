@@ -1985,12 +1985,17 @@ private:
             subtype.constraints, [](const auto& constraint) {
                 return constraint.kind == RangeKind::array_index;
             });
+        // A base this pass cannot profile (a natively provided standard
+        // subtype such as FLOAT32, whose range the frontend supplies) gives
+        // no ground to reject the constraint.
         if (array_constraint) {
-            report(
-                "FSIM-ELAB-VHSUBTYPE-003",
-                "a derived VHDL packed index constraint requires an "
-                "unconstrained one-dimensional packed-array base",
-                source);
+            if (base.kind != ProfileKind::unknown) {
+                report(
+                    "FSIM-ELAB-VHSUBTYPE-003",
+                    "a derived VHDL packed index constraint requires an "
+                    "unconstrained one-dimensional packed-array base",
+                    source);
+            }
             return;
         }
         const auto& constraint = subtype.constraints.front();

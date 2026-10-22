@@ -955,7 +955,11 @@ std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
             }
             return { };
         }();
-        result.push_back({ language, kind, unit.name, { }, { }, { }, { },
+        // An extern module, interface or program declaration is not the
+        // definition, which owns the name (IEEE 1800-2023 23.2.1).
+        result.push_back({ language,
+            unit.external ? "extern-" + kind : kind, unit.name, { }, { },
+            { }, { },
             unit.standard, unit.compatibility_profile });
     }
     for (const auto& unit : design.vhdl_hir.units()) {

@@ -13,7 +13,7 @@ Exclusions never count as closures.
 | verilator | 70 | 279 |
 | ivtest | 20 | 299 |
 | vests | 2 | 0 |
-| nvc | 218 | 0 |
+| nvc | 219 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## verilator
@@ -894,6 +894,7 @@ Exclusions never count as closures.
 | `siginit3` | not run | nvc-specific test kind plugin |
 | `signal28` | not run | nvc-specific test kind relaxed |
 | `stdenv1` | not run | nvc option $FOO=123 |
+| `stdenv3` | not run | expects the call-path name element in nvc's uppercase form ("P1"); IEEE 1076-2019 16.5.6 does not define its case, and fsim gives basic identifiers in lowercase as E'SIMPLE_NAME does (16.2.5) |
 | `tcl1` | not run | nvc-specific test kind tcl |
 | `tcl2` | not run | nvc-specific test kind tcl |
 | `tcl3` | not run | nvc-specific test kind tcl |

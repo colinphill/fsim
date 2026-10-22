@@ -104,6 +104,9 @@ struct Scope {
   // Module and interface instances of the enclosing unit, by instance name,
   // with the name of the instantiated unit.
   std::map<std::string, std::string, std::less<>> instances{};
+  // Interface ports of the enclosing unit, which name interface
+  // instances rather than data objects.
+  std::set<std::string, std::less<>> interface_ports{};
   // Type aliases declared in enclosing procedural blocks, by name
   // (IEEE 1800-2017 6.18).
   std::map<std::string, const Type*, std::less<>> aliases{};
@@ -232,8 +235,11 @@ class Resolver final {
   // The value of a specialization's parameter or local parameter, with the
   // specialization's literal or named actuals substituted.
   // Replaces `C#(...)::name` value references in a module constant.
+  void resolve_class_owner_constants(
+      Expression& expression, const Scope& scope, std::size_t depth);
   void substitute_class_parameter_references(
-      Expression& expression, const Scope& scope, std::size_t depth = 0U);
+      Expression& expression, const Scope& scope,
+      std::size_t depth = 0U) const;
   // A class constant at a module constant site (`C#(5)::b`, `P::C::n`,
   // `CFG::w`) names that member of the selected specialization; the
   // elaboration-time evaluator binds the selection's actuals.
@@ -341,6 +347,8 @@ class Resolver final {
       const Scope& scope,
       const Type& expected);
   void resolve_task_call(Statement& statement, const Scope& scope);
+  void resolve_member_sensitivity(
+      Sensitivity& sensitivity, const Scope& scope) const;
   void resolve_statement(
       Statement& statement,
       const Scope& inherited_scope,
@@ -362,7 +370,7 @@ class Resolver final {
   [[nodiscard]] static std::optional<std::string>
   class_specialization_spelling(const std::string& owner, const Type& type);
   [[nodiscard]] std::optional<Expression> class_scoped_parameter_value(
-      const Type& type, const Scope& scope);
+      const Type& type, const Scope& scope) const;
   [[nodiscard]] const Type* container_alias(
       std::string lexical, const std::string& named_type) const;
   std::map<std::string, SystemVerilogClassMethod*, std::less<>> methods_;

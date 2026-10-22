@@ -1035,16 +1035,6 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             vpi_profile_language(project, specialization));
     }
 
-    std::map<std::string, const semantic::design::InstanceOccurrence*,
-        std::less<>>
-        relevant_instances_by_path;
-    for (const auto& instance : project.design_ir.instances()) {
-        if (instance_profiles.contains(instance.id.value())) {
-            relevant_instances_by_path.emplace(
-                project.design_ir.path(instance.path), &instance);
-        }
-    }
-
     // Package startup processes have a parentless, package-named synthetic
     // specialization. Publish its runtime paths beneath the package object
     // created by the package inventory pass, not as a configured Root.
@@ -1057,15 +1047,47 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             specialization.instance.value());
         const auto& unit = project.semantics.units().at(
             specialization.unit.value());
-        const auto configured_root = std::ranges::find(
-                                         project.design_ir.roots(), instance.path)
-            != project.design_ir.roots().end();
-        if (!configured_root && !instance.parent
+        // A package's path may equal a root module's name: packages and
+        // definitions are separate namespaces (IEEE 1800-2023 3.13).
+        if (!instance.parent
             && unit.kind == semantic::UnitKind::systemverilog_package
             && project.design_ir.path(instance.path) == unit.name) {
             package_initializer_instances.emplace(
                 specialization.instance.value(),
                 unit.library + "::" + unit.name);
+        }
+    }
+
+    // A package's scope is named `pkg::`, a namespace apart from the
+    // design's instances (IEEE 1800-2023 3.13, 37.10).
+    const auto vpi_scope_path = [&](const auto& instance) {
+        auto path = std::string { project.design_ir.path(instance.path) };
+        if (package_initializer_instances.contains(instance.id.value())) {
+            path.append("::");
+        }
+        return path;
+    };
+    const auto vpi_occurrence_path = [&](const auto& instance,
+                                         const std::string_view local) {
+        const auto design_path = project.design_ir.path(instance.path);
+        auto path = occurrence_path(design_path, local);
+        if (!package_initializer_instances.contains(instance.id.value())) {
+            return path;
+        }
+        return std::string { design_path } + "::"
+            + (path.size() > design_path.size()
+                    ? path.substr(design_path.size() + 1U)
+                    : std::string { });
+    };
+
+    std::map<std::string, const semantic::design::InstanceOccurrence*,
+        std::less<>>
+        relevant_instances_by_path;
+    for (const auto& instance : project.design_ir.instances()) {
+        if (instance_profiles.contains(instance.id.value())
+            && !package_initializer_instances.contains(instance.id.value())) {
+            relevant_instances_by_path.emplace(
+                project.design_ir.path(instance.path), &instance);
         }
     }
 
@@ -1370,7 +1392,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             };
         }
         const auto& instance = project.design_ir.instances().at(instance_id);
-        const auto package_path = project.design_ir.path(instance.path);
+        const auto package_path = vpi_scope_path(instance);
         if (!instances.emplace(instance_id, package->second).second
             || !instance_paths.emplace(package_path, package->second).second) {
             throw std::logic_error {
@@ -1637,9 +1659,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 *descriptor.type, project, specialization);
             apply_vpi_source(
                 *descriptor.type, project, declaration->source);
-            const auto path
-                = std::string { project.design_ir.path(instance.path) }
-                + '.' + parameter.name;
+            const auto path = vpi_occurrence_path(instance, parameter.name);
             const auto handle = create_checked(
                 *result.registry, std::move(descriptor), path);
             const auto bound = result.registry->bind_value(
@@ -1717,7 +1737,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
         vpi_memory_paths.insert(
-            occurrence_path(project.design_ir.path(instance.path),
+            vpi_occurrence_path(instance,
                 project.design_ir.path(object.path)));
     }
     std::vector<const semantic::design::Object*> vpi_objects;
@@ -1732,8 +1752,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             object.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(
-            project.design_ir.path(instance.path),
+        const auto path = vpi_occurrence_path(instance,
             project.design_ir.path(object.path));
         if (function_scope_paths.contains(path)) {
             continue;
@@ -1776,8 +1795,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             object.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(
-            project.design_ir.path(instance.path),
+        const auto path = vpi_occurrence_path(instance,
             project.design_ir.path(object.path));
         if (instance_paths.contains(path)) {
             if (!object.parent_object) {
@@ -1804,7 +1822,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (published != published_paths.end()) {
             if (published->second.first != signal) {
                 throw std::logic_error {
-                    "VPI path aliases distinct runtime signals"
+                    "VPI path '" + path
+                    + "' aliases distinct runtime signals"
                 };
             }
             objects.emplace(object.id.value(), published->second.second);
@@ -1990,8 +2009,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (owner == instances.end()) {
             throw std::logic_error { "VPI memory has no published instance" };
         }
-        const auto path = occurrence_path(
-            project.design_ir.path(instance.path),
+        const auto path = vpi_occurrence_path(instance,
             project.design_ir.path(object.path));
         auto parent = owner->second;
         const auto separator = path.find_last_of('.');
@@ -2151,8 +2169,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     const auto& signal_instance
                         = project.design_ir.instances().at(
                             signal_specialization.instance.value());
-                    const auto signal_path = occurrence_path(
-                        project.design_ir.path(signal_instance.path),
+                    const auto signal_path = vpi_occurrence_path(signal_instance,
                         project.design_ir.path(signal_object->path));
                     if (signal_path == word_path) {
                         objects.insert_or_assign(
@@ -2173,8 +2190,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             process.specialization.value());
         const auto& instance = project.design_ir.instances().at(
             specialization.instance.value());
-        const auto path = occurrence_path(
-            project.design_ir.path(instance.path), process.name);
+        const auto path = vpi_occurrence_path(instance, process.name);
         const semantic::sv::ConcurrentAssertion* assertion_source { };
         const auto unit = std::ranges::find(
             project.systemverilog_hir.units(), specialization.unit,

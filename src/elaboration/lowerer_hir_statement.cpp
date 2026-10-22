@@ -24994,6 +24994,33 @@ Lowerer::hir_named_class_property(const std::string_view name,
         // A property of the class whose method this is.
         const auto declaration = hir_resolver().resolve_systemverilog(
             name, scope, { }, false, std::nullopt, source_order).unique();
+        // A static property named through its class scope (`C::e`,
+        // IEEE 1800-2017 8.23).
+        if (const auto scoped = name.rfind("::");
+            !declaration && scoped != std::string_view::npos) {
+            const auto qualifier = name.substr(0U, scoped);
+            const auto class_name = qualifier.substr(
+                qualifier.rfind("::") == std::string_view::npos
+                    ? 0U : qualifier.rfind("::") + 2U);
+            const auto member = name.substr(scoped + 2U);
+            std::optional<HirNamedClassProperty> found;
+            for (const auto& candidate : classes) {
+                if (candidate.forward_declaration
+                    || candidate.name != class_name) {
+                    continue;
+                }
+                for (const auto& property : candidate.properties) {
+                    if (property.name != member || !property.static_storage) {
+                        continue;
+                    }
+                    if (found) {
+                        return std::nullopt;
+                    }
+                    found = describe(property, std::nullopt);
+                }
+            }
+            return found;
+        }
         if (!declaration) {
             return std::nullopt;
         }

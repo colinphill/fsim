@@ -189,11 +189,6 @@ bool Interpreter::Impl::route_module_path_update(
                 && selected_condition->second)) {
             continue;
         }
-        const auto data_source = path.data_source.empty()
-            ? std::optional<PackedLogic4> { }
-            : std::optional<PackedLogic4> {
-                  evaluate_module_path_expression(path.data_source)
-              };
         for (std::size_t destination_index = 0;
             destination_index < path.destinations.size(); ++destination_index) {
             const auto& destination = path.destinations[destination_index];
@@ -216,19 +211,10 @@ bool Interpreter::Impl::route_module_path_update(
                             : std::optional<std::size_t> { path_bit })) {
                     continue;
                 }
-                auto routed_value = value.get(bit);
-                if (data_source) {
-                    const auto data_bit = data_source->width() == 1
-                        ? 0U
-                        : path_bit;
-                    if (data_bit >= data_source->width())
-                        continue;
-                    routed_value = data_source->get(data_bit);
-                    if (path.polarity == ModulePathPolarity::negative) {
-                        auto scalar = unary_not(PackedLogic4 { 1U, routed_value });
-                        routed_value = scalar.get(0);
-                    }
-                }
+                // A path's data source and polarity describe the data flow
+                // only; the destination takes the value the module's logic
+                // drives (IEEE 1800-2023 30.4.4.3).
+                const auto routed_value = value.get(bit);
                 const InertialDriverKey projected_key {
                     driver,
                     signal,

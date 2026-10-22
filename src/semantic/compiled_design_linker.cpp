@@ -1854,6 +1854,106 @@ void resolve_linked_vhdl_architecture_names(CompiledDesign& design)
     design.refresh_lookup_indexes();
 }
 
+// Projecting one library drops type identities owned by another, so a
+// type whose subtype indications name a type from a different library (for
+// example `subtype t is complex` or `array (natural range <>) of complex`
+// under `use ieee.math_complex.all`) keeps only the spelling. Rebind those
+// marks in the declaring unit once every library is linked, restoring the
+// subtype chain and element types (IEEE 1076-2008 5.3, 6.3) for units that
+// do not see the original name.
+void resolve_linked_vhdl_type_marks(CompiledDesign& design)
+{
+    enum class Slot : std::uint8_t { base, element, record_element, designated };
+    struct Rebound {
+        std::size_t type { };
+        Slot slot { };
+        std::size_t element { };
+        TypeId target;
+    };
+    std::vector<Rebound> rebound;
+    std::map<std::pair<ScopeId, std::string>, std::optional<TypeId>> resolved;
+    const auto& types = design.vhdl_hir.types();
+    for (std::size_t position = 0; position < types.size(); ++position) {
+        const auto& type = types[position];
+        const auto declaration = design.find_declaration(type.declaration);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->scope.valid()
+            || declaration->vhdl->scope.value()
+                >= design.semantics.scopes().size()) {
+            continue;
+        }
+        const auto scope = declaration->vhdl->scope;
+        const auto rebind = [&](const vhdl::SubtypeIndication& subtype,
+                                const Slot slot, const std::size_t element) {
+            if (subtype.type_mark.target.valid()
+                || subtype.type_mark.spelling.empty()) {
+                return;
+            }
+            const auto key = std::pair { scope, subtype.type_mark.spelling };
+            auto found = resolved.find(key);
+            if (found == resolved.end()) {
+                const CompiledDesignResolver resolver {
+                    design, design.semantics.scopes()[scope.value()].unit
+                };
+                found = resolved.emplace(key,
+                    resolver.resolve_vhdl_named_type(
+                        subtype.type_mark.spelling, scope)).first;
+            }
+            if (found->second && *found->second != type.id) {
+                rebound.push_back({ position, slot, element, *found->second });
+            }
+        };
+        if (type.form == vhdl::TypeForm::subtype
+            || type.form == vhdl::TypeForm::alias) {
+            rebind(type.base, Slot::base, 0U);
+        }
+        if (type.element_subtype) {
+            rebind(*type.element_subtype, Slot::element, 0U);
+        }
+        for (std::size_t element = 0; element < type.record_elements.size();
+            ++element) {
+            rebind(type.record_elements[element].subtype,
+                Slot::record_element, element);
+        }
+        if (type.designated_subtype) {
+            rebind(*type.designated_subtype, Slot::designated, 0U);
+        }
+    }
+    if (rebound.empty()) {
+        return;
+    }
+    auto& mutable_types = design.vhdl_hir.mutable_types();
+    auto& declarations = design.vhdl_hir.mutable_declarations();
+    for (const auto& entry : rebound) {
+        auto& type = mutable_types[entry.type];
+        switch (entry.slot) {
+        case Slot::base:
+            type.base.type_mark.target = entry.target;
+            // The subtype declaration carries the same indication.
+            for (auto& declaration : declarations) {
+                if (declaration.id == type.declaration && declaration.subtype
+                    && !declaration.subtype->type_mark.target.valid()
+                    && declaration.subtype->type_mark.spelling
+                        == type.base.type_mark.spelling) {
+                    declaration.subtype->type_mark.target = entry.target;
+                }
+            }
+            break;
+        case Slot::element:
+            type.element_subtype->type_mark.target = entry.target;
+            break;
+        case Slot::record_element:
+            type.record_elements[entry.element].subtype.type_mark.target
+                = entry.target;
+            break;
+        case Slot::designated:
+            type.designated_subtype->type_mark.target = entry.target;
+            break;
+        }
+    }
+    design.refresh_lookup_indexes();
+}
+
 CompiledReference systemverilog_configuration_reference(
     const sv::Unit& owner, const CompiledReferenceKind kind,
     const std::string_view library, const std::string_view name,
@@ -3548,6 +3648,7 @@ static CompiledLinkResult finalize_linked_design(CompiledDesign output)
         return { std::nullopt, error, "FSIM-FE-VHORDER-011" };
     }
     resolve_linked_vhdl_architecture_names(output);
+    resolve_linked_vhdl_type_marks(output);
     if (!normalize_compiled_design(output)) {
         return { std::nullopt,
             "linked compiled-HIR bundle is structurally invalid" };

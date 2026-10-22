@@ -61,9 +61,14 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
     if (effective_element && mailbox_string_element(*effective_element)) {
         return HirMailboxElement { true, 0U };
     }
-    const auto width = element
+    // A typedef element (`mailbox #(my_t)`) has its aliased type's width.
+    auto width = element
         ? hir_systemverilog_type_width(*element, hir_process_scope_)
         : std::nullopt;
+    if (!width && effective_element) {
+        width = hir_systemverilog_type_width(
+            *effective_element, hir_process_scope_);
+    }
     if (!effective_element || !width || *width == 0U
         || *width > std::numeric_limits<std::uint32_t>::max()) {
         report("FSIM-ELAB-SVSYNC-002", std::string { message }, span);

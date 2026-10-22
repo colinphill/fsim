@@ -190,25 +190,76 @@ namespace {
             if (tokens.empty()) {
                 return VhdlPslAttemptOutcome::failure;
             }
+            // The invariance operators bind most loosely, then Boolean
+            // implication, then the abort operators (IEEE 1850-2010
+            // 4.2.3.2): `always a -> p abort c` is `always (a -> (p abort c))`.
+            {
+                const auto first = canonical(tokens.front());
+                if (first == "always") {
+                    const auto operand = tokens.subspan(1U);
+                    for (std::size_t sample = start; sample < samples_.size();
+                        ++sample) {
+                        if (property(operand, sample, depth + 1U)
+                            == VhdlPslAttemptOutcome::failure) {
+                            return VhdlPslAttemptOutcome::failure;
+                        }
+                    }
+                    return end_of_run_ ? VhdlPslAttemptOutcome::pass
+                                       : VhdlPslAttemptOutcome::pending;
+                }
+                // `never s` fails at every cycle where s matches (IEEE 1850-2010
+                // 6.2.1.6.2); a Boolean is a sequence of one cycle.
+                if (first == "never") {
+                    const auto operand = tokens.subspan(1U);
+                    for (std::size_t sample = start; sample < samples_.size();
+                        ++sample) {
+                        if (!sequence(operand, sample, depth + 1U)
+                                .matches.empty()) {
+                            return VhdlPslAttemptOutcome::failure;
+                        }
+                    }
+                    return end_of_run_ ? VhdlPslAttemptOutcome::pass
+                                       : VhdlPslAttemptOutcome::pending;
+                }
+            }
+            // `b -> p`: p must hold where Boolean b does, and the property
+            // holds vacuously elsewhere (IEEE 1850-2010 6.2.1.5).
+            if (const auto implication = boolean_implication_at(tokens)) {
+                if (start >= samples_.size()) {
+                    return VhdlPslAttemptOutcome::pending;
+                }
+                if (!boolean_at(tokens.first(implication->position), start,
+                        depth + 1U)) {
+                    return VhdlPslAttemptOutcome::vacuous;
+                }
+                return property(tokens.subspan(
+                                    implication->position + implication->width),
+                    start, depth + 1U);
+            }
             if (const auto abort = top_level_word(tokens, "async_abort")) {
                 if (boolean(tokens.subspan(*abort + 1U), current_, depth + 1U)) {
                     return VhdlPslAttemptOutcome::aborted;
                 }
                 return property(tokens.first(*abort), start, depth + 1U);
             }
-            if (const auto abort = top_level_word(tokens, "sync_abort")) {
-                if (edge_
-                    && boolean(tokens.subspan(*abort + 1U), current_, depth + 1U)) {
+            // A synchronous abort condition is sampled at the clock: it
+            // aborts the attempt from any sample since the attempt began.
+            const auto sync_abort = top_level_word(tokens, "sync_abort");
+            const auto plain_abort = sync_abort
+                ? std::nullopt : top_level_word(tokens, "abort");
+            if (sync_abort || plain_abort) {
+                const auto at = sync_abort ? *sync_abort : *plain_abort;
+                const auto condition = tokens.subspan(at + 1U);
+                if (edge_ && boolean(condition, current_, depth + 1U)) {
                     return VhdlPslAttemptOutcome::aborted;
                 }
-                return property(tokens.first(*abort), start, depth + 1U);
-            }
-            if (const auto abort = top_level_word(tokens, "abort")) {
-                if (edge_
-                    && boolean(tokens.subspan(*abort + 1U), current_, depth + 1U)) {
-                    return VhdlPslAttemptOutcome::aborted;
+                for (std::size_t sample = start; sample < samples_.size();
+                    ++sample) {
+                    if (boolean_at(condition, sample, depth + 1U)) {
+                        return VhdlPslAttemptOutcome::aborted;
+                    }
                 }
-                return property(tokens.first(*abort), start, depth + 1U);
+                return property(tokens.first(at), start, depth + 1U);
             }
             if (const auto implication = implication_at(tokens)) {
                 const auto antecedent = sequence(
@@ -323,61 +374,65 @@ namespace {
                     ? VhdlPslAttemptOutcome::pending
                     : VhdlPslAttemptOutcome::failure;
             }
-            if (first == "always") {
-                const auto operand = tokens.subspan(1U);
+            // `a until b` needs a in every cycle before b holds; `until_`
+            // also needs a in the cycle b holds (IEEE 1850-2010 6.2.1.6.4).
+            const auto until = top_level_word(tokens, "until");
+            const auto until_inclusive = until
+                ? std::nullopt : top_level_word(tokens, "until_");
+            if (until || until_inclusive) {
+                const auto at = until ? *until : *until_inclusive;
+                // `until!` is strong: b must eventually hold. The weak form
+                // holds on a run that ends first (IEEE 1850-2010 6.2.1.6.4).
+                const bool strong = at + 1U < tokens.size()
+                    && tokens[at + 1U] == "!";
+                const auto right = tokens.subspan(at + (strong ? 2U : 1U));
                 for (std::size_t sample = start; sample < samples_.size();
                     ++sample) {
-                    if (property(operand, sample, depth + 1U)
-                        == VhdlPslAttemptOutcome::failure) {
+                    if (until_inclusive
+                        && !boolean_at(tokens.first(at), sample, depth + 1U)) {
                         return VhdlPslAttemptOutcome::failure;
                     }
-                }
-                return end_of_run_ ? VhdlPslAttemptOutcome::pass
-                                   : VhdlPslAttemptOutcome::pending;
-            }
-            // `never s` fails at every cycle where s matches (IEEE 1850-2010
-            // 6.2.1.6.2); a Boolean is a sequence of one cycle.
-            if (first == "never") {
-                const auto operand = tokens.subspan(1U);
-                for (std::size_t sample = start; sample < samples_.size();
-                    ++sample) {
-                    if (!sequence(operand, sample, depth + 1U)
-                            .matches.empty()) {
-                        return VhdlPslAttemptOutcome::failure;
-                    }
-                }
-                return end_of_run_ ? VhdlPslAttemptOutcome::pass
-                                   : VhdlPslAttemptOutcome::pending;
-            }
-            if (const auto until = top_level_word(tokens, "until")) {
-                for (std::size_t sample = start; sample < samples_.size();
-                    ++sample) {
-                    if (boolean_at(tokens.subspan(*until + 1U), sample,
-                            depth + 1U)) {
+                    if (boolean_at(right, sample, depth + 1U)) {
                         return VhdlPslAttemptOutcome::pass;
                     }
-                    if (!boolean_at(tokens.first(*until), sample, depth + 1U)) {
+                    if (!boolean_at(tokens.first(at), sample, depth + 1U)) {
                         return VhdlPslAttemptOutcome::failure;
                     }
                 }
-                return end_of_run_ ? VhdlPslAttemptOutcome::failure
-                                   : VhdlPslAttemptOutcome::pending;
+                return !end_of_run_ ? VhdlPslAttemptOutcome::pending
+                    : strong        ? VhdlPslAttemptOutcome::failure
+                                    : VhdlPslAttemptOutcome::pass;
             }
-            if (const auto before = top_level_word(tokens, "before")) {
+            // `a before b` needs a strictly before b; `before_` also accepts
+            // a in the cycle b first holds (IEEE 1850-2010 6.2.1.6.5).
+            const auto before = top_level_word(tokens, "before");
+            const auto before_inclusive = before
+                ? std::nullopt : top_level_word(tokens, "before_");
+            if (before || before_inclusive) {
+                const auto at = before ? *before : *before_inclusive;
+                // `before!` is strong: a must eventually hold.
+                const bool strong = at + 1U < tokens.size()
+                    && tokens[at + 1U] == "!";
+                const auto right = tokens.subspan(at + (strong ? 2U : 1U));
                 for (std::size_t sample = start; sample < samples_.size();
                     ++sample) {
-                    if (property(tokens.first(*before), sample, depth + 1U)
-                        == VhdlPslAttemptOutcome::pass) {
+                    const auto left = property(tokens.first(at), sample,
+                                          depth + 1U)
+                        == VhdlPslAttemptOutcome::pass;
+                    if (left && before_inclusive) {
                         return VhdlPslAttemptOutcome::pass;
                     }
-                    if (property(tokens.subspan(*before + 1U), sample,
-                            depth + 1U)
+                    if (property(right, sample, depth + 1U)
                         == VhdlPslAttemptOutcome::pass) {
                         return VhdlPslAttemptOutcome::failure;
                     }
+                    if (left) {
+                        return VhdlPslAttemptOutcome::pass;
+                    }
                 }
-                return end_of_run_ ? VhdlPslAttemptOutcome::failure
-                                   : VhdlPslAttemptOutcome::pending;
+                return !end_of_run_ ? VhdlPslAttemptOutcome::pending
+                    : strong        ? VhdlPslAttemptOutcome::failure
+                                    : VhdlPslAttemptOutcome::pass;
             }
             if (const auto specialized = specialized_declaration(tokens)) {
                 if (specialized->declaration->kind
@@ -395,6 +450,30 @@ namespace {
                         : result.pending ? VhdlPslAttemptOutcome::pending
                                          : VhdlPslAttemptOutcome::failure;
                 }
+            }
+            // `b or p` with a property operand holds when either operand
+            // does (IEEE 1850-2010 6.2.1.4); the temporal operators above
+            // bind more loosely than HDL `or`.
+            if (const auto disjunction = top_level_word(tokens, "or")) {
+                const auto left = property(
+                    tokens.first(*disjunction), start, depth + 1U);
+                const auto right = property(
+                    tokens.subspan(*disjunction + 1U), start, depth + 1U);
+                const auto holds = [](const VhdlPslAttemptOutcome outcome) {
+                    return outcome == VhdlPslAttemptOutcome::pass
+                        || outcome == VhdlPslAttemptOutcome::vacuous;
+                };
+                if (holds(left) || holds(right)) {
+                    return VhdlPslAttemptOutcome::pass;
+                }
+                if (left == VhdlPslAttemptOutcome::aborted
+                    || right == VhdlPslAttemptOutcome::aborted) {
+                    return VhdlPslAttemptOutcome::aborted;
+                }
+                return left == VhdlPslAttemptOutcome::pending
+                        || right == VhdlPslAttemptOutcome::pending
+                    ? VhdlPslAttemptOutcome::pending
+                    : VhdlPslAttemptOutcome::failure;
             }
             if (start >= samples_.size()) {
                 return VhdlPslAttemptOutcome::pending;
@@ -562,6 +641,37 @@ namespace {
                         || tokens[index + 1U] == "->")) {
                     return Implication { index, 2U,
                         tokens[index + 1U] == "=>" };
+                }
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<Implication> boolean_implication_at(
+            const std::span<const std::string> tokens) const
+        {
+            std::size_t depth { };
+            for (std::size_t index = 0U; index < tokens.size(); ++index) {
+                if (opening(tokens[index])) {
+                    ++depth;
+                    continue;
+                }
+                if (closing(tokens[index])) {
+                    if (depth != 0U) {
+                        --depth;
+                    }
+                    continue;
+                }
+                // `|->` and `<->` are other operators.
+                if (depth != 0U || index == 0U || tokens[index - 1U] == "|"
+                    || tokens[index - 1U] == "<") {
+                    continue;
+                }
+                if (tokens[index] == "->") {
+                    return Implication { index, 1U, false };
+                }
+                if (index + 1U < tokens.size() && tokens[index] == "-"
+                    && tokens[index + 1U] == ">") {
+                    return Implication { index, 2U, false };
                 }
             }
             return std::nullopt;

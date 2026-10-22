@@ -253,6 +253,84 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 85: interface-port parameters, PSL directives, cross-library VHDL subtypes
+
+Full runs on the frozen `b85k` (VHDL suites) and `b85m` (SystemVerilog
+suites, after fixing three `b85k` losses), compared with Batch 84 (`b84e`).
+Batch 85 closes 10 corpus tests (verilator 6, nvc 2, vhdl-compliance 1,
+ivtest 1) with no losses. On 2026-10-22 the owner decided to close it below
+the usual 50: the remaining pool is mostly one-offs, and the next batch takes
+the class/UVM cluster. Both columns are counted from the runs' results; the
+Batch 84 column is recomputed from `b84e`.
+
+| Suite | Batch84 passes / in scope | Batch85 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2609 / 2622 | 2610 / 2622 | 289 |
+| sv-tests | 1444 / 1497 | 1444 / 1497 | 0 |
+| verilator | 1986 / 2074 | 1992 / 2074 | 341 |
+| vests | 3656 / 3663 | 3656 / 3663 | 2 |
+| nvc | 1169 / 1264 | 1171 / 1263 | 219 |
+| vhdl-compliance | 51 / 65 | 52 / 65 | 7 |
+
+SystemVerilog:
+- A parameter expression that names an interface port member (`i.N`,
+  `q.cfg.w`, `$bits(i.v)`, `$bits({i.a, i.b})`, `type(i.v)`) imports it as a
+  hidden parameter or typedef of the unit, bound from the connected interface
+  instance when the unit is elaborated (25.10, 23.6, 20.6.2). This covers
+  generate conditions, overrides and declared ranges. The binding follows
+  interface array elements (`.i(bus[0])`, 23.3.3.5) and type parameters.
+  Closes `t_interface_hierparam_bits`, `t_interface_modport_param`,
+  `t_selrange_iface_type_param` and `t_param_type6`.
+- `P.m[i]` on an unpacked array member of a structure constant selects the
+  element, not a bit (7.2.1, 7.4).
+- A packed structure member's edge sensitivity (`@(posedge s.clk)`, 9.4.2)
+  closes `t_struct_clk`. `extern` program declarations close
+  `t_program_extern`.
+- A specify path's data source affects only delay selection, not the
+  propagated value (30.4.4; `sdf6`).
+- Also: VPI `name::` registry scopes for packages (3.13), parenless
+  `.delete`, modport unit variables, class static property selects.
+
+VHDL:
+- The linker rebinds subtype type marks that library projection dropped (a
+  base, element, record element or designated subtype named in another
+  library), resolving each by its spelling in its declaration scope
+  (`subtype fdt is complex`; issue831).
+- A user-overloaded operator that no candidate can accept falls back to the
+  predefined operator in elaboration-time evaluation (9.2, 12.5). Function
+  result shapes infer through operator calls. An alias of a named
+  constrained subtype takes that subtype's range.
+- A nested typed evaluation inside a function sees the integer evaluator's
+  scalar arguments, so `positive(integer(ceil(real(w))))` folds for a
+  generic `w`. vhpi21 now elaborates; its remaining gap is VHPI metadata for
+  record fields constrained by the object.
+- `math_complex` is analyzed from the IEEE source. `float32` is accepted as
+  the constrained `float` it denotes (G.5).
+- PSL (1076-2008 11.5, 15.10; IEEE 1850):
+  - an unmarked `assert` with a PSL property is a PSL directive;
+  - `before_`/`until_` are reserved words;
+  - `always`/`never` bind loosest, and Boolean implication `b -> p` evaluates
+    a property consequent;
+  - `sync_abort` checks the condition at each sample;
+  - strong and inclusive `until`/`before`, and property-level `or`, are
+    evaluated.
+  Closes psl12 and vhdl_2008/tb_psl.
+
+Runner: `stdenv3` is excluded (its call-path vectors are nvc-specific); the
+exclusions document is regenerated.
+
+Open leads:
+- Batch 86 triage: `.local-artifacts/lrm-closure/triage/b86/class-uvm-triage.md`.
+  The parked UVM cases need `$unit` string actuals, the native-UVM static
+  call frame plus `uvm_resource_db`, cross-library base method calls, and a
+  bridge from `run_test` to the native UVM services. They do not need the
+  UVM library lowered.
+- nvc: issue843 (runtime float_pkg), issue1150 (PSL integer sampling),
+  element resolution `(resolved) T` (signal15, view4, issue1334, issue370),
+  elab35.
+- verilator: `$sformat` with runtime formats (`t_sys_sformat*`), class
+  event handles (`t_array_event`).
+
 ### Batch 84: VHPI, DPI-C exports and types, nested units, VHDL generic shapes
 
 Full run on the frozen `b84e`, compared with Batch 83 (`b83l`). Batch 84

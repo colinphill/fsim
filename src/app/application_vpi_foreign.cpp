@@ -1319,7 +1319,9 @@ private:
     {
         auto prefix = scope;
         while (true) {
-            const auto candidate = prefix.empty() ? name : prefix + "." + name;
+            const auto candidate = prefix.empty() ? name
+                : prefix.ends_with("::") ? prefix + name
+                                         : prefix + "." + name;
             if (const auto found = registry_.find(candidate);
                 found && found.value) {
                 return found.value->handle;
@@ -2160,7 +2162,8 @@ private:
         if (!scope) {
             return succeed(result);
         }
-        auto found = registry_.find(scope->full_name + "." + name);
+        auto found = registry_.find(scope->full_name
+            + (scope->full_name.ends_with("::") ? "" : ".") + name);
         if (!found || !found.value) {
             found = registry_.find(name);
         }

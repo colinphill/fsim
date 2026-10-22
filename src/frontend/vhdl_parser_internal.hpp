@@ -67,6 +67,7 @@ private:
 
   bool parse_vhdl_psl_declaration(DesignUnit &unit);
 
+  [[nodiscard]] bool psl_property_follows() const;
   bool parse_vhdl_psl_directive(
       DesignUnit &unit, std::optional<Token> label = std::nullopt,
       bool marker_consumed = false);

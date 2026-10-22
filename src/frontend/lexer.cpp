@@ -298,8 +298,13 @@ class Lexer {
     if (is_vhdl()) {
       const auto text = source_.text.substr(
           begin.offset, current_location().offset - begin.offset);
-      if (text.front() == '_' || text.back() == '_'
-          || text.find("__") != std::string::npos) {
+      // PSL's inclusive BEFORE_ and UNTIL_ are reserved words of VHDL
+      // (IEEE 1076-2008 15.10), not malformed basic identifiers.
+      const auto psl_inclusive = detail::ctype_lower_copy(text) == "before_"
+          || detail::ctype_lower_copy(text) == "until_";
+      if (!psl_inclusive
+          && (text.front() == '_' || text.back() == '_'
+              || text.find("__") != std::string::npos)) {
         diagnose(
             "FSIM-FE-LEX-005",
             "a VHDL basic identifier must start with a letter and cannot "

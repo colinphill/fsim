@@ -2172,6 +2172,7 @@ void Resolver::resolve_statement(
     resolve_expression(output.value, scope);
   }
   for (auto& sensitivity : statement.sensitivities) {
+    resolve_member_sensitivity(sensitivity, scope);
     resolve_expression(sensitivity.expression, scope);
   }
   if (statement.kind == StatementKind::Report) {
@@ -2246,6 +2247,14 @@ void Resolver::resolve_task(TaskDeclaration& task, Scope scope) {
 void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope scope) {
   scope.class_owner = &declaration;
   scope.lexical_identity = declaration.canonical_identity;
+  // A parameter default naming another specialization's constant
+  // (`parameter int v = C#(7)::b`, IEEE 1800-2017 8.25.1).
+  for (auto& parameter : declaration.parameters) {
+    if (parameter.kind == ParameterKind::Value
+        && parameter.default_value.valid()) {
+      resolve_module_constant(parameter.default_value, scope);
+    }
+  }
   for (auto& property : declaration.properties) {
     if (property.declaration.initializer) {
       resolve_typed_expression(

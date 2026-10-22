@@ -251,6 +251,7 @@ namespace {
             "and",
             "async_abort",
             "before",
+            "before_",
             "eventually",
             "false",
             "fell",
@@ -274,6 +275,7 @@ namespace {
             "sync_abort",
             "true",
             "until",
+            "until_",
             "within",
             "weak",
             "xor",
@@ -618,9 +620,9 @@ void VhdlParser::analyze_vhdl_psl(ParsedDesign& design)
                     ? std::optional { VhdlPslTemporalOperatorKind::Eventually }
                     : word == "always"
                     ? std::optional { VhdlPslTemporalOperatorKind::Always }
-                    : word == "until"
+                    : word == "until" || word == "until_"
                     ? std::optional { VhdlPslTemporalOperatorKind::Until }
-                    : word == "before"
+                    : word == "before" || word == "before_"
                     ? std::optional { VhdlPslTemporalOperatorKind::Before }
                     : word == "within"
                     ? std::optional { VhdlPslTemporalOperatorKind::Within }

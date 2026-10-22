@@ -395,6 +395,22 @@ std::string Lowerer::debug_scope_name() const
         }
         result += scope;
     }
+    // A VHDL subprogram's statements run in the subprogram, which the
+    // STD.ENV call path names (IEEE 1076-2019 16.5.6).
+    if (active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()) {
+        const auto& frame = hir_callable_frames_[*active_hir_callable_];
+        const auto* unit = frame.callee_unit != nullptr
+            ? frame.callee_unit : specialized_hir_unit_;
+        const auto declaration = unit != nullptr
+            ? unit->find_declaration(frame.declaration) : std::nullopt;
+        if (declaration && declaration->vhdl != nullptr) {
+            if (!result.empty()) {
+                result += '.';
+            }
+            result += declaration->vhdl->name;
+        }
+    }
     return result;
 }
 
@@ -2456,7 +2472,13 @@ std::optional<Process> Lowerer::lower_hir_process(
                     ? hir_runtime_binding(
                           *declaration, input.scope, false)
                     : std::nullopt;
-                if (binding) {
+                // A member of a packed structure (`s.clk`) names part of
+                // the declaration's signal, not all of it (IEEE 1800-2017
+                // 7.2.1, 9.4.2).
+                if (binding
+                    && hir_expression_width(
+                           *sensitivity.expression, input.scope)
+                        .value_or(binding->width) == binding->width) {
                     signal = binding->signal;
                 }
                 if (const auto named = specialized_hir_unit_->find_expression(

@@ -213,6 +213,45 @@ bool VhdlParser::parse_vhdl_psl_declaration(DesignUnit& unit)
     return true;
 }
 
+// A concurrent assertion whose condition uses a PSL temporal operator, which
+// no VHDL expression can contain, is a PSL assertion directive (IEEE
+// 1076-2008 11.5).
+bool VhdlParser::psl_property_follows() const
+{
+    static constexpr std::array temporal {
+        std::string_view { "always" }, std::string_view { "never" },
+        std::string_view { "eventually" }, std::string_view { "next" },
+        std::string_view { "next_a" }, std::string_view { "next_e" },
+        std::string_view { "next_event" }, std::string_view { "until" },
+        std::string_view { "until_" }, std::string_view { "before" },
+        std::string_view { "before_" }, std::string_view { "within" },
+        std::string_view { "abort" }, std::string_view { "async_abort" },
+        std::string_view { "sync_abort" },
+    };
+    std::size_t nesting { };
+    for (std::size_t offset = 1U;; ++offset) {
+        const auto& token = current(offset);
+        if (token.kind == TokenKind::EndOfFile
+            || (token.kind == TokenKind::Semicolon && nesting == 0U)) {
+            return false;
+        }
+        if (token.kind == TokenKind::LeftParen) {
+            ++nesting;
+        } else if (token.kind == TokenKind::RightParen && nesting != 0U) {
+            --nesting;
+        }
+        if (token.kind == TokenKind::ThinArrow
+            || token.kind == TokenKind::LeftBrace) {
+            return true;
+        }
+        if (token.kind == TokenKind::Identifier
+            && std::ranges::find(temporal, vhdl_name(token.text))
+                != temporal.end()) {
+            return true;
+        }
+    }
+}
+
 bool VhdlParser::parse_vhdl_psl_directive(
     DesignUnit& unit, std::optional<Token> label, const bool marker_consumed)
 {
@@ -235,7 +274,8 @@ bool VhdlParser::parse_vhdl_psl_directive(
     // unless the explicit PSL `property` introducer removes the ambiguity.
     if (!comment_embedded && keyword("assert", 0, true)
         && unit.kind != UnitKind::VhdlPslVerificationUnit
-        && !keyword("property", 1, true)) {
+        && !keyword("property", 1, true)
+        && !psl_property_follows()) {
         rewind(before);
         return false;
     }

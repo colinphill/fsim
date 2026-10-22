@@ -961,6 +961,12 @@ void VerilogParser::parse_modport(
                   unit.ports,
                   [&](const SignalDeclaration& port) {
                     return port.name == member.text;
+                  })
+              // An unpacked array variable (`logic w[1:N]`).
+              || std::ranges::any_of(
+                  unit.variables,
+                  [&](const VariableDeclaration& variable) {
+                    return variable.name == member.text;
                   });
           if (!callable && !signal_declared) {
             error(

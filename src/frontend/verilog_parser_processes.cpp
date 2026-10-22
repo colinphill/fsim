@@ -1879,6 +1879,22 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         Statement statement;
         statement.kind = StatementKind::ContainerMethod;
         statement.value = parse_expression();
+        // `a[i].delete;` and `s.q.delete;` call the method with no
+        // arguments, as `delete()` does (IEEE 1800-2023 7.5.3, 13.5.5).
+        if (auto& value = statement.value;
+            value.kind == ExpressionKind::Call
+            && value.text == "@sv-select:delete"
+            && value.operands.size() == 1U) {
+            value.text = ".delete";
+        } else if (value.kind == ExpressionKind::Identifier
+            && value.text.ends_with(".delete")
+            && value.text.size() > 7U) {
+            auto receiver = value;
+            receiver.text.resize(receiver.text.size() - 7U);
+            value = Expression {
+                ExpressionKind::Call, ".delete", { std::move(receiver) },
+                value.span };
+        }
         expect(
             TokenKind::Semicolon,
             "';' after container method call",

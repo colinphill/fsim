@@ -1878,6 +1878,7 @@ DesignUnit VerilogParser::parse_module(
         }
     }
     expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
+    import_interface_member_references(unit);
     if (match(TokenKind::Colon)) {
         const auto end_name = expect_identifier(
             std::string { unit_kind } + " name after "

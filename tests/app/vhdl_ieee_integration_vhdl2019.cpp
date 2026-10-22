@@ -859,7 +859,7 @@ begin
         + R"FSIM(" severity failure;
     assert std.env.file_name = "environment-api.vhd" severity failure;
     assert std.env.file_path = ")FSIM"
-        + source.lexically_normal().generic_string()
+        + std::filesystem::weakly_canonical(source).parent_path().generic_string()
         + R"FSIM(" severity failure;
     assert std.env.file_line > 0 severity failure;
     call_path := capture_call_path(0);
@@ -869,7 +869,7 @@ begin
     assert saved_path.all(0).file_name.all = "environment-api.vhd"
         severity failure;
     assert saved_path.all(0).file_path.all = ")FSIM"
-        + source.lexically_normal().generic_string()
+        + std::filesystem::weakly_canonical(source).parent_path().generic_string()
         + R"FSIM(" severity failure;
     assert saved_path.all(0).file_line > 0 severity failure;
     line_value := std.env.to_string(saved_path.all(0));

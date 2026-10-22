@@ -2043,13 +2043,18 @@ void Interpreter::Impl::handle_boundary(
                 const auto path = std::filesystem::path {
                     frames[index].source.path.str() }
                     .lexically_normal();
-                element.nested_elements[0].string_elements[0]
-                    = frames[index].scope.empty()
+                // A frame is named by its subprogram, the root by its
+                // process (IEEE 1076-2019 16.5.6).
+                const auto& scope = frames[index].scope.empty()
                     ? process.program().name() : frames[index].scope;
+                const auto leaf = scope.rfind('.');
+                element.nested_elements[0].string_elements[0]
+                    = leaf == std::string::npos ? scope
+                                                : scope.substr(leaf + 1U);
                 element.nested_elements[1].string_elements[0]
                     = path.filename().generic_string();
                 element.nested_elements[2].string_elements[0]
-                    = path.generic_string();
+                    = fsim::support::vhdl_environment_file_path(path);
                 element.nested_elements[3].elements[0]
                     = PackedLogic4::from_aval_bval(
                         64U, frames[index].source.line, 0U);
@@ -2072,9 +2077,14 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* call_path
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentCallPath>(&operation)) {
+        // An element's text is its file path, the directory separator,
+        // its file name, a colon, its line, a colon and its name (IEEE
+        // 1076-2019 16.5.6).
         struct Frame {
-            SourceLocation source;
-            std::string scope;
+            std::string directory;
+            std::string file_name;
+            std::uint64_t line { };
+            std::string name;
         };
         std::vector<Frame> frames;
         if (call_path->source_value) {
@@ -2107,6 +2117,7 @@ void Interpreter::Impl::handle_boundary(
                 const auto& element = value.nested_elements[index];
                 if (element.nested_elements.size() != 4U
                     || element.nested_elements[0].string_elements.size() != 1U
+                    || element.nested_elements[1].string_elements.size() != 1U
                     || element.nested_elements[2].string_elements.size() != 1U
                     || element.nested_elements[3].elements.size() != 1U) {
                     process.pc = instruction;
@@ -2122,9 +2133,9 @@ void Interpreter::Impl::handle_boundary(
                         "STD.ENV TO_STRING call path line is invalid");
                 }
                 frames.push_back(Frame {
-                    SourceLocation {
-                        element.nested_elements[2].string_elements[0],
-                        static_cast<std::uint32_t>(*line), 1U },
+                    element.nested_elements[2].string_elements[0],
+                    element.nested_elements[1].string_elements[0],
+                    *line,
                     element.nested_elements[0].string_elements[0] });
             }
         } else {
@@ -2132,7 +2143,17 @@ void Interpreter::Impl::handle_boundary(
                 call_path->source, call_path->scope);
             frames.reserve(current.size());
             for (const auto& frame : current) {
-                frames.push_back(Frame { frame.source, frame.scope });
+                const auto path = std::filesystem::path {
+                    frame.source.path.str() }.lexically_normal();
+                const auto& scope = frame.scope.empty()
+                    ? process.program().name() : frame.scope;
+                const auto leaf = scope.rfind('.');
+                frames.push_back(Frame {
+                    fsim::support::vhdl_environment_file_path(path),
+                    path.filename().generic_string(),
+                    frame.source.line,
+                    leaf == std::string::npos ? scope
+                                              : scope.substr(leaf + 1U) });
             }
         }
         const auto separator = process.executor
@@ -2141,13 +2162,10 @@ void Interpreter::Impl::handle_boundary(
         std::string text;
         for (std::size_t index = 0; index < frames.size(); ++index) {
             const auto& frame = frames[index];
-            const auto path = std::filesystem::path { frame.source.path.str() }
-                .lexically_normal().generic_string();
-            const auto name = frame.scope.empty()
-                ? process.program().name() : frame.scope;
-            const auto line = std::to_string(frame.source.line);
-            const auto required = name.size() + path.size() + line.size()
-                + 4U + (index == 0U ? 0U : separator.size());
+            const auto line = std::to_string(frame.line);
+            const auto required = frame.directory.size()
+                + frame.file_name.size() + line.size() + frame.name.size()
+                + 3U + (index == 0U ? 0U : separator.size());
             if (required > maximum_string_bytes
                 || text.size() > maximum_string_bytes - required) {
                 process.pc = instruction;
@@ -2157,12 +2175,13 @@ void Interpreter::Impl::handle_boundary(
             if (index != 0U) {
                 text += separator;
             }
-            text += name;
-            text += " [";
-            text += path;
+            text += frame.directory;
+            text += '/';
+            text += frame.file_name;
             text += ':';
             text += line;
-            text += ']';
+            text += ':';
+            text += frame.name;
         }
         if (process.executor) {
             process.executor->write_string_register(

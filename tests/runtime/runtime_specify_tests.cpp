@@ -1076,8 +1076,9 @@ void test_simir_module_paths()
         "posedge module paths delay only matching source transitions");
     require(
         run_edge_polarity(ModulePathEdge::none, true)
-            == std::vector<std::pair<SimulationTick, std::string>> { { 15, "1" } },
-        "negative polarity transforms destination data before scheduling");
+            == std::vector<std::pair<SimulationTick, std::string>> {
+                { 5, "1" }, { 15, "0" } },
+        "path polarity and data source leave propagated data unchanged");
 }
 
 } // namespace fsim::tests::runtime

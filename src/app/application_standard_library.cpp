@@ -777,6 +777,52 @@ end context ieee_std_context;
         }
     }
 
+    std::optional<std::vector<frontend::DesignUnit>> analyzed_units(
+        const std::string_view package,
+        const std::filesystem::path& declaration_path,
+        const std::string_view declaration,
+        const std::filesystem::path& body_path,
+        const std::string_view body,
+        diagnostic::Engine& diagnostics,
+        const frontend::VhdlStandard standard)
+    {
+        std::vector<frontend::DesignUnit> units;
+        std::vector<std::pair<std::filesystem::path, std::string>> sources;
+        sources.emplace_back(declaration_path, std::string { declaration });
+        if (!body_path.empty()) {
+            sources.emplace_back(body_path, std::string { body });
+        }
+        for (auto& [path, text] : sources) {
+            // The package is analyzed into IEEE, so its `use WORK.MATH_REAL`
+            // names IEEE.MATH_REAL.
+            for (auto at = text.find("use WORK."); at != std::string::npos;
+                 at = text.find("use WORK.", at)) {
+                text.replace(at, 9U, "library IEEE; use IEEE.");
+                at += 23U;
+            }
+            auto parsed = frontend::parse(
+                frontend::SourceText { fsim::support::path_to_utf8(path), text },
+                frontend::Language::Vhdl2008, standard);
+            if (!parsed.ok() || parsed.design.units.size() != 1U) {
+                diagnostics.error(
+                    "FSIM-FE-VHSTD-003",
+                    "internal ieee." + std::string { package }
+                        + " source does not analyze for VHDL-"
+                        + std::string { frontend::to_string(standard) },
+                    { fsim::support::path_to_utf8(path), { }, { } });
+                return std::nullopt;
+            }
+            auto unit = std::move(parsed.design.units.front());
+            unit.library = "ieee";
+            unit.vhdl_predefined_environment
+                = predefined_environment(standard, "ieee");
+            unit.standard_package_revision
+                = std::string { kIeeePackageRevision };
+            units.push_back(std::move(unit));
+        }
+        return units;
+    }
+
     std::optional<std::vector<frontend::DesignUnit>> projected_units(
         const std::string_view package,
         const std::filesystem::path& declaration_path,
@@ -1638,8 +1684,15 @@ void inject_vhdl_standard_libraries(
         if (!declaration || !body) {
             return;
         }
-        auto package_units = projected_units(
-            package.name, declaration_path, body_path, diagnostics, standard);
+        // IEEE.MATH_COMPLEX is ordinary VHDL over IEEE.MATH_REAL (IEEE
+        // 1076-2019 16.10): its declarations and body are analyzed from
+        // the standard's source rather than projected.
+        auto package_units = package.name == "math_complex"
+            ? analyzed_units(package.name, declaration_path, *declaration,
+                  body_path, *body, diagnostics, standard)
+            : projected_units(
+                  package.name, declaration_path, body_path, diagnostics,
+                  standard);
         if (!package_units) {
             return;
         }

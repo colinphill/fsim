@@ -105,6 +105,20 @@ namespace {
             ? std::string_view { "verilog" }
             : std::string_view { "systemverilog" };
         const auto kind = [&]() -> std::string_view {
+            // An extern declaration is catalogued apart from its
+            // definition (IEEE 1800-2023 23.2.1).
+            if (unit.systemverilog_extern) {
+                switch (unit.kind) {
+                case frontend::UnitKind::SystemVerilogInterface:
+                    return "extern-interface";
+                case frontend::UnitKind::VerilogModule:
+                    return "extern-module";
+                case frontend::UnitKind::SystemVerilogProgram:
+                    return "extern-program";
+                default:
+                    break;
+                }
+            }
             switch (unit.kind) {
             case frontend::UnitKind::VhdlEntity:
                 return "entity";

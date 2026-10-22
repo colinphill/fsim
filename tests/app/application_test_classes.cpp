@@ -1039,10 +1039,11 @@ endmodule
         auto& startup_vpi = startup_simulation.systemverilog_vpi_objects();
         const auto startup_vpi_root
             = startup_vpi.find("package_static_notification_top");
+        // A package's scope is `pkg::` (IEEE 1800-2023 3.13, 37.10).
         const auto startup_vpi_package
-            = startup_vpi.find("package_static_notification_pkg");
+            = startup_vpi.find("package_static_notification_pkg::");
         const auto startup_vpi_package_count = startup_vpi.find(
-            "package_static_notification_pkg.package_count");
+            "package_static_notification_pkg::package_count");
         assert(startup_vpi_root && startup_vpi_package
             && startup_vpi_package_count);
         assert(startup_vpi_root.value->kind

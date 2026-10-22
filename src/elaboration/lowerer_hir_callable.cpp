@@ -10081,12 +10081,17 @@ Lowerer::hir_vhdl_function_result_proof(
 
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
+    // An operator symbol a user function overloads is a call of it too.
     if (!expression || expression->vhdl == nullptr
         || !expression->vhdl->referenced_name
         || (expression->vhdl->kind
                 != semantic::vhdl::ExpressionKind::call
             && expression->vhdl->kind
-                != semantic::vhdl::ExpressionKind::name)) {
+                != semantic::vhdl::ExpressionKind::name
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::unary
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::binary)) {
         return std::nullopt;
     }
     const auto resolution = selected_body ? std::nullopt
@@ -12580,7 +12585,11 @@ Lowerer::hir_vhdl_returned_result_shape(
         || !expression->vhdl->referenced_name
         || (expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
             && expression->vhdl->kind
-                != semantic::vhdl::ExpressionKind::name)) {
+                != semantic::vhdl::ExpressionKind::name
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::unary
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::binary)) {
         return std::nullopt;
     }
     const auto resolution = selected_body ? std::nullopt

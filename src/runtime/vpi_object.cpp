@@ -803,13 +803,22 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         }
     }
 
-    auto key = sibling_key(descriptor.parent, normalized_name);
+    // Packages are a namespace apart from the design's instances: a
+    // package's full name is `name::`, which prefixes its members' names
+    // (IEEE 1800-2023 3.13, 37.10).
+    const bool package_scope = top_level
+        && descriptor.kind == SystemVerilogVpiObjectKind::Package;
+    auto key = sibling_key(descriptor.parent,
+        package_scope ? normalized_name + "::" : normalized_name);
     if (siblings_.contains(key)) {
         return { { }, SystemVerilogVpiObjectError::DuplicateName };
     }
     std::string full_name;
     if (top_level) {
         full_name = hierarchy_segment;
+        if (package_scope) {
+            full_name.append("::");
+        }
     } else {
         full_name = records_[parent_slot].full_name;
         const bool indexed_child
@@ -819,7 +828,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
                       == SystemVerilogVpiObjectKind::Array)
             && normalized_name.starts_with('[')
             && normalized_name.ends_with(']');
-        if (!indexed_child) {
+        if (!indexed_child && !full_name.ends_with("::")) {
             full_name.push_back('.');
         }
         full_name.append(hierarchy_segment);
