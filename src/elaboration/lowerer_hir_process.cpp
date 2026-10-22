@@ -2399,6 +2399,14 @@ std::optional<Process> Lowerer::lower_hir_process(
                             continue;
                         }
                     }
+                    // A class event is waited on through its event object
+                    // (IEEE 1800-2017 15.5.2), by the leading event control.
+                    if (input.sensitivities.size() == 1U
+                        && hir_class_event_expression(
+                            *sensitivity.expression)) {
+                        dynamic_terms = true;
+                        break;
+                    }
                     if (const auto selected = hir_static_signal_sensitivity(
                             *sensitivity.expression, input.scope)) {
                         // A constant selected element/bit subscribes to its

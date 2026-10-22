@@ -240,17 +240,88 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     || member.text == "find_last_index");
             // IEEE 1800-2017 13.4.5: a method with no arguments may omit its
             // empty parentheses, as in `q.size` or `q.pop_back`.
+            // `a[i].size`: an element of `a` that is itself a container
+            // (IEEE 1800-2017 7.4.5, 13.4.5).
+            const auto indexed_container_receiver = [&] {
+                std::size_t indices { };
+                const Expression* root = &expression;
+                while (root->kind == ExpressionKind::Index
+                    && root->operands.size() == 2U) {
+                    ++indices;
+                    root = &root->operands.front();
+                }
+                if (indices == 0U || root->kind != ExpressionKind::Identifier) {
+                    return false;
+                }
+                const Type* type = nullptr;
+                if (const auto found = current_procedural_types_.find(root->text);
+                    found != current_procedural_types_.end()) {
+                    type = &found->second;
+                } else if (const auto unit = unit_foreach_types_.find(root->text);
+                    unit != unit_foreach_types_.end()) {
+                    type = &unit->second;
+                }
+                std::size_t depth { };
+                for (const Type* level = type;
+                     level != nullptr && level->systemverilog_container;) {
+                    const auto& container = *level->systemverilog_container;
+                    depth += std::max<std::size_t>(
+                        1U, container.static_range_expressions.size());
+                    level = container.element_types.empty()
+                        ? nullptr
+                        : &container.element_types.front();
+                }
+                return indices < depth;
+            };
+            // `s.a.size`: a container member of an unpacked structure.
+            const auto member_container_receiver = [&] {
+                if (expression.kind != ExpressionKind::Identifier
+                    || expression.text.find('.') == std::string::npos) {
+                    return false;
+                }
+                std::string_view rest { expression.text };
+                const auto first = rest.find('.');
+                const auto root = std::string { rest.substr(0U, first) };
+                rest.remove_prefix(first + 1U);
+                const Type* type = nullptr;
+                if (const auto found = current_procedural_types_.find(root);
+                    found != current_procedural_types_.end()) {
+                    type = &found->second;
+                } else if (const auto unit = unit_foreach_types_.find(root);
+                    unit != unit_foreach_types_.end()) {
+                    type = &unit->second;
+                }
+                while (type != nullptr && !rest.empty()) {
+                    const auto dot = rest.find('.');
+                    const auto name = rest.substr(0U, dot);
+                    rest.remove_prefix(
+                        dot == std::string_view::npos ? rest.size() : dot + 1U);
+                    const auto member = std::ranges::find_if(
+                        type->packed_members, [&](const PackedMember& candidate) {
+                            return candidate.name == name;
+                        });
+                    type = type->systemverilog_container
+                            || member == type->packed_members.end()
+                            || member->nested_types.empty()
+                        ? nullptr
+                        : &member->nested_types.front();
+                }
+                return type != nullptr && type->systemverilog_container;
+            };
             const bool implicit_container_call = !parenthesized_call
                 && !implicit_container_with
-                && expression.kind == ExpressionKind::Identifier
-                && [&] {
-                       const auto found
-                           = current_procedural_types_.find(expression.text);
-                       return found != current_procedural_types_.end()
-                           ? found->second.systemverilog_container
-                                 .has_value()
-                           : unit_container_names_.contains(expression.text);
-                   }()
+                && ((expression.kind == ExpressionKind::Identifier
+                        && [&] {
+                               const auto found = current_procedural_types_
+                                                      .find(expression.text);
+                               return found != current_procedural_types_.end()
+                                   ? found->second.systemverilog_container
+                                         .has_value()
+                                   : unit_container_names_.contains(
+                                         expression.text);
+                           }())
+                    || indexed_container_receiver()
+                    || member_container_receiver())
                 && (member.text == "size" || member.text == "num"
                     || member.text == "pop_front"
                     || member.text == "pop_back"

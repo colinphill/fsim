@@ -691,6 +691,39 @@ void SystemVerilogClassHeap::commit_randc_states(
   }
 }
 
+void SystemVerilogClassHeap::copy_properties(
+    const SystemVerilogClassHandle destination,
+    const SystemVerilogClassHandle source) {
+  const auto randc_bytes = [](const SystemVerilogClassObject& value) {
+    std::size_t bytes{};
+    for (const auto& property : value.properties) {
+      if (property.random_state) {
+        bytes = checked_add(
+            bytes,
+            property.random_state->randc_used_values.size()
+                * sizeof(std::uint64_t),
+            "randc cycle state");
+      }
+    }
+    return bytes;
+  };
+  const auto& from = object(source);
+  auto& to = object(destination);
+  if (from.properties.size() != to.properties.size()) {
+    throw std::invalid_argument{"class copy has a different property layout"};
+  }
+  const auto old_bytes = randc_bytes(to);
+  const auto new_bytes = randc_bytes(from);
+  const auto updated_storage_bytes = checked_add(
+      storage_bytes_ - old_bytes, new_bytes, "randc cycle state");
+  if (updated_storage_bytes > limits_.maximum_storage_bytes) {
+    throw std::length_error{"SystemVerilog class storage budget exceeded"};
+  }
+  to.properties = from.properties;
+  to.accounted_bytes = to.accounted_bytes - old_bytes + new_bytes;
+  storage_bytes_ = updated_storage_bytes;
+}
+
 SystemVerilogClassHandle SystemVerilogClassHeap::checked_cast(
     const SystemVerilogClassHandle handle,
     const std::string_view declared_type) const {

@@ -44,7 +44,9 @@ parse_input_format(const std::string_view text) {
           width * 10U + digit, std::numeric_limits<std::uint32_t>::max());
       ++index;
     }
-    if ((has_width && width == 0) || index >= text.size()) {
+    // A zero field width (`%0d`) places no limit on the field, as for the
+    // output formats that $value$plusargs shares (IEEE 1800-2017 21.6).
+    if (index >= text.size()) {
       result.valid = false;
       return result;
     }
@@ -63,7 +65,7 @@ parse_input_format(const std::string_view text) {
       conversion.format = InputScanFormat::Real;
     else if (code == 'm') {
       // Do not silently ignore a width on this no-input conversion.
-      if (has_width) {
+      if (has_width && width != 0) {
         result.valid = false;
         return result;
       }

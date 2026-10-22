@@ -282,7 +282,12 @@ namespace fsim::runtime::simir {
     candidate = support::native_fs::weakly_canonical(candidate, error);
     if (error || !vhdl_path_below_root(root, candidate)) {
         if (!error) {
-            error = std::make_error_code(std::errc::permission_denied);
+            // A directory that does not exist is not found wherever it
+            // would be (IEEE 1076-2019 16.5.6 DIR_OPEN_STATUS).
+            std::error_code missing;
+            error = support::native_fs::exists(candidate, missing) || missing
+                ? std::make_error_code(std::errc::permission_denied)
+                : std::make_error_code(std::errc::no_such_file_or_directory);
         }
         return std::nullopt;
     }

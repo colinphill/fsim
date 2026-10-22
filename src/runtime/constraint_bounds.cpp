@@ -3,6 +3,7 @@
 #include "constraint_bounds_internal.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -270,6 +271,19 @@ namespace {
           ? constant_bits(nodes[node.operands[position]])
           : std::nullopt;
     };
+    // A selection by a known condition is its chosen operand (IEEE
+    // 1800-2017 11.4.11).
+    if (node.operation == Operator::Conditional
+        && node.operands.size() == 3U) {
+      if (const auto condition = operand(0)) {
+        const auto chosen = node.operands[*condition != 0U ? 1U : 2U];
+        if (nodes[chosen].profile.width == width) {
+          node.operation = Operator::UnaryPlus;
+          node.operands = { chosen };
+        }
+      }
+      continue;
+    }
     std::optional<std::uint64_t> folded;
     switch (node.operation) {
     case Operator::UnaryMinus:
@@ -325,6 +339,86 @@ namespace {
     }
     return std::optional<std::size_t> {};
   };
+  // `c * v == k` and `v + v == k` hold for the few values of `v` that solve
+  // the congruence modulo 2^w (IEEE 1800-2017 11.4.3): a disjunction of
+  // equalities, or a constant when no value does.
+  const auto rewrite_scaled = [&](const std::size_t index,
+                                  const std::size_t arithmetic_id,
+                                  const std::uint64_t known,
+                                  const std::size_t context) {
+    const auto& arithmetic = nodes[arithmetic_id];
+    std::optional<std::size_t> found;
+    std::optional<std::uint64_t> factor;
+    const auto left = is_variable(arithmetic.operands[0]);
+    const auto right = is_variable(arithmetic.operands[1]);
+    if (arithmetic.operation == Operator::Add) {
+      if (left && right) {
+        found = left;
+        factor = 2U;
+      }
+    } else if (arithmetic.operation == Operator::Multiply) {
+      if (left) {
+        found = left;
+        factor = constant_bits(nodes[arithmetic.operands[1]]);
+      } else if (right) {
+        found = right;
+        factor = constant_bits(nodes[arithmetic.operands[0]]);
+      }
+    }
+    if (!found || !factor || nodes[*found].profile.width != context) {
+      return false;
+    }
+    const auto mask = context == 64U
+        ? ~std::uint64_t{} : (std::uint64_t{1} << context) - 1U;
+    const auto scale = *factor & mask;
+    const auto target = known & mask;
+    if (scale == 0U) return false;
+    const auto shift = static_cast<std::size_t>(std::countr_zero(scale));
+    if (shift > 2U || shift >= context) return false;
+    const bool equal = nodes[index].operation == Operator::Equal
+        || nodes[index].operation == Operator::CaseEqual;
+    if ((target & ((std::uint64_t{1} << shift) - 1U)) != 0U) {
+      const auto width = nodes[index].profile.width;
+      nodes[index].operation = Operator::Constant;
+      nodes[index].constant = constant_of_width(equal ? 0U : 1U, width);
+      nodes[index].operands.clear();
+      return true;
+    }
+    // The inverse of the odd part modulo 2^64 by Newton's iteration.
+    const auto odd = scale >> shift;
+    auto inverse = odd;
+    for (int step = 0; step < 6; ++step) inverse *= 2U - odd * inverse;
+    const auto low_bits = context - shift;
+    const auto low_mask = low_bits == 64U
+        ? ~std::uint64_t{} : (std::uint64_t{1} << low_bits) - 1U;
+    const auto first = ((target >> shift) * inverse) & low_mask;
+    std::optional<std::size_t> combined;
+    for (std::uint64_t step = 0; step < (std::uint64_t{1} << shift); ++step) {
+      SystemVerilogConstraintExpressionNode value;
+      value.operation = Operator::Constant;
+      value.constant = constant_of_width(
+          first + (low_bits == 64U ? 0U : step << low_bits), context);
+      value.profile = nodes[*found].profile;
+      nodes.push_back(std::move(value));
+      SystemVerilogConstraintExpressionNode compare;
+      compare.operation = equal ? Operator::Equal : Operator::NotEqual;
+      compare.profile = nodes[index].profile;
+      compare.operands = { *found, nodes.size() - 1U };
+      nodes.push_back(std::move(compare));
+      if (combined) {
+        SystemVerilogConstraintExpressionNode join;
+        join.operation = equal ? Operator::LogicalOr : Operator::LogicalAnd;
+        join.profile = nodes[index].profile;
+        join.operands = { *combined, nodes.size() - 1U };
+        nodes.push_back(std::move(join));
+      }
+      combined = nodes.size() - 1U;
+    }
+    const auto replacement = nodes[*combined];
+    nodes[index].operation = replacement.operation;
+    nodes[index].operands = replacement.operands;
+    return true;
+  };
   for (std::size_t index = 0; index < original_count; ++index) {
     const auto operation = nodes[index].operation;
     if ((operation != Operator::Equal && operation != Operator::NotEqual
@@ -340,6 +434,31 @@ namespace {
       const auto known = constant_bits(nodes[other_id]);
       const auto context = std::max(
           arithmetic.profile.width, nodes[other_id].profile.width);
+      if (known && context != 0U && context <= 64U
+          && arithmetic.operands.size() == 2U
+          && rewrite_scaled(index, arithmetic_id, *known, context)) {
+        break;
+      }
+      // `~v == k` and `-v == k` invert: `v == ~k`, `v == -k`.
+      if (known && context != 0U && context <= 64U
+          && (arithmetic.operation == Operator::BitwiseNot
+              || arithmetic.operation == Operator::UnaryMinus)
+          && arithmetic.operands.size() == 1U) {
+        const auto inverted = is_variable(arithmetic.operands.front());
+        if (inverted && nodes[*inverted].profile.width == context) {
+          SystemVerilogConstraintExpressionNode constant;
+          constant.operation = Operator::Constant;
+          constant.constant = constant_of_width(
+              arithmetic.operation == Operator::BitwiseNot
+                  ? ~*known : ~*known + 1U,
+              context);
+          constant.profile = nodes[*inverted].profile;
+          const auto variable_id = *inverted;
+          nodes.push_back(std::move(constant));
+          nodes[index].operands = { variable_id, nodes.size() - 1U };
+          break;
+        }
+      }
       if (!known || context == 0U || context > 64U
           || (arithmetic.operation != Operator::Add
               && arithmetic.operation != Operator::Subtract)
@@ -375,6 +494,47 @@ namespace {
       nodes[index].operands = { *found, nodes.size() - 1U };
       break;
     }
+  }
+  // A rewritten comparison names nodes appended after it; restore source
+  // order, every operand before its user.
+  bool ordered = true;
+  for (std::size_t index = 0; index < nodes.size() && ordered; ++index) {
+    for (const auto operand : nodes[index].operands) {
+      if (operand >= index) {
+        ordered = false;
+        break;
+      }
+    }
+  }
+  if (ordered) return result;
+  std::vector<std::optional<std::size_t>> renumbered(nodes.size());
+  std::vector<SystemVerilogConstraintExpressionNode> sorted;
+  sorted.reserve(nodes.size());
+  std::vector<std::pair<std::size_t, std::size_t>> stack;
+  for (std::size_t start = 0; start < nodes.size(); ++start) {
+    if (renumbered[start]) continue;
+    stack.emplace_back(start, 0U);
+    while (!stack.empty()) {
+      auto& [id, next] = stack.back();
+      if (next < nodes[id].operands.size()) {
+        const auto operand = nodes[id].operands[next++];
+        if (operand < nodes.size() && !renumbered[operand]) {
+          stack.emplace_back(operand, 0U);
+        }
+        continue;
+      }
+      auto node = nodes[id];
+      for (auto& operand : node.operands) {
+        if (operand < nodes.size()) operand = *renumbered[operand];
+      }
+      renumbered[id] = sorted.size();
+      sorted.push_back(std::move(node));
+      stack.pop_back();
+    }
+  }
+  nodes = std::move(sorted);
+  if (result.root < renumbered.size() && renumbered[result.root]) {
+    result.root = *renumbered[result.root];
   }
   return result;
 }
@@ -738,7 +898,18 @@ node_interval(const SystemVerilogConstraintExpression& expression,
       return false;
     };
     for (const auto& node : nodes) {
-      if (node.operation != Operator::Equal || node.operands.size() != 2U) {
+      // A comparison with a constant under a guard (`if (c) {x > 4;
+      // x < 7;}`) bounds nothing either; its boundary values and their
+      // neighbours are candidates.
+      const bool equality = node.operation == Operator::Equal
+          || node.operation == Operator::CaseEqual;
+      const bool relational = node.operation == Operator::Less
+          || node.operation == Operator::LessEqual
+          || node.operation == Operator::Greater
+          || node.operation == Operator::GreaterEqual
+          || node.operation == Operator::NotEqual
+          || node.operation == Operator::CaseNotEqual;
+      if ((!equality && !relational) || node.operands.size() != 2U) {
         continue;
       }
       for (std::size_t side = 0; side < 2U; ++side) {
@@ -760,10 +931,17 @@ node_interval(const SystemVerilogConstraintExpression& expression,
           }
         }
         const auto key = (bits & width_mask) ^ sign_bit;
-        if (std::ranges::any_of(hard, [&](const auto& range) {
-              return range.low <= key && key <= range.high;
-            })) {
-          keys.push_back(key);
+        const auto add = [&](const std::uint64_t candidate) {
+          if (std::ranges::any_of(hard, [&](const auto& range) {
+                return range.low <= candidate && candidate <= range.high;
+              })) {
+            keys.push_back(candidate);
+          }
+        };
+        add(key);
+        if (relational) {
+          if (key != 0U) add(key - 1U);
+          if (key != width_mask) add(key + 1U);
         }
       }
     }

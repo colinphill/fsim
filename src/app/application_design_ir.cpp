@@ -468,8 +468,12 @@ class DesignIrBuilder final {
     }
   }
 
+  // `declaration_source` tells apart instances that share a path, such as
+  // a package and a module of the same name (IEEE 1800-2017 3.13).
   [[nodiscard]] di::SpecializationId specialization_for_path(
-      const std::string_view path) const {
+      const std::string_view path,
+      const std::optional<semantic::SourceSpanId> declaration_source
+      = std::nullopt) const {
     const auto& instances = result_.instances();
     auto prefix_size = path.size();
     while (true) {
@@ -477,6 +481,29 @@ class DesignIrBuilder final {
       const auto found = prefix == std::nullopt
           ? instance_path_positions_.end()
           : instance_path_positions_.find(*prefix);
+      if (found != instance_path_positions_.end() && declaration_source
+          && found->second.first != found->second.last) {
+        const auto leaf = leaf_name(path);
+        for (auto index = found->second.first; index <= found->second.last;
+             ++index) {
+          const auto& candidate = instances[index];
+          if (!candidate.specialization.valid()
+              || !owns_path(paths_.view(candidate.path), path)) {
+            continue;
+          }
+          const auto scope = result_.specializations()
+              [candidate.specialization.value()].scope;
+          const bool declares = scope.valid()
+              && std::ranges::any_of(model_.values(),
+                  [&](const semantic::Value& value) {
+                    return value.scope == scope && value.name == leaf
+                        && value.source == *declaration_source;
+                  });
+          if (declares) {
+            return candidate.specialization;
+          }
+        }
+      }
       if (found != instance_path_positions_.end()) {
         const auto& owner = instances[found->second.last];
         if (owns_path(paths_.view(owner.path), path)) {
@@ -606,8 +633,9 @@ class DesignIrBuilder final {
   }
 
   void add_signal_object(const elaboration::SignalInfo& input) {
-    const auto specialization = specialization_for_path(input.name);
     const auto object_source = source(input.declaration_span);
+    const auto specialization
+        = specialization_for_path(input.name, object_source);
     const auto name = std::string{leaf_name(input.name)};
     const auto value = find_value(name, object_source, specialization);
     const auto object = add_object(

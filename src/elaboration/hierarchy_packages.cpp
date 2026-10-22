@@ -12242,12 +12242,9 @@ namespace {
                     cast_prefix.size());
                 const auto cast_size_declaration
                     = [](const semantic::CompiledDeclarationView& candidate) {
-                          if (candidate.systemverilog == nullptr) {
-                              return false;
-                          }
-                          const auto form = candidate.systemverilog->form;
-                          return form == DeclarationForm::parameter
-                              || form == DeclarationForm::local_parameter;
+                          return candidate.systemverilog != nullptr
+                              && semantic::sv::is_size_constant_declaration(
+                                  *candidate.systemverilog);
                       };
                 const auto cast_sizes
                     = semantic::CompiledDesignResolver {
@@ -12920,6 +12917,30 @@ namespace {
                 return false;
             }
         };
+        // A loop generate's genvar is a constant only in each expanded
+        // block (IEEE 1800-2017 27.4); a replication count that names it is
+        // checked when that block is lowered.
+        std::vector<semantic::ScopeId> iterative_generate_scopes;
+        const auto collect_iterative = [&](const auto& self,
+                                           const std::vector<
+                                               semantic::sv::GenerateRegion>&
+                                               regions) -> void {
+            for (const auto& region : regions) {
+                if (region.kind == semantic::sv::GenerateKind::iterative) {
+                    iterative_generate_scopes.push_back(region.scope);
+                }
+                self(self, region.nested);
+            }
+        };
+        collect_iterative(collect_iterative, unit.generates);
+        const auto in_iterative_generate = [&](const semantic::ScopeId scope) {
+            return scope.valid()
+                && std::ranges::any_of(iterative_generate_scopes,
+                    [&](const semantic::ScopeId region) {
+                        return semantic::scope_within(
+                            compiled.semantics, scope, region);
+                    });
+        };
         std::unordered_set<std::string> case_match_bindings;
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
             static constexpr std::string_view binding_prefix { "@match-bind:" };
@@ -13037,6 +13058,7 @@ namespace {
                                     == ExpressionKind::string_literal;
                         });
                 bool valid = string_replication
+                    || (!count && in_iterative_generate(expression.scope))
                     || (count && *count >= 0
                         && expression.operands.size() >= 2U
                         && static_cast<std::uint64_t>(*count)
@@ -14774,6 +14796,19 @@ void HierarchyBuilder::finalize_systemverilog_whole_aliases(
             continue;
         }
         for (const auto& name : group) {
+            const auto bound = materialization.signals.find(name);
+            if (bound != materialization.signals.end()
+                && bound->second != *canonical
+                && bound->second < design_.signal_info_.size()
+                && *canonical < design_.signal_info_.size()
+                && design_.signal_info_[bound->second].width
+                    == design_.signal_info_[*canonical].width
+                && std::ranges::find(materialization.alias_plan.joined_nets,
+                       std::pair { *canonical, bound->second })
+                    == materialization.alias_plan.joined_nets.end()) {
+                materialization.alias_plan.joined_nets.emplace_back(
+                    *canonical, bound->second);
+            }
             materialization.signals.insert_or_assign(name, *canonical);
             const auto full_name = materialization.path + "." + name;
             materialization.signals.insert_or_assign(
@@ -14848,6 +14883,12 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
         info.direction = frontend::PortDirection::Unknown;
         auto signal = design_.signals_[model];
         signal.name = full_name;
+        // A clockvar has its signal's unpacked shape (IEEE 1800-2017 14.3).
+        if (const auto shape = design_.signal_unpacked_shape_.find(model);
+            shape != design_.signal_unpacked_shape_.end()) {
+            auto copied = shape->second;
+            design_.signal_unpacked_shape_.insert_or_assign(id, std::move(copied));
+        }
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.push_back(std::move(signal));
         design_.signal_by_name_.insert_or_assign(full_name, id);
@@ -23109,6 +23150,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                 = record.kind == Kind::call
                 || record.kind == Kind::unary
                 || record.kind == Kind::binary;
+            // Overload resolution records a call's callee here even when the
+            // referenced name carries no selection.
+            if (callable_expression && record.resolved_declaration
+                && callable_or_conversion(*record.resolved_declaration)) {
+                return true;
+            }
             if (callable_expression && record.referenced_name) {
                 if (record.referenced_name->selected
                     && callable_or_conversion(

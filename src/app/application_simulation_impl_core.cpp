@@ -348,6 +348,73 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         fill(fill, constraint);
     }
 
+    // A static random variable is randomized with the object, shared by
+    // every instance (IEEE 1800-2017 18.4): its stored value and random
+    // state join the object for the solve and return to the store after.
+    struct BorrowedStatics {
+        Simulation::Impl& impl;
+        runtime::SystemVerilogClassHandle handle;
+        std::size_t own_count;
+        std::vector<std::pair<std::string, std::string>> sources;
+        ~BorrowedStatics()
+        {
+            if (sources.empty()) {
+                return;
+            }
+            auto& current = impl.class_heap.object(handle);
+            for (std::size_t index { }; index < sources.size(); ++index) {
+                const auto slot = own_count + index;
+                if (slot < current.properties.size()) {
+                    impl.class_static_store.property(
+                        sources[index].first, sources[index].second)
+                        = std::move(current.properties[slot]);
+                }
+            }
+            current.properties.resize(own_count);
+            current.property_names.resize(own_count);
+        }
+    } borrowed_statics { *this, handle,
+        class_heap.object(handle).properties.size(), { } };
+    {
+        auto& owner_object = class_heap.object(handle);
+        // Inherited static variables are the base classes' (8.13).
+        std::vector<const semantic::sv::SpecializedClassProperty*> statics;
+        for (std::string current { owner_object.specialization_identity };
+             !current.empty();) {
+            const auto& specialization = class_specialization(current);
+            for (const auto& property : specialization.properties) {
+                statics.push_back(&property);
+            }
+            current = specialization.base
+                ? specialization.base->specialization_identity
+                : std::string { };
+        }
+        for (const auto* const property_pointer : statics) {
+            const auto& property = *property_pointer;
+            // A static randc cycle would need the heap's storage
+            // accounting; only rand variables are borrowed.
+            if (!property.static_storage
+                || property.random_kind != semantic::sv::ClassRandomKind::rand) {
+                continue;
+            }
+            auto qualified = property.owner_identity + "::" + property.name;
+            if (std::ranges::find(owner_object.property_names, qualified)
+                != owner_object.property_names.end()) {
+                continue;
+            }
+            auto specialization = static_property_specialization(
+                property.owner_identity, handle);
+            const auto& stored = class_static_store.property(
+                specialization, property.name);
+            if (!stored.random_state) {
+                continue;
+            }
+            owner_object.property_names.push_back(std::move(qualified));
+            owner_object.properties.push_back(stored);
+            borrowed_statics.sources.emplace_back(
+                std::move(specialization), property.name);
+        }
+    }
     auto& object = class_heap.object(handle);
     const auto prior_properties = object.properties;
     const auto callback_on = [&](const runtime::SystemVerilogClassHandle target,
@@ -1297,8 +1364,68 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         return runtime::PackedLogic4::from_aval_bval(
             32, enabled ? 1U : 0U, 0);
     }
-    return class_execution.invoke_source_randomization_mode(
+    // A static random variable's mode is shared by every instance (IEEE
+    // 1800-2017 18.8): it lives with the variable in the static store.
+    constexpr std::string_view random_prefix { "@builtin-rand-mode:" };
+    std::vector<runtime::SystemVerilogClassRandomState*> static_states;
+    std::optional<runtime::SystemVerilogClassRandomState*> named_static;
+    if (method.starts_with(random_prefix) && handle != 0U) {
+        const auto identity = method.substr(random_prefix.size());
+        for (std::string current {
+                 class_heap.object(handle).specialization_identity };
+             !current.empty();) {
+            const auto& specialization = class_specialization(current);
+            for (const auto& property : specialization.properties) {
+                if (!property.static_storage
+                    || property.random_kind
+                        == semantic::sv::ClassRandomKind::none) {
+                    continue;
+                }
+                auto& stored = class_static_store.property(
+                    static_property_specialization(
+                        property.owner_identity, handle),
+                    property.name);
+                if (!stored.random_state) {
+                    continue;
+                }
+                static_states.push_back(&*stored.random_state);
+                if (identity
+                    == property.owner_identity + "::" + property.name) {
+                    named_static = &*stored.random_state;
+                }
+            }
+            current = specialization.base
+                ? specialization.base->specialization_identity
+                : std::string { };
+        }
+    }
+    if (named_static) {
+        if (actuals.size() > 1U) {
+            throw std::invalid_argument {
+                "randomization mode method accepts zero or one argument"
+            };
+        }
+        if (!actuals.empty()) {
+            const auto value = actuals.front().low_word();
+            if (value.bval != 0 || (value.aval != 0 && value.aval != 1)) {
+                throw std::invalid_argument {
+                    "randomization mode update requires a known zero or one"
+                };
+            }
+            (*named_static)->enabled = value.aval != 0;
+        }
+        return runtime::PackedLogic4::from_aval_bval(
+            32, (*named_static)->enabled ? 1U : 0U, 0);
+    }
+    auto result = class_execution.invoke_source_randomization_mode(
         handle, method, actuals);
+    if (method == std::string { random_prefix } + "@object"
+        && !actuals.empty()) {
+        for (auto* const state : static_states) {
+            state->enabled = actuals.front().low_word().aval != 0;
+        }
+    }
+    return result;
 }
 
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::resize_packed(

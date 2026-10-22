@@ -294,6 +294,11 @@ class SystemVerilogClassHeap final {
   void commit_randc_states(
       SystemVerilogClassHandle handle,
       std::vector<SystemVerilogClassRandcStateUpdate>& updates);
+  // `new source` (IEEE 1800-2017 8.12): copies every property value and
+  // random state, accounting the copied randc cycle state.
+  void copy_properties(
+      SystemVerilogClassHandle destination,
+      SystemVerilogClassHandle source);
   [[nodiscard]] std::uint64_t simulation_seed() const noexcept {
     return simulation_seed_;
   }

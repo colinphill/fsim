@@ -46,9 +46,10 @@ private:
   // Use clauses of process declarative parts, joined to the enclosing
   // unit's context clause when the unit ends.
   std::vector<VhdlContextItem> deferred_context_items_;
-  // Attribute names declared by any unit analyzed so far.
-  // Type mark of each attribute declared so far, by attribute name.
-  std::unordered_map<std::string, std::string> vhdl_declared_attributes_;
+  // Type mark of each attribute declared so far, by attribute name;
+  // STANDARD declares FOREIGN (IEEE 1076-2008 16.3).
+  std::unordered_map<std::string, std::string> vhdl_declared_attributes_ {
+      {"foreign", "string"}};
   // Attribute specification values by attribute and entity name, read in
   // place of `name'attribute`.
   std::unordered_map<std::string, std::unordered_map<std::string, Expression>>
@@ -194,7 +195,7 @@ private:
   ProcedureDeclaration parse_vhdl_procedure(const Token &start,
                                             bool allow_declaration);
 
-  std::vector<FunctionArgument> parse_vhdl_function_parameters();
+  std::vector<FunctionArgument> parse_vhdl_function_parameters(bool pure = true);
 
   std::vector<ProcedureArgument> parse_vhdl_procedure_parameters();
 

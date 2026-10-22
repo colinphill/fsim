@@ -22,8 +22,14 @@ using Profile = SystemVerilogConstraintVariableProfile;
       || operation == Operator::LogicalNot;
 }
 
+[[nodiscard]] bool shift_operator(const Operator operation) noexcept {
+  return operation >= Operator::ShiftLeft
+      && operation <= Operator::ArithmeticShiftRight;
+}
+
 [[nodiscard]] bool binary_operator(const Operator operation) noexcept {
-  return operation >= Operator::Add && operation <= Operator::LogicalOr;
+  return (operation >= Operator::Add && operation <= Operator::LogicalOr)
+      || shift_operator(operation);
 }
 
 [[nodiscard]] bool logical_result(const Operator operation) noexcept {
@@ -438,6 +444,34 @@ enum class Truth : std::uint8_t { False, True, Unknown };
   return operation == Operator::Divide ? quotient : remainder;
 }
 
+// The shift amount is self-determined and unsigned; an x or z amount
+// makes the whole result x (IEEE 1800-2017 11.4.10).
+[[nodiscard]] PackedLogic4 shift(
+    const Operator operation,
+    const PackedLogic4& value,
+    const PackedLogic4& amount,
+    const bool signed_value) {
+  const auto width = value.width();
+  if (has_unknown(amount)) return PackedLogic4(width, Logic4::x);
+  std::size_t distance{};
+  for (std::size_t index = amount.width(); index-- > 0;) {
+    if (distance > width) break;
+    distance = distance * 2U + (amount.get(index) == Logic4::one ? 1U : 0U);
+  }
+  const auto fill = operation == Operator::ArithmeticShiftRight
+          && signed_value && width != 0U
+      ? value.get(width - 1U) : Logic4::zero;
+  PackedLogic4 result(width, fill);
+  for (std::size_t index = 0; index < width; ++index) {
+    if (operation == Operator::ShiftLeft) {
+      if (index >= distance) result.set(index, value.get(index - distance));
+    } else if (distance < width - index) {
+      result.set(index, value.get(index + distance));
+    }
+  }
+  return result;
+}
+
 }  // namespace
 
 SystemVerilogConstraintExpressionId
@@ -505,9 +539,12 @@ SystemVerilogConstraintExpressionBuilder::binary(
   }
   SystemVerilogConstraintExpressionNode node;
   node.operation = operation;
+  // A shift's result has the left operand's type (11.6.1).
   node.profile = logical_result(operation)
       ? logical_profile()
-      : common_profile(nodes_[left].profile, nodes_[right].profile);
+      : shift_operator(operation)
+          ? nodes_[left].profile
+          : common_profile(nodes_[left].profile, nodes_[right].profile);
   node.operands = {left, right};
   return append(std::move(node));
 }
@@ -716,6 +753,13 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
     }
     const auto& left_node = expression.nodes[node.operands[0]];
     const auto& right_node = expression.nodes[node.operands[1]];
+    if (shift_operator(node.operation)) {
+      values.push_back(shift(node.operation,
+          resized(values[node.operands[0]], node.profile.width,
+              left_node.profile.signed_value),
+          values[node.operands[1]], node.profile.signed_value));
+      continue;
+    }
     const auto operand_width = std::max(
         left_node.profile.width, right_node.profile.width);
     const auto signed_values = left_node.profile.signed_value
@@ -898,6 +942,12 @@ namespace {
             return Operator::LogicalAnd;
         if (spelling == "||")
             return Operator::LogicalOr;
+        if (spelling == "<<" || spelling == "<<<")
+            return Operator::ShiftLeft;
+        if (spelling == ">>")
+            return Operator::ShiftRight;
+        if (spelling == ">>>")
+            return Operator::ArithmeticShiftRight;
         return std::nullopt;
     }
 
@@ -1202,57 +1252,158 @@ namespace {
                 }
                 return *outer + "[" + std::to_string(*position) + "]";
             };
+            // `a[i].m`: a member of a structure or object element of an
+            // array is a solver variable of its own, which the class
+            // randomizer names `a[i].m` or, for an object, by the member's
+            // canonical identity `a[i].<class>::m` (IEEE 1800-2017 18.4).
+            constexpr std::string_view member_prefix { "@member:" };
+            if (expression.kind == TemplateKind::Method
+                && expression.text.starts_with(member_prefix)
+                && expression.operands.size() == 1U
+                && expression.operands[0].kind == TemplateKind::Index
+                && expression.operands[0].operands.size() >= 2U) {
+                const auto& selection = expression.operands[0];
+                const auto base = array_name(array_name, selection.operands[0]);
+                const auto position = constant_value(selection.operands[1]);
+                if (!base || !position) {
+                    if (deferred_)
+                        return std::nullopt;
+                    throw std::invalid_argument {
+                        "inline constraint member selection needs a constant "
+                        "or loop index"
+                    };
+                }
+                const auto member = std::string_view { expression.text }
+                    .substr(member_prefix.size());
+                const auto element
+                    = *base + "[" + std::to_string(*position) + "]";
+                std::optional<SystemVerilogConstraintVariableId> found;
+                const auto suffix = "::" + std::string { member };
+                element_members(element,
+                    [&](const std::string_view rest,
+                        const SystemVerilogConstraintVariableId variable) {
+                        if (!found
+                            && (rest == member
+                                || (rest.ends_with(suffix)
+                                    && rest.find_first_of(".[")
+                                        == std::string_view::npos))) {
+                            found = variable;
+                        }
+                    });
+                if (!found) {
+                    if (const auto* elements = container(*base);
+                        elements != nullptr
+                        && (*position < 0
+                            || static_cast<std::uint64_t>(*position)
+                                >= elements->size())) {
+                        // Outside the array: guarded from constraining
+                        // (IEEE 1800-2017 18.5.8.1).
+                        return builder_.constant(
+                            PackedLogic4(32U, Logic4::zero), index_profile());
+                    }
+                    if (deferred_)
+                        return std::nullopt;
+                    throw std::invalid_argument {
+                        "inline constraint member '" + element + "."
+                        + std::string { member } + "' has no solver variable"
+                    };
+                }
+                if (*found >= solver_.variables().size()) {
+                    throw std::invalid_argument {
+                        "inline constraint variable id is outside the solver"
+                    };
+                }
+                use(*found);
+                return builder_.variable(*found,
+                    solver_.variables()[*found].profile);
+            }
             if (expression.kind == TemplateKind::Index
                 && (expression.operands.size() == 2U
                     || expression.operands.size() == 3U)
                 && (expression.operands[0].kind == TemplateKind::Name
                     || expression.operands[0].kind == TemplateKind::Index)) {
-                const auto name = array_name(array_name, expression.operands[0]);
-                if (!name) {
-                    return std::nullopt;
-                }
-                const auto* elements = container(*name);
-                if (elements == nullptr) {
-                    if (deferred_)
-                        return std::nullopt;
-                    // An element of an array of the calling scope.
-                    if (expression.operands.size() == 3U)
-                        return lower(expression.operands[2]);
-                    throw std::invalid_argument {
-                        "inline constraint array '" + *name
-                        + "' has no element solver variables"
-                    };
-                }
-                const auto profile = element_profile(*elements);
-                const auto outside = [&] {
-                    // A selection outside the array occurs only where a
-                    // guard keeps it from constraining.
-                    return builder_.constant(
-                        PackedLogic4(profile.width, Logic4::zero), profile);
-                };
-                if (const auto position = constant_value(expression.operands[1])) {
-                    if (*position < 0
-                        || static_cast<std::uint64_t>(*position)
-                            >= elements->size()) {
-                        return outside();
+                const auto select_from = [&](const std::string& name,
+                                             const std::string& typed)
+                    -> std::optional<SystemVerilogConstraintExpressionId> {
+                    if (name.empty()) {
+                        // Outside the array: guarded from constraining.
+                        const auto* typing = container(typed);
+                        const auto profile = typing != nullptr
+                            ? element_profile(*typing) : index_profile();
+                        return builder_.constant(
+                            PackedLogic4(profile.width, Logic4::zero), profile);
                     }
-                    const auto element
-                        = (*elements)[static_cast<std::size_t>(*position)];
-                    use(element);
-                    return builder_.variable(element, profile);
+                    const auto* elements = container(name);
+                    if (elements == nullptr) {
+                        if (deferred_)
+                            return std::nullopt;
+                        // An element of an array of the calling scope.
+                        if (expression.operands.size() == 3U)
+                            return lower(expression.operands[2]);
+                        throw std::invalid_argument {
+                            "inline constraint array '" + name
+                            + "' has no element solver variables"
+                        };
+                    }
+                    const auto profile = element_profile(*elements);
+                    const auto outside = [&] {
+                        // A selection outside the array occurs only where a
+                        // guard keeps it from constraining.
+                        return builder_.constant(
+                            PackedLogic4(profile.width, Logic4::zero), profile);
+                    };
+                    if (const auto position = constant_value(expression.operands[1])) {
+                        if (*position < 0
+                            || static_cast<std::uint64_t>(*position)
+                                >= elements->size()) {
+                            return outside();
+                        }
+                        const auto element
+                            = (*elements)[static_cast<std::size_t>(*position)];
+                        use(element);
+                        return builder_.variable(element, profile);
+                    }
+                    const auto selector = lower(expression.operands[1]);
+                    if (!selector)
+                        return std::nullopt;
+                    auto result = outside();
+                    for (std::size_t index = elements->size(); index-- > 0U;) {
+                        use((*elements)[index]);
+                        result = builder_.conditional(
+                            builder_.binary(Operator::Equal, *selector,
+                                builder_.constant(
+                                    PackedLogic4::from_aval_bval(32, index, 0),
+                                    index_profile())),
+                            builder_.variable((*elements)[index], profile), result);
+                    }
+                    return result;
+                };
+                if (const auto name
+                    = array_name(array_name, expression.operands[0])) {
+                    return select_from(*name, *name);
                 }
-                const auto selector = lower(expression.operands[1]);
-                if (!selector)
+                // A random index of an outer dimension selects among its
+                // subarrays (IEEE 1800-2017 7.4.5, 18.3).
+                const auto alternatives
+                    = subarray_alternatives(expression.operands[0]);
+                if (!alternatives)
                     return std::nullopt;
-                auto result = outside();
-                for (std::size_t index = elements->size(); index-- > 0U;) {
-                    use((*elements)[index]);
-                    result = builder_.conditional(
-                        builder_.binary(Operator::Equal, *selector,
-                            builder_.constant(
-                                PackedLogic4::from_aval_bval(32, index, 0),
-                                index_profile())),
-                        builder_.variable((*elements)[index], profile), result);
+                std::string typed;
+                for (const auto& alternative : *alternatives) {
+                    if (!alternative.second.empty()) {
+                        typed = alternative.second;
+                        break;
+                    }
+                }
+                std::optional<SystemVerilogConstraintExpressionId> result;
+                for (auto at = alternatives->size(); at-- > 0U;) {
+                    const auto& [guard, name] = (*alternatives)[at];
+                    const auto value = select_from(name, typed);
+                    if (!value)
+                        return std::nullopt;
+                    result = result && guard
+                        ? builder_.conditional(*guard, *value, *result)
+                        : *value;
                 }
                 return result;
             }
@@ -1381,6 +1532,39 @@ namespace {
                 return builder_.conjunction(comparisons);
             }
 
+            if (expression.kind == TemplateKind::Binary
+                && expression.operands.size() == 2U
+                && (expression.text == "==" || expression.text == "!=")) {
+                // Unpacked arrays are equal when their elements are (IEEE
+                // 1800-2017 7.4.5, 11.4.5).
+                const auto left = array_elements(expression.operands[0]);
+                const auto right = left
+                    ? array_elements(expression.operands[1]) : std::nullopt;
+                if (left && right) {
+                    if (left->size() != right->size()) {
+                        throw std::invalid_argument {
+                            "inline constraint array comparison of unequal "
+                            "sizes"
+                        };
+                    }
+                    const bool equal = expression.text == "==";
+                    std::optional<SystemVerilogConstraintExpressionId> result;
+                    for (std::size_t index = 0; index < left->size(); ++index) {
+                        const auto compared = builder_.binary(
+                            equal ? Operator::Equal : Operator::NotEqual,
+                            (*left)[index], (*right)[index]);
+                        result = result
+                            ? builder_.binary(equal ? Operator::LogicalAnd
+                                                    : Operator::LogicalOr,
+                                  *result, compared)
+                            : compared;
+                    }
+                    if (result)
+                        return result;
+                    return builder_.constant(PackedLogic4::from_aval_bval(
+                        1, equal ? 1U : 0U, 0), truth_profile());
+                }
+            }
             std::vector<SystemVerilogConstraintExpressionId> operands;
             operands.reserve(expression.operands.size());
             for (const auto& operand : expression.operands) {
@@ -1468,9 +1652,33 @@ namespace {
             }
         }
 
+        /// Visit each variable of the element `a[k]` of an array of
+        /// objects, which the class randomizer names `<path>a[k].<member>`
+        /// (IEEE 1800-2017 18.5.9), with the part after `a[k].`.
+        template <typename Visit>
+        void element_members(const std::string_view element, Visit visit) const
+        {
+            const auto needle = std::string { element } + ".";
+            for (const auto& [key, variable] : variables_) {
+                for (auto at = key.find(needle); at != std::string::npos;
+                     at = key.find(needle, at + 1U)) {
+                    const auto before = std::string_view { key }.substr(0, at);
+                    if (at == 0U || before.ends_with("::")
+                        || before.ends_with('.')) {
+                        visit(std::string_view { key }.substr(
+                                  at + needle.size()),
+                            variable);
+                        break;
+                    }
+                }
+            }
+        }
+
         /// The elements of the array a name denotes, materialized by the
         /// class randomizer as `a[]` and `a[0]`, `a[1]`, ... An array whose
-        /// size is still a variable defers the expression.
+        /// size is still a variable defers the expression. The elements of
+        /// an array of objects are its objects, each standing for its first
+        /// member variable.
         [[nodiscard]] const std::vector<SystemVerilogConstraintVariableId>*
         container(const std::string_view name)
         {
@@ -1482,6 +1690,11 @@ namespace {
             const auto marker = find_template_key(
                 variables_, std::string { name } + "[]");
             if (!marker) {
+                auto objects = object_elements(name);
+                if (!objects.empty()) {
+                    return &containers_.emplace(std::string { name },
+                        std::move(objects)).first->second;
+                }
                 if (find_template_key(
                         variables_, std::string { name } + ".size()")) {
                     deferred_ = true;
@@ -1497,8 +1710,170 @@ namespace {
                     break;
                 elements.push_back(element->second);
             }
+            if (elements.empty())
+                elements = object_elements(base);
             return &containers_.emplace(std::string { name },
                 std::move(elements)).first->second;
+        }
+
+        /// The objects of an array of handles, each standing for its first
+        /// member variable.
+        [[nodiscard]] std::vector<SystemVerilogConstraintVariableId>
+        object_elements(const std::string_view name) const
+        {
+            std::vector<SystemVerilogConstraintVariableId> objects;
+            for (std::size_t index = 0;; ++index) {
+                std::optional<SystemVerilogConstraintVariableId> first;
+                element_members(std::string { name } + "["
+                        + std::to_string(index) + "]",
+                    [&](const std::string_view,
+                        const SystemVerilogConstraintVariableId variable) {
+                        if (!first)
+                            first = variable;
+                    });
+                if (!first)
+                    break;
+                objects.push_back(*first);
+            }
+            return objects;
+        }
+
+        /// The subarrays a selection of a nested array names when an outer
+        /// index is random: each name with the guard under which it is
+        /// selected, the first whose guard holds applying, and a final
+        /// unguarded selection outside the array (an empty name). Nothing
+        /// when it names no nested array.
+        [[nodiscard]] std::optional<std::vector<std::pair<
+            std::optional<SystemVerilogConstraintExpressionId>, std::string>>>
+        subarray_alternatives(const Template& array)
+        {
+            using Alternatives = std::vector<std::pair<
+                std::optional<SystemVerilogConstraintExpressionId>,
+                std::string>>;
+            if (array.kind == TemplateKind::Name)
+                return Alternatives { { std::nullopt, array.text } };
+            if (array.kind != TemplateKind::Index
+                || array.operands.size() < 2U) {
+                return std::nullopt;
+            }
+            const auto bases = subarray_alternatives(array.operands[0]);
+            if (!bases)
+                return std::nullopt;
+            const auto nested = [&](const std::string& base,
+                                    const std::size_t index) {
+                return find_template_key(variables_,
+                    base + "[" + std::to_string(index) + "][]")
+                    .has_value();
+            };
+            std::optional<SystemVerilogConstraintExpressionId> selector;
+            Alternatives result;
+            for (const auto& [guard, base] : *bases) {
+                if (base.empty()) {
+                    result.emplace_back(guard, std::string { });
+                    continue;
+                }
+                if (const auto position = constant_value(array.operands[1])) {
+                    result.emplace_back(guard, *position >= 0
+                            && nested(base,
+                                static_cast<std::size_t>(*position))
+                        ? base + "[" + std::to_string(*position) + "]"
+                        : std::string { });
+                    continue;
+                }
+                if (!nested(base, 0U))
+                    return std::nullopt;
+                if (!selector) {
+                    selector = lower(array.operands[1]);
+                    if (!selector)
+                        return std::nullopt;
+                }
+                for (std::size_t index = 0; nested(base, index); ++index) {
+                    const auto chosen = builder_.binary(Operator::Equal,
+                        *selector,
+                        builder_.constant(
+                            PackedLogic4::from_aval_bval(32, index, 0),
+                            index_profile()));
+                    result.emplace_back(guard
+                            ? builder_.binary(
+                                  Operator::LogicalAnd, *guard, chosen)
+                            : chosen,
+                        base + "[" + std::to_string(index) + "]");
+                }
+                result.emplace_back(guard, std::string { });
+            }
+            return result;
+        }
+
+        /// The element values of a whole unpacked array an expression
+        /// names, which a random outer index selects among (IEEE 1800-2017
+        /// 7.4.5). Nothing when it names no array of solver variables.
+        [[nodiscard]] std::optional<
+            std::vector<SystemVerilogConstraintExpressionId>>
+        array_elements(const Template& expression)
+        {
+            if (expression.kind != TemplateKind::Name
+                && expression.kind != TemplateKind::Index) {
+                return std::nullopt;
+            }
+            if (expression.kind == TemplateKind::Name
+                && (iterator(expression.text) != nullptr
+                    || !find_template_key(variables_, expression.text + "[]"))) {
+                return std::nullopt;
+            }
+            const auto* root = &expression;
+            while (root->kind == TemplateKind::Index && !root->operands.empty())
+                root = &root->operands.front();
+            if (root->kind != TemplateKind::Name
+                || !find_template_key(variables_, root->text + "[0][]")) {
+                if (expression.kind != TemplateKind::Name)
+                    return std::nullopt;
+            }
+            const auto alternatives = subarray_alternatives(expression);
+            if (!alternatives)
+                return std::nullopt;
+            std::optional<std::size_t> size;
+            std::string typed;
+            for (const auto& [guard, name] : *alternatives) {
+                if (name.empty())
+                    continue;
+                if (find_template_key(variables_, name + "[0][]"))
+                    return std::nullopt;
+                const auto* elements = container(name);
+                if (elements == nullptr || elements->empty())
+                    return std::nullopt;
+                if (size && *size != elements->size()) {
+                    throw std::invalid_argument {
+                        "inline constraint array selection has subarrays of "
+                        "unequal sizes"
+                    };
+                }
+                size = elements->size();
+                if (typed.empty())
+                    typed = name;
+            }
+            if (!size)
+                return std::nullopt;
+            const auto profile = element_profile(*container(typed));
+            std::vector<SystemVerilogConstraintExpressionId> values;
+            for (std::size_t index = 0; index < *size; ++index) {
+                std::optional<SystemVerilogConstraintExpressionId> value;
+                for (auto at = alternatives->size(); at-- > 0U;) {
+                    const auto& [guard, name] = (*alternatives)[at];
+                    SystemVerilogConstraintExpressionId chosen;
+                    if (name.empty()) {
+                        chosen = builder_.constant(
+                            PackedLogic4(profile.width, Logic4::zero), profile);
+                    } else {
+                        const auto element = (*container(name))[index];
+                        use(element);
+                        chosen = builder_.variable(element, profile);
+                    }
+                    value = value && guard
+                        ? builder_.conditional(*guard, chosen, *value) : chosen;
+                }
+                values.push_back(*value);
+            }
+            return values;
         }
 
         [[nodiscard]] SystemVerilogConstraintVariableProfile element_profile(
@@ -1723,8 +2098,15 @@ namespace {
                 const auto operand = lower(expression.operands[0]);
                 if (!operand)
                     return std::nullopt;
-                const auto target = std::string_view { method }.substr(9U);
+                auto target = std::string_view { method }.substr(9U);
                 auto profile = builder_.profile(*operand);
+                // `signed:N` and `unsigned:N` spell a resolved named type.
+                if (const auto separator = target.find(':');
+                    separator != std::string_view::npos) {
+                    profile.signed_value
+                        = target.substr(0, separator) == "signed";
+                    target.remove_prefix(separator + 1U);
+                }
                 if (target == "signed" || target == "unsigned") {
                     profile.signed_value = target == "signed";
                 } else if (const auto scalar = integral_cast_profile(target)) {

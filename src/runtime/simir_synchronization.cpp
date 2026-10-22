@@ -341,18 +341,35 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     }
     case DynamicEventOperation::trigger: {
       const auto handle = receiver_handle(event->receiver);
-      if (auto* state = event_from_handle(event->receiver)) {
-        state->last_trigger = scheduler.now();
-        auto waiters = std::move(state->waiters);
-        state->waiters.clear();
-        for (const auto waiter : waiters) {
-          auto& target = get_process(waiter);
-          if (target.halted || target.status != ProcessStatus::waiting
-              || target.cold().pending_dynamic_event != handle) {
-            continue;
+      if (event_from_handle(event->receiver) != nullptr) {
+        const auto index = static_cast<std::size_t>(
+            (handle & synchronization_handle_payload_mask) - 1U);
+        const auto trigger = [this, handle, index](Scheduler&) {
+          auto& state = dynamic_events[index];
+          state.last_trigger = scheduler.now();
+          auto waiters = std::move(state.waiters);
+          state.waiters.clear();
+          for (const auto waiter : waiters) {
+            auto& target = get_process(waiter);
+            if (target.halted || target.status != ProcessStatus::waiting
+                || target.cold().pending_dynamic_event != handle) {
+              continue;
+            }
+            target.cold().pending_dynamic_event.reset();
+            target.status = ProcessStatus::running;
+            queue_active_current(waiter);
           }
-          target.cold().pending_dynamic_event.reset();
-          (void)wake(waiter);
+        };
+        if (event->nonblocking
+            && processes.program_view(process.id).scheduling_domain()
+                == ProcessSchedulingDomain::systemverilog) {
+          // `->>` triggers the event in the NBA region (IEEE 1800-2017
+          // 15.5.1, 4.4).
+          const auto origin = capture_signal_change_origin(
+              process.id, SignalUpdateDomain::systemverilog_nba);
+          scheduler.schedule_systemverilog(origin.phase, process.id, trigger);
+        } else {
+          trigger(scheduler);
         }
       }
       process.status = ProcessStatus::running;

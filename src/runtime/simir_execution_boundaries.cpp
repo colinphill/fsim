@@ -407,20 +407,74 @@ void Interpreter::Impl::execute_scope_randomize(
             container.signed_value,
             container.nominal_type,
         };
+        // A fixed-size multidimensional array is nested arrays: element
+        // `a[i][j]` in row-major order, with each subarray `a[i]` holding
+        // its count in `a[i][]` (IEEE 1800-2017 7.4.5).
+        std::vector<std::size_t> extents;
+        if (value.type.dimensions.size() > 1U) {
+            std::size_t total = 1U;
+            for (const auto& [left, right] : value.type.dimensions) {
+                extents.push_back(static_cast<std::size_t>(
+                    (left >= right
+                            ? static_cast<std::int64_t>(left) - right
+                            : static_cast<std::int64_t>(right) - left)
+                    + 1));
+                total *= extents.back();
+            }
+            if (total != value.elements.size()) {
+                throw std::invalid_argument {
+                    "std::randomize array elements do not match their shape"
+                };
+            }
+        }
+        const auto element_name = [&](std::size_t index,
+                                      const std::size_t levels) {
+            if (extents.empty())
+                return "[" + std::to_string(index) + "]";
+            std::string suffix;
+            for (std::size_t level = extents.size(); level-- > 0U;) {
+                if (level < levels) {
+                    suffix.insert(0U,
+                        "[" + std::to_string(index % extents[level]) + "]");
+                }
+                index /= extents[level];
+            }
+            return suffix;
+        };
         const auto first = container_elements.size();
         for (std::size_t index = 0; index < value.elements.size(); ++index) {
             container_elements.push_back(value.elements[index]);
             request.variables.push_back({
-                container.canonical_identity + "["
-                    + std::to_string(index) + "]",
+                container.canonical_identity
+                    + element_name(index, extents.size()),
                 element_profile,
                 container.randomized
                     ? container.domain
                     : std::vector<PackedLogic4> { value.elements[index] },
                 &container_elements.back() });
         }
+        for (std::size_t level = 1U; level < extents.size(); ++level) {
+            // Each subarray of the outer `level` dimensions.
+            std::size_t span = 1U;
+            for (auto inner = level; inner < extents.size(); ++inner) {
+                span *= extents[inner];
+            }
+            for (std::size_t index = 0; index < value.elements.size();
+                 index += span) {
+                container_elements.push_back(PackedLogic4::from_aval_bval(
+                    32U, extents[level], 0U));
+                request.variables.push_back({
+                    container.canonical_identity
+                        + element_name(index, level) + "[]",
+                    { SystemVerilogConstraintDomainKind::Integer, 32U, true,
+                        "int" },
+                    { container_elements.back() },
+                    &container_elements.back() });
+            }
+        }
         container_elements.push_back(PackedLogic4::from_aval_bval(
-            32U, value.elements.size(), 0U));
+            32U, extents.empty() ? value.elements.size() : extents.front(),
+            0U));
         request.variables.push_back({
             container.canonical_identity + "[]",
             { SystemVerilogConstraintDomainKind::Integer, 32U, true, "int" },
@@ -1783,7 +1837,10 @@ void Interpreter::Impl::handle_boundary(
             if (directory->kind == Kind::open) {
                 std::uint64_t status = 0U;
                 if (!resolved) {
-                    status = vhdl_access_denied(error) ? 3U : 4U;
+                    status = vhdl_access_denied(error) ? 3U
+                        : error == std::errc::no_such_file_or_directory
+                        ? 1U
+                        : 4U;
                 } else if (!support::native_fs::exists(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 1U;
                 } else if (!support::native_fs::is_directory(*resolved, error)) {
@@ -1840,7 +1897,10 @@ void Interpreter::Impl::handle_boundary(
             if (directory->kind == Kind::set_working_directory) {
                 std::uint64_t status = 0U;
                 if (!resolved) {
-                    status = vhdl_access_denied(error) ? 3U : 4U;
+                    status = vhdl_access_denied(error) ? 3U
+                        : error == std::errc::no_such_file_or_directory
+                        ? 1U
+                        : 4U;
                 } else if (!support::native_fs::exists(*resolved, error)) {
                     status = error && vhdl_access_denied(error) ? 3U : 1U;
                 } else if (!support::native_fs::is_directory(*resolved, error)) {

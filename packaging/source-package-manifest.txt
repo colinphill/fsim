@@ -576,6 +576,7 @@ include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
 include/fsim/semantic/sva_plan.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
+include/fsim/semantic/systemverilog_constant_array.hpp
 include/fsim/semantic/systemverilog_hir.hpp
 include/fsim/semantic/systemverilog_structure_image.hpp
 include/fsim/semantic/systemverilog_type_descriptor.hpp

@@ -2732,6 +2732,7 @@ void Interpreter::Impl::set_driver(
             return;
         }
         if (try_publish_wide_owner_raw(process, signal_id, value)) {
+            wake_switch_source_readers(signal_id, process);
             return;
         }
     }
@@ -2751,6 +2752,20 @@ void Interpreter::Impl::set_driver(
     if (driver_change_hook) {
         driver_change_hook(process, signal_id, scheduler.now());
         publish_aggregate_leaf_driver_change(process, signal_id);
+    }
+    wake_switch_source_readers(signal_id, process);
+}
+
+void Interpreter::Impl::wake_switch_source_readers(
+    const SignalId signal, const ProcessId writer)
+{
+    if (signal >= switch_source_readers.size()) {
+        return;
+    }
+    for (const auto reader : switch_source_readers[signal]) {
+        if (reader != writer) {
+            queue_next_delta(reader);
+        }
     }
 }
 

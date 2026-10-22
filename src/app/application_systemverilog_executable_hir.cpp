@@ -2,6 +2,7 @@
 #include "application_systemverilog_hir_internal.hpp"
 #include "../elaboration/hir_output_conversion.hpp"
 
+#include <algorithm>
 #include <concepts>
 #include <cstdint>
 #include <functional>
@@ -590,6 +591,9 @@ namespace {
             semantic::ExpressionId receiver;
             const sv::ClassDeclaration* declaration { };
             std::string_view member;
+            // The object's type is a type parameter of an enclosing class;
+            // `declaration`, when present, is its default.
+            bool type_parameter { };
         };
         [[nodiscard]] std::optional<ImplicitClassMember> implicit_class_member(
             const std::string_view dotted, const frontend::SourceSpan& span,
@@ -641,14 +645,36 @@ namespace {
                 ? std::string_view { object->type->class_identity }
                 : std::string_view { object->type->target.spelling };
             const auto* declaration = visible_class(identity, scope);
+            bool type_parameter { };
             if (declaration == nullptr) {
+                type_parameter = enclosing_type_parameter(identity, scope);
                 declaration = type_parameter_default_class(identity, scope);
             }
-            if (declaration == nullptr) {
+            if (declaration == nullptr && !type_parameter) {
                 return std::nullopt;
             }
-            return ImplicitClassMember {
-                *receiver_id, declaration, dotted.substr(dot + 1U) };
+            return ImplicitClassMember { *receiver_id, declaration,
+                dotted.substr(dot + 1U), type_parameter };
+        }
+
+        // Whether `name` is a type parameter of a class enclosing `scope`.
+        [[nodiscard]] bool enclosing_type_parameter(
+            const std::string_view name, const semantic::ScopeId scope) const
+        {
+            for (auto visible = std::optional<semantic::ScopeId> { scope };
+                 visible; visible = parent_scope(*visible)) {
+                for (const auto& item : hir_.classes()) {
+                    if (item.scope == *visible
+                        && std::ranges::any_of(item.parameters,
+                            [&](const sv::ClassParameter& parameter) {
+                                return parameter.type_parameter
+                                    && parameter.name == name;
+                            })) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         // The class a type parameter of an enclosing class defaults to:
@@ -713,15 +739,25 @@ namespace {
             if (!access) {
                 return;
             }
-            const auto* property = unique_match(
-                access->declaration->properties,
-                [&](const sv::ClassProperty& candidate) {
-                    return candidate.name == access->member
-                        && !candidate.static_storage
-                        && candidate.visibility
-                            == sv::ClassVisibility::public_access;
-                });
+            const auto* property = access->declaration == nullptr ? nullptr
+                : unique_match(access->declaration->properties,
+                      [&](const sv::ClassProperty& candidate) {
+                          return candidate.name == access->member
+                              && !candidate.static_storage
+                              && candidate.visibility
+                                  == sv::ClassVisibility::public_access;
+                      });
             if (property == nullptr) {
+                // Through a type parameter the member is the one each
+                // specialization's actual class declares (IEEE 1800-2017
+                // 8.25); elaboration selects it by name.
+                if (access->type_parameter) {
+                    output.kind = sv::ExpressionKind::class_property;
+                    output.text = "@sv-dependent-property:"
+                        + std::string { access->member };
+                    output.referenced_name.reset();
+                    output.operands = { access->receiver };
+                }
                 return;
             }
             output.kind = sv::ExpressionKind::class_property;
@@ -748,7 +784,7 @@ namespace {
             }
             const auto access = implicit_class_member(
                 input.task_name, input.span, false, scope, parent);
-            if (!access) {
+            if (!access || access->declaration == nullptr) {
                 return std::nullopt;
             }
             const auto* method = unique_match(
@@ -1710,8 +1746,14 @@ namespace {
                         output.imports.push_back(std::move(converted));
                     }
                 }
+                // An inlined task call with locals carries its class's
+                // typedefs (IEEE 1800-2017 8.23); declare them beside them.
+                const bool task_call_scope
+                    = input.kind == frontend::StatementKind::TaskCall
+                    && child_scope != enclosing_scope;
                 if ((input.kind == frontend::StatementKind::Block
-                        || input.kind == frontend::StatementKind::Fork)
+                        || input.kind == frontend::StatementKind::Fork
+                        || task_call_scope)
                     && !input.type_aliases.empty()) {
                     std::vector<std::pair<semantic::ScopeId, sv::Import>>
                         visible_imports;
@@ -1726,11 +1768,31 @@ namespace {
                         }
                         import_scope = parent_scope(*import_scope);
                     }
+                    // A task call's list joins the caller's, class's and
+                    // method's typedefs; the innermost of a name wins.
+                    std::vector<frontend::TypeAliasDeclaration> task_aliases;
+                    if (task_call_scope) {
+                        for (auto index = input.type_aliases.size();
+                            index != 0U; --index) {
+                            const auto& alias = input.type_aliases[index - 1U];
+                            if (std::ranges::none_of(task_aliases,
+                                    [&](const auto& kept) {
+                                        return kept.name == alias.name;
+                                    })) {
+                                task_aliases.push_back(alias);
+                            }
+                        }
+                        std::ranges::reverse(task_aliases);
+                    }
+                    const auto aliases = task_call_scope
+                        ? std::span<const frontend::TypeAliasDeclaration> {
+                              task_aliases.data(), task_aliases.size() }
+                        : std::span<const frontend::TypeAliasDeclaration> {
+                              input.type_aliases.data(),
+                              input.type_aliases.size() };
                     const auto alias_declarations
                         = type_builder_.add_statement_type_aliases(
-                            std::span<const frontend::TypeAliasDeclaration> {
-                                input.type_aliases.data(),
-                                input.type_aliases.size() },
+                            aliases,
                             std::span<const std::pair<
                                 semantic::ScopeId, sv::Import>> {
                                 visible_imports },

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/systemverilog_constant_array.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_time.hpp"
@@ -7097,15 +7098,20 @@ private:
                     && is_universal_integer_expression(
                         is_universal_integer_expression,
                         expression.operands[1U]);
-                if (!literal_actuals) {
+                if (!literal_actuals && callable && !compiler_contract_only) {
                     // With retained IEEE bodies, preserve the existing pure
                     // function evaluator for typed constants and other legal
-                    // actual expressions. The bodyless compiler-contract
-                    // fallback remains restricted to proven universal ints.
-                    return callable && !compiler_contract_only
-                        ? evaluate_vhdl_callable(expression, *callable)
-                        : std::nullopt;
+                    // actual expressions.
+                    return evaluate_vhdl_callable(expression, *callable);
                 }
+                if (!literal_actuals && !compiler_contract_only) {
+                    return std::nullopt;
+                }
+                // The bodyless compiler contract has no homonym in scope.
+                // Both of its overloads take an INTEGER value, and only the
+                // one with a NATURAL size has an integer second actual, so
+                // integer-valued actuals select TO_SIGNED(INTEGER, NATURAL)
+                // (IEEE 1076.3 numeric_std).
                 const auto value = vhdl_integer_expression(
                     expression.operands[0U]);
                 const auto width = vhdl_integer_expression(
@@ -8504,7 +8510,10 @@ public:
             const auto constant
                 = form == sv::DeclarationForm::parameter
                 || form == sv::DeclarationForm::local_parameter
-                || form == sv::DeclarationForm::enumeration_literal;
+                || form == sv::DeclarationForm::enumeration_literal
+                || (form == sv::DeclarationForm::variable
+                    && view->systemverilog->array_local_parameter
+                    && view->systemverilog->initializer);
             if (constant && view->systemverilog->initializer) {
                 result = evaluate(*view->systemverilog->initializer);
                 // The fill literal `'1` sets every bit of the declared type
@@ -8640,7 +8649,7 @@ private:
     [[nodiscard]] const std::vector<sv::PackedMember>*
     systemverilog_packed_members(sv::TypeReference type) const
     {
-        if (const auto effective = CompiledDesignResolver { unit_ }
+        if (const auto effective = CompiledDesignResolver { unit_, class_frames_ }
                 .effective_systemverilog_type(type, unit_.scope())) {
             type = *effective;
         }
@@ -8656,7 +8665,7 @@ private:
             const auto alias = unit_.find_declaration(
                 definition->systemverilog->declaration);
             auto base = definition->systemverilog->base;
-            if (const auto effective = CompiledDesignResolver { unit_ }
+            if (const auto effective = CompiledDesignResolver { unit_, class_frames_ }
                     .effective_systemverilog_type(base,
                         alias && alias->systemverilog != nullptr
                             ? alias->systemverilog->scope
@@ -9180,6 +9189,22 @@ private:
             return std::nullopt;
         }
 
+        const auto scoped = !type.packed_range
+                && type.packed_dimensions.empty()
+            ? CompiledDesignResolver { unit_, class_frames_ }
+                  .systemverilog_type_parameter_scoped_typedef(
+                      type, unit_.scope())
+            : std::nullopt;
+        if (scoped) {
+            class_frames_.push_back(scoped->frame);
+            const auto width = systemverilog_specialized_type_bit_width(
+                scoped->type, depth + 1U);
+            class_frames_.pop_back();
+            if (width) {
+                return width;
+            }
+        }
+
         if (const auto width = systemverilog_native_integral_width(type)) {
             return width;
         }
@@ -9300,7 +9325,7 @@ private:
             return 1U;
         }
 
-        const CompiledDesignResolver resolver { unit_ };
+        const CompiledDesignResolver resolver { unit_, class_frames_ };
         const auto underlying = resolver.underlying_systemverilog_type(
             type, unit_.scope());
         if (underlying && *underlying != type) {
@@ -13883,6 +13908,9 @@ private:
     std::string effect_code_;
     std::string effect_context_;
     const SpecializedHirIntegralBinding* binding_ { };
+    // The class parameter bindings of the typedefs `X::name` being sized
+    // (IEEE 1800-2017 8.25.1).
+    std::vector<CompiledBindingFrame> class_frames_;
     std::shared_ptr<detail::VhdlInitializerMemoContext>
         initializer_memo_context_;
     bool profile_vhdl_initializers_ { };
@@ -13910,6 +13938,8 @@ void preserve_generate_subtree(
 std::atomic<SystemVerilogConstantIntegral> shared_constant_integral_ {
     nullptr
 };
+
+std::atomic<SystemVerilogConstantArray> shared_constant_array_ { nullptr };
 
 /// The shared constant evaluator, not re-entered from inside itself: its
 /// own use of the integral fast path must not loop back.
@@ -14639,6 +14669,24 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             return false;
         }
         values.insert(values.end(), picked.begin(), picked.end());
+        return true;
+    }
+    // A constant function call, or another constant array expression, is
+    // evaluated by elaboration's constant evaluator (13.4.3).
+    if (source.kind == sv::ExpressionKind::call) {
+        const auto evaluator
+            = shared_constant_array_.load(std::memory_order_acquire);
+        std::size_t count = 1U;
+        for (const auto extent : extents) {
+            count *= extent;
+        }
+        const auto elements = evaluator != nullptr
+            ? evaluator(parent, expression)
+            : std::nullopt;
+        if (!elements || elements->size() != count) {
+            return false;
+        }
+        values.insert(values.end(), elements->begin(), elements->end());
         return true;
     }
     if (source.kind != sv::ExpressionKind::name || !source.referenced_name
@@ -16505,9 +16553,30 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                 inferred_vhdl_type_class
                     = vhdl_type_actual->type_class;
             } else {
-                inferred_type_declaration = expression_declaration(
-                    design, *actual.expression, parent);
-                if (!inferred_type_declaration) {
+                // `X::name` with X a type parameter of the parent bound to
+                // a class names that class's typedef (IEEE 1800-2017
+                // 8.25.1); the parent sizes it.
+                sv::TypeReference scoped_type;
+                scoped_type.target.spelling = systemverilog_expression->text;
+                const bool class_scoped = parent != nullptr
+                    && &parent->design() == &design
+                    && CompiledDesignResolver { *parent }
+                           .systemverilog_type_parameter_scoped_typedef(
+                               scoped_type,
+                               systemverilog_expression->scope)
+                           .has_value();
+                if (class_scoped) {
+                    if (const auto width
+                        = parent->evaluate_systemverilog_type_width(
+                            scoped_type)) {
+                        scoped_type.executable_width = *width;
+                    }
+                    inferred_systemverilog_type = std::move(scoped_type);
+                } else {
+                    inferred_type_declaration = expression_declaration(
+                        design, *actual.expression, parent);
+                }
+                if (!class_scoped && !inferred_type_declaration) {
                     const auto qualified = std::string_view {
                         systemverilog_expression->text
                     };
@@ -17599,6 +17668,12 @@ void set_systemverilog_constant_integral(
     const SystemVerilogConstantIntegral evaluator) noexcept
 {
     shared_constant_integral_.store(evaluator, std::memory_order_release);
+}
+
+void set_systemverilog_constant_array(
+    const SystemVerilogConstantArray evaluator) noexcept
+{
+    shared_constant_array_.store(evaluator, std::memory_order_release);
 }
 
 std::optional<std::string>

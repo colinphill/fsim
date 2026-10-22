@@ -1757,6 +1757,20 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (function_scope_paths.contains(path)) {
             continue;
         }
+        // An alias named outside every instance, such as a compilation-unit
+        // variable's bare name, is no declaration of the instance it was
+        // attributed to (IEEE 1800-2023 3.12.1); its canonical object is
+        // published in its own scope.
+        if (object.parent_object) {
+            const auto local = project.design_ir.path(object.path);
+            const auto design_path = project.design_ir.path(instance.path);
+            if (local != design_path
+                && !(local.starts_with(design_path)
+                    && local.size() > design_path.size()
+                    && local[design_path.size()] == '.')) {
+                continue;
+            }
+        }
         // Runtime signal aliases used to connect a selected memory word are
         // implementation details. The Memory and its bound word children are
         // the canonical VPI hierarchy for the declaration.

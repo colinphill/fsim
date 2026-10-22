@@ -102,6 +102,45 @@ private:
         return packed != nullptr ? std::optional { *packed } : std::nullopt;
     }
 
+    [[nodiscard]] std::optional<std::string> evaluate_text(
+        const ExpressionId expression,
+        const std::span<const SpecializedHirNamedIdentity> identities) const
+    {
+        return working_unit(identities).evaluate_string_expression(
+            expression);
+    }
+
+    // The position of a character or enumeration literal; a character
+    // literal of no user enumeration type is a CHARACTER (IEEE 1076-2019
+    // 16.3).
+    [[nodiscard]] std::optional<std::int64_t> literal_position(
+        const ExpressionId expression_id) const
+    {
+        const auto expression = unit_.find_expression(expression_id);
+        if (!expression || expression->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->vhdl;
+        const auto selected = source.referenced_name
+            ? source.referenced_name->selected
+            : std::nullopt;
+        if (selected) {
+            for (const auto& type : unit_.design().vhdl_hir.types()) {
+                for (const auto& literal : type.enumeration_literals) {
+                    if (literal.declaration == *selected) {
+                        return static_cast<std::int64_t>(literal.ordinal);
+                    }
+                }
+            }
+        }
+        if (source.kind == vhdl::ExpressionKind::logic_literal
+            && source.text.size() == 3U && source.text.front() == '\''
+            && source.text.back() == '\'') {
+            return static_cast<unsigned char>(source.text[1]);
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool reject(
         std::string code, std::string message, const SourceSpanId source)
     {
@@ -334,7 +373,26 @@ private:
                     + "' shadows an enclosing hierarchy identity",
                 region.source);
         }
-        const auto initial = evaluate(*region.initial, identities);
+        auto initial = evaluate(*region.initial, identities);
+        // A range bounded by character or enumeration literals iterates
+        // their positions (IEEE 1076-2019 5.2.2.1, 11.8).
+        std::optional<std::int64_t> literal_limit;
+        bool literal_descending { };
+        if (!initial) {
+            const auto condition_expression
+                = unit_.find_expression(*region.condition);
+            if (condition_expression && condition_expression->vhdl != nullptr
+                && condition_expression->vhdl->operands.size() == 2U) {
+                initial = literal_position(*region.initial);
+                literal_limit = literal_position(
+                    condition_expression->vhdl->operands[1]);
+                literal_descending = condition_expression->vhdl->text == ">=";
+            }
+            if (!initial || !literal_limit) {
+                initial.reset();
+                literal_limit.reset();
+            }
+        }
         if (!initial) {
             return reject("FSIM-ELAB-GEN-002",
                 "cannot evaluate compiled VHDL loop-generate initial "
@@ -352,8 +410,11 @@ private:
             };
             iteration_identities.push_back(
                 { region.iterator, std::to_string(value) });
-            const auto condition = evaluate(
-                *region.condition, iteration_identities);
+            const auto condition = literal_limit
+                ? std::optional<std::int64_t> { literal_descending
+                          ? value >= *literal_limit
+                          : value <= *literal_limit }
+                : evaluate(*region.condition, iteration_identities);
             if (!condition) {
                 return reject("FSIM-ELAB-GEN-003",
                     "cannot evaluate compiled VHDL loop-generate "
@@ -384,8 +445,10 @@ private:
                     iteration_identities)) {
                 return false;
             }
-            const auto next = evaluate(
-                *region.iteration, iteration_identities);
+            const auto next = literal_limit
+                ? std::optional<std::int64_t> {
+                      literal_descending ? value - 1 : value + 1 }
+                : evaluate(*region.iteration, iteration_identities);
             if (!next) {
                 return reject("FSIM-ELAB-GEN-005",
                     "cannot evaluate compiled VHDL loop-generate "
@@ -416,8 +479,21 @@ private:
         if (!selector) {
             if (const auto packed = evaluate_packed(
                     *region.condition, identities)) {
-                return specialize_array_selection(
-                    region, parent_path, identities, *packed);
+                return specialize_array_selection(region, parent_path,
+                    identities, packed->bits,
+                    [&](const ExpressionId choice)
+                        -> std::optional<std::string> {
+                        const auto value = evaluate_packed(choice, identities);
+                        return value ? std::optional { value->bits }
+                                     : std::nullopt;
+                    });
+            }
+            if (const auto text = evaluate_text(
+                    *region.condition, identities)) {
+                return specialize_array_selection(region, parent_path,
+                    identities, *text, [&](const ExpressionId choice) {
+                        return evaluate_text(choice, identities);
+                    });
             }
             return reject("FSIM-ELAB-GEN-001",
                 "cannot evaluate compiled VHDL selection-generate "
@@ -502,11 +578,12 @@ private:
     // 10.9): each choice is a value of the same length, and the matching
     // alternative is the one whose choice equals the selector element by
     // element.
+    template <class ChoiceValue>
     [[nodiscard]] bool specialize_array_selection(
         const vhdl::GenerateRegion& region,
         const std::string_view parent_path,
         const std::span<const SpecializedHirNamedIdentity> identities,
-        const SpecializedHirVhdlPackedValue& selector)
+        const std::string_view selector, const ChoiceValue& choice_value)
     {
         const vhdl::GenerateRegion::Alternative* selected = nullptr;
         const vhdl::GenerateRegion::Alternative* fallback = nullptr;
@@ -519,20 +596,20 @@ private:
             for (const auto& choice : alternative.choices) {
                 const auto value = choice.right
                     ? std::nullopt
-                    : evaluate_packed(choice.left, identities);
-                if (!value || value->bits.size() != selector.bits.size()) {
+                    : choice_value(choice.left);
+                if (!value || value->size() != selector.size()) {
                     return reject("FSIM-ELAB-GEN-009",
                         "cannot evaluate compiled VHDL "
                         "selection-generate choice",
                         choice.source);
                 }
-                if (!seen.insert(value->bits).second) {
+                if (!seen.insert(*value).second) {
                     return reject("FSIM-ELAB-GEN-010",
                         "compiled VHDL selection-generate choices "
                         "overlap",
                         choice.source);
                 }
-                if (value->bits == selector.bits) {
+                if (*value == selector) {
                     selected = &alternative;
                 }
             }

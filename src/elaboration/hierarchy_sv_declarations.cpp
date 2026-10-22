@@ -2011,6 +2011,15 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             design_.container_signal_aliases_.push_back(
                 ContainerSignalAlias {
                     id, signal_id, true, alias_writable });
+            // The bridge holds a fixed array's equally wide elements, the
+            // leftmost in the most significant bits.
+            if (type->fixed && !type->dimensions.empty()
+                && (type->element_kind == ContainerElementKind::Packed
+                    || type->element_kind == ContainerElementKind::Scalar)) {
+                design_.signal_unpacked_shape_.emplace(signal_id,
+                    std::vector<std::pair<std::int64_t, std::int64_t>> {
+                        type->dimensions.begin(), type->dimensions.end() });
+            }
         }
         if (compiled_port_direction(declaration)
             == frontend::PortDirection::Input) {
@@ -2171,6 +2180,31 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 *right,
                 range.descending,
             };
+        }
+    }
+    if (declaration.type->container_form
+            != semantic::sv::TypeForm::static_array
+        && effective_type.packed_dimensions.size() > 1U) {
+        std::vector<std::pair<std::int64_t, std::int64_t>> shape;
+        std::uint64_t elements { 1U };
+        for (const auto& range : effective_type.packed_dimensions) {
+            const auto left = range.left_expression
+                ? hierarchy_sv_type_layout_detail::sized_range_bound(
+                      working_specialization, *range.left_expression)
+                : range.left;
+            const auto right = range.right_expression
+                ? hierarchy_sv_type_layout_detail::sized_range_bound(
+                      working_specialization, *range.right_expression)
+                : range.right;
+            if (!left || !right) {
+                shape.clear();
+                break;
+            }
+            shape.emplace_back(*left, *right);
+            elements *= support::index_distance(*left, *right) + 1U;
+        }
+        if (!shape.empty() && elements != 0U && width % elements == 0U) {
+            design_.signal_packed_shape_.emplace(id, std::move(shape));
         }
     }
     const auto packed_type = packed_type_resolver(

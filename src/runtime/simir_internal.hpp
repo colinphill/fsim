@@ -1915,6 +1915,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<SwitchConnection> switch_connections;
     std::vector<std::vector<std::size_t>> switch_endpoint_adjacency;
     std::vector<std::vector<std::size_t>> switch_control_adjacency;
+    // The unidirectional MOS switches that read each signal as their
+    // source: a source driver change can change the strength they pass
+    // on without changing the source's value (IEEE 1800-2017 28.13).
+    std::vector<std::vector<ProcessId>> switch_source_readers;
+    void wake_switch_source_readers(SignalId signal, ProcessId writer);
     std::vector<SwitchComponent> switch_components;
     std::vector<std::size_t> switch_component_by_signal;
     std::vector<std::size_t> switch_component_by_connection;

@@ -1045,6 +1045,10 @@ public:
     /// The callback receives the C linkage name and mutable copy-out actuals.
     void set_systemverilog_dpi_function_hook(
         SystemVerilogDpiFunctionHook hook);
+    /// The installed DPI function boundary, for a service that serves some
+    /// identities itself and passes the others on.
+    [[nodiscard]] SystemVerilogDpiFunctionHook
+    systemverilog_dpi_function_hook() const;
     void set_vcd_control_hook(VcdControlHook hook);
     void set_output_hook(OutputHook hook);
     /// Use the executable's concrete process-stdout sink for ordinary HDL

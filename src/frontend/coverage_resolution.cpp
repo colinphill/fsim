@@ -1340,6 +1340,16 @@ bool resolve_systemverilog_covergroups(
             collect_sample_calls(
                 design, owner, process.statements, entries, diagnostics);
         }
+        // A covergroup instance may be sampled from a task or function of
+        // the unit too (IEEE 1800-2017 19.8.1).
+        for (auto& function : unit.functions) {
+            collect_sample_calls(
+                design, owner, function.statements, entries, diagnostics);
+        }
+        for (auto& task : unit.tasks) {
+            collect_sample_calls(
+                design, owner, task.statements, entries, diagnostics);
+        }
     }
     for (auto& declaration : design.systemverilog_classes) {
         collect_class_instances(

@@ -319,7 +319,11 @@ void VhdlParser::parse_vhdl_generic_subprogram(
 }
 
 std::vector<FunctionArgument>
-VhdlParser::parse_vhdl_function_parameters() {
+VhdlParser::parse_vhdl_function_parameters(const bool pure) {
+  // An impure function may have variable-class parameters and parameters
+  // of mode inout or out (IEEE 1076-2019 4.2.2.1).
+  const bool impure_parameters
+      = !pure && vhdl_standard_ >= VhdlStandard::Vhdl2019;
   std::vector<FunctionArgument> arguments;
   (void)match_keyword("parameter", true);
   if (!match(TokenKind::LeftParen)) {
@@ -331,6 +335,7 @@ VhdlParser::parse_vhdl_function_parameters() {
     bool supported_class = true;
     bool file_class = false;
     bool signal_class = false;
+    bool variable_class = false;
     if (match_keyword("constant", true)) {
       // Constant is the default class for function parameters.
     } else if (match_keyword("file", true)) {
@@ -340,11 +345,15 @@ VhdlParser::parse_vhdl_function_parameters() {
       // 2.1.1.2); its value is passed like a constant's.
       signal_class = true;
     } else if (match_keyword("variable", true)) {
-      supported_class = false;
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-029",
-          "bounded VHDL functions require constant-class parameters");
+      if (impure_parameters) {
+        variable_class = true;
+      } else {
+        supported_class = false;
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-029",
+            "bounded VHDL functions require constant-class parameters");
+      }
     }
 
     std::vector<Token> names;
@@ -360,6 +369,7 @@ VhdlParser::parse_vhdl_function_parameters() {
 
     bool input_mode = true;
     bool explicit_mode = false;
+    auto direction = PortDirection::Input;
     if (match_keyword("in", true)) {
       explicit_mode = true;
       // In is the default mode for function parameters.
@@ -369,11 +379,18 @@ VhdlParser::parse_vhdl_function_parameters() {
         || match_keyword("buffer", true)
         || match_keyword("linkage", true)) {
       explicit_mode = true;
-      input_mode = false;
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-030",
-          "bounded VHDL functions require input parameters");
+      const auto mode = vhdl_name(previous().text);
+      if (impure_parameters && (mode == "inout" || mode == "out")) {
+        direction = mode == "out" ? PortDirection::Output
+                                  : PortDirection::Inout;
+        variable_class = true;
+      } else {
+        input_mode = false;
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-030",
+            "bounded VHDL functions require input parameters");
+      }
     }
     if (file_class && explicit_mode) {
       supported_class = false;
@@ -413,9 +430,9 @@ VhdlParser::parse_vhdl_function_parameters() {
         arguments.push_back(FunctionArgument{
             canonical,
             type,
-            PortDirection::Input,
+            direction,
             span_from(name, previous()),
-            false,
+            variable_class,
             default_value,
             file_class});
         arguments.back().vhdl_signal = signal_class;
@@ -598,7 +615,7 @@ ParameterDeclaration VhdlParser::parse_vhdl_interface_function(
 
   InterfaceFunctionProfile profile;
   profile.pure = pure;
-  profile.arguments = parse_vhdl_function_parameters();
+  profile.arguments = parse_vhdl_function_parameters(pure);
   expect_keyword(
       "return", true, "FSIM-VHDL-PARSE-155");
   const auto result_start = current();
@@ -725,7 +742,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     name = expect_identifier("function name");
     function.name = vhdl_name(name.text);
   }
-  function.arguments = parse_vhdl_function_parameters();
+  function.arguments = parse_vhdl_function_parameters(pure);
   // A function callable without parameters may prefix a selected name
   // (`f.element`, IEEE 1076-2008 8.3).
   if (name.kind == TokenKind::Identifier
@@ -1073,7 +1090,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     failure.assertion_severity = AssertionSeverity::Failure;
     failure.vhdl_report_expression = Expression{
         ExpressionKind::StringLiteral, "\"" + message + "\"", {},
-        name.span};
+        name.span, {}, {}, {}, message};
     failure.output_text = message;
     failure.vhdl_severity_expression = Expression{
         ExpressionKind::Identifier, "failure", {}, name.span};

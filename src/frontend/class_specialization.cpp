@@ -589,8 +589,32 @@ void diagnose(
     }
   }
   if (type.systemverilog_container) {
-    for (auto& element :
-         type.systemverilog_container->element_types) {
+    // Unpacked bounds (`T a[SIZE-1:0]`) take the specialization's values
+    // (IEEE 1800-2017 8.25, 7.4).
+    auto& container = *type.systemverilog_container;
+    for (std::size_t index = 0; index < container.static_range_expressions.size();
+         ++index) {
+      auto& dimension = container.static_range_expressions[index];
+      const auto left = evaluate(dimension.left, values);
+      const auto right = evaluate(dimension.right, values);
+      if (!left || !right) {
+        continue;
+      }
+      dimension.left = Expression{ExpressionKind::IntegerLiteral,
+          std::to_string(*left), {}, dimension.left.span};
+      dimension.right = Expression{ExpressionKind::IntegerLiteral,
+          std::to_string(*right), {}, dimension.right.span};
+      if (index == 0U && container.static_range) {
+        container.static_range = PackedRange{*left, *right, *left >= *right};
+      }
+    }
+    if (container.queue_maximum) {
+      if (const auto maximum = evaluate(*container.queue_maximum, values)) {
+        container.queue_maximum = Expression{ExpressionKind::IntegerLiteral,
+            std::to_string(*maximum), {}, container.queue_maximum->span};
+      }
+    }
+    for (auto& element : container.element_types) {
       element = specialize_type(
           std::move(element), values, types, replacing);
     }

@@ -815,6 +815,45 @@ struct VhdlProfileNominalIdentity {
     }
 };
 
+// The protected type a protected type body completes: the declaration of
+// the same name in the body's unit family (IEEE 1076-2008 5.6.3). A body
+// does not declare a type of its own, so its type mark denotes that type.
+std::optional<TypeId> vhdl_protected_type_of_body(
+    const CompiledDesign& design, const vhdl::TypeDefinition& body)
+{
+    const auto unit_of = [&](const DeclarationId id) -> const vhdl::Unit* {
+        const auto declaration = design.find_declaration(id);
+        const auto* scope = declaration && declaration->vhdl != nullptr
+            ? find_scope(design, declaration->vhdl->scope)
+            : nullptr;
+        const auto unit = scope != nullptr
+            ? design.find_unit(scope->unit)
+            : std::nullopt;
+        return unit ? unit->vhdl : nullptr;
+    };
+    const auto* body_unit = unit_of(body.declaration);
+    std::optional<TypeId> result;
+    for (const auto& candidate : design.vhdl_hir.types()) {
+        if (candidate.form != vhdl::TypeForm::protected_type
+            || !same_vhdl_identifier(candidate.name, body.name)) {
+            continue;
+        }
+        const auto* candidate_unit = unit_of(candidate.declaration);
+        if (body_unit != nullptr && candidate_unit != nullptr
+            && (!same_vhdl_identifier(candidate_unit->name, body_unit->name)
+                || !same_vhdl_identifier(
+                    normalized_library(candidate_unit->library),
+                    normalized_library(body_unit->library)))) {
+            continue;
+        }
+        if (result && *result != candidate.id) {
+            return std::nullopt;
+        }
+        result = candidate.id;
+    }
+    return result;
+}
+
 VhdlProfileNominalIdentity vhdl_profile_nominal_identity(
     const CompiledDesign& design, const SpecializedHirUnit* effective,
     const vhdl::SubtypeIndication& subtype)
@@ -835,6 +874,11 @@ VhdlProfileNominalIdentity vhdl_profile_nominal_identity(
             return { type_id, vhdl::BuiltinTypeIdentity::none };
         }
         const auto& definition = *type->vhdl;
+        if (definition.form == vhdl::TypeForm::protected_body) {
+            return { vhdl_protected_type_of_body(design, definition)
+                         .value_or(type_id),
+                vhdl::BuiltinTypeIdentity::none };
+        }
         if (definition.form != vhdl::TypeForm::subtype
             && definition.form != vhdl::TypeForm::alias) {
             return { type_id, vhdl::BuiltinTypeIdentity::none };
@@ -3359,7 +3403,23 @@ CompiledDesignResolver::effective_systemverilog_type(
                                  sv::TypeReference candidate,
                                  const ScopeId scope)
         -> sv::TypeReference {
-        const auto selected = type_declaration(candidate, scope);
+        auto selected = type_declaration(candidate, scope);
+        if (const auto scoped = systemverilog_type_parameter_scoped_typedef(
+                candidate, scope)) {
+            std::vector<CompiledBindingFrame> frames {
+                binding_frames_.begin(), binding_frames_.end()
+            };
+            frames.push_back(scoped->frame);
+            const CompiledDesignResolver nested {
+                *design_, selected_unit_, effective_, frames
+            };
+            if (auto resolved = nested.effective_systemverilog_type(
+                    scoped->type, scoped->scope)) {
+                candidate = retain_systemverilog_declarator(
+                    std::move(*resolved), candidate);
+                selected.reset();
+            }
+        }
         if (selected && visiting.insert(*selected).second) {
             const auto declaration = find_declaration(
                 *design_, effective_, *selected);
@@ -3422,6 +3482,107 @@ CompiledDesignResolver::effective_systemverilog_type(
     };
 
     return materialize(materialize, input, use_scope);
+}
+
+std::optional<CompiledClassScopedTypedef>
+CompiledDesignResolver::systemverilog_type_parameter_scoped_typedef(
+    const sv::TypeReference& input, const ScopeId use_scope) const
+{
+    const auto& spelling = input.target.spelling;
+    const auto separator = spelling.find("::");
+    if (design_ == nullptr || separator == std::string::npos
+        || separator == 0U
+        || spelling.find("::", separator + 2U) != std::string::npos) {
+        return std::nullopt;
+    }
+    sv::TypeReference qualifier;
+    qualifier.target.spelling = spelling.substr(0U, separator);
+    qualifier.source_order = input.source_order;
+    const auto formal = resolve_systemverilog_named_type(
+        qualifier.target.spelling, use_scope, false, input.source_order)
+                            .unique();
+    const auto formal_declaration = formal
+        ? find_declaration(*design_, effective_, *formal)
+        : std::nullopt;
+    if (!formal_declaration || formal_declaration->systemverilog == nullptr
+        || formal_declaration->systemverilog->form
+            != sv::DeclarationForm::type_parameter) {
+        return std::nullopt;
+    }
+    const auto owner = effective_systemverilog_type(qualifier, use_scope);
+    if (!owner
+        || (owner->class_identity.empty()
+            && owner->target.spelling.empty())) {
+        return std::nullopt;
+    }
+    // A class type actual bound before class resolution keeps only its
+    // spelling; it names the one class so called.
+    const auto& classes = design_->systemverilog_hir.classes();
+    auto selected_class = classes.end();
+    for (auto candidate = classes.begin(); candidate != classes.end();
+         ++candidate) {
+        const bool matches = owner->class_identity.empty()
+            ? !candidate->forward_declaration
+                && candidate->name == owner->target.spelling
+            : sv::class_declaration_identity(*candidate)
+                == owner->class_identity;
+        if (!matches) {
+            continue;
+        }
+        if (selected_class != classes.end()) {
+            return std::nullopt;
+        }
+        selected_class = candidate;
+    }
+    if (selected_class == classes.end()) {
+        return std::nullopt;
+    }
+    const auto name = std::string_view { spelling }.substr(separator + 2U);
+    const sv::Declaration* alias { };
+    for (const auto id : selected_class->type_aliases) {
+        const auto declaration = find_declaration(*design_, effective_, id);
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->name == name
+            && declaration->systemverilog->type) {
+            alias = declaration->systemverilog;
+            break;
+        }
+    }
+    if (alias == nullptr) {
+        return std::nullopt;
+    }
+    CompiledClassScopedTypedef result {
+        *alias->type, alias->scope, { }
+    };
+    const auto& actuals = owner->interface_parameter_actuals;
+    for (std::size_t index { }; index < selected_class->parameters.size();
+         ++index) {
+        const auto& parameter = selected_class->parameters[index];
+        const auto named = std::ranges::find_if(actuals,
+            [&](const sv::ActualAssociation& association) {
+                return association.formal
+                    && *association.formal == parameter.name;
+            });
+        const auto* association = named != actuals.end() ? &*named
+            : index < actuals.size() && !actuals[index].formal
+            ? &actuals[index]
+            : nullptr;
+        if (association == nullptr) {
+            continue;
+        }
+        CompiledActualBinding binding;
+        binding.formal = parameter.declaration;
+        if (association->kind == sv::ActualKind::type && association->type) {
+            binding.systemverilog_type = association->type;
+        } else if (association->kind == sv::ActualKind::expression
+            && association->expression) {
+            binding.expression = association->expression;
+        } else {
+            continue;
+        }
+        result.frame.push_back(std::move(binding));
+    }
+    return result;
 }
 
 std::optional<sv::TypeReference>

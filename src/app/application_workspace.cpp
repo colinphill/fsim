@@ -45,8 +45,12 @@ std::optional<BuiltProject> load_workspace_snapshot(const cli::Invocation& invoc
     }
     built->optimization = config.build.optimization;
     built->cache_path = config.build.cache_path;
+    // Files a simulation names are relative to the workspace, not to the
+    // snapshot's storage.
     if (invocation.file_root) {
         built->file_root = *invocation.file_root;
+    } else if (!config.base_directory.empty()) {
+        built->file_root = config.base_directory;
     }
     if (invocation.random_seed) {
         built->seed = entropy_seed();

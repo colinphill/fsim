@@ -835,20 +835,12 @@ Lowerer::hir_string_format_expression_status(
             && output != frontend::OutputFormat::Library
             && output != frontend::OutputFormat::Time;
     };
-    const auto invalid_conversion = std::ranges::any_of(
-        parsed.conversions,
-        [](const frontend::ParsedOutputConversion& conversion) {
-            return conversion.format
-                    == frontend::OutputFormat::Unformatted2
-                || conversion.format
-                    == frontend::OutputFormat::Unformatted4;
-        });
     const auto required = static_cast<std::size_t>(
         std::ranges::count_if(parsed.conversions,
             [&](const frontend::ParsedOutputConversion& conversion) {
                 return consumes_value(conversion.format);
             }));
-    if (!parsed.valid || invalid_conversion
+    if (!parsed.valid
         || parsed.conversions.size() > 64U
         || call.operands.size() - 1U < required) {
         return HirStringFormatStatus::invalid;
@@ -861,6 +853,19 @@ Lowerer::hir_string_format_expression_status(
         const auto value = call.operands[value_index++];
         if (conversion.format == frontend::OutputFormat::Pattern) {
             continue;
+        }
+        // `%u` and `%z` write an integral value's unformatted bits (IEEE
+        // 1800-2017 21.2.1.7).
+        if ((conversion.format == frontend::OutputFormat::Unformatted2
+                || conversion.format == frontend::OutputFormat::Unformatted4)
+            && hir_systemverilog_scan_value_kind(value)
+                != HirSystemVerilogScanValueKind::packed_integral) {
+            const auto literal = specialized_hir_unit_->find_expression(value);
+            if (!literal || literal->systemverilog == nullptr
+                || literal->systemverilog->kind
+                    != semantic::sv::ExpressionKind::string_literal) {
+                return HirStringFormatStatus::invalid;
+            }
         }
         // `%s` of an integral value shows its 8-bit characters.
         if (!hir_expression_width(value, process_scope)
@@ -1350,9 +1355,11 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         const bool unsupported_unformatted = unformatted
             && ((!packed_target && !string_target) || !integral_value);
         const auto width = hir_expression_width(value, process_scope);
+        // `%s` of an integral value shows its 8-bit characters.
         if (unsupported_unformatted
             || (conversion.format == frontend::OutputFormat::String
-                && !hir_expression_is_string(value, process_scope))
+                && !hir_expression_is_string(value, process_scope)
+                && (!width || *width == 0U))
             || (conversion.format != frontend::OutputFormat::String
                 && (!width || *width == 0U
                     || *width

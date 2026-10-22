@@ -1007,6 +1007,64 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         }
         if (derived.size() == derived_before && !(coupled && narrowed)) break;
         }
+        // Wide variables a hard equality joins (`x == y`) share their
+        // sampled values, so the search can meet on any sampled value
+        // rather than only on the values both samples happen to hold
+        // (IEEE 1800-2017 18.5, 18.5.12).
+        using Operator = SystemVerilogConstraintExpressionOperator;
+        std::map<SystemVerilogConstraintVariableId, Key> sampled_keys;
+        for (const auto& key : wide) {
+          if (bounded.contains(key)) {
+            sampled_keys.emplace(probe_variables.at(
+                identity_of(nodes[key.first], key.second)), key);
+          }
+        }
+        for (const auto& clause : probe.clauses()) {
+          if (clause.soft || !clause.expression) continue;
+          const auto& graph = *clause.expression;
+          if (graph.root >= graph.nodes.size()) continue;
+          const auto& root = graph.nodes[graph.root];
+          if ((root.operation != Operator::Equal
+                  && root.operation != Operator::CaseEqual)
+              || root.operands.size() != 2U) {
+            continue;
+          }
+          const auto& left = graph.nodes[root.operands[0]];
+          const auto& right = graph.nodes[root.operands[1]];
+          if (left.operation != Operator::Variable
+              || right.operation != Operator::Variable) {
+            continue;
+          }
+          const auto first = sampled_keys.find(left.variable);
+          const auto second = sampled_keys.find(right.variable);
+          // A size's domain and a single derived value stay as narrowed.
+          if (first == sampled_keys.end() || second == sampled_keys.end()
+              || first->second == second->second
+              || preserved.contains(first->second)
+              || preserved.contains(second->second)) {
+            continue;
+          }
+          auto& one = bounded.at(first->second);
+          auto& other = bounded.at(second->second);
+          const auto& profile = probe.variables()[left.variable].profile;
+          if (one.size() <= 1U || other.size() <= 1U || profile.width > 64U
+              || one.front().width() != other.front().width()
+              || probe.variables()[right.variable].profile.signed_value
+                  != profile.signed_value) {
+            continue;
+          }
+          const auto sign = profile.signed_value
+              ? std::uint64_t{1} << (profile.width - 1U) : std::uint64_t{};
+          const auto order = [&](const PackedLogic4& value) {
+            return value.low_word().aval ^ sign;
+          };
+          std::vector<PackedLogic4> merged = one;
+          merged.insert(merged.end(), other.begin(), other.end());
+          std::ranges::sort(merged, {}, order);
+          merged.erase(std::ranges::unique(merged).begin(), merged.end());
+          one = merged;
+          other = std::move(merged);
+        }
       } catch (const std::exception&) {
         direct_indices.clear();
         direct_randc.clear();

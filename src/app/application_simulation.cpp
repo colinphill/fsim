@@ -739,7 +739,14 @@ void Simulation::set_system_command_hook(SystemCommandHook hook)
 void Simulation::set_systemverilog_dpi_function_hook(
     SystemVerilogDpiFunctionHook hook)
 {
+    impl_->dpi_function_hook = hook;
     impl_->interpreter->set_dpi_function_call_hook(std::move(hook));
+}
+
+Simulation::SystemVerilogDpiFunctionHook
+Simulation::systemverilog_dpi_function_hook() const
+{
+    return impl_->dpi_function_hook;
 }
 
 void Simulation::set_vcd_control_hook(VcdControlHook hook)

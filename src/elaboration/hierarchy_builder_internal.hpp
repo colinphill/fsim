@@ -1488,6 +1488,10 @@ private:
     struct SystemVerilogAliasPlan {
         std::vector<std::vector<std::string>> whole_groups;
         std::vector<SystemVerilogAliasConnection> connections;
+        // Whole-net aliases of names already bound to distinct nets, such
+        // as two port formals connected to different actuals: the nets are
+        // joined (IEEE 1800-2017 10.11, 23.2.2.1).
+        std::vector<std::pair<SignalId, SignalId>> joined_nets;
     };
 
     // Generated entries borrow their parent maps and occurrence

@@ -649,8 +649,18 @@ private:
             : std::string_view { };
         const auto property = std::ranges::find(target->properties, member,
             &ClassProperty::canonical_identity);
-        if (property == target->properties.end() || !property->parameter
-            || !property->initializer) {
+        // A value parameter of the class is one of its formals (`D#(x)::v`,
+        // IEEE 1800-2017 8.25.1).
+        const auto cut = member.rfind("::");
+        const auto name = cut == std::string_view::npos
+            ? member : member.substr(cut + 2U);
+        const auto formal = std::ranges::find_if(target->parameters,
+            [&](const ClassParameter& parameter) {
+                return !parameter.type_parameter && parameter.name == name;
+            });
+        const bool constant_property = property != target->properties.end()
+            && property->parameter && property->initializer;
+        if (!constant_property && formal == target->parameters.end()) {
             return std::nullopt;
         }
         const auto errors = result_.errors.size();
@@ -665,10 +675,23 @@ private:
         }
         // A class value parameter is bound in that environment; a
         // localparam folds from its initializer there.
-        if (const auto bound = selected->second.values.find(
-                property->declaration);
+        const auto declaration = constant_property
+            ? property->declaration : formal->declaration;
+        if (const auto bound = selected->second.values.find(declaration);
             bound != selected->second.values.end()) {
             return bound->second;
+        }
+        if (!constant_property) {
+            if (!formal->default_value) {
+                discard_errors(errors);
+                return std::nullopt;
+            }
+            auto resolved = value(*formal->default_value, selected->second,
+                *identity, expression.source, active);
+            if (!resolved) {
+                discard_errors(errors);
+            }
+            return resolved;
         }
         auto resolved = value(*property->initializer, selected->second,
             *identity, expression.source, active);
@@ -2407,7 +2430,30 @@ private:
                 active_.erase(bound->specialization_identity);
                 return std::nullopt;
             }
-            const auto width = storage_width(specialized_type->type);
+            // A class typedef sized by the class's parameters
+            // (`typedef logic [W-1:0] t; t m;`) is laid out with this
+            // specialization's values (IEEE 1800-2017 8.25).
+            auto layout_type = specialized_type->type;
+            if (!layout_type.packed_range
+                && layout_type.target.target.valid()) {
+                const auto* definition
+                    = record_for(types_, layout_type.target.target);
+                if (definition != nullptr && definition->members.empty()
+                    && definition->base.packed_range
+                    && !definition->base.container_form
+                    && (!definition->base.packed_range->left
+                        || !definition->base.packed_range->right)) {
+                    auto range = *definition->base.packed_range;
+                    const auto errors = result_.errors.size();
+                    if (resolve_range(range, bound->environment, identity,
+                            property.source)) {
+                        layout_type = definition->base;
+                        layout_type.packed_range = range;
+                    }
+                    discard_errors(errors);
+                }
+            }
+            const auto width = storage_width(layout_type);
             if (!width) {
                 report(ClassSpecializationErrorKind::unresolved_member,
                     identity, property.source,

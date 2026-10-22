@@ -406,6 +406,8 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     string_by_name_.clear();
     container_by_name_.clear();
     container_element_packed_shape_.clear();
+    signal_packed_shape_.clear();
+    signal_unpacked_shape_.clear();
     virtual_interface_write_counts_.clear();
     // The index refers to the compiled design, which may not outlive
     // elaboration.

@@ -41,6 +41,8 @@ exact_specialization(const semantic::design::DesignIr& design,
 }
 
 struct Simulation::Impl {
+    // The hook last given to set_systemverilog_dpi_function_hook.
+    SystemVerilogDpiFunctionHook dpi_function_hook;
 
     struct ObserverDispatchGeneration {
         std::uint64_t high { };

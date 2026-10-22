@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 
+#include <fsim/semantic/systemverilog_type_descriptor.hpp>
+
+#include <algorithm>
+#include <cstdlib>
+
 namespace fsim::elaboration {
 namespace {
 
@@ -54,20 +59,131 @@ std::optional<Lowerer::HirMailboxElement> Lowerer::hir_mailbox_element(
 {
     const auto* element = mailbox_element_type(mailbox_type);
     const auto resolver = hir_resolver();
+    // A typedef's bounds use the names visible where it is declared (a
+    // class's local parameters).
+    auto element_scope = hir_process_scope_;
+    // A typedef name actual (`mailbox #(my_t)`) parses as an expression;
+    // it denotes the type the typedef names (IEEE 1800-2017 15.4, 6.18).
+    if (element == nullptr && synchronization_type(mailbox_type, "mailbox")
+        && mailbox_type->interface_parameter_actuals.size() == 1U) {
+        const auto& actual = mailbox_type->interface_parameter_actuals.front();
+        const auto expression = actual.kind == semantic::sv::ActualKind::expression
+                && actual.expression
+            ? specialized_hir_unit_->find_expression(*actual.expression)
+            : std::nullopt;
+        const auto alias = expression && expression->systemverilog != nullptr
+                && expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name
+            ? resolver.resolve_systemverilog_named_type(
+                  expression->systemverilog->text,
+                  expression->systemverilog->scope).unique()
+            : std::nullopt;
+        const auto declaration = alias
+            ? specialized_hir_unit_->find_declaration(*alias)
+            : std::nullopt;
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type) {
+            element = &*declaration->systemverilog->type;
+            element_scope = declaration->systemverilog->scope;
+        }
+    } else if (element != nullptr) {
+        // A typedef type actual (`mailbox #(C::t)`).
+        const auto definition = element->target.target.valid()
+            ? specialized_hir_unit_->find_type(element->target.target)
+            : std::nullopt;
+        const auto alias = definition && definition->systemverilog != nullptr
+            ? std::optional { definition->systemverilog->declaration }
+            : !element->target.spelling.empty()
+            ? resolver.resolve_systemverilog_named_type(
+                  element->target.spelling, hir_process_scope_).unique()
+            : std::nullopt;
+        const auto declaration = alias
+            ? specialized_hir_unit_->find_declaration(*alias)
+            : std::nullopt;
+        if (declaration && declaration->systemverilog != nullptr) {
+            element_scope = declaration->systemverilog->scope;
+        }
+    }
     const auto effective_element = element
         ? std::optional { fully_effective_systemverilog_type(
-              resolver, *element, hir_process_scope_) }
+              resolver, *element, element_scope) }
         : std::nullopt;
     if (effective_element && mailbox_string_element(*effective_element)) {
         return HirMailboxElement { true, 0U };
     }
     // A typedef element (`mailbox #(my_t)`) has its aliased type's width.
     auto width = element
-        ? hir_systemverilog_type_width(*element, hir_process_scope_)
+        ? hir_systemverilog_type_width(*element, element_scope)
         : std::nullopt;
     if (!width && effective_element) {
         width = hir_systemverilog_type_width(
-            *effective_element, hir_process_scope_);
+            *effective_element, element_scope);
+    }
+    // A fixed-size unpacked element is carried as its bit stream (IEEE
+    // 1800-2017 11.4.14).
+    if (!width && element) {
+        if (const auto described = semantic::describe_systemverilog_type(
+                *specialized_hir_unit_, *element, element_scope);
+            described && described->bits && *described->bits != 0U) {
+            std::uint64_t bits = *described->bits;
+            for (const auto& dimension : described->unpacked) {
+                if (!dimension.container.empty() || !dimension.left
+                    || !dimension.right) {
+                    bits = 0U;
+                    break;
+                }
+                bits *= static_cast<std::uint64_t>(std::llabs(
+                            *dimension.left - *dimension.right))
+                    + 1U;
+            }
+            if (bits != 0U) {
+                width = static_cast<std::size_t>(bits);
+            }
+        }
+    }
+    // Unpacked bounds written with class local parameters (`int t[2**W]`)
+    // fold as constant expressions.
+    if (!width && element && !element->unpacked_dimensions.empty()
+        && !element->container_form) {
+        auto packed = *element;
+        packed.unpacked_dimensions.clear();
+        auto bits = hir_systemverilog_type_width(packed, element_scope)
+                        .value_or(0U);
+        for (const auto& dimension : element->unpacked_dimensions) {
+            const auto bound = [&](const std::optional<std::int64_t> value,
+                                   const std::optional<semantic::ExpressionId> expression) {
+                return value ? value
+                    : expression ? hir_constant_integer(*expression)
+                    : std::nullopt;
+            };
+            const auto left = bound(dimension.left, dimension.left_expression);
+            const auto right = bound(dimension.right, dimension.right_expression);
+            if (!left || !right) {
+                bits = 0U;
+                break;
+            }
+            bits *= static_cast<std::size_t>(std::llabs(*left - *right)) + 1U;
+        }
+        if (bits != 0U) {
+            width = bits;
+        }
+    }
+    // Bounds written with class parameters fold in the active class frame.
+    if (!width && element) {
+        if (const auto container = hir_systemverilog_container_type(*element);
+            container && container->fixed
+            && container->element_kind
+                == runtime::simir::ContainerElementKind::Packed) {
+            std::uint64_t bits = container->element_width;
+            for (const auto& [left, right] : container->dimensions) {
+                bits *= static_cast<std::uint64_t>(std::llabs(
+                            static_cast<std::int64_t>(left) - right))
+                    + 1U;
+            }
+            if (bits != 0U) {
+                width = static_cast<std::size_t>(bits);
+            }
+        }
     }
     if (!effective_element || !width || *width == 0U
         || *width > std::numeric_limits<std::uint32_t>::max()) {
@@ -116,11 +232,39 @@ Lowerer::hir_synchronization_task_profile(
         ? &*declaration->systemverilog->type
         : nullptr;
     const bool mailbox = synchronization_type(type, "mailbox");
-    if (!mailbox && !synchronization_type(type, "semaphore")) {
+    if (mailbox || synchronization_type(type, "semaphore")) {
+        // A property named in a method (`mb.put(x)`) is the object's.
+        auto property = hir_named_class_property(
+            receiver_name, process_scope, 0U);
+        const auto is_property = std::ranges::any_of(
+            specialized_hir_unit_->design().systemverilog_hir.classes(),
+            [&](const semantic::sv::ClassDeclaration& candidate) {
+                return std::ranges::any_of(candidate.properties,
+                    [&](const semantic::sv::ClassProperty& item) {
+                        return item.declaration == *receiver;
+                    });
+            });
+        if (!is_property) {
+            property.reset();
+        }
+        return HirSynchronizationTaskProfile {
+            *receiver, method, mailbox, std::move(property)
+        };
+    }
+    // `c.mb.put(x)`: a property of a class object (IEEE 1800-2017 8.4).
+    auto property = hir_named_class_property(receiver_name, process_scope, 0U);
+    if (!property || property->type == nullptr) {
+        return std::nullopt;
+    }
+    const bool property_mailbox
+        = synchronization_type(property->type, "mailbox");
+    if (!property_mailbox
+        && !synchronization_type(property->type, "semaphore")) {
         return std::nullopt;
     }
     return HirSynchronizationTaskProfile {
-        *receiver, method, mailbox
+        receiver.value_or(semantic::DeclarationId { }), method,
+        property_mailbox, std::move(property)
     };
 }
 
@@ -135,15 +279,24 @@ bool Lowerer::lower_hir_synchronization_statement(
     }
     const auto declaration = specialized_hir_unit_->find_declaration(
         profile->receiver);
-    const auto binding = hir_runtime_binding(
-        profile->receiver, hir_process_scope_, true);
-    const auto* receiver_type = declaration
+    const auto binding = profile->class_property ? std::nullopt
+        : hir_runtime_binding(profile->receiver, hir_process_scope_, true);
+    const auto* receiver_type = profile->class_property
+        ? profile->class_property->type
+        : declaration
             && declaration->systemverilog != nullptr
             && declaration->systemverilog->type
         ? &*declaration->systemverilog->type
         : nullptr;
-    if (!binding || binding->width != 64U
-        || (!binding->local && !binding->signal)) {
+    const auto property_handle = profile->class_property
+        ? lower_hir_named_class_property(*profile->class_property)
+        : std::nullopt;
+    if (profile->class_property && !property_handle) {
+        return false;
+    }
+    if (!profile->class_property
+        && (!binding || binding->width != 64U
+            || (!binding->local && !binding->signal))) {
         report(
             "FSIM-ELAB-SVSYNC-001",
             "mailbox/semaphore method requires a compatible writable "
@@ -152,6 +305,9 @@ bool Lowerer::lower_hir_synchronization_statement(
         return true;
     }
     const auto receiver = [&]() {
+        if (property_handle) {
+            return *property_handle;
+        }
         if (binding->local) {
             return *binding->local;
         }

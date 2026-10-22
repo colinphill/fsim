@@ -47,6 +47,26 @@ void HierarchyBuilder::add_systemverilog_alias_connections(
         specialization.processes.push_back(process.id);
         design_.append_process_record(std::move(process));
     }
+    for (const auto& [left, right] : plan.joined_nets) {
+        const auto process_index = design_.process_count();
+        const auto process_id = static_cast<ProcessId>(process_index);
+        if (static_cast<std::size_t>(process_id) != process_index) {
+            throw std::length_error { "too many SimIR processes" };
+        }
+        Process process;
+        process.id = process_id;
+        process.name = std::string { path } + ".$alias_"
+            + std::to_string(ordinal++);
+        process.scheduling_domain
+            = ProcessSchedulingDomain::systemverilog;
+        process.switch_source = left;
+        process.switch_target = right;
+        process.switch_bidirectional = true;
+        process.initialize = false;
+        process.operations.emplace_back(Halt { });
+        specialization.processes.push_back(process.id);
+        design_.append_process_record(std::move(process));
+    }
 }
 
 } // namespace fsim::elaboration

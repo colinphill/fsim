@@ -10,10 +10,10 @@ Exclusions never count as closures.
 
 | suite | not run | out of scope |
 |---|---:|---:|
-| verilator | 70 | 279 |
+| verilator | 70 | 281 |
 | ivtest | 20 | 299 |
 | vests | 2 | 0 |
-| nvc | 219 | 0 |
+| nvc | 222 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## verilator
@@ -57,6 +57,7 @@ Exclusions never count as closures.
 | `t_constraint_dist_if_foreach` | out of scope | writes a dist inside parentheses, which IEEE 1800-2017 A.1.10 does not allow (dist is a constraint item, not an expression) |
 | `t_constraint_dist_randmode_unsup` | out of scope | expects a Verilator unsupported-feature error for legal code |
 | `t_constraint_dist_weight` | out of scope | expects randomize to succeed with only zero-weight dist values; zero weights are constraints, so it fails (IEEE 1800-2017 18.5.4) |
+| `t_constraint_real_struct_field` | out of scope | expects members of a rand unpacked struct declared without rand to be random; only members with a rand or randc modifier are (IEEE 1800-2017 18.4) |
 | `t_cover_fsm_sel_assign` | out of scope | uses a Verilator metacomment |
 | `t_cover_line_cc` | out of scope | needs a zero-delay always loop to terminate |
 | `t_cover_line_cc_vlt` | out of scope | needs a zero-delay always loop to terminate |
@@ -238,6 +239,7 @@ Exclusions never count as closures.
 | `t_randomize_inline_var_ctl` | out of scope | passes dotted names to randomize(); the arguments are identifiers of the calling object's properties (IEEE 1800-2017 18.11) |
 | `t_randomize_inline_var_ctl_unsup_1` | not run | lint-only test |
 | `t_randomize_inline_var_ctl_unsup_2` | not run | lint-only test |
+| `t_randomize_method_with_scoping` | out of scope | expects `get_x() == local::get_x()` to solve x through the function body; a constraint function's result is state computed before the solve (IEEE 1800-2017 18.5.12) |
 | `t_randomize_null_object` | out of scope | expects randomize() through a null handle to return 0 |
 | `t_randomize_null_unsup` | not run | lint-only test |
 | `t_randomize_soft_foreach` | out of scope | uses soft foreach (soft applies only to expression_or_dist, IEEE 1800-2017 18.5.14) |
@@ -798,6 +800,7 @@ Exclusions never count as closures.
 | `issue1512` | not run | nvc-specific test kind cover |
 | `issue1516` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `issue1517` | not run | nvc-specific test kind cover |
+| `issue1579` | not run | expects a foreign function's execution function to get a vhpiFuncDeclK handle; IEEE 1076-2019 20.4.2 passes a handle to the subpCall object of the call |
 | `issue1581` | not run | nvc-specific test kind exit |
 | `issue1595` | not run | nvc-specific test kind tcl |
 | `issue1624` | not run | nvc-specific test kind tcl |
@@ -903,9 +906,11 @@ Exclusions never count as closures.
 | `textio4` | not run | expects READ of a BIT_VECTOR to read past embedded spaces; a character that cannot be part of the value ends the read (IEEE 1076-2008 16.4) |
 | `toplevel3` | not run | hierarchical generic override |
 | `vhpi1` | not run | nvc option +foo=bar |
+| `vhpi14` | not run | expects vhpi_iterator to return an iterator for a call with no parameters; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |
 | `vhpi18` | not run | reads 64-bit integer and physical values through VHPI |
 | `vhpi20` | not run | nvc-specific test kind tcl |
 | `vhpi4` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
+| `vhpi8` | not run | expects vhpi_iterator to return an iterator for the indexed names of a null-range array; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |
 | `view7` | not run | leaves subelement p.y of an individually associated port unassociated; every scalar subelement shall be associated exactly once (IEEE 1076-2019 6.5.7.1) |
 | `vlog29` | not run | counts nvc's delta cycles for a SystemVerilog net crossing into VHDL; IEEE 1800-2023 4.4 scheduling regions and IEEE 1076-2019 14.7.5 delta cycles have no standard cross-language mapping |
 | `wait24` | not run | uses nvc's own library packages |

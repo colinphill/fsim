@@ -253,6 +253,127 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 87: class data and randomization, foreign subprograms, VHDL conversions
+
+Batch 87 is the one-off audit's batch W (SystemVerilog classes and class data,
+`triage/b86/audit/audit-plan.md`), widened with VHDL and foreign-interface
+items from the same audit. Every suite ran on the frozen `b87c` and was
+compared with Batch 86 (`b86w2`).
+
+The r13 targeted rerun closes 50 cases against `b86w2`: verilator 23, ivtest 6,
+vests 5, nvc 13 and vhdl-compliance 3. The full six-suite run (`b87w1`, on
+`b87c`) is in progress; its table goes here when it completes.
+
+SystemVerilog classes, constraints and randomization:
+- **Class events.** `->>` on an event object triggers in the NBA region. Class
+  event arrays (`c.ea[i]`) are handles, `@(c.ea[i])` uses the dynamic event
+  control, and an event property gets its object on first read (15.5.1,
+  15.5.2). Closes t_event_nba_timing, t_array_event.
+- **Class typedefs and mailboxes.** Class-task local typedefs survive inlining.
+  Mailbox and semaphore methods work on class properties. Element typedefs
+  sized by class localparams fold their unpacked bounds. Class parameters
+  reach unpacked typedef dimensions. `obj.x` through a type-parameter handle
+  is a dependent property access. Class localparams join the specialization
+  values of unparameterized classes. Closes t_class_param_typedef2,
+  t_mailbox_array, t_mailbox_struct_param, t_class_localparam_dotref.
+- **`$unit` classes** see the `$unit` package variables; a class derived from
+  `base#(N)` uses its default specialization. Closes t_uvm_typeof_type.
+- **Inline `with` and class constraints.** foreach loop variables stay solver
+  names. Element members (`a[i].m`), foreach over handle arrays,
+  struct-element members, `find(...).size()`, reductions, enum literals in
+  struct members and shifts reach the solver. Chained `get_c().c1_f`
+  resolves. Closes t_constraint_foreach_classref,
+  t_constraint_enum_lambda_arg, t_randomize_complex_queue.
+- **Solver.** Variables joined by a hard equality merge their candidate
+  domains. `x+x==k`, `c*x==k`, `~x==k` and `-x==k` are inverted, and
+  conditionals with a known condition fold. `dist` weights apply to variable
+  subjects; other subjects are membership tests (18.5.4). Closes
+  t_randomize_with_dyn_arr.
+- **`rand static` properties** keep their random state in the static store
+  and lend it to the object during `randomize()`. Static `rand_mode()` is
+  routed there (18.4). A shallow copy keeps its randc accounting. Closes
+  t_randomize_copy_constr, t_randomize_rand_mode_static.
+- **`std::randomize` of 2-D fixed arrays** solves nested arrays, a random
+  outer index and whole-array `==`/`!=`. Closes t_randomize_std_array_index.
+- **Instance calls and containers.** `i.go()` writes the called instance's
+  variables. `s1.a.size` works on struct-member containers. Elements of
+  unpacked arrays of packed structs read correctly in constant functions.
+  Closes t_dynarray_multid, t_virtual_interface_method_sched, t_foreach_const.
+
+SystemVerilog types, parameters and ports:
+- **`X::td_t` through a type parameter** resolves the typedef in the bound
+  class with that class's parameter frame. This covers child actuals and
+  instance identity (8.25.1). With per-signal packed shapes for hierarchical
+  names (`u.pa[1]`, `u.arr[1].a`), it closes t_iface_param_class_type,
+  t_iface_param_class_type_noinl and t_iface_param_type_derived_range.
+- **Unpacked members through a virtual interface.** Reads and writes of
+  `v.x[i]` and `f.x[1][j]` use a per-signal unpacked shape (7.4, 25.9).
+  Clocking drives reach an array element. Closes t_assigndly_deep_ref_array,
+  t_foreach_nested.
+- The negative covergroup case t_covergroup_with_sample_args_too_many_bad
+  closes too.
+
+Foreign interfaces and ports:
+- **VPI deposits on switch-network nets** are a persistent external driver.
+  Closes vpi_br_gh73a, vpi_br_gh73b.
+- **`$unit` variables** are not attributed to module `top` (3.12.1). Closes
+  vpi_br_gh1037.
+- **Ports.** A repeated port name (`module id(a,a)`) shorts its actuals, and
+  inout ports of instance arrays take their own slices. MOS strengths wake
+  their fanout. Closes inout, pr2219441, resolv1.
+- **VHPI.**
+  - Package instances have their relation and a constant evaluator.
+    Generic expressions are found by id, with record and integer generic
+    values. Closes vhpi11, vhpi15.
+  - A constrained array type declaration is a subtype of an anonymous
+    unconstrained base (1076-2019 5.3.2.1). Closes issue1240.
+  - `vhpi_iterator` returns NULL for an empty association (23.24). This
+    excludes vhpi8, whose expected output wants an iterator, as vhpi14 already
+    was.
+- **Foreign subprograms** (FOREIGN attribute, VHPI foreign calls, 1076-2019
+  20.4.2). Closes issue1233, issue1621.
+
+VHDL:
+- **Formal-part conversions in procedure calls** (`F1(b) => x`, 6.5.7.1),
+  checked, lowered and copied out. Closes tc146, tc154.
+- **Protected types.** Body types map to their declaration. Protected actuals
+  are bound in function calls. `'path_name` and `'instance_name` inside a body
+  use the running object. Closes tb_002, tb_032, issue923.
+- **Literals and numeric_std.**
+  - An untyped bit-string literal has BIT_VECTOR as a candidate. Closes
+    tc926.
+  - Unconstrained `signed`/`unsigned` constants take their value's width.
+    Closes issue655.
+  - `<`, `<=`, `>` and `>=` are FALSE on a metavalue (16.8.5.3). RESIZE of
+    SIGNED keeps the sign bit. Closes ieee12.
+  - A physical formal no longer matches a standard function's result. Closes
+    tb_numeric_std_unsigned.
+- **Closely related array conversions** from STRING to a user character array.
+  Closes ch_04_ch_04_09.
+- **Generate over character and enumeration ranges** (`'A' to 'Z'`,
+  `Day'low`), including the iterator's type. Closes tc1793.
+- **STD.ENV** directory status `NOT_FOUND`. Closes stdenv2.
+- pattern1, select11, select15 and tfcall3 (nvc SystemVerilog) close through
+  the part-select and call fixes above.
+
+Exclusions added: vhpi8 (above), t_randomize_method_with_scoping (expects
+`get_x() == local::get_x()` to solve through a function body), and
+t_randomize_soft_foreach (`soft` applies only to expression_or_dist,
+18.5.14).
+
+The labelled ctest has 23 failures, all known. The first close run caught a
+real regression in `sv_language_details_batch51`: the new `u.arr[1].a`
+selection took the flattened bit range as the element range. The element
+range now comes from the recorded packed shape and must match the
+structure's width.
+
+Parked or left for later: gh317 (escaped VPI names), gh141 (TF context in
+misctf), t_class_typedef, t_param_array_sparse, t_constraint_dynarray_struct,
+t_constraint_dist_randmode_frozen, t_sys_sformat and t_sys_plusargs (run-time
+formats change the SimIR codec), t_randc_extends (a user `uvm_pkg`), range3
+(record-element port range), issue801, issue1150, signal27, image2,
+issue1213, vhpi21, issue1161, ieee14, protected12.
+
 ### Batch 86: UVM front door, native run_test bridge, sequence-item handshake
 
 The SystemVerilog suites ran on the frozen `b86b` and were compared with

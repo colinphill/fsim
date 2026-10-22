@@ -163,6 +163,7 @@ enum class HandleTag : std::uint8_t {
     object,
     callback,
     iterator,
+    foreign,
 };
 
 struct Handle {
@@ -188,6 +189,7 @@ enum class ListKind : std::uint8_t {
     internal_regions,
     pack_insts,
     argvs,
+    param_decls,
 };
 
 struct Object final : Handle {
@@ -226,6 +228,10 @@ struct Object final : Handle {
     Object* suffix { };
     // Enumeration literals and physical units: their position or scale.
     std::int64_t position { };
+    // A formal of a foreign subprogram call: its actual's position in the
+    // running call; the call itself carries a function's result.
+    std::optional<std::size_t> call_slot;
+    bool call_result { };
 
     // Type declarations.
     std::unique_ptr<TypeData> type_data;
@@ -266,6 +272,19 @@ struct Iterator final : Handle {
 
     std::vector<Object*> items;
     std::size_t next { };
+};
+
+// A registered foreign subprogram model (IEEE 1076-2019 23.29
+// vhpi_register_foreignf); the names are owned copies.
+struct ForeignModel final : Handle {
+    ForeignModel()
+        : Handle { HandleTag::foreign }
+    {
+    }
+
+    vhpiForeignDataT data { };
+    std::string library;
+    std::string model;
 };
 
 [[nodiscard]] Handle* handle_of(const vhpiHandleT handle) noexcept
@@ -500,6 +519,31 @@ public:
         lifecycle(runtime::SystemVerilogVpiCallbackKind::EndOfSimulation,
             &LiveService::end_of_simulation);
         ensure_change_hook();
+        // Calls of foreign subprograms reach their execution functions
+        // through the foreign call boundary; other calls pass on.
+        simulation_.set_systemverilog_dpi_function_hook(
+            [this, next = simulation_.systemverilog_dpi_function_hook()](
+                const std::string_view identity,
+                std::vector<PackedLogic4>& actuals,
+                std::vector<std::string>& strings,
+                const std::span<const std::string> names,
+                const std::span<const std::uint8_t> directions) {
+                if (identity.starts_with(
+                        elaboration::vhdl_foreign_call_identity_prefix)) {
+                    return foreign_call(identity.substr(
+                            elaboration::vhdl_foreign_call_identity_prefix
+                                .size()),
+                        actuals, names, directions);
+                }
+                if (!next) {
+                    throw std::runtime_error {
+                        "SystemVerilog DPI function '"
+                        + std::string { identity }
+                        + "' has no loaded implementation"
+                    };
+                }
+                return next(identity, actuals, strings, names, directions);
+            });
         safe_point_token_ = simulation_.add_safe_point_hook(
             [this](runtime::Scheduler& scheduler,
                 const runtime::SchedulerPhase phase) {
@@ -688,10 +732,15 @@ private:
             return guarded<int>(user, 1,
                 [&](LiveService& s) { return s.release(handle); });
         };
-        host_.register_foreignf = [](void* user, vhpiForeignDataT*) {
+        host_.register_foreignf = [](void* user, vhpiForeignDataT* data) {
             return guarded<vhpiHandleT>(user, nullptr, [&](LiveService& s) {
-                s.error(vhpiError, "foreign models are not supported");
-                return static_cast<vhpiHandleT>(nullptr);
+                return s.register_foreign(data);
+            });
+        };
+        host_.get_foreignf_info = [](void* user, vhpiHandleT handle,
+                                      vhpiForeignDataT* data) {
+            return guarded<int>(user, 1, [&](LiveService& s) {
+                return s.foreign_info(handle, data);
             });
         };
     }
@@ -1412,7 +1461,17 @@ private:
             return u.kind == vhdl::UnitKind::package && same_name(u.name, name);
         });
         if (unit == hir_.units().end()) {
-            return nullptr;
+            // STANDARD is part of every design (IEEE 1076-2019 16.3) though
+            // its declarations are predefined rather than analyzed.
+            if (key != "standard") {
+                return nullptr;
+            }
+            auto* const object = make_object(vhpiPackInstK, "STANDARD", nullptr);
+            object->path = "std.standard";
+            object->full_name = ":" + object->name;
+            object->full_case_name = object->full_name;
+            packages_.emplace(key, object);
+            return object;
         }
         auto* const object = make_object(vhpiPackInstK, unit->name, nullptr);
         object->unit = &*unit;
@@ -1486,6 +1545,12 @@ private:
         }
         object->signal = simulation_.find_signal(
             region.path + "." + lower(declaration.name));
+        if (!object->signal && declaration.initializer
+            && (declaration.form == vhdl::DeclarationForm::constant
+                || declaration.form
+                    == vhdl::DeclarationForm::generic_constant)) {
+            literal_constant(*object, *declaration.initializer);
+        }
         if (object->signal) {
             if (const auto* const info = signal_info(*object->signal)) {
                 object->type = refine(object->type, *info);
@@ -1502,6 +1567,173 @@ private:
         }
         region.children.emplace(key, object);
         return object;
+    }
+
+    // The value of a constant whose initializer is a literal (IEEE 1076-2019
+    // 22.5): an integer, a negated integer, a string, which also constrains
+    // an unconstrained string type by its length (5.3.2.2), or a record
+    // aggregate of those.
+    void literal_constant(Object& object, const semantic::ExpressionId id)
+    {
+        if (auto value = literal_value(object.type, id, 0U)) {
+            object.type = value->first;
+            object.constant = std::move(value->second);
+        }
+    }
+
+    [[nodiscard]] std::optional<std::pair<Object*, PackedLogic4>>
+    literal_value(Object* const type, const semantic::ExpressionId id,
+        const std::size_t depth)
+    {
+        const auto& expressions = hir_.expressions();
+        const auto find = [&](const semantic::ExpressionId expression)
+            -> const vhdl::Expression* {
+            const auto index = static_cast<std::size_t>(expression.value());
+            if (index < expressions.size()
+                && expressions[index].id == expression) {
+                return &expressions[index];
+            }
+            // Expression ids are shared across languages, so a VHDL
+            // expression's position need not be its id.
+            const auto found = std::ranges::find(
+                expressions, expression, &vhdl::Expression::id);
+            return found == expressions.end() ? nullptr : &*found;
+        };
+        const auto* expression = find(id);
+        if (expression == nullptr || type == nullptr
+            || type->type_data == nullptr || depth > 16U) {
+            return std::nullopt;
+        }
+        const auto& data = *type->type_data;
+        // A type no signal lays out has the 32-bit INTEGER representation.
+        const auto integer_width = data.width != 0U ? data.width : 32U;
+        if (data.storage == Storage::integer && integer_width <= 64U) {
+            bool negative = false;
+            if (expression->kind == vhdl::ExpressionKind::unary
+                && expression->text == "-" && expression->operands.size() == 1U) {
+                negative = true;
+                expression = find(expression->operands.front());
+            }
+            if (expression == nullptr
+                || expression->kind != vhdl::ExpressionKind::integer_literal) {
+                return std::nullopt;
+            }
+            std::string digits;
+            for (const auto character : expression->text) {
+                if (character != '_') {
+                    digits.push_back(character);
+                }
+            }
+            std::int64_t value { };
+            const auto* const end = digits.data() + digits.size();
+            if (const auto [last, failure]
+                = std::from_chars(digits.data(), end, value);
+                failure != std::errc { } || last != end) {
+                return std::nullopt;
+            }
+            return std::pair { type, PackedLogic4::from_aval_bval(
+                integer_width,
+                static_cast<std::uint64_t>(negative ? -value : value), 0U) };
+        }
+        if (data.storage == Storage::record
+            && expression->kind == vhdl::ExpressionKind::aggregate
+            && expression->associations.size() == data.fields.size()) {
+            // Each element association names one element, positionally or
+            // by its simple name (IEEE 1076-2019 9.3.3.2).
+            auto fields = data.fields;
+            std::vector<std::optional<PackedLogic4>> values(fields.size());
+            for (std::size_t index = 0U;
+                 index < expression->associations.size(); ++index) {
+                const auto& association = expression->associations[index];
+                auto position = index;
+                if (!association.positional()) {
+                    const auto named = std::ranges::find_if(fields,
+                        [&](const Field& field) {
+                            return same_name(field.name,
+                                association.choice_spelling);
+                        });
+                    if (named == fields.end()) {
+                        return std::nullopt;
+                    }
+                    position = static_cast<std::size_t>(
+                        named - fields.begin());
+                }
+                if (values[position]) {
+                    return std::nullopt;
+                }
+                auto element = literal_value(
+                    fields[position].type, association.value, depth + 1U);
+                if (!element) {
+                    return std::nullopt;
+                }
+                fields[position].type = element->first;
+                values[position] = std::move(element->second);
+            }
+            // The first element is the most significant (as selected names
+            // read it).
+            std::size_t width { };
+            for (const auto& value : values) {
+                width += value->width();
+            }
+            PackedLogic4 bits(width, Logic4::zero);
+            auto lsb = width;
+            for (const auto& value : values) {
+                lsb -= value->width();
+                for (std::size_t bit = 0U; bit < value->width(); ++bit) {
+                    bits.set(lsb + bit, value->get(bit));
+                }
+            }
+            bool refined = false;
+            for (std::size_t index = 0U; index < fields.size(); ++index) {
+                refined = refined
+                    || fields[index].type != data.fields[index].type;
+            }
+            auto* value_type = type;
+            if (refined) {
+                value_type = constrained(*type);
+                value_type->type_data->fields = std::move(fields);
+            }
+            return std::pair { value_type, std::move(bits) };
+        }
+        if (data.storage != Storage::array || data.element == nullptr
+            || data.element->type_data == nullptr
+            || data.element->type_data->literals.size() != 256U
+            || expression->kind != vhdl::ExpressionKind::string_literal
+            || !expression->decoded_string
+            || expression->decoded_string->empty()) {
+            return std::nullopt;
+        }
+        const auto& text = *expression->decoded_string;
+        auto* value_type = type;
+        if (data.unconstrained || data.dimensions.empty()) {
+            const auto* const index = data.index_types.empty()
+                ? nullptr
+                : data.index_types.front();
+            const auto left = index != nullptr && index->type_data != nullptr
+                    && index->type_data->range
+                ? index->type_data->range->left
+                : 1;
+            value_type = constrained(*type);
+            value_type->type_data->dimensions = { Range { left,
+                left + static_cast<std::int64_t>(text.size()) - 1, false } };
+            value_type->type_data->unconstrained = false;
+        }
+        if (value_type->type_data->dimensions.size() != 1U
+            || static_cast<std::size_t>(
+                   value_type->type_data->dimensions.front().length())
+                != text.size()) {
+            return std::nullopt;
+        }
+        PackedLogic4 bits(text.size() * 8U, Logic4::zero);
+        for (std::size_t position = 0U; position < text.size(); ++position) {
+            const auto code = static_cast<unsigned char>(text[position]);
+            const auto base = (text.size() - 1U - position) * 8U;
+            for (std::size_t bit = 0U; bit < 8U; ++bit) {
+                bits.set(base + bit,
+                    ((code >> bit) & 1U) != 0U ? Logic4::one : Logic4::zero);
+            }
+        }
+        return std::pair { value_type, std::move(bits) };
     }
 
     // The declaration a name denotes in a region; a type name denotes the
@@ -2035,12 +2267,42 @@ private:
         case vhpiUnitDecls:
             result = type_list(relation, object);
             break;
+        case vhpiPackInsts:
+            result = package_instances();
+            break;
+        case vhpiParamDecls:
+            if (object != nullptr) {
+                result = object->lists[ListKind::param_decls];
+            }
+            break;
         case vhpiArgvs:
             result = argv_objects();
             break;
         default:
             error(vhpiError, "unsupported iteration " + std::to_string(relation));
             break;
+        }
+        return result;
+    }
+
+    // The instances of the design's packages, STANDARD first (IEEE
+    // 1076-2019 19.4.2).
+    [[nodiscard]] std::vector<Object*> package_instances()
+    {
+        std::vector<Object*> result;
+        if (auto* const standard = package_instance("standard")) {
+            result.push_back(standard);
+        }
+        for (const auto& unit : hir_.units()) {
+            if (unit.kind != vhdl::UnitKind::package
+                || same_name(unit.name, "standard")) {
+                continue;
+            }
+            if (auto* const package = package_instance(unit.name);
+                package != nullptr
+                && std::ranges::find(result, package) == result.end()) {
+                result.push_back(package);
+            }
         }
         return result;
     }
@@ -2123,9 +2385,9 @@ private:
             object = root();
         }
         auto items = list(relation, object);
-        // An empty association still has an iterator (IEEE 1076-2019
-        // 23.13); an unsupported one has none.
-        if (has_error_) {
+        // An association with no target objects, like an unsupported one,
+        // has no iterator (IEEE 1076-2019 23.24).
+        if (has_error_ || items.empty()) {
             return nullptr;
         }
         auto stored = std::make_unique<Iterator>();
@@ -2151,8 +2413,16 @@ private:
     [[nodiscard]] vhpiHandleT handle_by_index(const vhpiOneToManyT relation,
         const vhpiHandleT parent, const int32_t index)
     {
-        auto* const object = object_of(parent);
-        if (object == nullptr) {
+        // Package instances and tool arguments have no reference object.
+        auto* const object = parent == nullptr
+                && (relation == vhpiPackInsts || relation == vhpiArgvs)
+            ? nullptr
+            : object_of(parent);
+        if (object == nullptr && parent != nullptr) {
+            return nullptr;
+        }
+        if (object == nullptr && relation != vhpiPackInsts
+            && relation != vhpiArgvs) {
             return nullptr;
         }
         const auto items = list(relation, object);
@@ -2188,6 +2458,12 @@ private:
             }
             return total;
         }
+        // INTEGER and TIME representations where no object lays the type
+        // out (a generic or constant).
+        case Storage::integer:
+            return data.width != 0U ? data.width : 32U;
+        case Storage::physical:
+            return data.width != 0U ? data.width : 64U;
         default:
             return data.width;
         }
@@ -2540,6 +2816,19 @@ private:
             if (definition.element_subtype) {
                 data.element
                     = subtype_object(*definition.element_subtype, nullptr);
+            }
+            // A constrained array type declaration declares an anonymous
+            // array type and a named subtype of it (IEEE 1076-2019 5.3.2.1).
+            if (constrained) {
+                auto* const base
+                    = make_type(vhpiArrayTypeDeclK, name, "work", "");
+                *base->type_data = data;
+                base->type_data->base = base;
+                base->type_data->unconstrained = true;
+                base->type_data->dimensions.clear();
+                result->kind = vhpiSubtypeDeclK;
+                data.parent = base;
+                data.base = base;
             }
             break;
         }
@@ -3159,6 +3448,8 @@ private:
             whole = simulation_.read_signal_snapshot(*object.signal);
         } else if (object.constant) {
             whole = *object.constant;
+        } else if (object.call_slot || object.call_result) {
+            whole = call_value(object);
         }
         if (!whole || object.type == nullptr) {
             return whole;
@@ -3533,8 +3824,25 @@ private:
                 "cannot create delta cycle during current simulation phase");
             return 1;
         }
-        if (!object->signal || object->type == nullptr
+        const bool call = object->call_slot || object->call_result;
+        if ((!object->signal && !call) || object->type == nullptr
             || object->type->type_data == nullptr) {
+            error(vhpiError, object->full_name + " cannot be updated");
+            return 1;
+        }
+        // A foreign subprogram writes its formals of mode out or inout and
+        // its function result (IEEE 1076-2019 20.4.2, 22.5.5).
+        if (call
+            && (active_call_ == nullptr
+                || (object->call_slot
+                    && (*object->call_slot >= active_call_->directions.size()
+                        || (active_call_->directions[*object->call_slot]
+                                != static_cast<std::uint8_t>(
+                                    frontend::PortDirection::Output)
+                            && active_call_->directions[*object->call_slot]
+                                != static_cast<std::uint8_t>(
+                                    frontend::PortDirection::Inout))))
+                || mode == vhpiRelease)) {
             error(vhpiError, object->full_name + " cannot be updated");
             return 1;
         }
@@ -3542,7 +3850,9 @@ private:
             simulation_.release_signal(*object->signal);
             return 0;
         }
-        auto whole = simulation_.read_signal_snapshot(*object->signal);
+        auto whole = call
+            ? call_value(*object).value_or(PackedLogic4 {})
+            : simulation_.read_signal_snapshot(*object->signal);
         const auto& data = *object->type->type_data;
         const auto width = width_of(*object->type);
         if (object->offset + width > whole.width()) {
@@ -3654,6 +3964,15 @@ private:
                 store_scalar(whole, element, at(position), scalar);
             }
         }
+        if (call) {
+            if (object->call_slot) {
+                (*active_call_->actuals)[*object->call_slot] = std::move(whole);
+            } else {
+                active_call_->result = std::move(whole);
+                active_call_->has_result = true;
+            }
+            return 0;
+        }
         switch (mode) {
         case vhpiForce:
         case vhpiForcePropagate:
@@ -3665,6 +3984,237 @@ private:
         }
         return 0;
     }
+
+    // --- foreign subprograms -------------------------------------------------------
+
+    [[nodiscard]] vhpiHandleT register_foreign(vhpiForeignDataT* const data)
+    {
+        if (data == nullptr || data->libraryName == nullptr
+            || data->modelName == nullptr) {
+            error(vhpiError, "foreign model data is incomplete");
+            return nullptr;
+        }
+        if ((data->kind == vhpiProcF || data->kind == vhpiFuncF)
+            && data->execf == nullptr) {
+            error(vhpiError, "a foreign subprogram needs an execution function");
+            return nullptr;
+        }
+        const std::string_view library { data->libraryName };
+        const std::string_view model { data->modelName };
+        // A library and model name a single registration (20.2.4.2).
+        if (std::ranges::any_of(foreign_models_, [&](const auto& stored) {
+                return stored->data.kind == data->kind
+                    && stored->library == library && stored->model == model;
+            })) {
+            error(vhpiError, "foreign model '" + std::string { library } + " "
+                    + std::string { model } + "' is already registered");
+            return nullptr;
+        }
+        auto stored = std::make_unique<ForeignModel>();
+        stored->library = std::string { library };
+        stored->model = std::string { model };
+        stored->data = *data;
+        stored->data.libraryName = stored->library.data();
+        stored->data.modelName = stored->model.data();
+        foreign_models_.push_back(std::move(stored));
+        return to_handle(foreign_models_.back().get());
+    }
+
+    [[nodiscard]] int foreign_info(const vhpiHandleT handle,
+        vhpiForeignDataT* const data)
+    {
+        auto* const base = handle_of(handle);
+        if (base == nullptr || base->tag != HandleTag::foreign
+            || data == nullptr) {
+            error(vhpiError, "handle is not a foreign model");
+            return 1;
+        }
+        *data = static_cast<ForeignModel&>(*base).data;
+        return 0;
+    }
+
+    // The value of a formal or the result of the running foreign call.
+    [[nodiscard]] std::optional<PackedLogic4> call_value(const Object& object)
+    {
+        if (active_call_ == nullptr) {
+            return std::nullopt;
+        }
+        if (object.call_slot) {
+            return *object.call_slot < active_call_->actuals->size()
+                ? std::optional { (*active_call_->actuals)[*object.call_slot] }
+                : std::nullopt;
+        }
+        return active_call_->result;
+    }
+
+    // The subtype of a formal: an unconstrained array formal takes its
+    // actual's length, indexed from its index subtype's left bound
+    // (IEEE 1076-2019 5.3.2.2).
+    [[nodiscard]] Object* formal_type(
+        const vhdl::Declaration& formal, const std::size_t width)
+    {
+        auto* const type = formal.subtype
+            ? subtype_object(*formal.subtype, nullptr)
+            : nullptr;
+        if (type == nullptr || type->type_data == nullptr) {
+            return type;
+        }
+        const auto& data = *type->type_data;
+        if (data.storage != Storage::array || data.element == nullptr
+            || (!data.unconstrained && !data.dimensions.empty())
+            || data.dimension_count > 1U) {
+            return type;
+        }
+        const auto element = width_of(*data.element);
+        if (element == 0U || width % element != 0U) {
+            return type;
+        }
+        const auto* const index = data.index_types.empty()
+            ? nullptr
+            : data.index_types.front();
+        const auto left = index != nullptr && index->type_data != nullptr
+                && index->type_data->range
+            ? index->type_data->range->left
+            : 0;
+        auto* const result = constrained(*type);
+        result->type_data->dimensions = { Range { left,
+            left + static_cast<std::int64_t>(width / element) - 1, false } };
+        result->type_data->unconstrained = false;
+        return result;
+    }
+
+    // Run the execution function of a foreign subprogram for one call
+    // (IEEE 1076-2019 20.4.2). `identity` is
+    // `<library>\t<model>\t<name>\t<declaration>\t<scope>`; each name is
+    // `<formal>\t<declaration>`.
+    [[nodiscard]] PackedLogic4 foreign_call(const std::string_view identity,
+        std::vector<PackedLogic4>& actuals,
+        const std::span<const std::string> names,
+        const std::span<const std::uint8_t> directions)
+    {
+        std::vector<std::string_view> fields;
+        for (auto rest = identity;;) {
+            const auto tab = rest.find('\t');
+            fields.push_back(rest.substr(0U, tab));
+            if (tab == std::string_view::npos) {
+                break;
+            }
+            rest.remove_prefix(tab + 1U);
+        }
+        if (fields.size() < 4U) {
+            throw std::runtime_error { "malformed foreign subprogram call" };
+        }
+        const auto found = std::ranges::find_if(foreign_models_,
+            [&](const auto& stored) {
+                return (stored->data.kind == vhpiProcF
+                           || stored->data.kind == vhpiFuncF)
+                    && stored->library == fields[0]
+                    && stored->model == fields[1];
+            });
+        if (found == foreign_models_.end()) {
+            throw std::runtime_error { "foreign subprogram '"
+                + std::string { fields[2] } + "' (VHPI "
+                + std::string { fields[0] } + " " + std::string { fields[1] }
+                + ") has no registered execution function" };
+        }
+        const auto declaration = [&](const std::string_view text)
+            -> const vhdl::Declaration* {
+            std::uint32_t value { };
+            const auto [last, failure] = std::from_chars(
+                text.data(), text.data() + text.size(), value);
+            if (failure != std::errc { } || last != text.data() + text.size()) {
+                return nullptr;
+            }
+            return hir_.find_declaration(
+                semantic::DeclarationId::from_index(value));
+        };
+        const auto* const callable = declaration(fields[3]);
+        const bool function = callable != nullptr
+            ? callable->form == vhdl::DeclarationForm::function
+            : found->get()->data.kind == vhpiFuncF;
+        auto* const call = make_object(
+            function ? vhpiFuncCallK : vhpiSeqProcCallStmtK,
+            upper(fields[2]), nullptr);
+        auto* const region = root();
+        call->full_name = (region != nullptr ? region->full_name : std::string {})
+            + ":" + call->name;
+        call->full_case_name = call->full_name;
+        call->call_result = function;
+        if (function && callable != nullptr && callable->callable
+            && callable->callable->return_type) {
+            call->type = subtype_object(*callable->callable->return_type, nullptr);
+        }
+        auto& parameters = call->lists[ListKind::param_decls];
+        for (std::size_t index = 0U;
+             index < names.size() && index < actuals.size(); ++index) {
+            const auto name = std::string_view { names[index] };
+            const auto tab = name.find('\t');
+            const auto* const formal = tab == std::string_view::npos
+                ? nullptr
+                : declaration(name.substr(tab + 1U));
+            const bool writable = index < directions.size()
+                && (directions[index]
+                        == static_cast<std::uint8_t>(
+                            frontend::PortDirection::Output)
+                    || directions[index]
+                        == static_cast<std::uint8_t>(
+                            frontend::PortDirection::Inout));
+            auto* const parameter = make_object(
+                writable ? vhpiVarParamDeclK : vhpiConstParamDeclK,
+                upper(name.substr(0U, tab)), call);
+            parameter->full_name = call->full_name + ":" + parameter->name;
+            parameter->full_case_name = parameter->full_name;
+            parameter->declaration = formal;
+            parameter->call_slot = index;
+            parameter->position = static_cast<std::int64_t>(index);
+            if (formal != nullptr) {
+                parameter->type = formal_type(*formal, actuals[index].width());
+            }
+            parameters.push_back(parameter);
+        }
+        if (function && (call->type == nullptr || width_of(*call->type) == 0U)) {
+            throw std::runtime_error { "foreign function '"
+                + std::string { fields[2] } + "' has no result subtype" };
+        }
+        ActiveCall running { &actuals, directions,
+            PackedLogic4 { function ? width_of(*call->type) : 1U,
+                Logic4::zero },
+            false };
+        auto* const previous = active_call_;
+        active_call_ = &running;
+        vhpiCbDataT data { };
+        data.reason = vhpiCbStartOfSubpCall;
+        data.cb_rtn = found->get()->data.execf;
+        data.obj = to_handle(call);
+        auto* const dispatching = dispatching_;
+        dispatching_ = data.obj;
+        try {
+            Scope scope { *this };
+            data.cb_rtn(&data);
+        } catch (...) {
+            dispatching_ = dispatching;
+            active_call_ = previous;
+            throw;
+        }
+        dispatching_ = dispatching;
+        active_call_ = previous;
+        if (function) {
+            // A foreign function provides a result (20.4.2).
+            if (!running.has_result) {
+                throw std::runtime_error { "foreign function '"
+                    + std::string { fields[2] } + "' provided no result" };
+            }
+            return std::move(running.result);
+        }
+        return PackedLogic4 { 1U, Logic4::zero };
+    }
+
+    struct ActiveCall {
+        std::vector<PackedLogic4>* actuals { };
+        std::span<const std::uint8_t> directions;
+        PackedLogic4 result;
+        bool has_result { };
+    };
 
     Simulation& simulation_;
     const semantic::vhdl::Hir& hir_;
@@ -3694,6 +4244,8 @@ private:
     Object* root_ { };
     Object* tool_ { };
     vhpiHandleT dispatching_ { };
+    std::vector<std::unique_ptr<ForeignModel>> foreign_models_;
+    ActiveCall* active_call_ { };
     std::uint64_t safe_point_token_ { };
     std::uint64_t change_token_ { };
     std::uint64_t next_order_ { };

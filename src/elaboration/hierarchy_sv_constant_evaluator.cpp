@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "fsim/semantic/systemverilog_constant_array.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "specialization_cache.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -1636,11 +1637,17 @@ private:
     [[nodiscard]] static bool integral_array_element_type(
         const semantic::sv::TypeReference& type) noexcept
     {
+        // A packed structure or union element is one packed value too
+        // (IEEE 1800-2017 7.2.1, 7.3.1).
         if (type.value_form
             && (*type.value_form
                     == semantic::sv::TypeForm::packed_integral
                 || *type.value_form
-                    == semantic::sv::TypeForm::enumeration)) {
+                    == semantic::sv::TypeForm::enumeration
+                || *type.value_form
+                    == semantic::sv::TypeForm::packed_structure
+                || *type.value_form
+                    == semantic::sv::TypeForm::packed_union)) {
             return true;
         }
         const auto& spelling = type.target.spelling;
@@ -1671,6 +1678,69 @@ private:
             }
         }
         return nullptr;
+    }
+
+    /// A frame-local unpacked array assigned or initialized as a whole: an
+    /// assignment pattern's items take the element type (IEEE 1800-2017
+    /// 10.9.1, 10.10); another array expression copies element by element
+    /// (7.6). Nothing when the declaration is not a frame-local array.
+    [[nodiscard]] std::optional<bool> assign_local_array(
+        const semantic::DeclarationId declaration,
+        const semantic::ExpressionId value)
+    {
+        const auto* target = find_local_array(declaration);
+        if (target == nullptr) {
+            return std::nullopt;
+        }
+        const auto element_type = target->element_type;
+        const auto count = target->elements.size();
+        const auto view = specialization_.find_expression(value);
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->kind
+                != ExpressionKind::assignment_pattern) {
+            const auto source = evaluate_array(value);
+            auto* array = find_local_array(declaration);
+            return source && array != nullptr && copy_array(*array, *source);
+        }
+        std::optional<semantic::ExpressionId> fallback;
+        std::vector<semantic::ExpressionId> positional;
+        for (const auto& association : view->systemverilog->associations) {
+            if (association.choice_spelling == "default") {
+                fallback = association.value;
+            } else if (association.choice_spelling.empty()) {
+                positional.push_back(association.value);
+            } else {
+                return false;
+            }
+        }
+        if (positional.size() != count && !(positional.empty() && fallback)) {
+            error_ = "unpacked array pattern size differs from the array";
+            return false;
+        }
+        // Items are evaluated before the array is written; a call among
+        // them may push frames.
+        std::vector<Value> elements;
+        elements.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            auto element = evaluate_typed(
+                positional.empty() ? *fallback : positional[index],
+                element_type);
+            if (!element) {
+                return false;
+            }
+            auto converted = convert_hir_systemverilog_constant(
+                std::move(*element), element_type, error_, &specialization_);
+            if (!converted) {
+                return false;
+            }
+            elements.push_back(std::move(*converted));
+        }
+        auto* array = find_local_array(declaration);
+        if (array == nullptr) {
+            return false;
+        }
+        array->elements = std::move(elements);
+        return true;
     }
 
     [[nodiscard]] static std::optional<std::size_t> local_array_offset(
@@ -1809,10 +1879,14 @@ private:
             return false;
         }
         const auto element_domain = type_domain(element_type);
+        // Two-state elements, including the integer atoms other than
+        // `integer`, start at zero (IEEE 1800-2017 6.8, Table 6-7).
+        const auto two_state = element_domain == frontend::ValueDomain::Bit2
+            || (element_domain == frontend::ValueDomain::Integer
+                && element_type.target.spelling != "integer");
         auto default_value = make_value(
             PackedLogic4 { static_cast<std::uint32_t>(*width),
-                element_domain == frontend::ValueDomain::Bit2
-                    ? Logic4::zero : Logic4::x },
+                two_state ? Logic4::zero : Logic4::x },
             element_type.signed_value, false, element_domain);
         default_value.packed_range = element_type.packed_range;
 
@@ -5733,7 +5807,19 @@ private:
                     declaration_id, std::move(*converted));
                 continue;
             }
-            auto value = evaluate(*source.initializer);
+            if (!initialize_local_array(declaration_id, source)) {
+                return false;
+            }
+            if (const auto assigned
+                = assign_local_array(declaration_id, *source.initializer)) {
+                if (!*assigned) {
+                    return false;
+                }
+                continue;
+            }
+            auto value = source.type
+                ? evaluate_typed(*source.initializer, *source.type)
+                : evaluate(*source.initializer);
             if (!value) {
                 return false;
             }
@@ -5857,7 +5943,51 @@ private:
             if (!record.target || !record.value) {
                 return Flow::failed;
             }
-            auto value = evaluate(*record.value);
+            const auto target = specialization_.find_expression(*record.target);
+            const auto* named = target && target->systemverilog != nullptr
+                    && target->systemverilog->kind == ExpressionKind::name
+                    && target->systemverilog->referenced_name
+                    && target->systemverilog->referenced_name->selected
+                ? &*target->systemverilog->referenced_name->selected
+                : nullptr;
+            if (named != nullptr) {
+                if (const auto assigned
+                    = assign_local_array(*named, *record.value)) {
+                    return *assigned ? Flow::normal : Flow::failed;
+                }
+            }
+            // A pattern takes the shape of the variable or local array
+            // element it is assigned to (IEEE 1800-2017 10.9).
+            const auto target_type = [&]()
+                -> std::optional<semantic::sv::TypeReference> {
+                if (named != nullptr) {
+                    const auto declared
+                        = specialization_.find_declaration(*named);
+                    return declared && declared->systemverilog != nullptr
+                            && declared->systemverilog->type
+                        ? std::optional { *declared->systemverilog->type }
+                        : std::nullopt;
+                }
+                if (!target || target->systemverilog == nullptr
+                    || target->systemverilog->kind != ExpressionKind::index
+                    || target->systemverilog->operands.size() != 2U) {
+                    return std::nullopt;
+                }
+                const auto base = specialization_.find_expression(
+                    target->systemverilog->operands.front());
+                const auto* array = base && base->systemverilog != nullptr
+                        && base->systemverilog->kind == ExpressionKind::name
+                        && base->systemverilog->referenced_name
+                        && base->systemverilog->referenced_name->selected
+                    ? find_local_array(
+                          *base->systemverilog->referenced_name->selected)
+                    : nullptr;
+                return array != nullptr
+                    ? std::optional { array->element_type } : std::nullopt;
+            }();
+            auto value = target_type
+                ? evaluate_typed(*record.value, *target_type)
+                : evaluate(*record.value);
             return value && assign_target(*record.target, std::move(*value))
                 ? Flow::normal : Flow::failed;
         }
@@ -6945,6 +7075,33 @@ namespace {
             const auto value = evaluate_hir_systemverilog_constant(
                 unit, expression, error);
             return value ? value->integer_value() : std::nullopt;
+        });
+    return true;
+}();
+
+// A constant function call as an unpacked array parameter actual
+// (IEEE 1800-2017 13.4.3, 23.10).
+[[maybe_unused]] const bool shared_constant_array_registered = [] {
+    semantic::set_systemverilog_constant_array(
+        [](const semantic::SpecializedHirUnit& unit,
+            const semantic::ExpressionId expression)
+            -> std::optional<std::vector<std::int64_t>> {
+            std::string error;
+            const auto array = evaluate_hir_systemverilog_array_constant(
+                unit, expression, error);
+            if (!array) {
+                return std::nullopt;
+            }
+            std::vector<std::int64_t> values;
+            values.reserve(array->elements.size());
+            for (const auto& element : array->elements) {
+                const auto value = element.integer_value();
+                if (!value) {
+                    return std::nullopt;
+                }
+                values.push_back(*value);
+            }
+            return values;
         });
     return true;
 }();

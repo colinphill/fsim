@@ -13,7 +13,9 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
   result.name = qualified_name
       ? property.owner_identity + "::" + property.name
       : property.name;
-  if (!property.static_storage) {
+  // A static random variable is shared by every instance; its random
+  // state lives with its value in the static store (IEEE 1800-2017 18.4).
+  {
     result.random_kind = property.random_kind
             == semantic::sv::ClassRandomKind::rand
         ? runtime::SystemVerilogClassRandomKind::Rand
@@ -130,9 +132,10 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
     result.kind = runtime::SystemVerilogClassPropertyKind::String;
     result.width = 0;
   } else if (property.type.target.spelling == "event") {
-    // An event's trigger toggles one two-state bit (IEEE 1800-2017 15.5).
+    // An event property holds its event object's 64-bit handle (IEEE
+    // 1800-2017 15.5); 0 until the object is first used.
     result.kind = runtime::SystemVerilogClassPropertyKind::Bit2;
-    result.width = 1;
+    result.width = 64;
   } else {
     result.kind = property.type.four_state
         ? runtime::SystemVerilogClassPropertyKind::Logic4

@@ -5825,6 +5825,44 @@ private:
     // for positional, actual): every association names a formal once, each
     // formal without a default is associated, and a scalar actual has its
     // formal's type (IEEE 1076-2008 4.2.2.1, 6.5.7.1).
+    // The formal an association `name(formal) => actual` converts, where
+    // `name` is no formal of the callable (IEEE 1076-2008 6.5.7.1): the
+    // parser groups it as an individual association of `name` whose one
+    // choice is the formal. Only an out or inout formal has a formal part
+    // conversion.
+    std::optional<std::size_t> formal_part_conversion(
+        std::span<const semantic::DeclarationId> formals,
+        const std::string_view name, const semantic::ExpressionId actual) const
+    {
+        const auto aggregate = specialization_.find_expression(actual);
+        if (name.find_first_of(".(") != std::string_view::npos || !aggregate
+            || aggregate->vhdl == nullptr
+            || aggregate->vhdl->kind != semantic::vhdl::ExpressionKind::aggregate
+            || aggregate->vhdl->associations.size() != 1U
+            || aggregate->vhdl->associations.front().choices.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto choice = specialization_.find_expression(
+            aggregate->vhdl->associations.front().choices.front());
+        if (!choice || choice->vhdl == nullptr
+            || choice->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            const auto formal = specialization_.find_declaration(formals[index]);
+            if (formal && formal->vhdl != nullptr
+                && equal_ignoring_ascii_case(formal->vhdl->name, choice->vhdl->text)) {
+                using Direction = semantic::vhdl::Direction;
+                const auto direction = formal->vhdl->direction;
+                return direction == Direction::output
+                        || direction == Direction::inout
+                    ? std::optional<std::size_t> { index }
+                    : std::nullopt;
+            }
+        }
+        return std::nullopt;
+    }
+
     bool callable_accepts(const semantic::DeclarationId body,
         const std::vector<std::pair<std::string, semantic::ExpressionId>>& actuals) const
     {
@@ -5905,7 +5943,14 @@ private:
                     && equal_ignoring_ascii_case(formal_declaration->vhdl->name, base);
             });
             if (formal == formals.end()) {
-                return false;
+                // `f(formal) => actual` converts an out or inout formal
+                // (IEEE 1076-2008 6.5.7.1).
+                const auto converted = formal_part_conversion(formals, name, actual);
+                if (!converted || associated[*converted]) {
+                    return false;
+                }
+                associated[*converted] = true;
+                continue;
             }
             const auto position = static_cast<std::size_t>(formal - formals.begin());
             if (associated[position]

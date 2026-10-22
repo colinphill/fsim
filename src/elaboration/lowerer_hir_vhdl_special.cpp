@@ -694,6 +694,35 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
             container_objects_, object, "@protected");
     }
     if (!anchor) {
+        // A shared variable of a package body is visible only to that
+        // body's subprograms, which run in their callers' units: find the
+        // elaborated object its declaration made, when only one did.
+        const auto object_id = find_vhdl_object(
+            *specialized_hir_unit_, scope, object);
+        const auto* declaration = object_id
+            ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
+            : nullptr;
+        if (declaration != nullptr
+            && declaration->form == semantic::vhdl::DeclarationForm::variable) {
+            const auto span = hir_source_span(declaration->source);
+            const auto declared = [&](const VhdlProtectedObjectInfo& candidate) {
+                // Objects of processes and subprograms are keyed by
+                // their hierarchy (`path@declaration`).
+                return !candidate.members.empty()
+                    && candidate.name.find('@') == std::string::npos
+                    && candidate.declaration_span == span;
+            };
+            const auto found = std::ranges::find_if(
+                design_.vhdl_protected_object_info_, declared);
+            if (found != design_.vhdl_protected_object_info_.end()
+                && std::ranges::count_if(
+                       design_.vhdl_protected_object_info_, declared)
+                    == 1) {
+                anchor = found->members.front().storage;
+            }
+        }
+    }
+    if (!anchor) {
         // An object alias reaches the aliased object's anchor.
         const auto object_id = find_vhdl_object(
             *specialized_hir_unit_, scope, object);
@@ -764,9 +793,33 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     if (!anchor) {
         return std::nullopt;
     }
+    auto* const lowerer = const_cast<Lowerer*>(this);
+    // The object's own path names the items of its body. A protected-type
+    // formal denotes its actual, whose path is recorded where it is named.
+    if (!hir_vhdl_protected_paths_.contains(*anchor)) {
+        const auto object_id = find_vhdl_object(
+            *specialized_hir_unit_, object_scope, selected->object);
+        const auto* declaration = object_id
+            ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
+            : nullptr;
+        const bool formal = active_hir_callable_ && object_id
+            && hir_callable_frames_[*active_hir_callable_]
+                   .vhdl_protected_formals.contains(object_id->value());
+        if (declaration != nullptr && !formal) {
+            auto name = declaration->name;
+            lowercase_ascii(name);
+            const auto path = hir_vhdl_path_text(
+                name, false, object_id, std::nullopt, { });
+            const auto instance_path = hir_vhdl_path_text(
+                name, true, object_id, std::nullopt, { });
+            if (path && instance_path) {
+                lowerer->hir_vhdl_protected_paths_.emplace(
+                    *anchor, std::pair { *path, *instance_path });
+            }
+        }
+    }
     // Private variables of a protected type from a generic package
     // instance are typed by that instance's generic actuals.
-    auto* const lowerer = const_cast<Lowerer*>(this);
     const auto instance = hir_vhdl_protected_instance(
         object_scope, selected->object);
     if (instance) {

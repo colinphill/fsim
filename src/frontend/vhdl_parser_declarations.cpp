@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
 
+#include <algorithm>
+#include <array>
 #include <concepts>
 #include <type_traits>
 #include <unordered_map>
@@ -1935,7 +1937,34 @@ void VhdlParser::parse_vhdl_object_alias(
             || keyword("element", lookahead + 1, true)
             || keyword("designated_subtype", lookahead + 1, true));
   };
-  if (is_subtype_attribute_alias()) {
+  // An alias without a subtype indication whose name denotes a type is a
+  // nonobject alias of that type (IEEE 1076-2008 6.6.3).
+  const auto is_type_name_alias = [&]() {
+    if (!keyword("is", 0, true) || !at(TokenKind::Identifier, 1)) {
+      return false;
+    }
+    std::size_t lookahead = 2;
+    while (at(TokenKind::Dot, lookahead)
+           && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (!at(TokenKind::Semicolon, lookahead)) {
+      return false;
+    }
+    static constexpr std::array predefined_types {
+      "boolean", "bit", "character", "severity_level", "integer", "natural",
+      "positive", "real", "time", "delay_length", "string", "boolean_vector",
+      "bit_vector", "integer_vector", "real_vector", "time_vector",
+      "std_ulogic", "std_logic", "std_ulogic_vector", "std_logic_vector",
+      "signed", "unsigned", "unresolved_signed", "unresolved_unsigned",
+      "u_signed", "u_unsigned", "line", "text"
+    };
+    const auto target = vhdl_name(current(lookahead - 1U).text);
+    return vhdl_source_declares_type(target)
+        || std::ranges::find(predefined_types, target)
+            != predefined_types.end();
+  };
+  if (is_subtype_attribute_alias() || is_type_name_alias()) {
     (void)match_keyword("is", true);
     auto type = parse_vhdl_type(true, true);
     expect(TokenKind::Semicolon, "';' after alias declaration",

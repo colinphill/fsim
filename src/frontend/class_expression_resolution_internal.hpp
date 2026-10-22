@@ -248,9 +248,11 @@ class Resolver final {
   void resolve_module_constant(Expression& expression, const Scope& scope);
   void resolve_generate_constants(GenerateRegion& region, const Scope& scope);
   void resolve_range_constants(Type& type, const Scope& scope);
+  // With `scope`, an actual that names another specialization's parameter
+  // (`C#(15)::b`) takes that parameter's value.
   [[nodiscard]] std::optional<Expression> class_specialization_parameter_value(
       const SystemVerilogClassDeclaration& owner, std::string_view spelling,
-      std::string_view member) const;
+      std::string_view member, const Scope* scope = nullptr) const;
   // `parsed` carries the selection's actuals as the parser read them; it
   // applies when its spelling is `spelling`.
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(

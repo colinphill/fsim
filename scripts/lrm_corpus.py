@@ -1091,6 +1091,12 @@ VERILATOR_NONSTANDARD = {
         "t_assoc_wildcard_method")},
     "t_randomize_soft_foreach": "uses soft foreach (soft applies only to "
         "expression_or_dist, IEEE 1800-2017 18.5.14)",
+    "t_constraint_real_struct_field": "expects members of a rand unpacked "
+        "struct declared without rand to be random; only members with a rand "
+        "or randc modifier are (IEEE 1800-2017 18.4)",
+    "t_randomize_method_with_scoping": "expects `get_x() == local::get_x()` "
+        "to solve x through the function body; a constraint function's "
+        "result is state computed before the solve (IEEE 1800-2017 18.5.12)",
     "t_display_pattern_format": "uses the \\r escape (not in IEEE 1800-2017 "
         "Table 5-1)",
     # Input the LRM rejects.
@@ -1473,7 +1479,9 @@ def verilator_cases(root: Path) -> list[Case]:
                 without_verilator_branches(read_text(top_file), defined)):
             out_of_scope = "out of scope: Verilator $c extension"
         all_run_flags = python_literal_list(source, "all_run_flags") or []
-        plusargs += [f for f in all_run_flags if f.startswith("+")]
+        # A flag string can hold several plusargs ('+A +B=1').
+        plusargs += [token for flag in all_run_flags
+                     for token in shlex.split(flag) if token.startswith("+")]
         top_text = read_text(top_file)
         # Modules declared in `include files (t_mailbox_class includes the
         # module of t_mailbox.v) are part of the top file's text.
@@ -2337,6 +2345,15 @@ NVC_NONSTANDARD = {
         "defines only the VHPI and VHPIDIRECT forms",
     "issue1473": "binds a VHDL component to a Verilog module through nvc's "
         "vhpiVerilogModuleK extension class, outside IEEE 1076-2019",
+    "issue1579": "expects a foreign function's execution function to get "
+        "a vhpiFuncDeclK handle; IEEE 1076-2019 20.4.2 passes a handle to "
+        "the subpCall object of the call",
+    "vhpi14": "expects vhpi_iterator to return an iterator for a call "
+        "with no parameters; IEEE 1076-2019 23.24 returns NULL for an "
+        "association with no target objects",
+    "vhpi8": "expects vhpi_iterator to return an iterator for the "
+        "indexed names of a null-range array; IEEE 1076-2019 23.24 returns "
+        "NULL for an association with no target objects",
     # Owner decision (Batch 81): VHDL integer types stay 32-bit (IEEE
     # 1076-2019 5.2.3.1).
     **{name: "reads 64-bit integer and physical values through VHPI"

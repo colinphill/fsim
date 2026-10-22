@@ -1180,21 +1180,47 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                 }
                 // Likewise a literal of the element type of an array, or of
                 // an inherited property's type.
+                // Structure members count too (`items[i].kind == WRITE`).
                 if (!binding) {
+                    const auto enumeration = [&](const auto& self,
+                                                 const frontend::Type& type,
+                                                 const std::size_t depth)
+                        -> const frontend::Type* {
+                        if (std::ranges::find(type.enumeration_literals,
+                                expression.text)
+                            != type.enumeration_literals.end()) {
+                            return &type;
+                        }
+                        if (depth == 8U) {
+                            return nullptr;
+                        }
+                        if (type.systemverilog_container) {
+                            for (const auto& element :
+                                type.systemverilog_container->element_types) {
+                                if (const auto* found
+                                    = self(self, element, depth + 1U)) {
+                                    return found;
+                                }
+                            }
+                        }
+                        for (const auto& member : type.packed_members) {
+                            for (const auto& nested : member.nested_types) {
+                                if (const auto* found
+                                    = self(self, nested, depth + 1U)) {
+                                    return found;
+                                }
+                            }
+                        }
+                        return nullptr;
+                    };
                     for (const auto& layout : specialization.properties) {
-                        const frontend::Type* type = &layout.type;
-                        if (type->enumeration_literals.empty()
-                            && type->systemverilog_container
-                            && type->systemverilog_container->element_types
-                                    .size() == 1U) {
-                            type = &type->systemverilog_container
-                                        ->element_types.front();
+                        const frontend::Type* type
+                            = enumeration(enumeration, layout.type, 0U);
+                        if (type == nullptr) {
+                            continue;
                         }
                         const auto literal = std::ranges::find(
                             type->enumeration_literals, expression.text);
-                        if (literal == type->enumeration_literals.end()) {
-                            continue;
-                        }
                         const auto values = enumeration_values(*type);
                         const auto index = static_cast<std::size_t>(
                             literal - type->enumeration_literals.begin());
@@ -1488,6 +1514,11 @@ void SystemVerilogHirBuilder::add_class(
     for (const auto& property : input.properties) {
         const auto id = add_variable(
             property.declaration, output.scope, output.origin);
+        // A class local parameter is a constant of the class scope (IEEE
+        // 1800-2017 8.25), which ranges there evaluate.
+        if (property.is_parameter && property.declaration.initializer) {
+            declaration(id).array_local_parameter = true;
+        }
         const auto& retained_declaration = declaration(id);
         sv::ClassProperty retained;
         retained.declaration = id;

@@ -401,13 +401,15 @@ namespace {
         input.type, input.span, scope, declaration_origin);
     projecting_typedef_declaration_base_ = false;
     suppress_hidden_anonymous_enum_typedef_ = false;
-    const auto type_id = ensure_type(
-        input.name,
-        scope,
-        semantic::TypeKind::alias,
-        base,
-        declaration(id).source,
-        declaration_origin);
+    // A typedef projected again into another scope (a class's typedefs
+    // beside an inlined task's locals) declares its own type there.
+    auto type_id = find_type(scope, input.name, declaration(id).source);
+    if (!type_id.valid()
+        || model_.types()[type_id.value()].scope != scope) {
+        type_id = model_.add_type(scope, semantic::TypeKind::alias,
+            input.name, base.target, declaration(id).source,
+            declaration_origin);
+    }
     declaration(id).declared_type = type_id;
     declaration(id).type = base;
     sv::TypeDefinition output;

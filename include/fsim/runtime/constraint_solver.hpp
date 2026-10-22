@@ -195,6 +195,9 @@ enum class SystemVerilogConstraintExpressionOperator : std::uint8_t {
   LogicalAnd,
   LogicalOr,
   Conditional,
+  ShiftLeft,
+  ShiftRight,
+  ArithmeticShiftRight,
 };
 
 /// Frontend-neutral, owning constraint syntax retained by SimIR randomize

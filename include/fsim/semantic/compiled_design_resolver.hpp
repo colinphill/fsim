@@ -38,6 +38,14 @@ using CompiledBindingFrame = std::vector<CompiledActualBinding>;
 using CompiledDeclarationPredicate =
     std::function<bool(const CompiledDeclarationView&)>;
 
+/// The typedef `X::name` selects through type parameter X bound to a class,
+/// and the frame binding that class's parameters to its actuals.
+struct CompiledClassScopedTypedef {
+    sv::TypeReference type;
+    ScopeId scope;
+    CompiledBindingFrame frame;
+};
+
 /// A VHDL type, subtype or generic type declaration.
 [[nodiscard]] inline bool is_vhdl_type_declaration(
     const CompiledDeclarationView& candidate) noexcept
@@ -295,6 +303,13 @@ public:
     /// their TypeDefinition without repeating name lookup.
     [[nodiscard]] std::optional<sv::TypeReference>
     effective_systemverilog_type(
+        const sv::TypeReference&, ScopeId use_scope) const;
+
+    /// `X::name` where type parameter X is bound to a class: the typedef
+    /// that class declares, to be resolved under the returned frame (IEEE
+    /// 1800-2017 8.25.1).
+    [[nodiscard]] std::optional<CompiledClassScopedTypedef>
+    systemverilog_type_parameter_scoped_typedef(
         const sv::TypeReference&, ScopeId use_scope) const;
 
     /// Resolve type parameters and aliases to their executable base while

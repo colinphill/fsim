@@ -202,7 +202,12 @@ FileHandle Interpreter::Impl::open_file_unchecked(
             };
         }
     }
-    const auto joined = file_root / relative;
+    // A VHDL file name is relative to the working directory that
+    // STD.ENV.DIR_WORKINGDIR sets (IEEE 1076-2019 16.5.6).
+    const auto joined = (vhdl && !vhdl_working_directory.empty()
+                            ? vhdl_working_directory
+                            : file_root)
+        / relative;
     std::error_code error;
     auto checked = support::native_fs::weakly_canonical(
         mode->readable && !mode->writable

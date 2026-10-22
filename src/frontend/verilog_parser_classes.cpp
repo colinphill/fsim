@@ -214,6 +214,11 @@ bool VerilogParser::parse_class_property(
           "duplicate class property declaration '" + name.text + "'");
     } else {
       const auto span = cover(start.span, previous().span);
+      // `arr.size` in a method calls the property's method (IEEE
+      // 1800-2017 13.4.5).
+      if (type.systemverilog_container) {
+        unit_container_names_.insert(name.text);
+      }
       if (type.systemverilog_container
           && type.systemverilog_container->associative_index_type) {
         class_associative_index_types_.insert_or_assign(name.text,

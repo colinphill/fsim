@@ -97,6 +97,19 @@ void Resolver::run() {
     for (const auto& import : declaration.compilation_unit_imports) {
       scope.imports.push_back(&import);
     }
+    // A compilation-unit class sees the compilation unit's objects (IEEE
+    // 1800-2017 3.12.1), as the file's modules do.
+    for (const auto& import : declaration.compilation_unit_imports) {
+      if (!import.package.starts_with("fsim_unit_")) continue;
+      for (const auto& candidate : design_.units) {
+        if (candidate.kind == UnitKind::SystemVerilogPackage
+            && candidate.name == import.package
+            && effective_library(candidate.library) == scope.library) {
+          add_objects(scope, candidate.signals);
+          add_objects(scope, candidate.variables);
+        }
+      }
+    }
     // A class declared in a package sees that package's imports.
     const auto& identity = declaration.canonical_identity;
     const auto library_end = identity.find("::");
@@ -157,6 +170,13 @@ void Resolver::run() {
     for (auto& parameter : unit.parameters) {
       if (parameter.kind == ParameterKind::Value) {
         resolve_module_constant(parameter.default_value, scope);
+      } else if (parameter.default_type) {
+        // `localparam type t = C#(8)::t;` names the specialization's type
+        // (IEEE 1800-2017 8.25.1, 6.20.3).
+        if (auto scoped
+            = resolve_class_scoped_type(*parameter.default_type, scope)) {
+          parameter.default_type = std::move(*scoped);
+        }
       }
     }
     for (auto& instance : unit.instances) {
@@ -1402,7 +1422,7 @@ void Resolver::substitute_class_parameter_references(
       const auto owners = resolve_class_name(owner_name, scope);
       if (owners.size() == 1U) {
         if (auto value = class_specialization_parameter_value(*owners.front(),
-                owner_name, expression.text.substr(selected + 2U))) {
+                owner_name, expression.text.substr(selected + 2U), &scope)) {
           const auto span = expression.span;
           expression = std::move(*value);
           expression.span = span;
@@ -1439,7 +1459,7 @@ void Resolver::substitute_class_parameter_references(
         if (owners.size() == 1U) {
           if (auto value = class_specialization_parameter_value(
                   *owners.front(), *spelling,
-                  expression.text.substr(selected + 2U))) {
+                  expression.text.substr(selected + 2U), &scope)) {
             const auto span = expression.span;
             expression = std::move(*value);
             expression.span = span;
@@ -1483,12 +1503,12 @@ std::optional<Expression> Resolver::class_scoped_parameter_value(
   if (!spelling) return std::nullopt;
   const auto owners = resolve_class_name(*spelling, scope);
   if (owners.size() != 1U) return std::nullopt;
-  return class_specialization_parameter_value(
-      *owners.front(), *spelling, type.named_type.substr(selected + 2U));
+  return class_specialization_parameter_value(*owners.front(), *spelling,
+      type.named_type.substr(selected + 2U), &scope);
 }
 std::optional<Expression> Resolver::class_specialization_parameter_value(
     const SystemVerilogClassDeclaration& owner, const std::string_view spelling,
-    const std::string_view member) const {
+    const std::string_view member, const Scope* scope) const {
   const auto trim = [](std::string_view text) {
     while (!text.empty()
            && std::isspace(static_cast<unsigned char>(text.front()))) {
@@ -1505,6 +1525,24 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       -> std::optional<Expression> {
     text = trim(text);
     if (text.empty()) return std::nullopt;
+    // `D#(C#(15)::b)`: the actual is a parameter of another specialization
+    // (IEEE 1800-2017 8.25.1).
+    if (const auto separator = text.rfind("::");
+        scope != nullptr && separator != std::string_view::npos
+        && text.find("#(") != std::string_view::npos
+        && text.find("#(") < separator) {
+      const auto nested_owner = text.substr(0U, separator);
+      const auto owners = resolve_class_name(nested_owner, *scope);
+      if (owners.size() != 1U) return std::nullopt;
+      auto value = class_specialization_parameter_value(*owners.front(),
+          nested_owner, text.substr(separator + 2U), scope);
+      if (!value || !value->operands.empty()
+          || (value->kind != ExpressionKind::IntegerLiteral
+              && value->kind != ExpressionKind::LogicLiteral)) {
+        return std::nullopt;
+      }
+      return value;
+    }
     const auto identifier = (std::isalpha(static_cast<unsigned char>(
                                  text.front())) != 0
                                 || text.front() == '_')
@@ -1907,17 +1945,18 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   // Class local parameters (`localparam int n = W * 2`) follow the
   // parameters they are computed from (IEEE 1800-2017 8.25, 6.20.4); with
   // no actual, from the parameters' defaults.
-  const bool any_default = std::ranges::any_of(values,
+  // A class without parameters still sizes its typedefs by its local
+  // parameters (`localparam int W = 4; typedef logic [W-1:0] t`).
+  bool any_default = std::ranges::any_of(values,
       [](const auto& value) { return value.second != nullptr; });
-  if (any_value_actual || any_default) {
-    for (const auto& property : selection.declaration->properties) {
-      if (property.is_parameter && property.declaration.initializer
-          && std::ranges::none_of(values, [&](const auto& value) {
-               return value.first == property.declaration.name;
-             })) {
-        values.emplace_back(property.declaration.name,
-            &*property.declaration.initializer);
-      }
+  for (const auto& property : selection.declaration->properties) {
+    if (property.is_parameter && property.declaration.initializer
+        && std::ranges::none_of(values, [&](const auto& value) {
+             return value.first == property.declaration.name;
+           })) {
+      values.emplace_back(property.declaration.name,
+          &*property.declaration.initializer);
+      any_default = true;
     }
   }
   // Type parameters bound here also type the selected type's members
@@ -1928,6 +1967,19 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
     type_bindings.emplace(name, any_value_actual || any_default
         ? specialize_selected_class_type(bound, values, {})
         : bound);
+  }
+  // The class's own typedefs, in declaration order, type the selected
+  // type's members too (`typedef struct {t_vector m0[2*SIZE-1:0];} t`); an
+  // enumeration keeps its name and literals.
+  if (any_value_actual || any_default || !type_bindings.empty()) {
+    for (const auto& alias : selection.declaration->type_aliases) {
+      if (!alias.enum_literals.empty()
+          || type_bindings.contains(alias.name)) {
+        continue;
+      }
+      type_bindings.emplace(alias.name,
+          specialize_selected_class_type(alias.type, values, type_bindings));
+    }
   }
   if (any_value_actual || any_default || !type_bindings.empty()) {
     type = specialize_selected_class_type(
@@ -2720,6 +2772,50 @@ void Resolver::retain_result_type(
   // declaration matches at every step. This supplies method selection with
   // the declared handle type; runtime reads still use the ordinary
   // hierarchical signal binding.
+  // The class type of a variable declared in a module or interface unit,
+  // resolved in that unit's scope (IEEE 1800-2017 23.8, 25.9).
+  const auto unit_variable_class_type
+      = [&](const DesignUnit& target,
+            const std::string_view name) -> std::optional<Type> {
+    const VariableDeclaration* variable = nullptr;
+    for (const auto& candidate : target.variables) {
+      if (candidate.name != name) {
+        continue;
+      }
+      if (variable != nullptr) {
+        return std::nullopt;
+      }
+      variable = &candidate;
+    }
+    if (variable == nullptr) {
+      return std::nullopt;
+    }
+    Scope declaration_scope = scope;
+    declaration_scope.library = effective_library(target.library);
+    declaration_scope.compilation_unit_identity
+        = target.compilation_unit_identity;
+    declaration_scope.lexical_identity
+        = declaration_scope.library + "::" + target.name;
+    declaration_scope.class_owner = nullptr;
+    declaration_scope.objects.clear();
+    declaration_scope.instances.clear();
+    auto type = resolve_alias_type(
+        variable->type, declaration_scope.lexical_identity);
+    type = canonicalize_selected_type(std::move(type), declaration_scope);
+    if (!class_identity(type) && !type.named_type.empty()) {
+      const auto declarations
+          = resolve_class_name(type.named_type, declaration_scope);
+      if (declarations.size() == 1U) {
+        auto selected_type = class_type(*declarations.front());
+        selected_type.systemverilog_container = type.systemverilog_container;
+        type = std::move(selected_type);
+      }
+    }
+    if (!class_identity(type) || type.systemverilog_container) {
+      return std::nullopt;
+    }
+    return type;
+  };
   const auto first_dot = expression.text.find('.');
   if (first_dot != std::string::npos) {
     std::vector<std::string_view> components;
@@ -2731,6 +2827,18 @@ void Resolver::retain_result_type(
         break;
       }
       remaining.remove_prefix(separator + 1U);
+    }
+    // `$root.t.i.c` and `t.i.c` inside module `t` name the same object as
+    // `i.c` (IEEE 1800-2017 23.6, 23.3.1).
+    const auto own_unit = scope.lexical_identity.substr(
+        scope.lexical_identity.rfind(':') + 1U);
+    if (components.size() >= 3U && components.front() == "$root") {
+      components.erase(components.begin());
+    }
+    if (components.size() >= 3U && components.front() == own_unit
+        && !scope.instances.contains(components.front())
+        && scope.instances.contains(components[1])) {
+      components.erase(components.begin());
     }
     if (components.size() >= 2U
         && scope.instances.contains(components.front())) {
@@ -2774,45 +2882,9 @@ void Resolver::retain_result_type(
                   effective_library(target->library));
       }
       if (target != nullptr) {
-        const VariableDeclaration* variable = nullptr;
-        for (const auto& candidate : target->variables) {
-          if (candidate.name != components.back()) {
-            continue;
-          }
-          if (variable != nullptr) {
-            variable = nullptr;
-            break;
-          }
-          variable = &candidate;
-        }
-        if (variable != nullptr) {
-          Scope declaration_scope = scope;
-          declaration_scope.library = effective_library(target->library);
-          declaration_scope.compilation_unit_identity
-              = target->compilation_unit_identity;
-          declaration_scope.lexical_identity
-              = declaration_scope.library + "::" + target->name;
-          declaration_scope.class_owner = nullptr;
-          declaration_scope.objects.clear();
-          declaration_scope.instances.clear();
-          auto type = resolve_alias_type(
-              variable->type, declaration_scope.lexical_identity);
-          type = canonicalize_selected_type(
-              std::move(type), declaration_scope);
-          if (!class_identity(type) && !type.named_type.empty()) {
-            const auto declarations = resolve_class_name(
-                type.named_type, declaration_scope);
-            if (declarations.size() == 1U) {
-              auto selected_type = class_type(*declarations.front());
-              selected_type.systemverilog_container
-                  = type.systemverilog_container;
-              type = std::move(selected_type);
-            }
-          }
-          if (class_identity(type) && !type.systemverilog_container) {
-            expression.nominal_type = *class_identity(type);
-            return type;
-          }
+        if (auto type = unit_variable_class_type(*target, components.back())) {
+          expression.nominal_type = *class_identity(*type);
+          return type;
         }
       }
     }
@@ -2884,6 +2956,17 @@ void Resolver::retain_result_type(
             expression.text.substr(0, dot), {}, expression.span});
         expression = std::move(call);
         return resolve_expression(expression, scope);
+      }
+      // `vif.c` reads a class handle the interface declares (25.9).
+      for (const auto& unit : design_.units) {
+        if (unit.kind != UnitKind::SystemVerilogInterface
+            || unit.name != interface_name) {
+          continue;
+        }
+        if (auto type = unit_variable_class_type(unit, member)) {
+          expression.nominal_type = *class_identity(*type);
+          return type;
+        }
       }
     }
     // A member of a packed structure class property (`c.p.a`, 7.2, 8.5).
@@ -3170,7 +3253,7 @@ void Resolver::retain_result_type(
     if (owners.size() == 1U
         && specialization_spelling.find('#') != std::string::npos) {
       if (auto value = class_specialization_parameter_value(
-              *owners.front(), specialization_spelling, member)) {
+              *owners.front(), specialization_spelling, member, &scope)) {
         const auto span = expression.span;
         expression = std::move(*value);
         expression.span = span;

@@ -387,6 +387,13 @@ struct UserSystemTask {
 inline constexpr std::string_view user_system_call_identity_prefix {
     "$vpi:" };
 
+/// Identity prefix, after the DPI function prefix, of a call of a foreign
+/// VHDL subprogram's VHPI execution function. The full identity is
+/// `$vhpi:<library>\t<model>\t<name>\t<declaration>\t<scope>`, and each
+/// actual name is `<formal>\t<declaration>`.
+inline constexpr std::string_view vhdl_foreign_call_identity_prefix {
+    "$vhpi:" };
+
 /// Parser-free compiled-HIR elaboration. Unsupported residual structures are
 /// diagnosed instead of being reconstructed as syntax nodes.
 [[nodiscard]] ElaborationResult elaborate(
@@ -1116,6 +1123,20 @@ private:
     std::unordered_map<runtime::simir::ContainerObjectId,
         std::vector<std::pair<std::int64_t, std::int64_t>>>
         container_element_packed_shape_;
+    // Construction draft: the packed dimensions of a signal with more than
+    // one, so a select of it named hierarchically finds its elements (IEEE
+    // 1800-2017 7.4.5, 23.6).
+    std::unordered_map<runtime::simir::SignalId,
+        std::vector<std::pair<std::int64_t, std::int64_t>>>
+        signal_packed_shape_;
+    // Construction draft: the unpacked dimensions of a fixed-size unpacked
+    // array signal, outermost first; its elements are equally wide and the
+    // rightmost element of the last dimension is at bit 0, so a select
+    // through a virtual interface handle finds an element (IEEE 1800-2017
+    // 7.4, 25.9).
+    std::unordered_map<runtime::simir::SignalId,
+        std::vector<std::pair<std::int64_t, std::int64_t>>>
+        signal_unpacked_shape_;
     // Construction draft: per process, the writes through a virtual
     // interface handle to each candidate instance member; the instance
     // they reach is known only at run time (IEEE 1800-2017 25.9).

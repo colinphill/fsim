@@ -1238,6 +1238,19 @@ private:
     [[nodiscard]] bool lower_hir_virtual_interface_select_write(
         semantic::ExpressionId target, semantic::ExpressionId value,
         bool nonblocking, SignalUpdateDomain update_domain);
+    // An element of a one-dimensional unpacked array member reached through
+    // a virtual interface handle (`v.x[i]`, IEEE 1800-2017 7.4, 25.9): its
+    // bit offset in the member, or a register holding that offset for a
+    // run-time index (unknown or out of range when the index is), and its
+    // width. Neither for a constant index outside the declared range.
+    struct HirVirtualInterfaceElement {
+        std::optional<std::uint32_t> offset;
+        std::optional<RegisterId> dynamic_offset;
+        std::size_t width { };
+    };
+    [[nodiscard]] std::optional<HirVirtualInterfaceElement>
+    lower_hir_virtual_interface_element(
+        const HirVirtualInterfaceMember& member, semantic::ExpressionId index);
     // Marks a clockvar's synchronous drive request pending (IEEE
     // 1800-2017 14.16); a signal without a pending flag is not a clockvar.
     void emit_clocking_drive_pending(SignalId request);
@@ -1462,6 +1475,10 @@ private:
     // keyed by hierarchy path and declaration.
     std::unordered_map<std::string, ContainerObjectId>
         hir_vhdl_local_protected_anchors_;
+    // The path and instance names of protected objects, by anchor, for
+    // 'PATH_NAME of items in their bodies (IEEE 1076-2019 16.2.5).
+    std::unordered_map<ContainerObjectId, std::pair<std::string, std::string>>
+        hir_vhdl_protected_paths_;
     // The anchor first, then the private variables' storage, created on
     // first use.
     [[nodiscard]] std::optional<std::vector<HirVhdlProtectedMember>>
@@ -1816,6 +1833,11 @@ private:
     hir_vhdl_generate_iterator_value(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The literal lower bound of the character or enumeration range a
+    // VHDL generate parameter named by `expression` iterates.
+    [[nodiscard]] std::optional<semantic::ExpressionId>
+    hir_vhdl_generate_iterator_literal_bound(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::pair<semantic::vhdl::TypeForm,
         semantic::TypeId>>
     hir_vhdl_composite_root_type(
@@ -2079,10 +2101,24 @@ private:
         bool succeeded { };
         std::optional<RegisterId> value;
     };
+    struct HirNamedClassProperty {
+        std::string identity;
+        std::optional<semantic::DeclarationId> object;
+        bool static_storage { };
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
+        // An `event` property: it holds its event object's handle.
+        bool event { };
+        // The property's declared type.
+        const semantic::sv::TypeReference* type { };
+    };
     struct HirSynchronizationTaskProfile {
         semantic::DeclarationId receiver;
         std::string_view method;
         bool mailbox { };
+        // A mailbox or semaphore property of a class object (`mb.put(x)`
+        // in a method, `c.mb.get(y)`).
+        std::optional<HirNamedClassProperty> class_property;
     };
     [[nodiscard]] std::optional<HirSynchronizationTaskProfile>
     hir_synchronization_task_profile(
@@ -3621,6 +3657,14 @@ private:
     // a named entity E in the current instance (IEEE 1076-2008 16.2.5).
     [[nodiscard]] std::optional<std::string> hir_vhdl_path_attribute(
         semantic::ExpressionId expression) const;
+    // The 'PATH_NAME (or, with `instance`, 'INSTANCE_NAME) text of `name`
+    // declared by `declaration`, or of a block, process or package that
+    // `prefix_text` names in `prefix_scope`.
+    [[nodiscard]] std::optional<std::string> hir_vhdl_path_text(
+        const std::string& name, bool instance,
+        std::optional<semantic::DeclarationId> declaration,
+        std::optional<std::string_view> prefix_text,
+        semantic::ScopeId prefix_scope) const;
     // Whether a VHDL expression is a CHARACTER value (a character literal or
     // an object of type CHARACTER).
     [[nodiscard]] bool hir_vhdl_character_expression(
@@ -3658,10 +3702,28 @@ private:
     // representation rather than a character string (IEEE 1076-2019 5.7).
     [[nodiscard]] bool hir_vhdl_parenthesized_image_type(
         const semantic::vhdl::TypeDefinition& definition) const;
+    // A formal part conversion `f(formal) => actual` of a procedure call
+    // (IEEE 1076-2008 6.5.7.1).
+    struct HirVhdlFormalPartConversion {
+        std::size_t formal { };
+        semantic::DeclarationId function;
+        semantic::ExpressionId actual;
+    };
+    [[nodiscard]] std::optional<HirVhdlFormalPartConversion>
+    hir_vhdl_formal_part_conversion(
+        const semantic::vhdl::ProcedureAssociation& association,
+        std::span<const semantic::DeclarationId> formals,
+        semantic::ScopeId scope) const;
+    // The actual of each formal of a procedure call. An association
+    // `f(formal) => actual` (IEEE 1076-2008 6.5.7.1) binds the formal to
+    // `actual` and records function f in `formal_conversions`; without that
+    // vector such a call does not bind.
     [[nodiscard]] std::optional<std::vector<semantic::ExpressionId>>
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
-        semantic::DeclarationId declaration) const;
+        semantic::DeclarationId declaration,
+        std::vector<std::optional<semantic::DeclarationId>>* formal_conversions
+        = nullptr) const;
     // Whether no actual of known width differs from the width of its
     // constrained array formal (IEEE 1076-2008 4.2.2.1, 14.6).
     [[nodiscard]] bool hir_vhdl_actual_lengths_fit(
@@ -3685,6 +3747,14 @@ private:
         semantic::StatementId statement);
     [[nodiscard]] bool lower_pending_hir_callables();
     [[nodiscard]] bool lower_hir_callable_body(std::size_t callable);
+    // The `VHPI <library> <model>` binding of a foreign VHDL subprogram's
+    // FOREIGN attribute, as "<library>\t<model>" (IEEE 1076-2019 20.2.4).
+    [[nodiscard]] std::optional<std::string> hir_vhdl_foreign_model(
+        const semantic::vhdl::Declaration& callable) const;
+    // The call of a foreign subprogram's VHPI execution function that
+    // replaces its body (IEEE 1076-2019 14.6, 20.4.2).
+    [[nodiscard]] bool lower_hir_vhdl_foreign_body(
+        std::size_t callable, std::string_view model);
     [[nodiscard]] bool lower_hir_callable_return(
         std::optional<semantic::ExpressionId> value);
 
@@ -3906,6 +3976,10 @@ private:
     [[nodiscard]] std::optional<RegisterId> hir_systemverilog_event_handle(
         std::string_view name, semantic::ScopeId scope,
         std::optional<semantic::ExpressionId> expression = std::nullopt);
+    // Whether `expression` names an event property of a class object or an
+    // element of one's event array; it is waited on through its handle.
+    [[nodiscard]] bool hir_class_event_expression(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_local_event_notifier(
         semantic::DeclarationId declaration);
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, RegisterId>>
@@ -3964,15 +4038,6 @@ private:
     // A class property named in an event control: `p` in a method of its
     // class, or `obj.p` through a class handle variable (IEEE 1800-2017
     // 9.4.2, 8.4).
-    struct HirNamedClassProperty {
-        std::string identity;
-        std::optional<semantic::DeclarationId> object;
-        bool static_storage { };
-        std::size_t width { };
-        frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
-        // An `event` property: a trigger toggles its one-bit value.
-        bool event { };
-    };
     [[nodiscard]] std::optional<HirNamedClassProperty>
     hir_named_class_property(std::string_view name,
         semantic::ScopeId scope, std::uint64_t source_order) const;
@@ -3980,6 +4045,11 @@ private:
         const HirNamedClassProperty& property);
     [[nodiscard]] bool lower_hir_named_class_property_write(
         const HirNamedClassProperty& property, RegisterId value);
+    // The handle an event property holds, made on first use (IEEE
+    // 1800-2017 15.5).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_class_event_handle(
+        std::optional<RegisterId> receiver, const std::string& identity,
+        bool static_storage);
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
@@ -4272,6 +4342,12 @@ private:
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_resolution_call(
         semantic::DeclarationId function, RegisterId driving_values,
         std::size_t driver_count, std::size_t element_width);
+    // A call of VHDL function `function` on one register argument, whose
+    // formal takes `formal_range` when it is an unconstrained array.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_register_call(
+        semantic::DeclarationId function, RegisterId argument,
+        std::size_t contextual_width,
+        std::optional<HirPackedRange> formal_range, std::string callable_key);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     std::vector<HirCallableFrame> hir_callable_frames_;
     std::vector<HirVhdlCapturedScalarRange>

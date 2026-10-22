@@ -1956,6 +1956,12 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 process.operations().signal(*read->gate));
         }
     }
+    if (has_switch_metadata && !switch_connection) {
+        if (switch_source_readers.size() < signals.size()) {
+            switch_source_readers.resize(signals.size());
+        }
+        switch_source_readers[*process.switch_source()].push_back(id);
+    }
     if (switch_connection) {
         switch_endpoint_adjacency.resize(signals.size());
         switch_control_adjacency.resize(signals.size());
@@ -3553,6 +3559,17 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
 {
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->invalidate_fused_static_cohorts();
+    // A net joined by bidirectional switches takes its value from the whole
+    // network, so a deposit there persists as an external driver that the
+    // network resolves through to every endpoint (IEEE 1800-2017 38.34).
+    if (impl_->switch_network_member(signal)
+        && impl_->driven_values[signal].width() == value.width()) {
+        impl_->external_driver_slot(signal)
+            = impl_->normalize_signal_value(signal, std::move(value));
+        impl_->mark_switch_network_dirty(signal);
+        impl_->refresh_switch_network();
+        return;
+    }
     impl_->commit(signal, std::move(value),
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }

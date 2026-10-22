@@ -1580,10 +1580,17 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
         // A port whose actual has a different packed width cannot share the
         // actual's storage; it connects through an adapter that pads or
         // truncates like a continuous assignment (IEEE 1800-2017 23.3.3).
+        // An inout of an instance array instead joins its own slice of
+        // the actual net through a switch (23.3.3.5).
+        const auto instance_array_inout
+            = direction == frontend::PortDirection::Inout
+            && context.array_position && context.array_position->second > 1U;
+        std::optional<SignalId> inout_array_actual;
         if (actual_signal && direct_name_actual && !interface_port
             && formal_declaration.type
             && (direction == frontend::PortDirection::Input
-                || direction == frontend::PortDirection::Output)
+                || direction == frontend::PortDirection::Output
+                || instance_array_inout)
             && *actual_signal < design_.signal_info_.size()) {
             const auto formal_width
                 = hierarchy_sv_type_layout_detail::
@@ -1593,6 +1600,9 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             if (formal_width && *formal_width != 0U
                 && *formal_width
                     != design_.signal_info_[*actual_signal].width) {
+                if (instance_array_inout) {
+                    inout_array_actual = actual_signal;
+                }
                 actual_signal.reset();
             }
         }
@@ -1760,11 +1770,27 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 // the formal net to the selected bits, so drivers on either
                 // side resolve together (IEEE 1800-2017 23.3.3.3). Copying
                 // each way instead would hold an unknown value forever.
-                const auto inout_actual
+                auto inout_actual
                     = direction == frontend::PortDirection::Inout
                         && domain == frontend::ValueDomain::Logic4
                     ? actual_lowerer.hir_inout_actual(*binding.expression)
                     : std::nullopt;
+                if (!inout_actual && inout_array_actual
+                    && domain == frontend::ValueDomain::Logic4
+                    && *width != 0U) {
+                    const auto [ordinal, count] = *context.array_position;
+                    if (design_.signal_info_[*inout_array_actual].width
+                        == *width * count) {
+                        inout_actual = std::vector {
+                            Lowerer::HirInoutActual {
+                                *inout_array_actual,
+                                (count - 1U - ordinal) * *width,
+                                *width,
+                                0U,
+                            },
+                        };
+                    }
+                }
                 const auto joinable = [&] {
                     if (!inout_actual) {
                         return false;

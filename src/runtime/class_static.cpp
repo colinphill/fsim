@@ -93,6 +93,22 @@ namespace {
     }
     result.string = *descriptor.initial_string;
   }
+  // A static random variable keeps its random state, rand_mode and randc
+  // cycle with its value (IEEE 1800-2017 18.4, 18.8).
+  if (descriptor.random_kind != SystemVerilogClassRandomKind::None
+      && !descriptor.nominal_type.empty()) {
+    result.random_state = SystemVerilogClassRandomState{
+        descriptor.random_kind,
+        width,
+        descriptor.signed_value,
+        descriptor.nominal_type,
+        true,
+        0,
+        0,
+        0,
+        0,
+        {}};
+  }
   return result;
 }
 

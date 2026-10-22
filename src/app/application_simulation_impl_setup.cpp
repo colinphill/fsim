@@ -1540,7 +1540,7 @@ Simulation::Impl::Impl(
                         source.specialization_identity, source.declared_type,
                         source.random_root_identity);
                     try {
-                        class_heap.object(copy).properties = source.properties;
+                        class_heap.copy_properties(copy, handle);
                         const auto owner = class_owner_parameter_values.find(handle);
                         if (owner != class_owner_parameter_values.end()) {
                             const bool inserted = class_owner_parameter_values

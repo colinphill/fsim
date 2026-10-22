@@ -87,12 +87,16 @@ void SystemVerilogClassHandleContainer::set(
 }
 
 void SystemVerilogClassHandleContainer::resize(const std::size_t size) {
-  if (descriptor_.kind != SystemVerilogClassContainerKind::DynamicArray) {
-    throw std::logic_error{"only dynamic class handle arrays may be resized"};
+  // A queue takes a whole new value (`q = {h}`) through a resize too
+  // (IEEE 1800-2017 7.10.4).
+  if (descriptor_.kind != SystemVerilogClassContainerKind::DynamicArray
+      && descriptor_.kind != SystemVerilogClassContainerKind::Queue) {
+    throw std::logic_error{
+        "only dynamic class handle arrays and queues may be resized"};
   }
   if (size > descriptor_.maximum_elements) {
     throw std::length_error{
-        "dynamic class handle array exceeds its element budget"};
+        "class handle array exceeds its element budget"};
   }
   sequential_.resize(size);
 }

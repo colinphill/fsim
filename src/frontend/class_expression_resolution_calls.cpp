@@ -656,6 +656,11 @@ void Resolver::retain_task_profile(
         return result;
       }
     }
+    // An unqualified method call in a randomize with-clause is called on
+    // the randomized object, named again by this unresolved receiver.
+    const auto unresolved_receiver = expression.text == ".randomize"
+        ? std::optional<Expression>{expression.operands.front()}
+        : std::nullopt;
     auto& receiver_expression = expression.operands.front();
     auto receiver_type = resolve_expression(receiver_expression, scope);
     // A function-returned class handle is a valid method-call receiver. The
@@ -844,14 +849,14 @@ void Resolver::retain_task_profile(
             expression.operands[index].kind == ExpressionKind::Identifier
                 ? find_property(receiver_identity, selected_name)
                 : PropertyMatch{};
-        // Any property may be listed; it is random for this call (IEEE
-        // 1800-2017 18.11).
-        if (!selected.property || selected.property->is_static) {
+        // Any property may be listed, static ones included; it is random
+        // for this call (IEEE 1800-2017 18.11).
+        if (!selected.property) {
           diagnose(
               diagnostics_,
               "FSIM-SV-CLASS-019",
-              "object randomize variable list requires a non-static "
-              "property of class '" + receiver_identity + "'",
+              "object randomize variable list requires a property of "
+              "class '" + receiver_identity + "'",
               expression.operands[index].span);
           continue;
         }
@@ -870,6 +875,9 @@ void Resolver::retain_task_profile(
       // An array method's with-clause iterator (`item` by default) is
       // bound in its with expression (IEEE 1800-2017 7.12).
       std::vector<std::string> bound_iterators;
+      // Inside the arguments of a call that is resolved as a whole, names
+      // are only rewritten; that call's resolution binds them.
+      bool deferring{false};
       const auto resolve_caller_names = [&](const auto& self,
                                             Expression& node) -> void {
         static const std::set<std::string_view> iterator_methods{
@@ -892,6 +900,58 @@ void Resolver::retain_task_profile(
           bound_iterators.pop_back();
           return;
         }
+        enum class Callee { none, object, caller };
+        const auto callee_of = [&](const std::string_view text) {
+          constexpr std::string_view local_prefix{"local::"};
+          if (text.empty() || text.front() == '.' || text.front() == '@'
+              || text.front() == '$') {
+            return Callee::none;
+          }
+          const bool local = text.starts_with(local_prefix);
+          const auto callee = local ? text.substr(local_prefix.size()) : text;
+          if (callee.find("::") != std::string_view::npos
+              || callee.find('.') != std::string_view::npos) {
+            return Callee::none;
+          }
+          if (!local && unresolved_receiver
+              && !find_methods(receiver_identity, std::string{callee},
+                      SystemVerilogClassMethodKind::Function,
+                      &*receiver_type).empty()) {
+            return Callee::object;
+          }
+          if (scope.class_owner != nullptr
+              && !find_methods(scope.class_owner->canonical_identity,
+                      std::string{callee},
+                      SystemVerilogClassMethodKind::Function).empty()) {
+            return Callee::caller;
+          }
+          return Callee::none;
+        };
+        // `(f).m`: a member of the object a with-clause function returns,
+        // written as a path from the function's name.
+        if ((node.kind == ExpressionKind::Identifier
+                || (node.kind == ExpressionKind::Call && node.operands.empty()))
+            && node.text.find('.') != std::string::npos
+            && callee_of(std::string_view{node.text}.substr(
+                   0, node.text.find('.'))) != Callee::none) {
+          const auto dot = node.text.find('.');
+          Expression selected{ExpressionKind::Call, node.text.substr(0, dot),
+              {}, node.span};
+          std::string_view path{node.text};
+          path.remove_prefix(dot + 1U);
+          while (!path.empty()) {
+            const auto next = path.find('.');
+            Expression select{ExpressionKind::Call,
+                "@sv-select:" + std::string{path.substr(0, next)}, {},
+                node.span};
+            select.operands.push_back(std::move(selected));
+            selected = std::move(select);
+            path = next == std::string_view::npos ? std::string_view{}
+                                                 : path.substr(next + 1U);
+          }
+          selected.systemverilog_source_order = node.systemverilog_source_order;
+          node = std::move(selected);
+        }
         if (node.kind == ExpressionKind::Identifier) {
           constexpr std::string_view local_prefix{"local::"};
           // The first name of a dotted path (`item.addr`) selects the
@@ -907,11 +967,11 @@ void Resolver::retain_task_profile(
                 && find_property(scope.class_owner->canonical_identity,
                        head(name)).property) {
               node.text = name;
-              resolve_expression(node, scope);
+              if (!deferring) resolve_expression(node, scope);
             }
             return;
           }
-          if (node.text.find("::") == std::string::npos
+          if (!deferring && node.text.find("::") == std::string::npos
               && std::ranges::find(bound_iterators, head(node.text))
                   == bound_iterators.end()
               && !find_property(receiver_identity, head(node.text)).property
@@ -922,6 +982,75 @@ void Resolver::retain_task_profile(
             resolve_expression(node, scope);
           }
           return;
+        }
+        // A function named in the with-clause is a method of the randomized
+        // object when that class has one; otherwise, or when `local::`
+        // qualified, it is a function of the calling scope (IEEE 1800-2017
+        // 18.7, 18.7.1).
+        // `get_c().m` and `(get_c).m`: a member of the object a function
+        // returns is selected once the call is bound (IEEE 1800-2017 18.7).
+        constexpr std::string_view select_prefix{"@sv-select:"};
+        if (!deferring && node.kind == ExpressionKind::Call
+            && node.text.starts_with(select_prefix)
+            && node.operands.size() == 1U) {
+          auto& operand = node.operands.front();
+          if (operand.kind == ExpressionKind::Identifier
+              && callee_of(operand.text) != Callee::none) {
+            operand = Expression{
+                ExpressionKind::Call, operand.text, {}, operand.span};
+          }
+          if (operand.kind == ExpressionKind::Call
+              && callee_of(operand.text) != Callee::none) {
+            // A function of the calling scope is a method of the calling
+            // object (`this.f()`), whose result's member is selected.
+            constexpr std::string_view local_prefix{"local::"};
+            if (callee_of(operand.text) == Callee::caller) {
+              if (operand.text.starts_with(local_prefix)) {
+                operand.text.erase(0, local_prefix.size());
+              }
+              operand.operands.insert(operand.operands.begin(),
+                  Expression{ExpressionKind::Identifier, "this", {},
+                      operand.span});
+              operand.text = "." + operand.text;
+            }
+            deferring = true;
+            self(self, operand);
+            deferring = false;
+            resolve_expression(node, scope);
+            return;
+          }
+        }
+        if (node.kind == ExpressionKind::Call && !node.text.empty()
+            && node.text.front() != '.' && node.text.front() != '@'
+            && node.text.front() != '$') {
+          constexpr std::string_view local_prefix{"local::"};
+          const bool local = node.text.starts_with(local_prefix);
+          const auto callee = local
+              ? node.text.substr(local_prefix.size())
+              : node.text;
+          if (callee.find("::") == std::string::npos
+              && callee.find('.') == std::string::npos) {
+            const auto kind = callee_of(node.text);
+            const bool object_method = kind == Callee::object;
+            const bool caller_method = kind == Callee::caller;
+            if (object_method || caller_method) {
+              // Each argument names in its own right: `local::` qualifies
+              // only the name it prefixes (IEEE 1800-2017 18.7.1).
+              const bool outer = deferring;
+              deferring = true;
+              for (auto& operand : node.operands) self(self, operand);
+              deferring = outer;
+              if (object_method) {
+                node.operands.insert(
+                    node.operands.begin(), *unresolved_receiver);
+                node.text = "." + callee;
+              } else if (!deferring) {
+                node.text = callee;
+              }
+              if (!deferring) resolve_expression(node, scope);
+              return;
+            }
+          }
         }
         for (auto& operand : node.operands) self(self, operand);
       };

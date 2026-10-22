@@ -1030,6 +1030,19 @@ struct Declaration {
     bool local_type_parameter { };
 };
 
+// A named constant usable as a casting size: a parameter, a local
+// parameter, or a class parameter kept as a constant property (IEEE
+// 1800-2017 6.24.1, 8.25).
+[[nodiscard]] inline bool is_size_constant_declaration(
+    const Declaration& declaration) noexcept
+{
+    return declaration.form == DeclarationForm::parameter
+        || declaration.form == DeclarationForm::local_parameter
+        || (declaration.form == DeclarationForm::variable
+            && declaration.array_local_parameter
+            && declaration.initializer.has_value());
+}
+
 struct Export {
     Name package;
     std::optional<Name> member;
