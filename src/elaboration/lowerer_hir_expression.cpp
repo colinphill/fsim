@@ -28918,6 +28918,14 @@ bool Lowerer::hir_process_handle_expression(
         return false;
     }
     const auto& source = *expression->systemverilog;
+    const auto process_type = [](const semantic::sv::TypeReference& type) {
+        return type.target.spelling == "process"
+            || type.target.spelling == "std::process";
+    };
+    // A class property of type process.
+    if (const auto property = hir_class_property_profile(expression_id)) {
+        return process_type(property->type);
+    }
     if (source.kind == semantic::sv::ExpressionKind::call) {
         return source.text == "process::self"
             || source.text == "std::process::self";
@@ -28928,9 +28936,7 @@ bool Lowerer::hir_process_handle_expression(
         : std::nullopt;
     return record && record->systemverilog != nullptr
         && record->systemverilog->type
-        && (record->systemverilog->type->target.spelling == "process"
-            || record->systemverilog->type->target.spelling
-                == "std::process");
+        && process_type(*record->systemverilog->type);
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_string_to_packed(
@@ -30388,6 +30394,39 @@ bool Lowerer::lower_hir_packed_copy_out(
         ? SignalUpdateDomain::systemverilog_nba
         : SignalUpdateDomain::systemverilog_active;
     if (!staged_update && expression->systemverilog != nullptr) {
+        // A property of the object, or a member of one (IEEE 1800-2017
+        // 8.5, 13.3).
+        if (const auto property = hir_class_property_profile(target);
+            property && property->writable) {
+            const auto value = register_width(source) == property->width
+                ? source
+                : resize_register(
+                      source, property->width, property->signed_value);
+            if (property->static_storage) {
+                process_.operations.emplace_back(ClassStaticPropertyWrite {
+                    value, property->identity });
+                return true;
+            }
+            const auto receiver = property->receiver
+                ? lower_hir_expression(*property->receiver, 64U)
+                : std::nullopt;
+            if (!receiver || register_width(*receiver) != 64U) {
+                return false;
+            }
+            process_.operations.emplace_back(ClassPropertyWrite {
+                *receiver, value, property->identity });
+            return true;
+        }
+        if (const auto member = hir_virtual_interface_member(target)
+                ? std::nullopt
+                : hir_class_property_member(target)) {
+            return member->profile.writable
+                && lower_hir_class_property_member_write(*member,
+                    register_width(source) == member->member.width
+                        ? source
+                        : resize_register(
+                              source, member->member.width, false));
+        }
         // An output actual through a virtual interface (`f(vif.data)`).
         if (const auto member = hir_virtual_interface_member(target)) {
             const auto value = register_width(source) == member->width
@@ -31175,6 +31214,10 @@ bool Lowerer::lower_hir_string_copy_out(
         }
         process_.operations.emplace_back(WriteStringObject { *binding->object, source });
         return true;
+    }
+    // A string property of the object (IEEE 1800-2017 8.5).
+    if (hir_class_property_profile(target, true)) {
+        return lower_hir_class_string_property_write(target, source);
     }
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(target)

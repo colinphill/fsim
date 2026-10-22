@@ -1725,6 +1725,10 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     actual_lowerer.set_package_container_object(
                         context.package_container);
                 }
+                if (context.package_string) {
+                    actual_lowerer.set_package_string_object(
+                        context.package_string);
+                }
                 actual_lowerer.set_systemverilog_interface_handles(
                     &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_);

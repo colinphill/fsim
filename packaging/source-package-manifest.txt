@@ -222,6 +222,7 @@ docs/tcl.md
 docs/tracing.md
 docs/user-platform-guide.md
 docs/uvm-closure-audit.md
+docs/uvm-run-test-bridge-plan.md
 docs/uvm-source-provenance.md
 docs/uvm-tutorial.md
 docs/v1-conformance-audit.md

@@ -823,6 +823,8 @@ bool Resolver::class_assignable(
     const std::string_view identity) const {
   std::set<std::string> visited;
   auto current = find_class(identity);
+  // A class of another library (UVM) resolves at elaboration.
+  if (current == nullptr) return true;
   while (current != nullptr
          && visited.insert(current->canonical_identity).second) {
     if (current->base) {
@@ -835,7 +837,9 @@ bool Resolver::class_assignable(
         return true;
       }
     }
-    current = find_base_class(*current);
+    const auto* const base = find_base_class(*current);
+    if (current->base && base == nullptr) return true;
+    current = base;
   }
   return false;
 }

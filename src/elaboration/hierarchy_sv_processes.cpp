@@ -1007,6 +1007,7 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
         lowerer.set_systemverilog_program_owner(entry.program_owner);
         lowerer.set_package_constant_signal(entry.package_signal);
         lowerer.set_package_container_object(entry.package_container);
+        lowerer.set_package_string_object(entry.package_string);
         ForwardDeferredSystemVerilogItems missed;
         static_cast<void>(lower_deferred_systemverilog_processes(
             *entry.unit, *materialization.specialization, entry.path,

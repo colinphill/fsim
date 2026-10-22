@@ -1657,6 +1657,9 @@ struct Statement {
     };
     // Empty entries are positional; nonempty entries retain named task actuals.
     support::RareVector<std::string> task_argument_names;
+    // The actuals of a `C#(...)::m` task name as parsed, so a class of another
+    // library selects its specialization (IEEE 1800-2017 8.25.1).
+    std::shared_ptr<const Type> systemverilog_task_class_selection;
     support::RareVector<FunctionArgument> class_method_arguments;
     // VHDL procedure calls retain positional or named association spans.
     std::string procedure_name;

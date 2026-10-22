@@ -642,10 +642,46 @@ namespace {
                 : std::string_view { object->type->target.spelling };
             const auto* declaration = visible_class(identity, scope);
             if (declaration == nullptr) {
+                declaration = type_parameter_default_class(identity, scope);
+            }
+            if (declaration == nullptr) {
                 return std::nullopt;
             }
             return ImplicitClassMember {
                 *receiver_id, declaration, dotted.substr(dot + 1U) };
+        }
+
+        // The class a type parameter of an enclosing class defaults to:
+        // `T rec` in `class C #(type T = D)` names D's members; elaboration
+        // selects the member of each specialization's actual by name (IEEE
+        // 1800-2017 8.25).
+        [[nodiscard]] const sv::ClassDeclaration* type_parameter_default_class(
+            const std::string_view name, const semantic::ScopeId scope) const
+        {
+            for (auto visible = std::optional<semantic::ScopeId> { scope };
+                 visible; visible = parent_scope(*visible)) {
+                for (const auto& item : hir_.classes()) {
+                    if (item.scope != *visible) {
+                        continue;
+                    }
+                    const auto parameter = std::ranges::find_if(
+                        item.parameters, [&](const sv::ClassParameter& p) {
+                            return p.type_parameter && p.name == name;
+                        });
+                    if (parameter == item.parameters.end()) {
+                        continue;
+                    }
+                    if (!parameter->default_type) {
+                        return nullptr;
+                    }
+                    const auto& type = *parameter->default_type;
+                    return visible_class(!type.class_identity.empty()
+                            ? std::string_view { type.class_identity }
+                            : std::string_view { type.target.spelling },
+                        item.scope);
+                }
+            }
+            return nullptr;
         }
 
         // The one element of `range` satisfying `predicate`, or null.

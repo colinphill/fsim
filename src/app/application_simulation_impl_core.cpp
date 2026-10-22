@@ -7,7 +7,10 @@
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/uvm_identity.hpp"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 
 namespace fsim::app {
@@ -1788,6 +1791,14 @@ std::string Simulation::Impl::static_property_specialization(
                 uvm_objects.set_name(handle, string_actuals[name_index]);
             }
         }
+        // A TLM port's second constructor argument is its parent, and an
+        // imp's is the object implementing it.
+        if (is_systemverilog_uvm_type(
+                built.compiled_systemverilog_class_specializations,
+                specialization, "uvm_port_base")
+            && actuals.size() > 1U && actuals[1].low_word().bval == 0U) {
+            uvm_tlm_owners[handle] = actuals[1].low_word().aval;
+        }
         if (component_specialization) {
             std::size_t name_index { };
             std::size_t parent_index { 1U };
@@ -1822,6 +1833,8 @@ std::string Simulation::Impl::static_property_specialization(
                 automatic_root = root;
             }
             uvm_components.initialize(handle, std::move(name), parent, root);
+            construct_uvm_component_ports(specialization, handle,
+                allocation_scope);
         }
         // The UVM base state exists once `super.new` has run, so a
         // user-derived constructor may already report through it; the
@@ -1874,6 +1887,77 @@ std::string Simulation::Impl::static_property_specialization(
     if (source_function_dispatch_depth == 0U)
         notify_class_changes(before);
     return handle;
+}
+
+void Simulation::Impl::construct_uvm_component_ports(
+    const semantic::sv::ClassSpecialization& specialization,
+    const runtime::SystemVerilogClassHandle handle,
+    const std::string_view allocation_scope)
+{
+    // The ports the library constructors of uvm_driver and uvm_sequencer
+    // create (IEEE 1800.2-2020 15.2, 15.5); the library constructors do not
+    // run for a component the simulation's UVM services construct.
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 4U>
+        ports { {
+            { "::uvm_driver", "seq_item_port" },
+            { "::uvm_driver", "rsp_port" },
+            { "::uvm_sequencer", "seq_item_export" },
+            { "::uvm_sequencer_param_base", "rsp_export" },
+        } };
+    const auto known = [&](const std::string_view identity) {
+        return std::ranges::any_of(
+            built.compiled_systemverilog_class_specializations,
+            [&](const semantic::sv::ClassSpecialization& item) {
+                return item.specialization_identity == identity
+                    || item.declaration_identity == identity;
+            });
+    };
+    std::set<std::string> visited;
+    for (const auto* current = &specialization; current != nullptr
+         && visited.insert(current->specialization_identity).second;) {
+        for (const auto& property : current->properties) {
+            const auto port = std::ranges::find_if(ports, [&](const auto& item) {
+                return property.name == item.second
+                    && property.owner_identity.ends_with(item.first);
+            });
+            const auto& type = property.type;
+            const auto identity = !type.class_specialization.empty()
+                ? std::string_view { type.class_specialization }
+                : std::string_view { type.class_identity };
+            if (port == ports.end()
+                || !support::is_uvm_library_identity(property.owner_identity)
+                || property.static_storage || identity.empty()
+                || !known(identity)) {
+                continue;
+            }
+            if (packed_property_value(class_heap.property(
+                    handle, property.canonical_identity))
+                    .low_word().aval != 0U) {
+                continue;
+            }
+            const std::array<runtime::PackedLogic4, 2U> actuals {
+                runtime::PackedLogic4::from_aval_bval(64U, 0U, 0U),
+                runtime::PackedLogic4::from_aval_bval(64U, handle, 0U),
+            };
+            const std::array<std::string, 2U> names {
+                std::string { port->second }, std::string { } };
+            const auto created = construct_class(
+                "@no-constructor:" + std::string { identity },
+                class_specialization(identity).declaration_identity,
+                actuals, names, std::span<const std::string> { },
+                allocation_scope);
+            // The allocation may move the heap's objects.
+            assign_property_value(
+                class_heap.property(handle, property.canonical_identity),
+                property.canonical_identity,
+                runtime::PackedLogic4::from_aval_bval(64U, created, 0U),
+                class_heap.object(handle).specialization_identity);
+        }
+        current = current->base
+            && known(current->base->specialization_identity)
+            ? &class_specialization(current->base->specialization_identity)
+            : nullptr;
+    }
 }
 
 [[nodiscard]] Simulation::Impl::PackedSnapshot

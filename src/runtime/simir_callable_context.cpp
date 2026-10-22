@@ -83,6 +83,11 @@ void Interpreter::Impl::restore_callable_values(
     const ProcessState::CallableFrameState& context)
 {
     for (std::size_t index = 0; index < context.packed.size(); ++index) {
+        // A register an inner frame shadowed at every capture so far holds
+        // no value of this context yet; the live register keeps its own.
+        if (context.packed[index].empty()) {
+            continue;
+        }
         if (process.executor) {
             process.executor->write_register(
                 context.packed_ids[index], context.packed[index]);

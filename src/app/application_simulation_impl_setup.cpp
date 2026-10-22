@@ -1021,6 +1021,16 @@ Simulation::Impl::Impl(
         [this] {
             return static_cast<std::uint64_t>(interpreter->scheduler().now());
         });
+    // A displayed UVM report prints on the simulation output (IEEE
+    // 1800.2-2020 6.4.2); the composed record ends in its newline.
+    uvm_reports.server().set_display_sink([this](const std::string_view text) {
+        if (output_hook) {
+            output_hook(0U,
+                text.ends_with('\n') ? text.substr(0, text.size() - 1U) : text,
+                true, interpreter->scheduler().now(),
+                interpreter->scheduler().delta());
+        }
+    });
     class_hir_execution.set_string_property_services(
         [this](const runtime::SystemVerilogClassHandle handle,
             const std::string_view property) -> std::optional<std::string> {

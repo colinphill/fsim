@@ -15891,6 +15891,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 *specialized, declaration, packed_type_resolver,
                 packed_default_resolver, packed_fallback_resolver);
         });
+    lowerer.set_package_string_object(
+        [&](const semantic::DeclarationId declaration) {
+            return compiled_systemverilog_package_string_object(
+                *specialized, declaration, packed_type_resolver,
+                packed_default_resolver, packed_fallback_resolver);
+        });
     lowerer.set_systemverilog_interface_handles(
         &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_);
@@ -16265,6 +16271,17 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                                            const auto& default_resolver,
                                            const auto& fallback_resolver) {
                     return compiled_systemverilog_package_container_object(
+                        specialization, declaration, type_resolver,
+                        default_resolver, fallback_resolver);
+                });
+            },
+            [this, resolve_package](
+                const semantic::DeclarationId declaration) {
+                return resolve_package([&](const auto& specialization,
+                                           const auto& type_resolver,
+                                           const auto& default_resolver,
+                                           const auto& fallback_resolver) {
+                    return compiled_systemverilog_package_string_object(
                         specialization, declaration, type_resolver,
                         default_resolver, fallback_resolver);
                 });
@@ -17153,6 +17170,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                     .package_container
                     = [&](const semantic::DeclarationId id) {
                           return compiled_systemverilog_package_container_object(
+                              working_specialization, id, port_packed_type,
+                              port_packed_default, port_packed_fallback);
+                      },
+                    .package_string
+                    = [&](const semantic::DeclarationId id) {
+                          return compiled_systemverilog_package_string_object(
                               working_specialization, id, port_packed_type,
                               port_packed_default, port_packed_fallback);
                       },
@@ -19881,6 +19904,30 @@ HierarchyBuilder::compiled_systemverilog_package_container_object(
         : std::nullopt;
 }
 
+std::optional<StringObjectId>
+HierarchyBuilder::compiled_systemverilog_package_string_object(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId declaration_id,
+    const SystemVerilogPackedTypeResolver& packed_type_resolver,
+    const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
+{
+    static_cast<void>(compiled_systemverilog_package_variable_signal(
+        specialization, declaration_id, packed_type_resolver,
+        packed_default_resolver, packed_fallback_resolver));
+    const auto found = systemverilog_package_string_objects_.find(
+        declaration_id.value());
+    if (found == systemverilog_package_string_objects_.end()
+        || found->second >= design_.string_object_info_.size()
+        || found->second >= design_.string_objects_.size()) {
+        return std::nullopt;
+    }
+    const auto& info = design_.string_object_info_[found->second];
+    return info.id == found->second && !info.is_port
+        ? std::optional { found->second }
+        : std::nullopt;
+}
+
 bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
 {
     if (systemverilog_package_initializers_.empty()
@@ -20571,22 +20618,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                     packed_default, packed_fallback);
             });
         lowerer.set_package_string_object(
-            [&](const semantic::DeclarationId declaration)
-                -> std::optional<StringObjectId> {
-                const auto found
-                    = systemverilog_package_string_objects_.find(
-                        declaration.value());
-                if (found
-                        == systemverilog_package_string_objects_.end()
-                    || found->second >= design_.string_object_info_.size()
-                    || found->second >= design_.string_objects_.size()) {
-                    return std::nullopt;
-                }
-                const auto& info
-                    = design_.string_object_info_[found->second];
-                return info.id == found->second && !info.is_port
-                    ? std::optional { found->second }
-                    : std::nullopt;
+            [&](const semantic::DeclarationId declaration) {
+                return compiled_systemverilog_package_string_object(
+                    *specialized, declaration, packed_type,
+                    packed_default, packed_fallback);
             });
         lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_,

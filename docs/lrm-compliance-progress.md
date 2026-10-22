@@ -253,6 +253,98 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 86: UVM front door, native run_test bridge, sequence-item handshake
+
+The SystemVerilog suites ran on the frozen `b86b` and were compared with
+Batch 85 (`b85z`). The VHDL suites did not change. The parked UVM cases ran
+separately on `b86b` (`b86w2-parked`).
+
+Batch 86 closes 48 corpus tests, all in sv-tests, with no losses. On
+2026-10-22 the owner closed it below the usual 50. The first full run
+(`b86w1`, on `b86a`) lost 10 cases; all 10 are fixed (see below). Both
+columns are counted from the runs' results.
+
+| Suite | Batch85 passes / in scope | Batch86 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2610 / 2622 | 2610 / 2622 | 289 |
+| sv-tests | 1444 / 1497 | 1492 / 1497 | 0 |
+| verilator | 1992 / 2074 | 1992 / 2074 | 341 |
+| vests | 3656 / 3663 | 3656 / 3663 | 2 |
+| nvc | 1171 / 1263 | 1171 / 1263 | 219 |
+| vhdl-compliance | 52 / 65 | 52 / 65 | 7 |
+
+UVM (design: `docs/uvm-run-test-bridge-plan.md`). The parked UVM tests run
+on the native UVM services; the UVM library's `uvm_root` is not interpreted:
+- **Library class calls.**
+  - The workspace's source environment binds calls on library classes:
+    `uvm_config_db#(T)::set/get`, `uvm_resource_db#(T)::set/read_by_name`,
+    `X::type_id::create`, and the package report functions.
+  - The calls become native intrinsics, typed by the specialization.
+  - Property types of source classes are visible through library-typed
+    handles (`m.ap.connect`).
+- **`run_test`** expands to a SimIR template:
+  1. It creates the named test, or uses the components that already exist.
+  2. It runs the function phases as host-driven loops; each callback is a
+     lowered virtual dispatch.
+  3. It forks each component's `run_phase`.
+  4. It waits until the run phase ends.
+  5. It runs extract to final, prints the report summary, and calls
+     `$finish`.
+- **Phases and reports.** `phase.raise_objection` and `drop_objection` work
+  on the native phase objects. `super.<phase>` calls do not dispatch back to
+  the override.
+- **Analysis ports.** `port.write` fans out to the `write` of every imp owner
+  reached through `connect` (IEEE 1800.2-2020 12.2.10).
+- **Sequence items.** A natively created driver or sequencer gets the ports
+  its library constructor makes.
+  - `seq.start(sqr)` runs `pre_start` to `post_start` and `body`.
+  - `finish_item` queues the item and waits until a driver takes it.
+  - `get`, `get_next_item`, `peek` and `item_done` serve the driver (15.2.2.1).
+- **Wider SystemVerilog support:**
+  - A nonblocking write to a class property.
+  - Copy-out to class properties.
+  - A variable whose type is a class type parameter (`T rec; rec.data`)
+    binds to the parameter's default class; elaboration selects the member
+    by name in each specialization (8.25).
+- **Closes:**
+  - all 7 parked `testbenches/uvm_*` cases;
+  - 22 chapter-16 `*-uvm` cases;
+  - 16 `generated/uvm_classes_*` cases;
+  - `uvm_agent_env`, `uvm_resource_db_read_by_name` and
+    `uvm_test_run_test`.
+
+Fixes for the `b86w1` losses (cases that had passed only because their
+`run_phase` bodies never ran):
+- A `process` handle held in a class property accepts the process methods,
+  and `get_randstate` returns into a class string property (9.7, 18.13).
+  Closes chapter-18 random-stability_0/1/3 and thread-stability_0/1.
+- A nonvoid function called as a statement from a class method discards its
+  result (13.4.1). Closes in-line-constraints--randomize_4/6 and
+  local-scope-resolution_1.
+- Automatic declarations of a fork get a frame of their own only outside a
+  callable (9.3.2). Inside a callable the callable's escaping frame already
+  holds them (t_fork_block_item_declaration, automatic_events2).
+- A suspended process restoring an escaping callable context skips
+  registers that context never captured. Before, the restore wrote
+  zero-width values into live registers: a fork inside a class task broke
+  another process that called into the same class.
+
+Runner: the parked list keeps the 4 SVA cases (16.2 assert0, 16.7, 16.11,
+16.13). The exclusions document is unchanged.
+
+Open leads:
+- A one-off audit grouped the remaining 215 failures into 25 architectural
+  changes and four batches (W, X, Y, Z). It is in
+  `.local-artifacts/lrm-closure/triage/b86/audit/audit-plan.md`. Batch 87
+  starts with W: SV class lowering S3-S7, class-scope specialization,
+  clocking drives through virtual interfaces, and run-time format strings.
+- The compiled engine still fails the escaping-context pattern above (a fork
+  inside a class task, with another process calling into the class). It
+  failed the same way before Batch 86; the interpreter, which the corpus
+  uses, is fixed.
+- `t_class_param_typedef2`: a type parameter whose default class lacks the
+  member needs per-specialization binding of `obj.x`.
+
 ### Batch 85: interface-port parameters, PSL directives, cross-library VHDL subtypes
 
 Full runs on the frozen `b85k` (VHDL suites) and `b85m` (SystemVerilog

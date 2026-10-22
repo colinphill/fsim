@@ -3687,6 +3687,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
+        // A property of the object a method runs on.
+        if (const auto property
+            = hir_named_class_property(name, hir_process_scope_, 0U)) {
+            return lower_hir_named_class_property(*property);
+        }
         auto signal = signals_.find(std::string { name });
         if (signal == signals_.end()) {
             const auto suffix = "." + std::string { name };
@@ -8721,7 +8726,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && lower_hir_class_string_property_write(*target, *lowered);
         }
         if (const auto property = hir_class_property_profile(*target)) {
-            if (signal_assignment || nonblocking || !property->writable) {
+            if (signal_assignment || !property->writable
+                || (nonblocking
+                    && (statement->systemverilog->assignment_control
+                            != semantic::sv::AssignmentControl::none
+                        || statement->systemverilog->delay))) {
                 return assignment_rejected(__LINE__);
             }
             // `this.m = new` constructs a mailbox or semaphore of the
@@ -8767,24 +8776,49 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 lowered = resize_register(
                     *lowered, property->width, property->signed_value);
             }
-            if (property->static_storage) {
-                if (!lower_intra_assignment_control()) {
+            std::optional<RegisterId> receiver;
+            if (!property->static_storage) {
+                receiver = lower_hir_expression(*property->receiver, 64U);
+                if (!receiver || register_width(*receiver) != 64U) {
                     return assignment_rejected(__LINE__);
                 }
+            }
+            if (!nonblocking && !lower_intra_assignment_control()) {
+                return assignment_rejected(__LINE__);
+            }
+            // A nonblocking assignment to a static variable, which a class
+            // property is, updates it in the NBA region (IEEE 1800-2017
+            // 10.4.2, 4.4.2.4): a detached child holding the evaluated value
+            // and object writes it there.
+            std::optional<InstructionIndex> fork_site;
+            std::optional<InstructionIndex> continuation;
+            if (nonblocking) {
+                fork_site = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Fork { });
+                continuation = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Jump { 0U });
+                process_.operations.emplace_back(WaitRegion {
+                    systemverilog_program_owner_
+                        ? runtime::SchedulerPhase::re_update
+                        : runtime::SchedulerPhase::update });
+            }
+            if (property->static_storage) {
                 process_.operations.emplace_back(ClassStaticPropertyWrite {
                     *lowered, property->identity });
-                return true;
+            } else {
+                process_.operations.emplace_back(ClassPropertyWrite {
+                    *receiver, *lowered, property->identity });
             }
-            const auto receiver = lower_hir_expression(
-                *property->receiver, 64U);
-            if (!receiver || register_width(*receiver) != 64U) {
-                return assignment_rejected(__LINE__);
+            if (nonblocking) {
+                process_.operations.emplace_back(ForkEnd { });
+                process_.operations[*continuation] = Jump {
+                    static_cast<InstructionIndex>(process_.operations.size()) };
+                process_.operations[*fork_site] = Fork {
+                    { *continuation + 1U },
+                    runtime::simir::ForkJoinKind::none, true, true };
             }
-            if (!lower_intra_assignment_control()) {
-                return assignment_rejected(__LINE__);
-            }
-            process_.operations.emplace_back(ClassPropertyWrite {
-                *receiver, *lowered, property->identity });
             return true;
         }
         const auto declaration = vhdl_array_call
@@ -19207,9 +19241,57 @@ bool Lowerer::lower_hir_statement_unsuspended(
             hir_local_registers_ = saved_hir_locals;
             hir_process_scope_ = saved_scope;
         };
+        // Each execution of a fork owns its block item declarations, which
+        // its branches share (IEEE 1800-2017 9.3.2); a loop that forks
+        // again must not overwrite the values earlier children still use.
+        // Outside a callable the automatic declarations live in a frame that
+        // the children capture as an escaping context; inside one they
+        // already belong to the callable's escaping frame. A static
+        // declaration keeps one shared variable.
+        const auto frame_site = static_cast<InstructionIndex>(
+            process_.operations.size());
+        std::vector<semantic::DeclarationId> automatic_declarations;
+        for (const auto declaration_id : input.declarations) {
+            const auto declaration
+                = specialized_hir_unit_->find_declaration(declaration_id);
+            if (!active_hir_callable_ && declaration
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->lifetime
+                    == semantic::sv::Lifetime::automatic) {
+                automatic_declarations.push_back(declaration_id);
+            }
+        }
+        const bool fork_frame = !automatic_declarations.empty();
+        if (fork_frame) {
+            process_.operations.emplace_back(CallableFramePush { });
+        }
         if (!initialize_hir_declarations(input.declarations)) {
             restore_scope();
             return false;
+        }
+        std::uint32_t frame_identity { };
+        if (fork_frame) {
+            CallableFramePush push;
+            for (const auto declaration : automatic_declarations) {
+                if (const auto found
+                    = hir_local_registers_.find(declaration.value());
+                    found != hir_local_registers_.end()) {
+                    push.packed.push_back(found->second);
+                }
+                if (const auto found
+                    = hir_local_string_registers_.find(declaration.value());
+                    found != hir_local_string_registers_.end()) {
+                    push.strings.push_back(found->second);
+                }
+                if (const auto found = hir_local_container_registers_.find(
+                        declaration.value());
+                    found != hir_local_container_registers_.end()) {
+                    push.containers.push_back(found->second);
+                }
+            }
+            frame_identity = next_callable_invocation_identity_++;
+            push.identity = frame_identity;
+            process_.operations[frame_site] = std::move(push);
         }
 
         // The markers name the fork's own scope so a hierarchical disable
@@ -19304,6 +19386,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             std::move(branches), join, input.fork_isolate_register_frame,
             input.fork_detached
         };
+        if (fork_frame) {
+            process_.operations.emplace_back(
+                CallableFramePop { frame_identity, { }, { }, { } });
+        }
         restore_scope();
         return true;
     };

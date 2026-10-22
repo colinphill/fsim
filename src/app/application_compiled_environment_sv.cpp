@@ -2,7 +2,9 @@
 #include "application_compiled_environment_sv.hpp"
 #include "application_compiled_source.hpp"
 
+#include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -448,6 +450,10 @@ private:
         const auto relation = [&](frontend::SystemVerilogClassBase& base) {
             if (const auto* selected = named_class(base.name, scope, base.span))
                 base.declaration_identity = selected->canonical_identity;
+            // A source base leads the chain on to a library class.
+            else if (const auto* local = source_class(base.name, scope);
+                local != nullptr && base.declaration_identity.empty())
+                base.declaration_identity = local->canonical_identity;
             for (auto& actual : base.parameter_actuals) {
                 if (actual.type_actual)
                     source_type(*actual.type_actual, scope);
@@ -583,6 +589,37 @@ private:
         return result;
     }
 
+    // The declared class type of a property of a class being compiled; its
+    // access stays for the frontend to bind, but a library class it names
+    // binds the members selected through it (`m.ap.connect(...)`).
+    ClassTypeView source_property(std::string_view identity, std::string_view name,
+        const SourceScope& scope)
+    {
+        const frontend::Type* type { };
+        class_chain(std::string { identity }, [&](const auto& owner) {
+            for (const auto& item : owner.properties) {
+                if constexpr (requires { item.canonical_identity; }) {
+                    if (item.name == name)
+                        return false;
+                } else if (item.declaration.name == name) {
+                    type = &item.declaration.type;
+                    return false;
+                }
+            }
+            return true;
+        });
+        if (type == nullptr)
+            return { };
+        auto declaration = type->systemverilog_class_declaration;
+        if (declaration.empty() && !type->named_type.empty()) {
+            if (const auto* local = source_class(type->named_type, scope))
+                declaration = local->canonical_identity;
+            else if (const auto* compiled = named_class(type->named_type, scope, type->named_type_span))
+                declaration = compiled->canonical_identity;
+        }
+        return { type, nullptr, std::move(declaration) };
+    }
+
     const sv::ClassMethod* method(std::string_view identity,
         std::string_view name) const
     {
@@ -652,6 +689,76 @@ private:
         error("FSIM-SV-CLASS-013", "compiled method '" + method.canonical_identity
             + "' has no matching argument profile", source);
         return false;
+    }
+
+    // A uvm_config_db or uvm_resource_db method of the UVM library runs on
+    // the native UVM database, keyed by the selection's value type.
+    // The package-level report functions (`uvm_info` outside a component)
+    // report through the native report server for the root (IEEE
+    // 1800.2-2020 F.3.2.3).
+    std::string uvm_report_intrinsic(std::string_view name, const SourceScope& scope,
+        const frontend::SourceSpan& source)
+    {
+        if (name.starts_with("uvm_pkg::"))
+            name.remove_prefix(std::string_view { "uvm_pkg::" }.size());
+        if (name != "uvm_report_enabled" && name != "uvm_report_info"
+            && name != "uvm_report_warning" && name != "uvm_report_error"
+            && name != "uvm_report_fatal" && name != "uvm_get_report_object")
+            return { };
+        if (!scope.class_identity.empty() && method(scope.class_identity, name) != nullptr)
+            return { };
+        const auto* declaration = named_declaration(name, scope, source);
+        if (declaration == nullptr || !declaration->callable)
+            return { };
+        if (name == "uvm_get_report_object")
+            return "@uvm-report-object";
+        return "@uvm-report-" + std::string { name.substr(std::string_view { "uvm_report_" }.size()) };
+    }
+
+    std::string uvm_database_intrinsic(const sv::ClassDeclaration& owner,
+        const std::string_view member, const frontend::Type* selection,
+        const SourceScope& scope, const frontend::SourceSpan& source)
+    {
+        if (selection == nullptr
+            || selection->systemverilog_class_parameter_actuals.empty()
+            || !support::is_uvm_library_identity(owner.canonical_identity))
+            return { };
+        std::string_view family;
+        if (owner.name == "uvm_config_db"
+            && (member == "set" || member == "get" || member == "exists"))
+            family = "config";
+        else if (owner.name == "uvm_resource_db"
+            && (member == "set" || member == "read_by_name"
+                || member == "write_by_name"))
+            family = "resource";
+        else
+            return { };
+        const auto& actual = selection->systemverilog_class_parameter_actuals.front();
+        const auto named = [&](const std::string& spelling) {
+            if (const auto* compiled = named_class(spelling, scope, source))
+                return "class:" + compiled->canonical_identity;
+            if (const auto* local = source_class(spelling, scope))
+                return "class:" + local->canonical_identity;
+            return "packed:" + spelling;
+        };
+        std::string type;
+        if (actual.type_actual) {
+            const auto& selected = *actual.type_actual;
+            const auto spelling = selected.named_type.empty()
+                ? selected.spelling : selected.named_type;
+            if (selected.systemverilog_virtual_interface)
+                type = "vif:" + spelling + ":64";
+            else if (spelling == "string")
+                type = "string";
+            else
+                type = named(spelling);
+        } else if (actual.value.kind == frontend::ExpressionKind::Identifier) {
+            type = named(actual.value.text);
+        } else {
+            return { };
+        }
+        return "@uvm-" + std::string { family } + "-db-" + std::string { member }
+            + ":" + type;
     }
 
     ClassTypeView method_result(const sv::ClassMethod& method) const
@@ -759,6 +866,8 @@ private:
                 const auto type = expression(receiver, scope);
                 if (!type.identity.empty()) {
                     const auto member = input.text.substr(dot + 1U);
+                    if (property(type.identity, member) == nullptr)
+                        return source_property(type.identity, member, scope);
                     return bind_property(input, std::move(receiver), type, member, scope, false);
                 }
             }
@@ -799,16 +908,59 @@ private:
         if (input.text.starts_with("@sv-select:") && operands.size() == 1U
             && !operands.front().identity.empty()) {
             const auto member = input.text.substr(std::string_view { "@sv-select:" }.size());
+            if (property(operands.front().identity, member) == nullptr)
+                return source_property(operands.front().identity, member, scope);
             auto receiver = input.operands.front();
             return bind_property(input, std::move(receiver), operands.front(), member, scope, false);
         }
         const auto separator = input.text.rfind("::");
+        // `C::type_id::create(name, parent)` creates a C through the factory
+        // registry the UVM utility macros declare (IEEE 1800.2-2020 8.2.4).
+        if (constexpr std::string_view registry { "::type_id::create" };
+            input.text.ends_with(registry)) {
+            const auto class_name = std::string_view { input.text }.substr(
+                0, input.text.size() - registry.size());
+            const auto hash = class_name.find('#');
+            const auto name = std::string { class_name.substr(0, hash) };
+            std::string canonical;
+            if (const auto* compiled = named_class(name, scope, input.span))
+                canonical = compiled->canonical_identity;
+            else if (const auto* local = source_class(name, scope))
+                canonical = local->canonical_identity;
+            if (!canonical.empty()) {
+                input.text = "@sv-static-method:@uvm-registry-create:" + canonical;
+                input.call_result_width = 64U;
+                input.call_result_signed = false;
+                input.call_result_domain = frontend::ValueDomain::Bit2;
+                return { nullptr, nullptr, canonical };
+            }
+        }
         if (separator != std::string::npos) {
-            if (const auto* owner = named_class(std::string_view { input.text }.substr(0, separator),
-                    scope, input.span)) {
+            // `C#(...)::m(...)` selects a specialization of class C (8.25.1).
+            const auto owner_name = std::string_view { input.text }.substr(0, separator);
+            const auto hash = owner_name.find('#');
+            if (const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span)) {
                 const auto member = input.text.substr(separator + 2U);
-                return bind_method(input, { nullptr, nullptr, owner->canonical_identity },
+                if (hash != std::string_view::npos) {
+                    if (auto intrinsic = uvm_database_intrinsic(*owner, member,
+                            input.systemverilog_class_selection.get(), scope, input.span);
+                        !intrinsic.empty()) {
+                        input.text = "@sv-static-method:" + std::move(intrinsic);
+                        input.call_result_width = member == "set" ? 0U : 1U;
+                        input.call_result_signed = false;
+                        input.call_result_domain = frontend::ValueDomain::Bit2;
+                        return { };
+                    }
+                }
+                auto result = bind_method(input, { nullptr, nullptr, owner->canonical_identity },
                     member, scope, true);
+                if (hash != std::string_view::npos && input.systemverilog_class_selection) {
+                    auto selection = *input.systemverilog_class_selection;
+                    selection.systemverilog_class_declaration = owner->canonical_identity;
+                    input.systemverilog_class_owner
+                        = std::make_shared<const frontend::Type>(std::move(selection));
+                }
+                return result;
             }
         }
         if (!scope.class_identity.empty() && !input.text.starts_with('@')) {
@@ -824,6 +976,23 @@ private:
                 return bind_method(input, { nullptr, nullptr, scope.class_identity },
                     member, scope, selected->static_method);
             }
+        }
+        if (auto intrinsic = uvm_report_intrinsic(input.text, scope, input.span);
+            !intrinsic.empty()) {
+            const bool query = intrinsic == "@uvm-report-enabled";
+            const bool object = intrinsic == "@uvm-report-object";
+            // The root's report object keeps its library type, so the
+            // report macros call its methods.
+            ClassTypeView result;
+            if (object) {
+                if (const auto* declaration = named_declaration(input.text, scope, input.span))
+                    result = compiled_type(declaration->callable->return_type);
+            }
+            input.text = "@sv-static-method:" + std::move(intrinsic);
+            input.call_result_width = query ? 32U : object ? 64U : 0U;
+            input.call_result_signed = query;
+            input.call_result_domain = frontend::ValueDomain::Bit2;
+            return result;
         }
         if (const auto* declaration = named_declaration(input.text, scope, input.span)) {
             if (declaration->callable)
@@ -846,10 +1015,21 @@ private:
             if (!type.identity.empty())
                 selected = method(type.identity, std::string_view { input.task_name }.substr(dot + 1U));
         } else if (separator != std::string::npos) {
-            if (const auto* owner = named_class(std::string_view { input.task_name }.substr(0, separator),
-                    scope, input.span))
-                selected = method(owner->canonical_identity,
-                    std::string_view { input.task_name }.substr(separator + 2U));
+            // `C#(...)::m` selects a specialization of class C (8.25.1).
+            auto owner_name = std::string_view { input.task_name }.substr(0, separator);
+            const auto hash = owner_name.find('#');
+            const auto member = std::string_view { input.task_name }.substr(separator + 2U);
+            if (const auto* owner = named_class(owner_name.substr(0, hash), scope, input.span)) {
+                if (hash != std::string_view::npos) {
+                    if (auto intrinsic = uvm_database_intrinsic(*owner, member,
+                            input.systemverilog_task_class_selection.get(), scope, input.span);
+                        !intrinsic.empty()) {
+                        input.task_name = "@sv-static-task:" + std::move(intrinsic);
+                        return;
+                    }
+                }
+                selected = method(owner->canonical_identity, member);
+            }
         } else if (!scope.class_identity.empty()) {
             selected = method(scope.class_identity, input.task_name);
             if (selected != nullptr && !selected->static_method) {
@@ -859,8 +1039,14 @@ private:
                 receiver.nominal_type = scope.class_identity;
             }
         }
-        if (selected == nullptr)
+        if (selected == nullptr) {
+            if (static_access && separator == std::string::npos) {
+                if (auto intrinsic = uvm_report_intrinsic(input.task_name, scope, input.span);
+                    !intrinsic.empty())
+                    input.task_name = "@sv-static-task:" + std::move(intrinsic);
+            }
             return;
+        }
         if (!accessible(selected->visibility, selected->owner_identity, scope, input.span)
             || !validate_call(*selected, input.task_arguments.size(), input.span))
             return;
@@ -893,9 +1079,127 @@ private:
             prepare_statement(statement, scope, returned);
     }
 
+    // `run_test(name)` of the UVM library runs on the native UVM services
+    // (IEEE 1800.2-2020 F.3.1.2). The phases before and after run are native
+    // calls; the run phase forks each component's run_phase as a process of
+    // the calling thread, which ends the simulation when the phase ends. The
+    // block is parsed onto the call's source line, so it reports there.
+    void expand_uvm_run_test(frontend::Statement& input, const SourceScope& scope)
+    {
+        if (input.kind != frontend::StatementKind::TaskCall
+            || (input.task_name != "run_test" && input.task_name != "uvm_pkg::run_test")
+            || input.task_arguments.size() > 1U)
+            return;
+        const auto* declaration = named_declaration(input.task_name, scope, input.span);
+        if (declaration == nullptr || !declaration->callable
+            || declaration->callable->function)
+            return;
+        std::string text(input.span.begin.line > 1U ? input.span.begin.line - 1U : 0U, '\n');
+        const bool named = !input.task_arguments.empty() && input.task_arguments.front().valid();
+        // Each function phase calls its method on the components in the
+        // order next() hands them out; run_phase runs as one process per
+        // component (IEEE 1800.2-2020 9.8).
+        const auto function_phase = [](const int kind, const std::string_view method) {
+            return "__fsim_uvm_phase = __fsim_uvm_run_test_function_phase(" + std::to_string(kind)
+                + "); __fsim_uvm_component = __fsim_uvm_run_test_next(); "
+                  "while (__fsim_uvm_component != null) begin __fsim_uvm_component."
+                + std::string { method }
+                + "(__fsim_uvm_phase); __fsim_uvm_component = __fsim_uvm_run_test_next(); end ";
+        };
+        text += "module __fsim_uvm_run_test; initial begin begin : __fsim_uvm_run_test "
+                "int __fsim_uvm_count; uvm_pkg::uvm_phase __fsim_uvm_phase; "
+                "uvm_pkg::uvm_component __fsim_uvm_component; "
+                "__fsim_uvm_count = __fsim_uvm_run_test_begin(";
+        text += named ? "\"__fsim_uvm_test_name\"" : "";
+        text += "); ";
+        text += function_phase(0, "build_phase");
+        text += function_phase(1, "connect_phase");
+        text += function_phase(2, "end_of_elaboration_phase");
+        text += function_phase(3, "start_of_simulation_phase");
+        text += "__fsim_uvm_count = __fsim_uvm_run_test_components(); "
+                "__fsim_uvm_phase = __fsim_uvm_run_test_phase(); "
+                "for (int __fsim_uvm_index = 0; __fsim_uvm_index < __fsim_uvm_count; "
+                "__fsim_uvm_index++) fork automatic uvm_pkg::uvm_component "
+                "__fsim_uvm_task_component = __fsim_uvm_run_test_component(__fsim_uvm_index); "
+                "__fsim_uvm_task_component.run_phase(__fsim_uvm_phase); join_none "
+                "__fsim_uvm_run_test_wait(); ";
+        text += function_phase(4, "extract_phase");
+        text += function_phase(5, "check_phase");
+        text += function_phase(6, "report_phase");
+        text += function_phase(7, "final_phase");
+        text += "__fsim_uvm_run_test_end(); $finish; end end endmodule\n";
+        auto parsed = frontend::parse_verilog(
+            frontend::SourceText { std::string { input.span.source_name.str() }, std::move(text) },
+            scope.unit != nullptr ? scope.unit->standard_revision
+                                  : frontend::StandardRevision::SystemVerilog2017);
+        frontend::Statement* block { };
+        const auto find = [&](auto& self, auto& items) -> void {
+            for (auto& item : items) {
+                if (block != nullptr)
+                    return;
+                if (item.label == "__fsim_uvm_run_test")
+                    block = &item;
+                else
+                    self(self, item.statements);
+            }
+        };
+        for (auto& unit : parsed.design.units)
+            for (auto& process : unit.processes)
+                find(find, process.statements);
+        if (!parsed.ok() || block == nullptr) {
+            error("FSIM-SV-CLASS-013", "UVM run_test could not be prepared"
+                + (parsed.diagnostics.empty() ? std::string { }
+                                              : ": " + parsed.diagnostics.front().message),
+                input.span);
+            return;
+        }
+        auto name = named ? std::move(input.task_arguments.front()) : frontend::Expression { };
+        // The placeholder names are the native calls of the run.
+        const auto rewrite = [&](auto& self, frontend::Expression& expression) -> void {
+            for (auto& operand : expression.operands)
+                self(self, operand);
+            if (expression.kind == frontend::ExpressionKind::StringLiteral
+                && expression.text.find("__fsim_uvm_test_name") != std::string::npos) {
+                expression = name;
+            } else if (expression.kind == frontend::ExpressionKind::Call
+                && expression.text.starts_with("__fsim_uvm_run_test_")) {
+                auto member = expression.text.substr(std::string_view { "__fsim_uvm_run_test_" }.size());
+                std::ranges::replace(member, '_', '-');
+                expression.text = "@sv-static-method:@uvm-run-test-" + member;
+                const bool count = member == "begin" || member == "components";
+                expression.call_result_width = count ? 32U : 64U;
+                expression.call_result_signed = count;
+                expression.call_result_domain = frontend::ValueDomain::Bit2;
+            }
+        };
+        const auto walk = [&](auto& self, frontend::Statement& statement) -> void {
+            for (auto* expression : { &statement.target, &statement.value, &statement.condition,
+                     &statement.loop_initial, &statement.loop_limit, &statement.loop_update_target })
+                rewrite(rewrite, *expression);
+            for (auto& argument : statement.task_arguments)
+                rewrite(rewrite, argument);
+            for (auto& declaration : statement.declarations)
+                if (declaration.initializer)
+                    rewrite(rewrite, *declaration.initializer);
+            if (statement.kind == frontend::StatementKind::TaskCall
+                && statement.task_name.starts_with("__fsim_uvm_run_test_")) {
+                statement.task_name = "@sv-static-task:@uvm-run-test-"
+                    + statement.task_name.substr(std::string_view { "__fsim_uvm_run_test_" }.size());
+            }
+            for (auto* nested : { &statement.statements, &statement.loop_updates,
+                     &statement.else_statements })
+                for (auto& item : *nested)
+                    self(self, item);
+        };
+        walk(walk, *block);
+        block->label.clear();
+        input = std::move(*block);
+    }
+
     void prepare_statement(frontend::Statement& input, SourceScope scope,
         const ClassTypeView& returned)
     {
+        expand_uvm_run_test(input, scope);
         if (!input.systemverilog_imports.empty()) {
             scope.block_imports.push_back(&input.systemverilog_imports);
             for (const auto& import : input.systemverilog_imports) {

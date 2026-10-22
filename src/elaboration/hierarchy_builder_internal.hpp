@@ -551,6 +551,8 @@ private:
             package_signal { };
         std::function<std::optional<ContainerObjectId>(semantic::DeclarationId)>
             package_container { };
+        std::function<std::optional<StringObjectId>(semantic::DeclarationId)>
+            package_string { };
     };
 
     void add_compiled_vhdl_root(
@@ -1651,6 +1653,8 @@ private:
         std::function<std::optional<ContainerObjectId>(
             semantic::DeclarationId)>
             package_container;
+        std::function<std::optional<StringObjectId>(semantic::DeclarationId)>
+            package_string;
     };
     // Retries the forward-deferred items of instances below `ancestor`, or
     // all of them with an empty ancestor; `final` reports what still misses.
@@ -1748,6 +1752,15 @@ private:
     // variable, materialized on its first use.
     std::optional<ContainerObjectId>
     compiled_systemverilog_package_container_object(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::DeclarationId declaration,
+        const SystemVerilogPackedTypeResolver& packed_type_resolver,
+        const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+        const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
+    // The design-global string object of a package or `$unit` string
+    // variable, materialized on its first use.
+    std::optional<StringObjectId>
+    compiled_systemverilog_package_string_object(
         const semantic::SpecializedHirUnit& specialization,
         semantic::DeclarationId declaration,
         const SystemVerilogPackedTypeResolver& packed_type_resolver,

@@ -4150,6 +4150,41 @@ Lowerer::hir_class_method_profile(
         result.string_result = true;
         return result;
     }
+    if (static_call && call.class_member_identity.starts_with("@uvm-")) {
+        if (!call.argument_names.empty()
+            && std::ranges::any_of(call.argument_names,
+                [](const std::string& name) { return !name.empty(); })) {
+            return std::nullopt;
+        }
+        std::vector<std::optional<semantic::ExpressionId>> expressions(
+            call.operands.begin(), call.operands.end());
+        auto actuals = hir_uvm_database_actuals(
+            call.class_member_identity, expressions, process_scope);
+        if (!actuals) {
+            return std::nullopt;
+        }
+        HirClassMethodProfile result;
+        result.identity = call.class_member_identity;
+        result.actuals = std::move(*actuals);
+        // A database call answers a bit; the run's component count is an
+        // int, and its phases and components are class handles.
+        const auto& identity = call.class_member_identity;
+        const bool count = identity == "@uvm-run-test-begin"
+            || identity == "@uvm-run-test-components"
+            || identity == "@uvm-report-enabled";
+        result.result_width = count ? 32U
+            : (identity.starts_with("@uvm-run-test-")
+                  && identity != "@uvm-run-test-ended")
+                || identity.starts_with("@uvm-registry-create:")
+                || identity == "@uvm-report-object"
+            ? 64U
+            : 1U;
+        result.result_signed = count;
+        result.result_domain = frontend::ValueDomain::Bit2;
+        result.static_method = true;
+        result.virtual_dispatch = false;
+        return result;
+    }
     const auto builtin_randomize
         = call.class_member_identity == randomize_identity;
     const auto builtin_mode
@@ -4393,6 +4428,27 @@ Lowerer::hir_class_task_profile(
     }
     const auto native_uvm
         = class_call && support::is_uvm_library_identity(identity);
+    // A uvm_config_db or uvm_resource_db call runs on the native UVM
+    // database.
+    if (static_call && identity.starts_with("@uvm-")) {
+        std::vector<std::optional<semantic::ExpressionId>> expressions;
+        for (const auto& association : call.task_arguments) {
+            if (association.formal) {
+                return std::nullopt;
+            }
+            expressions.push_back(association.actual);
+        }
+        auto actuals = hir_uvm_database_actuals(
+            identity, expressions, process_scope);
+        if (!actuals) {
+            return std::nullopt;
+        }
+        HirClassTaskProfile result;
+        result.identity = std::string { identity };
+        result.static_method = true;
+        result.actuals = std::move(*actuals);
+        return result;
+    }
 
     auto selected_declaration = std::optional<semantic::DeclarationId> { };
     auto interface_receiver = std::optional<std::string> { };
@@ -4432,25 +4488,23 @@ Lowerer::hir_class_task_profile(
         selected_declaration = resolver.resolve_systemverilog_name(
             call.task, call.scope, task, false).unique();
         // A class method may call a compilation-unit or package-visible
-        // void function as a statement. Such a call is retained as a task
-        // call by the class-body resolver, so accept only the exact visible
-        // function declaration with the predefined void return type here.
+        // function as a statement. Such a call is retained as a task call
+        // by the class-body resolver; a nonvoid function's result is
+        // discarded (IEEE 1800-2017 13.4.1).
         if (!selected_declaration
             && identity.find_first_of(".:") == std::string_view::npos) {
-            const auto void_function = [](
+            const auto function = [](
                 const semantic::CompiledDeclarationView& view) {
                 return view.systemverilog != nullptr
                     && view.systemverilog->form
                         == semantic::sv::DeclarationForm::function
                     && view.systemverilog->callable
-                    && view.systemverilog->callable->function
-                    && view.systemverilog->callable->return_type.target.spelling
-                        == "void";
+                    && view.systemverilog->callable->function;
             };
-            const auto visible_void_lookup
+            const auto visible_function_lookup
                 = resolver.resolve_systemverilog_name(
-                    call.task, call.scope, void_function, false);
-            selected_declaration = visible_void_lookup.unique();
+                    call.task, call.scope, function, false);
+            selected_declaration = visible_function_lookup.unique();
             instance_function = selected_declaration.has_value();
         }
         const auto separator = identity.rfind('.');
@@ -4606,6 +4660,82 @@ Lowerer::hir_class_task_profile(
         return std::nullopt;
     }
     result.actuals = std::move(*actuals);
+    return result;
+}
+
+std::optional<std::vector<Lowerer::HirClassMethodActual>>
+Lowerer::hir_uvm_database_actuals(const std::string_view identity,
+    const std::span<const std::optional<semantic::ExpressionId>> expressions,
+    const semantic::ScopeId process_scope) const
+{
+    const auto config = identity.starts_with("@uvm-config-db-");
+    // A run_test step, a factory create or a package report call has no
+    // value actual.
+    const auto report = identity.starts_with("@uvm-report-");
+    const auto run_test = identity.starts_with("@uvm-run-test-")
+        || identity.starts_with("@uvm-registry-create:") || report;
+    if (!config && !run_test && !identity.starts_with("@uvm-resource-db-")) {
+        return std::nullopt;
+    }
+    const auto read = identity.starts_with("@uvm-config-db-get:")
+        || identity.starts_with("@uvm-resource-db-read_by_name:");
+    const auto value_index = config ? 3U : 2U;
+    std::vector<HirClassMethodActual> result;
+    for (std::size_t index { }; index < expressions.size(); ++index) {
+        if (!expressions[index]) {
+            return std::nullopt;
+        }
+        // The scope and name formals are strings (IEEE 1800.2-2020 C.4.2.2,
+        // C.2.3.2), as is a factory create's name.
+        // uvm_report_enabled(verbosity, severity, id) and uvm_report_*(id,
+        // message, verbosity, filename, line, context_name, ...).
+        const bool name_formal = report
+            ? (identity == "@uvm-report-enabled"
+                    ? index == 2U
+                    : index == 0U || index == 1U || index == 3U
+                        || index == 5U)
+            : run_test
+            ? identity.starts_with("@uvm-registry-create:") && index == 0U
+            : index + 2U >= value_index && index < value_index;
+        if (name_formal
+            || hir_expression_is_string(*expressions[index], process_scope)) {
+            HirClassMethodActual actual;
+            actual.expression = *expressions[index];
+            actual.string = true;
+            actual.domain = frontend::ValueDomain::String;
+            actual.direction = read && index == value_index
+                ? frontend::PortDirection::Inout
+                : frontend::PortDirection::Input;
+            result.push_back(std::move(actual));
+            continue;
+        }
+        const auto domain = hir_expression_domain(
+            *expressions[index], process_scope);
+        const auto width = hir_expression_width(
+            *expressions[index], process_scope);
+        if (!domain || (*domain != frontend::ValueDomain::String
+                && (!width || *width == 0U))) {
+            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                std::cerr << "[fsim-hir-lower] uvm-database-actual "
+                          << identity << " index=" << index
+                          << " domain=" << domain.has_value()
+                          << " width=" << width.value_or(0U) << '\n';
+            }
+            return std::nullopt;
+        }
+        HirClassMethodActual actual;
+        actual.expression = *expressions[index];
+        actual.string = *domain == frontend::ValueDomain::String;
+        actual.domain = *domain;
+        actual.width = actual.string ? 0U : *width;
+        actual.direction = read && index == value_index
+            ? frontend::PortDirection::Inout
+            : frontend::PortDirection::Input;
+        result.push_back(std::move(actual));
+    }
+    if (!run_test && result.size() <= value_index) {
+        return std::nullopt;
+    }
     return result;
 }
 
@@ -6288,6 +6418,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     // A class function runs as a lowered subroutine when it can; otherwise
     // the runtime interprets it.
     if (receiver.has_value() != profile->static_method
+        && !profile->identity.starts_with("@uvm-")
         && inline_constraints->empty()) {
         const auto mark = process_.operations.size();
         const auto frames = hir_callable_frames_.size();
@@ -6434,6 +6565,11 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             : lower_hir_packed_copy_out(
                   actual.expression, actuals[index]);
         if (!copied) {
+            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                std::cerr << "[fsim-hir-lower] class-call copy-out "
+                          << profile->identity << " index=" << index
+                          << '\n';
+            }
             return std::nullopt;
         }
     }
@@ -7003,6 +7139,38 @@ bool Lowerer::lower_hir_class_task_call(
             base_constructor_prefix)) {
         return lower_hir_base_constructor_call(statement_id);
     }
+    // The native UVM run waits until its run phase ends: the phase ends in
+    // a runtime call, which publishes it through the class heap notifier.
+    if (const auto statement = specialized_hir_unit_->find_statement(
+            statement_id);
+        statement && statement->systemverilog != nullptr
+        && statement->systemverilog->task.spelling
+            == "@sv-static-task:@uvm-run-test-wait") {
+        const auto notifier = hir_class_heap_notifier();
+        if (!notifier) {
+            return false;
+        }
+        // The forked run_phase processes start first.
+        process_.operations.emplace_back(Yield { });
+        const auto check = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto ended = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            ended, "@uvm-run-test-ended", { }, { }, { }, 1U, { } });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            ended, 0U, branch + 1U, UnknownBranchPolicy::when_false });
+        process_.operations.emplace_back(WaitOn { { *notifier } });
+        process_.operations.emplace_back(Jump { check });
+        process_.operations[branch] = Branch {
+            ended,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            branch + 1U,
+            UnknownBranchPolicy::when_false,
+        };
+        return true;
+    }
     const auto profile = hir_class_task_profile(
         statement_id, hir_process_scope_);
     if (!profile) {
@@ -7023,6 +7191,246 @@ bool Lowerer::lower_hir_class_task_call(
         receiver = *hir_class_receiver_register_;
     }
 
+    // A virtual UVM library task called through a handle runs the override
+    // of the object's class when that class extends the library class
+    // (`component.run_phase(phase)`, IEEE 1800-2017 8.20); other objects
+    // keep the native service.
+    // `super.m()` names the base method itself (8.15).
+    const auto base_call = [&] {
+        const auto record = profile->receiver
+            ? specialized_hir_unit_->find_expression(*profile->receiver)
+            : std::nullopt;
+        return record && record->systemverilog != nullptr
+            && record->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            && record->systemverilog->text == "super";
+    };
+    // An analysis port's write calls write on every object implementing an
+    // analysis imp the port reaches (IEEE 1800.2-2020 12.2.10.1): the
+    // runtime enumerates them, and each runs the write of its own class.
+    if (native_uvm && receiver && !profile->static_method
+        && profile->identity.ends_with("::uvm_analysis_port::write")
+        && profile->actuals.size() == 1U) {
+        const auto& classes
+            = specialized_hir_unit_->design().systemverilog_hir.classes();
+        const auto depth = [&](const semantic::sv::ClassDeclaration& item) {
+            std::size_t result { };
+            std::set<std::string> visited;
+            for (auto base = item.base_declaration_identity;
+                 !base.empty() && visited.insert(base).second; ++result) {
+                const auto found = std::ranges::find(classes, base,
+                    &semantic::sv::ClassDeclaration::canonical_identity);
+                base = found == classes.end()
+                    ? std::string { } : found->base_declaration_identity;
+            }
+            return result;
+        };
+        std::vector<std::pair<std::size_t, HirClassOverride>> writers;
+        for (const auto& candidate : classes) {
+            if (support::is_uvm_library_identity(
+                    candidate.canonical_identity)) {
+                continue;
+            }
+            for (const auto& method : candidate.methods) {
+                const auto formals = [&] {
+                    const auto declaration
+                        = specialized_hir_unit_->find_declaration(
+                            method.declaration);
+                    return declaration && declaration->systemverilog != nullptr
+                            && declaration->systemverilog->callable
+                        ? declaration->systemverilog->callable->formals.size()
+                        : std::size_t { };
+                };
+                if (method.name == "write" && method.defined
+                    && !method.static_method && formals() == 1U) {
+                    writers.push_back({ depth(candidate),
+                        { candidate.canonical_identity, method.declaration,
+                            method.canonical_identity } });
+                }
+            }
+        }
+        // The most derived class is tested first.
+        std::ranges::stable_sort(writers, std::greater { },
+            &std::pair<std::size_t, HirClassOverride>::first);
+        const auto index = allocate_register(32U, frontend::ValueDomain::Bit2);
+        const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+        const auto none = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            index, unsigned_value(0U, 32U) });
+        process_.operations.emplace_back(LoadConstant {
+            one, unsigned_value(1U, 32U) });
+        process_.operations.emplace_back(LoadConstant {
+            none, unsigned_value(0U, 64U) });
+        const auto loop = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto target = allocate_register(64U, frontend::ValueDomain::Bit2);
+        const auto input = static_cast<std::uint8_t>(
+            frontend::PortDirection::Input);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            target, "@uvm-analysis-target", { *receiver, index },
+            { std::string { }, std::string { } }, { input, input }, 64U,
+            { 0U, 0U } });
+        const auto found = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::not_equal, found, target, none });
+        const auto done = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            found, done + 1U, 0U, UnknownBranchPolicy::when_false });
+        std::vector<InstructionIndex> delivered;
+        for (const auto& [rank, writer] : writers) {
+            (void)rank;
+            const auto selected = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ClassMethodCall {
+                selected, target, "@checked-cast:" + writer.owner_identity,
+                { }, { }, { }, 1U, false });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            auto writer_profile = *profile;
+            writer_profile.declaration = writer.declaration;
+            writer_profile.identity = writer.identity;
+            // The writer runs in its own class, not the port's
+            // specialization: the one the design names when the class is
+            // parameterized.
+            writer_profile.specialization.reset();
+            {
+                auto& specializations = class_specializations();
+                std::vector<std::uint32_t> named;
+                std::optional<std::uint32_t> fallback;
+                for (std::uint32_t id { }; id < specializations.size(); ++id) {
+                    const auto& item = specializations.at(id);
+                    if (item.declaration_identity != writer.owner_identity
+                        || item.parameters.empty()) {
+                        continue;
+                    }
+                    fallback = id;
+                    if (!item.default_specialization) {
+                        named.push_back(id);
+                    }
+                }
+                writer_profile.specialization = named.size() == 1U
+                    ? std::optional<std::uint32_t> { named.front() }
+                    : fallback;
+            }
+            if (!lower_hir_class_task_invocation(
+                    statement_id, writer_profile, target)) {
+                return false;
+            }
+            delivered.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            process_.operations[branch] = Branch {
+                selected, branch + 1U,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+        }
+        const auto next = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto jump : delivered) {
+            process_.operations[jump] = Jump { next };
+        }
+        const auto advanced = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_signed, advanced, index, one });
+        process_.operations.emplace_back(CopyRegister { index, advanced });
+        process_.operations.emplace_back(Jump { loop });
+        process_.operations[done] = Branch {
+            found, done + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false };
+        return true;
+    }
+    std::vector<InstructionIndex> native_exits;
+    if (native_uvm && receiver && !profile->static_method && !base_call()) {
+        for (const auto& item :
+            hir_class_method_overrides(profile->declaration)) {
+            if (support::is_uvm_library_identity(item.identity)) {
+                continue;
+            }
+            const auto selected = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ClassMethodCall {
+                selected,
+                *receiver,
+                "@checked-cast:" + item.owner_identity,
+                { },
+                { },
+                { },
+                1U,
+                false,
+            });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            auto override_profile = *profile;
+            override_profile.declaration = item.declaration;
+            override_profile.identity = item.identity;
+            if (!lower_hir_class_task_invocation(
+                    statement_id, override_profile, receiver)) {
+                return false;
+            }
+            native_exits.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            process_.operations[branch] = Branch {
+                selected,
+                branch + 1U,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
+        }
+    }
+    // The sequence-item handshake waits on the class heap (IEEE 1800.2-2020
+    // 14.2.6, 15.2.2.1): a driver's pull-port get until the sequencer holds
+    // an item, a sequence's finish_item until a driver took the item.
+    const auto native_method = [&] {
+        const auto separator = profile->identity.rfind("::");
+        return separator == std::string::npos
+            ? std::string_view { }
+            : std::string_view { profile->identity }.substr(separator + 2U);
+    }();
+    const auto sequence_method = native_uvm && receiver
+        && profile->identity.find("::uvm_sequence_base::")
+            != std::string::npos;
+    const auto wait_for_uvm = [&](const std::string_view query,
+                                  const RegisterId operand) {
+        const auto notifier = hir_class_heap_notifier();
+        if (!notifier) {
+            return false;
+        }
+        const auto check = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto ready = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall {
+            ready, std::string { query }, { operand }, { std::string { } },
+            { static_cast<std::uint8_t>(frontend::PortDirection::Input) },
+            1U, { 0U } });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            ready, 0U, branch + 1U, UnknownBranchPolicy::when_false });
+        process_.operations.emplace_back(WaitOn { { *notifier } });
+        process_.operations.emplace_back(Jump { check });
+        process_.operations[branch] = Branch {
+            ready,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            branch + 1U,
+            UnknownBranchPolicy::when_false,
+        };
+        return true;
+    };
+    if (native_uvm && receiver
+        && profile->identity.find("::uvm_seq_item_pull_") != std::string::npos
+        && (native_method == "get" || native_method == "get_next_item"
+            || native_method == "peek")
+        && !wait_for_uvm("@uvm-sequence-item-ready", *receiver)) {
+        return false;
+    }
     if (native_uvm) {
         std::vector<RegisterId> actuals;
         std::vector<std::uint8_t> actual_kinds;
@@ -7104,6 +7512,73 @@ bool Lowerer::lower_hir_class_task_call(
             if (!copied) {
                 return false;
             }
+        }
+        if (sequence_method && native_method == "finish_item"
+            && !actuals.empty()
+            && !wait_for_uvm("@uvm-sequence-item-done", actuals.front())) {
+            return false;
+        }
+        // `seq.start(sequencer)` runs the sequence's callbacks and body
+        // (IEEE 1800.2-2020 14.2.4.1): the overrides of the object's class.
+        if (sequence_method && native_method == "start") {
+            const auto prefix = std::string_view { profile->identity }.substr(
+                0U, profile->identity.size() - native_method.size());
+            const auto resolver = hir_resolver();
+            for (const std::string_view callback :
+                { "pre_start", "pre_body", "body", "post_body",
+                    "post_start" }) {
+                const auto* callback_method = resolver
+                    .resolve_systemverilog_class_method(
+                        std::string { prefix } + std::string { callback },
+                        false)
+                    .unique();
+                if (callback_method == nullptr) {
+                    continue;
+                }
+                std::vector<InstructionIndex> callback_exits;
+                for (const auto& item : hir_class_method_overrides(
+                         callback_method->declaration)) {
+                    if (support::is_uvm_library_identity(item.identity)) {
+                        continue;
+                    }
+                    const auto selected = allocate_register(
+                        1U, frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(ClassMethodCall {
+                        selected, *receiver,
+                        "@checked-cast:" + item.owner_identity,
+                        { }, { }, { }, 1U, false });
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        selected, branch + 1U, 0U,
+                        UnknownBranchPolicy::when_false });
+                    auto callback_profile = *profile;
+                    callback_profile.declaration = item.declaration;
+                    callback_profile.identity = item.identity;
+                    callback_profile.actuals.clear();
+                    if (!lower_hir_class_task_invocation(
+                            statement_id, callback_profile, receiver)) {
+                        return false;
+                    }
+                    callback_exits.push_back(static_cast<InstructionIndex>(
+                        process_.operations.size()));
+                    process_.operations.emplace_back(Jump { });
+                    process_.operations[branch] = Branch {
+                        selected, branch + 1U,
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()),
+                        UnknownBranchPolicy::when_false };
+                }
+                for (const auto exit : callback_exits) {
+                    process_.operations[exit] = Jump {
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()) };
+                }
+            }
+        }
+        for (const auto exit : native_exits) {
+            process_.operations[exit] = Jump {
+                static_cast<InstructionIndex>(process_.operations.size()) };
         }
         return true;
     }

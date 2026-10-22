@@ -2059,15 +2059,18 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             const auto task_start_index = index_;
             const auto start = advance();
             std::string name = start.text;
+            std::shared_ptr<Type> class_selection;
             if (match(TokenKind::Hash)) {
                 Instance actual_owner;
                 parse_parameter_overrides(actual_owner, previous());
+                class_selection = std::make_shared<Type>();
+                class_selection->named_type = name;
                 name += "#(";
                 for (std::size_t index = 0;
                     index < actual_owner.parameter_overrides.size(); ++index) {
                     if (index != 0U)
                         name += ',';
-                    const auto& actual = actual_owner.parameter_overrides[index];
+                    auto& actual = actual_owner.parameter_overrides[index];
                     if (actual.name)
                         name += "." + *actual.name + "(";
                     if (actual.type_value) {
@@ -2079,8 +2082,19 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     }
                     if (actual.name)
                         name += ')';
+                    SystemVerilogClassTypeActual retained;
+                    retained.name = std::move(actual.name);
+                    retained.value = std::move(actual.value);
+                    if (actual.type_value) {
+                        retained.type_actual = std::make_shared<Type>(
+                            std::move(*actual.type_value));
+                    }
+                    retained.span = std::move(actual.span);
+                    class_selection->systemverilog_class_parameter_actuals
+                        .push_back(std::move(retained));
                 }
                 name += ')';
+                class_selection->spelling = name;
             }
             while (at(TokenKind::Scope) || at(TokenKind::Dot)
                 || skip_scope_index(0U)) {
@@ -2126,6 +2140,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 statement.assertion_control = SystemVerilogAssertionControlKind::VacuousOff;
             }
             statement.task_name = std::move(name);
+            statement.systemverilog_task_class_selection
+                = std::move(class_selection);
             if (match(TokenKind::LeftParen)) {
                 if (!at(TokenKind::RightParen)) {
                     do {

@@ -3216,6 +3216,13 @@ private:
         // The parameterized class specialization the call runs in.
         std::optional<std::uint32_t> specialization;
     };
+    // The actuals of a native UVM database call (`@uvm-config-db-get:T`,
+    // `@uvm-resource-db-read_by_name:T`), each of its own type; a read
+    // copies its value actual out.
+    [[nodiscard]] std::optional<std::vector<HirClassMethodActual>>
+    hir_uvm_database_actuals(std::string_view identity,
+        std::span<const std::optional<semantic::ExpressionId>> expressions,
+        semantic::ScopeId process_scope) const;
     // Call actuals bound to a class method's formals by position or name,
     // with each unbound formal's default (13.5.3).
     [[nodiscard]] std::optional<std::vector<HirClassMethodActual>>

@@ -361,6 +361,79 @@ struct Simulation::Impl {
     execute_uvm_task_phase(const runtime::SystemVerilogUvmPhaseHandle phase_handle,
         const UvmTaskPhaseContinuation& continuation);
 
+    // The native UVM `run_test` (IEEE 1800.2-2020 F.3.1.2). The lowered
+    // caller runs `@uvm-run-test-begin` (the phases before run), forks the
+    // run_phase of each `@uvm-run-test-component`, waits until
+    // `@uvm-run-test-ended`, and finishes after `@uvm-run-test-end` (the
+    // phases after run).
+    [[nodiscard]] std::optional<runtime::PackedLogic4> invoke_uvm_run_test(
+        std::string_view identity,
+        std::span<const runtime::PackedLogic4> actuals,
+        std::span<const std::string> string_actuals);
+    // A method called on a phase object of the native run.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> invoke_uvm_phase_method(
+        runtime::SystemVerilogClassHandle phase_object,
+        std::string_view method,
+        std::span<const runtime::PackedLogic4> actuals,
+        std::span<const std::string> string_actuals);
+    // The object a phase callback receives for a phase: a tagged handle
+    // that only the phase methods above accept.
+    [[nodiscard]] runtime::SystemVerilogClassHandle uvm_phase_object(
+        const runtime::SystemVerilogUvmPhaseHandle& phase);
+    static constexpr runtime::SystemVerilogClassHandle uvm_phase_object_tag {
+        UINT64_C(0x7f00000000000000)
+    };
+    std::vector<runtime::SystemVerilogUvmPhaseHandle> uvm_phase_objects;
+    struct UvmRunTestState {
+        runtime::SystemVerilogUvmRootHandle root { };
+        // Every root holding components: the test's, and the automatic root
+        // of each scope that constructed components itself.
+        std::vector<runtime::SystemVerilogUvmRootHandle> roots;
+        std::vector<runtime::SystemVerilogClassHandle> components;
+        // The run-phase processes, one per component, that the forked
+        // run_phase tasks stand for.
+        std::vector<runtime::SystemVerilogUvmPhaseProcessHandle> processes;
+        // The function phase in progress and the components it has handed
+        // out; build visits components its parents create on the way.
+        std::optional<runtime::SystemVerilogUvmPhaseKind> phase;
+        std::vector<runtime::SystemVerilogClassHandle> order;
+        std::size_t next { };
+        std::vector<runtime::SystemVerilogClassHandle> visited;
+        bool raised { };
+        bool ended { };
+    };
+    UvmRunTestState uvm_run_test;
+    // The object each TLM port, export or imp was constructed for, and the
+    // connections made from each analysis port or export (IEEE 1800.2-2020
+    // 12.2.10).
+    std::map<runtime::SystemVerilogClassHandle, runtime::SystemVerilogClassHandle>
+        uvm_tlm_owners;
+    std::map<runtime::SystemVerilogClassHandle,
+        std::vector<runtime::SystemVerilogClassHandle>>
+        uvm_analysis_connections;
+    // The sequence-item handshake (IEEE 1800.2-2020 15.3, 14.2.6): the
+    // sequencer each started sequence runs on, the items each sequencer
+    // holds for its driver, the item a driver took with get_next_item, and
+    // the items whose finish_item still waits for a driver.
+    std::map<runtime::SystemVerilogClassHandle,
+        runtime::SystemVerilogClassHandle>
+        uvm_sequence_sequencers;
+    std::map<runtime::SystemVerilogClassHandle,
+        std::vector<runtime::SystemVerilogClassHandle>>
+        uvm_sequencer_items;
+    std::map<runtime::SystemVerilogClassHandle,
+        runtime::SystemVerilogClassHandle>
+        uvm_sequencer_current;
+    std::set<runtime::SystemVerilogClassHandle> uvm_pending_items;
+    [[nodiscard]] runtime::SystemVerilogClassHandle uvm_pull_sequencer(
+        runtime::SystemVerilogClassHandle port) const;
+    void construct_uvm_component_ports(
+        const semantic::sv::ClassSpecialization& specialization,
+        runtime::SystemVerilogClassHandle handle,
+        std::string_view allocation_scope);
+    // The report object of the root, for reports outside any component.
+    runtime::SystemVerilogClassHandle uvm_root_report_object { };
+
     [[nodiscard]] std::optional<runtime::simir::SignalId>
     backdoor_signal(const std::string_view path) const noexcept;
 
