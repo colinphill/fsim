@@ -420,9 +420,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     if (!duplicate) {
       Type type;
       type.spelling = canonical_name;
-      type.nominal_type = start.span.source_name + ":" +
-                          std::to_string(start.span.begin.offset) + ":" +
-                          canonical_name;
+      type.nominal_type = vhdl_declaration_identity(start, canonical_name);
       type.vhdl_type_declaration = type.nominal_type;
       if (!nested_scope) {
         vhdl_named_types_.insert(canonical_name);
@@ -454,9 +452,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
     Type type;
     type.spelling = canonical_name;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     VhdlFileInfo file;
     file.element_span = element_span;
@@ -491,9 +487,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
     Type type;
     type.spelling = canonical_name;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     VhdlAccessInfo access;
     access.designated_span = designated_span;
@@ -610,9 +604,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       // The declaration is retained like a subtype of its predefined base
       // so ranges, attributes, and arithmetic follow INTEGER or REAL.
       type.spelling = floating ? "real" : "integer";
-      type.vhdl_type_declaration = start.span.source_name + ":" +
-                                   std::to_string(start.span.begin.offset) +
-                                   ":" + canonical_name;
+      type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical_name);
       expect(TokenKind::Semicolon, "';' after scalar type declaration",
              "FSIM-VHDL-PARSE-244");
       if (!duplicate) {
@@ -692,9 +684,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
     Type type;
     type.spelling = canonical_name;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     type.vhdl_physical = std::move(physical);
     if (!duplicate) {
@@ -727,9 +717,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
     Type type;
     type.spelling = canonical_name;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     type.vhdl_protected =
         parse_vhdl_protected_type(start, canonical_name, body);
@@ -754,9 +742,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
   if (match_keyword("array", true)) {
     Type type;
     type.spelling = canonical_name;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     VhdlArrayInfo array;
 
@@ -933,9 +919,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     Type type;
     type.spelling = canonical_name;
     type.domain = ValueDomain::Bit2;
-    type.nominal_type = start.span.source_name + ":" +
-                        std::to_string(start.span.begin.offset) + ":" +
-                        canonical_name;
+    type.nominal_type = vhdl_declaration_identity(start, canonical_name);
     type.vhdl_type_declaration = type.nominal_type;
     std::vector<EnumLiteralDeclaration> literals;
     std::unordered_set<std::string> literal_names;
@@ -1027,9 +1011,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
   type.spelling = canonical_name;
   type.domain = ValueDomain::Bit2;
   type.packed_aggregate = PackedAggregateKind::Struct;
-  type.nominal_type = start.span.source_name + ":" +
-                      std::to_string(start.span.begin.offset) + ":" +
-                      canonical_name;
+  type.nominal_type = vhdl_declaration_identity(start, canonical_name);
   type.vhdl_type_declaration = type.nominal_type;
   std::unordered_set<std::string> member_names;
   // VHDL-2019 allows a record type without elements (LCS-2016-082).
@@ -1702,9 +1684,7 @@ void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
   auto resolution_function = parse_vhdl_resolution_indication(false);
   auto type = parse_vhdl_type(true, true);
   type.vhdl_resolution_function = std::move(resolution_function);
-  type.vhdl_type_declaration = start.span.source_name + ":" +
-                               std::to_string(start.span.begin.offset) + ":" +
-                               canonical_name;
+  type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical_name);
   expect(TokenKind::Semicolon, "';' after subtype declaration",
          "FSIM-VHDL-PARSE-135");
   if (duplicate) {
@@ -1951,8 +1931,7 @@ void VhdlParser::parse_vhdl_object_alias(
     expect(TokenKind::Semicolon, "';' after alias declaration",
         "FSIM-VHDL-PARSE-236");
     const auto canonical = vhdl_name(name.text);
-    type.vhdl_type_declaration = start.span.source_name + ":"
-        + std::to_string(start.span.begin.offset) + ":" + canonical;
+    type.vhdl_type_declaration = vhdl_declaration_identity(start, canonical);
     TypeAliasDeclaration alias;
     alias.name = canonical;
     alias.type = std::move(type);

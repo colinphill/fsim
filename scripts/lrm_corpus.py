@@ -859,6 +859,10 @@ VERILATOR_NONSTANDARD = {
         "names are reached through its block name (IEEE 1800-2017 27.6)",
     "t_sys_psprintf": "calls $psprintf, a Verilator extension; the LRM "
         "string formatting function is $sformatf (IEEE 1800-2017 21.3.3)",
+    "t_public_flat_rw_large_offset": "a behaviourless module that checks "
+        "Verilator's generated C++ member offsets beyond 32 bits under its "
+        "--public-flat-rw option; the only observable is that 6 GiB of "
+        "static array storage compiles, which no LRM clause specifies",
     "t_sys_readmem": "its memory file has a '#' comment line, a Verilator "
         "extension; a $readmem file holds only white space, // and /* */ "
         "comments, addresses and numbers (IEEE 1800-2017 21.4.3)",
@@ -2412,6 +2416,11 @@ NVC_NONSTANDARD = {
         "instances are created when 'REFLECT is evaluated (IEEE 1076-2019 "
         "16.12.1) and access values are equal only when they designate the "
         "same object (9.2.3)",
+    "reflect3": "asserts rstm.element_subtype(\"A\") = natural'reflect "
+        "and rstm.to_subtype_mirror = rec1'reflect, access equality of "
+        "separately created subtype mirrors; mirror instances are created "
+        "when 'REFLECT is evaluated (IEEE 1076-2019 16.12.1) and access "
+        "values are equal only when they designate the same object (9.2.3)",
     "issue1213": "expects a case generate statement to have kind "
         "vhpiIfGenerateK, which the test notes has no VHPI kind; the VHPI "
         "generateStmt class has only the forGenerate and ifGenerate classes "

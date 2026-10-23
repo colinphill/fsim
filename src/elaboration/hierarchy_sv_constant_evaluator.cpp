@@ -131,35 +131,38 @@ resolve_constant_name_declaration(
     // carry an implicit-net placeholder in the immutable HIR. Re-resolve only
     // non-constant selections in the effective target specialization; real
     // lexical and package constants retain their linked declaration. A class
-    // or package body resolves from its own scope.
-    const auto lookup_scope
-        = class_or_package_body(specialization, expression.scope)
-        ? expression.scope
-        : specialization.scope();
-    if (const auto rebound
-        = semantic::CompiledDesignResolver { specialization }
-              .resolve_systemverilog_constant(
-                  expression.text, lookup_scope, false,
-                  expression.referenced_name
-                      ? expression.referenced_name->source_order
-                      : 0U)
-              .unique()) {
-        return rebound;
+    // or package body resolves from its own scope first, then (for names a
+    // compilation-unit import provides) from the specialization's.
+    const auto source_order = expression.referenced_name
+        ? expression.referenced_name->source_order
+        : 0U;
+    std::vector<semantic::ScopeId> lookup_scopes;
+    if (class_or_package_body(specialization, expression.scope)) {
+        lookup_scopes.push_back(expression.scope);
+    }
+    lookup_scopes.push_back(specialization.scope());
+    for (const auto lookup_scope : lookup_scopes) {
+        if (const auto rebound
+            = semantic::CompiledDesignResolver { specialization }
+                  .resolve_systemverilog_constant(
+                      expression.text, lookup_scope, false, source_order)
+                  .unique()) {
+            return rebound;
+        }
     }
     // `P.m` selects a member of the structure constant P (IEEE 1800-2017
     // 7.2.1); evaluate_name slices the member.
     if (const auto dot = expression.text.find('.');
         !selected && dot != std::string::npos && dot != 0U) {
-        if (const auto prefix
-            = semantic::CompiledDesignResolver { specialization }
-                  .resolve_systemverilog_constant(
-                      std::string_view { expression.text }.substr(0U, dot),
-                      lookup_scope, false,
-                      expression.referenced_name
-                          ? expression.referenced_name->source_order
-                          : 0U)
-                  .unique()) {
-            return prefix;
+        for (const auto lookup_scope : lookup_scopes) {
+            if (const auto prefix
+                = semantic::CompiledDesignResolver { specialization }
+                      .resolve_systemverilog_constant(
+                          std::string_view { expression.text }.substr(0U, dot),
+                          lookup_scope, false, source_order)
+                      .unique()) {
+                return prefix;
+            }
         }
     }
     return selected;
@@ -3691,10 +3694,20 @@ private:
         const auto record = declaration
             ? specialization_.find_declaration(*declaration) : std::nullopt;
         const std::string_view text { view->systemverilog->text };
+        // A subprogram's variable is read from its frame instead: only a
+        // unit-level variable is queried by its declaration.
+        const auto unit_level = [&](const semantic::ScopeId scope) {
+            const auto& design = specialization_.design();
+            const auto* found = design.find_scope(scope);
+            const auto unit = found != nullptr
+                ? design.find_unit(found->unit) : std::nullopt;
+            return unit && unit->identity->scope == scope;
+        };
         const bool object = record && record->systemverilog != nullptr
             && (record->systemverilog->form == Form::net
-                || record->systemverilog->form == Form::variable
-                || record->systemverilog->form == Form::port);
+                || record->systemverilog->form == Form::port
+                || (record->systemverilog->form == Form::variable
+                    && unit_level(record->systemverilog->scope)));
         if (!record || record->systemverilog == nullptr
             || !(record->systemverilog->array_parameter
                 || record->systemverilog->array_local_parameter

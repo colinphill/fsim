@@ -1127,7 +1127,14 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
   const auto identifier = [&](std::string text) {
     return make(TokenKind::Identifier, std::move(text));
   };
-  const auto& instance_name = instance_token.text;
+  // The declarations that stand for the generics precede every template
+  // item, as the generic clause does.
+  const auto generic_word = [&](std::string text) {
+    return Token { TokenKind::Identifier, std::move(text),
+        tokens[*declaration].span, { }, { } };
+  };
+  // A copy: the instantiation tokens are replaced below.
+  const std::string instance_name = instance_token.text;
   std::vector<Token> wrappers;
   std::vector<Token> expanded = context_before(*declaration);
   if (enclosing_package) {
@@ -1191,13 +1198,13 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
       wrapper.push_back(make(TokenKind::Semicolon, ";"));
       wrappers.insert(wrappers.end(), wrapper.begin(), wrapper.end());
     } else if (formal.type) {
-      expanded.push_back(identifier("subtype"));
-      expanded.push_back(identifier(formal.name));
+      expanded.push_back(generic_word("subtype"));
+      expanded.push_back(generic_word(formal.name));
       expanded.push_back(identifier("is"));
       expanded.insert(expanded.end(), value.begin(), value.end());
     } else {
-      expanded.push_back(identifier("constant"));
-      expanded.push_back(identifier(formal.name));
+      expanded.push_back(generic_word("constant"));
+      expanded.push_back(generic_word(formal.name));
       expanded.push_back(make(TokenKind::Colon, ":"));
       expanded.insert(expanded.end(), formal.subtype.begin(),
           formal.subtype.end());
@@ -1306,7 +1313,28 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
       tokens.begin() + static_cast<std::ptrdiff_t>(end + 1U));
   tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(start),
       expanded.begin(), expanded.end());
+  expanded_package_instances_.push_back(
+      { start, start + expanded.size(), instance_name });
   return true;
+}
+
+std::string VhdlParser::vhdl_declaration_identity(const Token& start,
+    const std::string_view name) const {
+  auto identity = start.span.source_name + ":"
+      + std::to_string(start.span.begin.offset);
+  // The instance qualifies the position; the name stays last.
+  const auto cursor = position();
+  for (const auto& instance : expanded_package_instances_) {
+    if (cursor >= instance.begin && cursor < instance.end) {
+      identity += "@" + instance.name;
+      break;
+    }
+  }
+  if (!name.empty()) {
+    identity += ":";
+    identity += name;
+  }
+  return identity;
 }
 
 } // namespace fsim::frontend

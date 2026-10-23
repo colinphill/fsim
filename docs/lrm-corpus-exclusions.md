@@ -11,10 +11,10 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 292 |
+| verilator | 63 | 293 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
-| nvc | 218 | 0 |
+| nvc | 219 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## sv-tests
@@ -244,6 +244,7 @@ Exclusions never count as closures.
 | `t_property_unsup` | not run | lint-only test |
 | `t_property_until_implication` | out of scope | counts failures once per cycle; each attempt fails separately (IEEE 1800-2017 16.14.1) |
 | `t_public_clk` | not run | needs the Verilator C++ model API |
+| `t_public_flat_rw_large_offset` | out of scope | a behaviourless module that checks Verilator's generated C++ member offsets beyond 32 bits under its --public-flat-rw option; the only observable is that 6 GiB of static array storage compiles, which no LRM clause specifies |
 | `t_public_seq` | not run | needs the Verilator C++ model API |
 | `t_queue` | out of scope | compares %p text against Verilator's element spacing |
 | `t_queue_method` | out of scope | calls the non-standard array method map() |
@@ -886,6 +887,7 @@ Exclusions never count as closures.
 | `real14` | not run | copy of ivtest itor_rtoi; expects results the test notes are not defined by the standard (IEEE 1800-2017 20.5) |
 | `reflect1` | not run | applies 'REFLECT to the enumeration literal TRUE; IEEE 1076-2019 16.2 defines O'REFLECT only for an object prefix |
 | `reflect2` | not run | documents nvc reflection bounds the test calls incorrect |
+| `reflect3` | not run | asserts rstm.element_subtype("A") = natural'reflect and rstm.to_subtype_mirror = rec1'reflect, access equality of separately created subtype mirrors; mirror instances are created when 'REFLECT is evaluated (IEEE 1076-2019 16.12.1) and access values are equal only when they designate the same object (9.2.3) |
 | `reflect4` | not run | asserts rstm.element_subtype("A") = integer'reflect, access equality of two separately created subtype mirrors; mirror instances are created when 'REFLECT is evaluated (IEEE 1076-2019 16.12.1) and access values are equal only when they designate the same object (9.2.3) |
 | `reflect5` | not run | expects nvc's 1-based physical unit index (unit_index("ns") = 3); IEEE 1076-2019 16.12.3.6 gives the primary unit index zero |
 | `shared4` | not run | nvc-specific test kind relax |

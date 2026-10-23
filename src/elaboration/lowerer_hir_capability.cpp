@@ -5940,6 +5940,45 @@ std::optional<std::string> Lowerer::hir_name(
     return std::nullopt;
 }
 
+void Lowerer::select_hir_package_object_instance(
+    const semantic::ExpressionId expression_id,
+    const semantic::DeclarationId declaration_id) const
+{
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        declaration_id);
+    if (!declaration || declaration->vhdl == nullptr
+        || (declaration->vhdl->form != semantic::vhdl::DeclarationForm::signal
+            && !(declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::variable
+                && declaration->vhdl->shared))) {
+        return;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || !expression->vhdl->referenced_name
+        || expression->vhdl->referenced_name->text().find('.')
+            == std::string_view::npos) {
+        return;
+    }
+    const auto member = hir_resolver()
+                            .resolve_vhdl_package_members(
+                                *expression->vhdl->referenced_name,
+                                expression->vhdl->scope)
+                            .unique();
+    if (!member || member->member != declaration_id
+        || !member->package_instance) {
+        return;
+    }
+    const auto key = vhdl_package_object_key(
+        *member->package_instance, declaration->vhdl->name);
+    if (signals_.find(key) != signals_.end()
+        || container_objects_.find(key) != container_objects_.end()) {
+        hir_package_object_instances_.insert_or_assign(
+            declaration_id.value(), *member->package_instance);
+    }
+}
+
 std::optional<semantic::DeclarationId>
 Lowerer::hir_referenced_declaration(
     const semantic::ExpressionId expression_id) const
@@ -6079,6 +6118,7 @@ Lowerer::hir_referenced_declaration(
                 declaration->value())) {
             return declaration;
         }
+        select_hir_package_object_instance(expression_id, *declaration);
         return resolver.actual_declaration(*declaration)
             .value_or(*declaration);
     }
@@ -6102,6 +6142,10 @@ Lowerer::hir_referenced_declaration(
         reference, expression_scope);
     if (!packages.candidates.empty()) {
         const auto package = packages.unique();
+        if (package) {
+            select_hir_package_object_instance(
+                expression_id, package->member);
+        }
         return package
             ? std::optional { package->member }
             : std::nullopt;
@@ -8111,23 +8155,33 @@ Lowerer::hir_runtime_binding(
                 }
                 // A VHDL-2019 variable whose subtype leaves index ranges
                 // open takes them from its initial value (IEEE 1076-2019
-                // 6.4.2.4).
-                if (effective && effective->unconstrained && local_subtype
-                    && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019
+                // 6.4.2.4). Earlier revisions reach an open subtype only
+                // through `G'subtype` of a generic constant or formal, whose
+                // bounds are its actual's (IEEE 1076-2008 6.5.6.2, 16.2.2),
+                // the initial value it is given.
+                if (effective
+                    && (effective->unconstrained
+                        || hir_vhdl_partially_constrained_record(*effective))
+                    && local_subtype
                     && source.form == semantic::vhdl::DeclarationForm::variable
-                    && source.initializer
-                    && !hir_local_registers_.contains(
-                        declaration_id.value())) {
-                    if (const auto initialized
-                        = hir_vhdl_initialized_object_subtype(
+                    && source.initializer) {
+                    // A predefined vector (INTEGER_VECTOR) has its element
+                    // layout only on the effective subtype.
+                    auto initialized = hir_vhdl_initialized_object_subtype(
+                        *source.initializer, *effective, source.scope);
+                    if (!initialized) {
+                        initialized = hir_vhdl_initialized_object_subtype(
                             *source.initializer, *local_subtype,
-                            source.scope)) {
-                        if (auto completed
-                            = hir_effective_vhdl_subtype(*initialized)) {
-                            effective = std::move(completed);
-                        } else {
-                            effective = initialized;
-                        }
+                            source.scope);
+                    }
+                    if (initialized) {
+                        // Re-deriving a predefined vector's subtype may drop
+                        // the width its value gave it.
+                        auto completed
+                            = hir_effective_vhdl_subtype(*initialized);
+                        effective = completed && vhdl_subtype_width(*completed)
+                            ? std::move(completed)
+                            : initialized;
                     }
                 }
                 if (effective
@@ -8368,6 +8422,39 @@ Lowerer::hir_runtime_binding(
                         && frame.callee_unit != nullptr) {
                         hierarchical_reference_missed_ = true;
                         return std::nullopt;
+                    }
+                }
+            }
+            // An object of a generic package is the object of the package
+            // instance declared in this unit that it is named through, or
+            // of the one such instance made visible by a use clause.
+            if (!signal_id && found == signals_.end()
+                && declaration->vhdl != nullptr) {
+                if (const auto instance = hir_package_object_instances_.find(
+                        declaration_id.value());
+                    instance != hir_package_object_instances_.end()) {
+                    found = signals_.find(vhdl_package_object_key(
+                        instance->second, declaration->vhdl->name));
+                } else {
+                    auto unique = signals_.end();
+                    std::size_t matches { };
+                    for (const auto& candidate :
+                        specialized_hir_unit_->design().vhdl_hir
+                            .declarations()) {
+                        if (candidate.form != semantic::vhdl::
+                                DeclarationForm::package_instance) {
+                            continue;
+                        }
+                        const auto local = signals_.find(
+                            vhdl_package_object_key(candidate.id,
+                                declaration->vhdl->name));
+                        if (local != signals_.end()) {
+                            unique = local;
+                            ++matches;
+                        }
+                    }
+                    if (matches == 1U) {
+                        found = unique;
                     }
                 }
             }
@@ -18305,12 +18392,18 @@ std::optional<semantic::ExpressionId> Lowerer::hir_vhdl_alias_target_expression(
     const auto expression = specialized_hir_unit_->find_expression(expression_id);
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
-        || !expression->vhdl->referenced_name
-        || !expression->vhdl->referenced_name->selected) {
+        || !expression->vhdl->referenced_name) {
+        return std::nullopt;
+    }
+    // A name analysis left unbound (one in a package body) is resolved now.
+    const auto selected = expression->vhdl->referenced_name->selected
+        ? expression->vhdl->referenced_name->selected
+        : hir_referenced_declaration(expression_id);
+    if (!selected) {
         return std::nullopt;
     }
     const auto declaration = specialized_hir_unit_->find_declaration(
-        *expression->vhdl->referenced_name->selected);
+        *selected);
     if (!declaration || declaration->vhdl == nullptr
         || declaration->vhdl->form != semantic::vhdl::DeclarationForm::alias
         || !declaration->vhdl->initializer

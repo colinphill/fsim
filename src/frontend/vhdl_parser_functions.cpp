@@ -827,9 +827,8 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   if (result_identifier) {
     auto result_subtype = function.return_type;
     result_subtype.vhdl_type_declaration =
-        result_identifier->span.source_name + ":"
-        + std::to_string(result_identifier->span.begin.offset) + ":"
-        + function.vhdl_return_identifier;
+        vhdl_declaration_identity(
+            *result_identifier, function.vhdl_return_identifier);
     function.type_aliases.push_back(TypeAliasDeclaration {
         function.vhdl_return_identifier,
         std::move(result_subtype),

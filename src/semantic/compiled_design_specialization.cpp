@@ -17469,6 +17469,36 @@ resolve_specialized_hir_vhdl_block_associations(
         &parent, &formals);
 }
 
+SpecializedHirAssociationResult
+resolve_specialized_hir_vhdl_package_associations(
+    const CompiledDesign& design,
+    const vhdl::Declaration& instance,
+    const vhdl::Unit& template_package,
+    const SpecializedHirUnit& parent)
+{
+    std::vector<AssociationFormal> formals;
+    for (const auto declaration_id : template_package.declarations) {
+        const auto declaration = parent.find_declaration(declaration_id);
+        if (!declaration || declaration->vhdl == nullptr
+            || !vhdl::is_generic_formal(declaration->vhdl->form)) {
+            continue;
+        }
+        formals.push_back({ declaration_id, declaration->vhdl->name,
+            declaration->vhdl->form
+                == vhdl::DeclarationForm::generic_type });
+    }
+    vhdl::Instance association;
+    association.scope = instance.scope;
+    if (instance.package) {
+        association.generic_map = instance.package->generic_map;
+    }
+    association.source = instance.source;
+    return resolve_specialized_hir_associations_impl(
+        design, parent.unit(), { nullptr, &association },
+        SpecializedHirAssociationSurface::parameters,
+        &parent, &formals);
+}
+
 SpecializedHirUnit::SpecializedHirUnit(const CompiledDesign& design,
     SpecializedHirOverlay specialization,
     std::vector<UnitId> replacement_units,

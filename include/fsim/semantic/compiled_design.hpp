@@ -485,6 +485,38 @@ validate_compiled_design(const CompiledDesign&);
 [[nodiscard]] std::string vhdl_instance_ownership_error(
     const CompiledDesign&);
 
+/// A VHDL declaration identity `source:offset[@instance]:name`, as the
+/// parser spells nominal types. `instance` names the design-unit-level
+/// package instance whose expansion declared it (IEEE 1076-2008 4.9).
+struct VhdlDeclarationIdentity {
+    std::string_view source;
+    std::uint64_t offset { };
+    std::string_view instance;
+    std::string_view name;
+};
+[[nodiscard]] std::optional<VhdlDeclarationIdentity>
+parse_vhdl_declaration_identity(std::string_view spelling);
+
+/// Whether `type`, declared at `identity`'s position, is the type it names:
+/// one of the named instance's unit, or without an instance one of the unit
+/// whose text declares it. An instance expansion repeats its template's
+/// positions.
+[[nodiscard]] bool vhdl_type_in_identity_unit(const CompiledDesign& design,
+    const vhdl::TypeDefinition& type, const VhdlDeclarationIdentity& identity);
+
+/// The type among `named` (definitions carrying the identity's simple name)
+/// that `identity` designates: `ambiguous` when several remain, `none` when
+/// no definition sits at its position.
+struct VhdlIdentityTypeSelection {
+    enum class Status : std::uint8_t { none, unique, ambiguous };
+    Status status { Status::none };
+    TypeId type;
+};
+[[nodiscard]] VhdlIdentityTypeSelection select_vhdl_identity_type(
+    const CompiledDesign& design,
+    std::span<const vhdl::TypeDefinition* const> named,
+    const VhdlDeclarationIdentity& identity);
+
 /// The definition at the end of a VHDL type's subtype/alias chain: the
 /// first that is neither a subtype nor an alias. Null for a missing link or
 /// a cycle. `Hir` is CompiledDesign or SpecializedHirUnit.

@@ -616,9 +616,50 @@ bool synthetic_enum_constant_duplicate(
 }
 
 sv::TypeReference retain_systemverilog_declarator(
-    sv::TypeReference replacement, const sv::TypeReference& use)
+    sv::TypeReference replacement, const sv::TypeReference& use,
+    const bool packed_element = false)
 {
-    if (use.packed_range) {
+    // `T [1:0]` with T a packed type bound to a type parameter is a packed
+    // array of T: the use's dimensions come first (IEEE 1800-2017 7.4.1).
+    const auto dimensions_of = [](const sv::TypeReference& type) {
+        return type.packed_dimensions.empty() && type.packed_range
+            ? std::vector<sv::PackedRange> { *type.packed_range }
+            : type.packed_dimensions;
+    };
+    const auto extent = [](const sv::PackedRange& range)
+        -> std::optional<std::uint64_t> {
+        if (!range.left || !range.right) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(*range.left >= *range.right
+                       ? *range.left - *range.right
+                       : *range.right - *range.left)
+            + 1U;
+    };
+    std::vector<sv::PackedRange> composed;
+    std::optional<std::uint64_t> composed_width { 1U };
+    if (packed_element && use.packed_range && replacement.packed_range) {
+        composed = dimensions_of(use);
+        const auto element = dimensions_of(replacement);
+        composed.insert(composed.end(), element.begin(), element.end());
+        for (const auto& dimension : composed) {
+            const auto size = extent(dimension);
+            composed_width = size && composed_width
+                ? std::optional { *composed_width * *size }
+                : std::nullopt;
+        }
+    }
+    if (!composed.empty() && composed_width && *composed_width != 0U) {
+        const auto outer = extent(*use.packed_range).value_or(1U);
+        replacement.packed_range = sv::PackedRange {
+            static_cast<std::int64_t>(*composed_width) - 1, 0,
+            std::nullopt, std::nullopt, true, use.packed_range->source };
+        replacement.packed_dimensions = std::move(composed);
+        if (replacement.executable_width) {
+            replacement.executable_width
+                = *replacement.executable_width * outer;
+        }
+    } else if (use.packed_range) {
         replacement.packed_range = use.packed_range;
     }
     replacement.signed_value
@@ -2808,47 +2849,23 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         }
         return ids;
     }();
-    const auto last_colon = spelling.rfind(':');
-    if (last_colon != std::string_view::npos && last_colon != 0U) {
-        const auto offset_colon = spelling.rfind(':', last_colon - 1U);
-        if (offset_colon != std::string_view::npos
-            && offset_colon + 1U < last_colon) {
-            const auto offset_spelling = spelling.substr(
-                offset_colon + 1U, last_colon - offset_colon - 1U);
-            std::uint64_t offset { };
-            const auto parsed = std::from_chars(
-                offset_spelling.data(),
-                offset_spelling.data() + offset_spelling.size(), offset);
-            if (parsed.ec == std::errc { }
-                && parsed.ptr
-                    == offset_spelling.data() + offset_spelling.size()) {
-                const auto source_name = spelling.substr(0U, offset_colon);
-                std::optional<TypeId> exact;
-                for (const auto stored_id : named_type_ids) {
-                    const auto type = find_type(stored_id);
-                    if (!type || type->vhdl == nullptr
-                        || !same_vhdl_identifier(
-                            type->vhdl->name, simple_name)
-                        || !type->vhdl->source.valid()
-                        || type->vhdl->source.value()
-                            >= design_->semantics.source_spans().size()) {
-                        continue;
-                    }
-                    const auto& source = design_->semantics.source_spans()[
-                        type->vhdl->source.value()];
-                    if (source.logical_name != source_name
-                        || source.begin.offset != offset) {
-                        continue;
-                    }
-                    if (exact && *exact != type->vhdl->id) {
-                        return std::nullopt;
-                    }
-                    exact = type->vhdl->id;
-                }
-                if (exact) {
-                    return exact;
-                }
+    if (const auto identity = parse_vhdl_declaration_identity(spelling)) {
+        std::vector<const vhdl::TypeDefinition*> named;
+        for (const auto stored_id : named_type_ids) {
+            const auto type = find_type(stored_id);
+            if (type && type->vhdl != nullptr
+                && same_vhdl_identifier(type->vhdl->name, simple_name)) {
+                named.push_back(type->vhdl);
             }
+        }
+        const auto selection
+            = select_vhdl_identity_type(*design_, named, *identity);
+        using Status = VhdlIdentityTypeSelection::Status;
+        if (selection.status == Status::unique) {
+            return selection.type;
+        }
+        if (selection.status == Status::ambiguous) {
+            return std::nullopt;
         }
     }
 
@@ -3474,7 +3491,7 @@ CompiledDesignResolver::effective_systemverilog_type(
                         auto resolved = self(self, *replacement,
                             bound ? scope : record.scope);
                         candidate = retain_systemverilog_declarator(
-                            std::move(resolved), candidate);
+                            std::move(resolved), candidate, true);
                     }
                 } else {
                     const auto nominal_target = candidate.target;
@@ -3722,7 +3739,25 @@ CompiledDesignResolver::effective_vhdl_subtype(
         return std::nullopt;
     }
     // A type mark that analysis could not resolve (a selected name such as
-    // `work.pkg.t`) is resolved now that every unit is known.
+    // `work.pkg.t`, or an instance-qualified declaration identity) is bound
+    // now that every unit is known; the effective subtype keeps a binding.
+    const auto relink = [&](const TypeId resolved)
+        -> std::optional<vhdl::SubtypeIndication> {
+        auto relinked = input;
+        relinked.type_mark.target = resolved;
+        auto effective = effective_vhdl_subtype(relinked, use_scope);
+        if (!effective) {
+            return relinked;
+        }
+        if (!effective->type_mark.target.valid()
+            && effective->builtin_type == vhdl::BuiltinTypeIdentity::none
+            && !effective->type_mark.spelling.empty()) {
+            effective->type_mark.target = resolve_vhdl_named_type(
+                effective->type_mark.spelling, use_scope)
+                                              .value_or(resolved);
+        }
+        return effective;
+    };
     if (input.type_mark.target.valid() && !input.type_mark.spelling.empty()) {
         const auto marked = find_type(*design_, effective_,
             input.type_mark.target);
@@ -3731,10 +3766,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (const auto resolved = resolve_vhdl_named_type(
                     input.type_mark.spelling, use_scope);
                 resolved && *resolved != input.type_mark.target) {
-                auto relinked = input;
-                relinked.type_mark.target = *resolved;
-                return effective_vhdl_subtype(relinked, use_scope);
+                return relink(*resolved);
             }
+        }
+    } else if (!input.type_mark.target.valid()
+        && input.builtin_type == vhdl::BuiltinTypeIdentity::none
+        && parse_vhdl_declaration_identity(input.type_mark.spelling)) {
+        if (const auto resolved = resolve_vhdl_named_type(
+                input.type_mark.spelling, use_scope)) {
+            return relink(*resolved);
         }
     }
 
@@ -5083,6 +5123,20 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 = find_type(*design_, effective_, result.type_mark.target);
             if (type && type->vhdl != nullptr) {
                 declaration_id = type->vhdl->declaration;
+            }
+        }
+        // A declaration identity (`source:offset[@instance]:name`) names the
+        // type declared there.
+        if (!declaration_id
+            && parse_vhdl_declaration_identity(result.type_mark.spelling)) {
+            if (const auto identified = resolver.resolve_vhdl_named_type(
+                    result.type_mark.spelling, scope)) {
+                if (const auto type
+                    = find_type(*design_, effective_, *identified);
+                    type && type->vhdl != nullptr) {
+                    result.type_mark.target = *identified;
+                    declaration_id = type->vhdl->declaration;
+                }
             }
         }
         if (!declaration_id && !result.type_mark.spelling.empty()) {
@@ -6816,6 +6870,36 @@ CompiledDesignResolver::bind_vhdl_generics(
                 && form != vhdl::DeclarationForm::generic_package) {
                 return std::nullopt;
             }
+        }
+    }
+    // A type actual is a type mark of the association's context, not of the
+    // formal's (IEEE 1076-2008 6.5.7.2).
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        auto& actual = result[index].vhdl_type;
+        if (!bound[index] || defaulted[index] || !actual
+            || actual->type_mark.target.valid()
+            || actual->builtin_type != vhdl::BuiltinTypeIdentity::none
+            || actual->type_mark.spelling.empty()
+            || actual->type_mark.spelling.starts_with(vhdl::builtin_prefix)
+            || !use_scope.valid()) {
+            continue;
+        }
+        const auto declaration = find_declaration(
+            *design_, effective_, formals[index]);
+        if (!declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form
+                != vhdl::DeclarationForm::generic_type) {
+            continue;
+        }
+        if (const auto named = resolve_vhdl_named_type(
+                actual->type_mark.spelling, use_scope)) {
+            actual->type_mark.target = *named;
+        } else if (same_vhdl_identifier(
+                       simple_vhdl_name(actual->type_mark.spelling),
+                       "line")) {
+            // STD.TEXTIO.LINE has no compiled declaration; its objects are
+            // dynamic strings, as the frontend types a LINE object.
+            actual->domain = vhdl::ValueDomain::string;
         }
     }
     return result;

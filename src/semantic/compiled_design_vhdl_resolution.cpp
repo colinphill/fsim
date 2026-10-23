@@ -591,6 +591,29 @@ private:
             : subtype_key(*definition->element_subtype, owner->scope);
     }
 
+    /// The index type of an array type's dimension (5.3.2.1).
+    [[nodiscard]] TypeKey index_key(const TypeKey& key,
+        const std::size_t dimension)
+    {
+        const auto* definition = key.builtin.empty() ? type(key.id) : nullptr;
+        if (definition == nullptr
+            || dimension >= definition->array_dimensions.size()) {
+            return { };
+        }
+        const auto* owner = declaration(definition->declaration);
+        const auto& index = definition->array_dimensions[dimension]
+                                .index_subtype;
+        if (index.selected) {
+            if (const auto* named = declaration(*index.selected);
+                named != nullptr && named->declared_type) {
+                return type_key(*named->declared_type);
+            }
+        }
+        return owner == nullptr
+            ? TypeKey { }
+            : named_type_key(index.text(), owner->scope);
+    }
+
     /// Whether a value of type `actual` suits a context of type `target`:
     /// the same type, or a universal or literal type the target class
     /// accepts (9.3.2, 9.3.3, 9.3.6).
@@ -1543,6 +1566,35 @@ private:
         case ExpressionKind::aggregate:
             resolve_aggregate(*record, known_expected);
             return;
+        case ExpressionKind::index: {
+            // Each index takes its dimension's index type as its context
+            // (8.4, 12.5), which selects an overloaded literal.
+            if (record->operands.size() < 2U) {
+                break;
+            }
+            const auto* prefix = expression(record->operands.front());
+            if (prefix == nullptr
+                || (function_call(*prefix) && !functions(*prefix).empty())) {
+                break;
+            }
+            resolve(record->operands.front(), std::nullopt);
+            const auto& prefixes = candidates(record->operands.front());
+            const auto* array = prefixes.size() == 1U
+                    && prefixes.front().builtin.empty()
+                ? type(prefixes.front().id)
+                : nullptr;
+            for (std::size_t index = 1; index < record->operands.size();
+                 ++index) {
+                auto context = array != nullptr
+                        && array->form == vhdl::TypeForm::array
+                    ? index_key(prefixes.front(), index - 1U)
+                    : TypeKey { };
+                resolve(record->operands[index], context.known()
+                        ? std::optional { std::move(context) }
+                        : std::nullopt);
+            }
+            return;
+        }
         default:
             break;
         }

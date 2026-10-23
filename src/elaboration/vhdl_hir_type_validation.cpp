@@ -268,53 +268,25 @@ private:
             }
         }
         const auto name = simple_name_of(spelling);
-        const auto last_colon = spelling.rfind(':');
-        if (last_colon != std::string_view::npos && last_colon != 0U) {
-            const auto offset_colon = spelling.rfind(':', last_colon - 1U);
-            if (offset_colon != std::string_view::npos
-                && offset_colon + 1U < last_colon) {
-                const auto offset_spelling = spelling.substr(
-                    offset_colon + 1U,
-                    last_colon - offset_colon - 1U);
-                std::uint64_t offset { };
-                const auto parsed = std::from_chars(
-                    offset_spelling.data(),
-                    offset_spelling.data() + offset_spelling.size(),
-                    offset);
-                if (parsed.ec == std::errc { }
-                    && parsed.ptr
-                        == offset_spelling.data()
-                            + offset_spelling.size()) {
-                    const auto source_name = spelling.substr(
-                        0U, offset_colon);
-                    std::optional<semantic::TypeId> exact;
-                    const auto& spans
-                        = specialization_.design().semantics.source_spans();
-                    for (const auto& stored :
-                        specialization_.design().vhdl_hir.types()) {
-                        const auto type = specialization_.find_type(
-                            stored.id);
-                        if (!type || type->vhdl == nullptr
-                            || !equal_ignoring_ascii_case(type->vhdl->name, name)
-                            || !type->vhdl->source.valid()
-                            || type->vhdl->source.value() >= spans.size()) {
-                            continue;
-                        }
-                        const auto& source
-                            = spans[type->vhdl->source.value()];
-                        if (source.logical_name != source_name
-                            || source.begin.offset != offset) {
-                            continue;
-                        }
-                        if (exact && *exact != type->vhdl->id) {
-                            return std::nullopt;
-                        }
-                        exact = type->vhdl->id;
-                    }
-                    if (exact) {
-                        return exact;
-                    }
+        if (const auto identity
+            = semantic::parse_vhdl_declaration_identity(spelling)) {
+            const auto& design = specialization_.design();
+            std::vector<const semantic::vhdl::TypeDefinition*> named;
+            for (const auto& stored : design.vhdl_hir.types()) {
+                const auto type = specialization_.find_type(stored.id);
+                if (type && type->vhdl != nullptr
+                    && equal_ignoring_ascii_case(type->vhdl->name, name)) {
+                    named.push_back(type->vhdl);
                 }
+            }
+            const auto selection = semantic::select_vhdl_identity_type(
+                design, named, *identity);
+            using Status = semantic::VhdlIdentityTypeSelection::Status;
+            if (selection.status == Status::unique) {
+                return selection.type;
+            }
+            if (selection.status == Status::ambiguous) {
+                return std::nullopt;
             }
         }
         if (use_scope.valid()) {

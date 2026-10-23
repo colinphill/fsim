@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design.hpp"
 
+#include "fsim/support/vhdl_identifier.hpp"
+
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <optional>
 #include <set>
 #include <type_traits>
@@ -503,6 +506,120 @@ bool CompiledDesign::LookupIndexes::VhdlIdentifierEqual::operator()(
     const std::string_view left, const std::string_view right) const noexcept
 {
     return same_vhdl_identifier(left, right);
+}
+
+std::optional<VhdlDeclarationIdentity> parse_vhdl_declaration_identity(
+    const std::string_view spelling)
+{
+    const auto last_colon = spelling.rfind(':');
+    if (last_colon == std::string_view::npos || last_colon == 0U) {
+        return std::nullopt;
+    }
+    const auto offset_colon = spelling.rfind(':', last_colon - 1U);
+    if (offset_colon == std::string_view::npos
+        || offset_colon + 1U >= last_colon) {
+        return std::nullopt;
+    }
+    auto position = spelling.substr(
+        offset_colon + 1U, last_colon - offset_colon - 1U);
+    VhdlDeclarationIdentity identity;
+    if (const auto at = position.find('@'); at != std::string_view::npos) {
+        identity.instance = position.substr(at + 1U);
+        position = position.substr(0U, at);
+    }
+    const auto parsed = std::from_chars(
+        position.data(), position.data() + position.size(), identity.offset);
+    if (parsed.ec != std::errc { }
+        || parsed.ptr != position.data() + position.size()) {
+        return std::nullopt;
+    }
+    identity.source = spelling.substr(0U, offset_colon);
+    identity.name = spelling.substr(last_colon + 1U);
+    return identity;
+}
+
+bool vhdl_type_in_identity_unit(const CompiledDesign& design,
+    const vhdl::TypeDefinition& type, const VhdlDeclarationIdentity& identity)
+{
+    const auto* declaration
+        = design.vhdl_hir.find_declaration(type.declaration);
+    const auto* scope = declaration != nullptr
+        ? design.find_scope(declaration->scope)
+        : nullptr;
+    const auto unit = scope != nullptr ? design.find_unit(scope->unit)
+                                       : std::nullopt;
+    if (!unit || unit->vhdl == nullptr) {
+        return false;
+    }
+    const auto& owner = *unit->vhdl;
+    if (!identity.instance.empty()) {
+        return support::same_vhdl_identifier(owner.name, identity.instance)
+            || support::same_vhdl_identifier(
+                owner.primary_name, identity.instance);
+    }
+    const auto& spans = design.semantics.source_spans();
+    if (!owner.source.valid() || owner.source.value() >= spans.size()) {
+        return false;
+    }
+    const auto& text = spans[owner.source.value()];
+    return text.begin.offset <= identity.offset
+        && identity.offset < text.end.offset;
+}
+
+VhdlIdentityTypeSelection select_vhdl_identity_type(
+    const CompiledDesign& design,
+    const std::span<const vhdl::TypeDefinition* const> named,
+    const VhdlDeclarationIdentity& identity)
+{
+    using Status = VhdlIdentityTypeSelection::Status;
+    const auto& spans = design.semantics.source_spans();
+    std::vector<const vhdl::TypeDefinition*> declared;
+    std::vector<const vhdl::TypeDefinition*> relocated;
+    for (const auto* type : named) {
+        if (type == nullptr || !type->source.valid()
+            || type->source.value() >= spans.size()) {
+            continue;
+        }
+        const auto& source = spans[type->source.value()];
+        const auto known = [&](const vhdl::TypeDefinition* existing) {
+            return existing->id == type->id;
+        };
+        if (source.begin.offset != identity.offset
+            || std::ranges::any_of(declared, known)
+            || std::ranges::any_of(relocated, known)) {
+            continue;
+        }
+        if (source.logical_name == identity.source) {
+            declared.push_back(type);
+        } else if (!identity.instance.empty()) {
+            relocated.push_back(type);
+        }
+    }
+    // A loaded design names its sources by their relocated copies while an
+    // instance identity keeps the analysed name; the instance's unit still
+    // selects the declaration.
+    const auto in_unit = [&](std::vector<const vhdl::TypeDefinition*> types) {
+        std::erase_if(types, [&](const vhdl::TypeDefinition* type) {
+            return !vhdl_type_in_identity_unit(design, *type, identity);
+        });
+        return types;
+    };
+    if (declared.empty()) {
+        const auto selected = in_unit(std::move(relocated));
+        return selected.size() == 1U
+            ? VhdlIdentityTypeSelection { Status::unique,
+                  selected.front()->id }
+            : VhdlIdentityTypeSelection { };
+    }
+    if (declared.size() == 1U) {
+        // Without a matching unit the one declaration at the position is
+        // still the identity's.
+        return { Status::unique, declared.front()->id };
+    }
+    const auto selected = in_unit(std::move(declared));
+    return selected.size() == 1U
+        ? VhdlIdentityTypeSelection { Status::unique, selected.front()->id }
+        : VhdlIdentityTypeSelection { Status::ambiguous, { } };
 }
 
 std::string vhdl_instance_ownership_error(const CompiledDesign& design)

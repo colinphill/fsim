@@ -1890,23 +1890,33 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         "a charge strength is legal only on a trireg declaration");
     charge_strength.reset();
   }
-  if (spec.type.named_type.empty()) {
+  // `enum ... { ... } [d] name` is a packed array of the enumeration, whose
+  // literals keep the enumeration's own type (IEEE 1800-2017 7.4.1, 6.19).
+  const auto enumeration = spec.type;
+  if (spec.type.named_type.empty()
+      && !spec.type.enumeration_literals.empty()
+      && at(TokenKind::LeftBracket)) {
+    auto element = spec.type;
+    element.enumeration_literals.clear();
+    element.systemverilog_enumeration_values.clear();
+    spec.type = packed_array_of_type(element, current().span);
+  } else if (spec.type.named_type.empty()) {
     parse_optional_signedness(spec.type);
     parse_optional_range(spec.type);
   }
   declare_member_enumerations(unit);
-  if (spec.type.named_type.empty()
-      && !spec.type.systemverilog_enumeration_values.empty()) {
+  if (enumeration.named_type.empty()
+      && !enumeration.systemverilog_enumeration_values.empty()) {
     for (std::size_t index = 0;
-         index < spec.type.enumeration_literals.size(); ++index) {
-      const auto& literal_name = spec.type.enumeration_literals[index];
+         index < enumeration.enumeration_literals.size(); ++index) {
+      const auto& literal_name = enumeration.enumeration_literals[index];
       const auto& literal_value =
-          spec.type.systemverilog_enumeration_values[index];
+          enumeration.systemverilog_enumeration_values[index];
       add_parameter(
           unit,
           ParameterDeclaration{
               literal_name,
-              spec.type,
+              enumeration,
               literal_value,
               true,
               literal_value.span,
@@ -1924,15 +1934,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     // scope, keys it.
     std::vector<EnumLiteralDeclaration> literals;
     for (std::size_t index = 0;
-         index < spec.type.enumeration_literals.size(); ++index) {
-      literals.push_back({ spec.type.enumeration_literals[index],
-          spec.type.systemverilog_enumeration_values[index],
-          spec.type.systemverilog_enumeration_values[index].span });
+         index < enumeration.enumeration_literals.size(); ++index) {
+      literals.push_back({ enumeration.enumeration_literals[index],
+          enumeration.systemverilog_enumeration_values[index],
+          enumeration.systemverilog_enumeration_values[index].span });
     }
     if (!literals.empty()) {
       unit.type_aliases.push_back({
           anonymous_enumeration_type_name(literals.front().name),
-          spec.type,
+          enumeration,
           span_from(start, previous()),
           std::move(literals),
           TypeDeclarationKind::SystemVerilogTypedef,

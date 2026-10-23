@@ -21279,6 +21279,101 @@ bool HierarchyBuilder::bind_compiled_vhdl_package_objects(
     return true;
 }
 
+bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
+    const semantic::SpecializedHirUnit& specialization,
+    const std::string& path,
+    const semantic::vhdl::Unit& unit,
+    SignalMap& signals,
+    ContainerMap& container_objects)
+{
+    using Form = semantic::vhdl::DeclarationForm;
+    for (const auto instance_id : unit.declarations) {
+        const auto instance = specialization.find_declaration(instance_id);
+        if (!instance || instance->vhdl == nullptr
+            || instance->vhdl->form != Form::package_instance
+            || !instance->vhdl->package) {
+            continue;
+        }
+        // An unknown or ambiguous template is reported by
+        // validate_compiled_vhdl_package_instances.
+        const auto candidates = compiled_vhdl_package_template_candidates(
+            instance->vhdl->package->template_name, unit.library);
+        if (candidates.size() != 1U) {
+            continue;
+        }
+        const auto& package = *candidates.front();
+        std::vector<const semantic::vhdl::Declaration*> objects;
+        for (const auto id : package.declarations) {
+            const auto member = specialization.find_declaration(id);
+            if (member && member->vhdl != nullptr
+                && (member->vhdl->form == Form::signal
+                    || (member->vhdl->form == Form::variable
+                        && member->vhdl->shared))) {
+                objects.push_back(member->vhdl);
+            }
+        }
+        if (objects.empty()) {
+            continue;
+        }
+        const auto bindings
+            = semantic::resolve_specialized_hir_vhdl_package_associations(
+                *compiled_, *instance->vhdl, package, specialization);
+        if (!bindings) {
+            continue;
+        }
+        std::vector<semantic::SpecializedHirActualIdentity> actuals;
+        bool static_actuals { true };
+        for (const auto& binding : bindings.bindings) {
+            if (binding.kind == semantic::SpecializedHirAssociationKind::open
+                || (binding.kind
+                        == semantic::SpecializedHirAssociationKind::
+                            default_value
+                    && !binding.actual_declaration)) {
+                continue;
+            }
+            auto actual = compiled_vhdl_specialization_actual(
+                *compiled_, specialization, binding);
+            if (binding.identity.empty() || actual.requires_static_value) {
+                static_actuals = false;
+                break;
+            }
+            actuals.push_back(std::move(actual.actual));
+        }
+        if (!static_actuals) {
+            continue;
+        }
+        const auto working
+            = specialization.with_local_actual_identities(actuals);
+        const auto instance_path = path + "." + instance->vhdl->name;
+        SignalMap instance_signals;
+        ReadOnlySignalSet read_only;
+        std::unordered_set<std::string> declared;
+        ContainerMap instance_containers;
+        std::vector<std::pair<std::string, std::string>> shapes;
+        for (const auto* object : objects) {
+            if (!materialize_compiled_vhdl_declaration(working,
+                    instance_path, path, instance_signals, read_only,
+                    declared, instance_containers, shapes, package.standard,
+                    package.compatibility_profile, *object)) {
+                return false;
+            }
+        }
+        for (const auto& [name, signal] : instance_signals) {
+            if (name.find('.') == std::string::npos) {
+                signals.emplace(
+                    vhdl_package_object_key(instance_id, name), signal);
+            }
+        }
+        for (const auto& [name, container] : instance_containers) {
+            if (!name.starts_with(instance_path + ".")) {
+                container_objects.emplace(
+                    vhdl_package_object_key(instance_id, name), container);
+            }
+        }
+    }
+    return true;
+}
+
 bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     const semantic::SpecializedHirUnit& working_specialization,
     const std::string& working_path,
@@ -26333,13 +26428,14 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                     && compiled_vhdl_name_equal(
                         candidate.name, package_name);
             });
-        if (package == compiled_->vhdl_units().end() && parts.size() == 2U) {
-            // A use-visible object (a shared variable of a protected type
-            // declared in a package): its name selects a method or element
-            // (IEEE 1076-2008 8.3).
+        if (package == compiled_->vhdl_units().end()) {
+            // A visible object (a shared variable of a protected type
+            // declared in a package, or `pkg.var` of a visible package):
+            // its name selects a method or element (IEEE 1076-2008 8.3).
+            const auto prefix = spelling.substr(0U, spelling.rfind('.'));
             semantic::vhdl::Name prefix_name;
-            prefix_name.spelling = std::string { parts.front() };
-            prefix_name.canonical = lowercase_ascii_copy(parts.front());
+            prefix_name.spelling = std::string { prefix };
+            prefix_name.canonical = lowercase_ascii_copy(prefix);
             if (semantic::CompiledDesignResolver {
                     *compiled_, architecture.id, &*specialized }
                     .resolve_vhdl(prefix_name, expression.scope, { })
@@ -29523,6 +29619,10 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
     };
     if (!add_unit_declarations(*entity)
         || !add_unit_declarations(architecture)
+        || !materialize_compiled_vhdl_local_package_objects(
+            *specialized, path, *entity, signals, container_objects)
+        || !materialize_compiled_vhdl_local_package_objects(
+            *specialized, path, architecture, signals, container_objects)
         || !bind_compiled_vhdl_package_objects(
             *specialized, signals, container_objects)) {
         return false;

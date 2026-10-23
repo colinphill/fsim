@@ -692,6 +692,16 @@ resolve_specialized_hir_vhdl_block_associations(
     const vhdl::GenerateRegion& block,
     const SpecializedHirUnit& parent);
 
+/// Resolve a VHDL package instantiation's generic map against the generic
+/// declarations of its template package (IEEE 1076-2008 4.9), for a
+/// hierarchy-local working specialization of the instance's objects.
+[[nodiscard]] SpecializedHirAssociationResult
+resolve_specialized_hir_vhdl_package_associations(
+    const CompiledDesign& design,
+    const vhdl::Declaration& instance,
+    const vhdl::Unit& template_package,
+    const SpecializedHirUnit& parent);
+
 /// Evaluate every VHDL generate owned by the selected unit and expose its
 /// selected body occurrences in hierarchy order. Iterative regions produce
 /// one occurrence per genvar value; each occurrence retains the complete set

@@ -737,6 +737,16 @@ private:
         const semantic::SpecializedHirUnit& specialization,
         SignalMap& signals,
         ContainerMap& container_objects);
+    // A package instance declared in a design unit has its own signals and
+    // shared variables (IEEE 1076-2008 4.9, 14.4.2.1): each is materialized
+    // under the instance's path with the instance's generics and bound as
+    // vhdl_package_object_key(instance, name).
+    bool materialize_compiled_vhdl_local_package_objects(
+        const semantic::SpecializedHirUnit& specialization,
+        const std::string& path,
+        const semantic::vhdl::Unit& unit,
+        SignalMap& signals,
+        ContainerMap& container_objects);
 
     // Expression and path inputs borrow from the active binding worklist and
     // compiled HIR. They are consumed synchronously; returned metadata owns

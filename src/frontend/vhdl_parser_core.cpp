@@ -926,9 +926,7 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
                     "select VHDL-2019 or use the unclassified 'type T' form");
                 generic.type = parse_vhdl_unspecified_type(type_start);
                 generic.type.vhdl_unspecified->inference_identity =
-                    type_start.span.source_name + ":" +
-                    std::to_string(type_start.span.begin.offset) + ":" +
-                    generic.name;
+                    vhdl_declaration_identity(type_start, generic.name);
             } else if (match(TokenKind::ColonEqual)) {
                 error(previous(), "FSIM-VHDL-UNSUPPORTED-028",
                     "a VHDL interface type does not use a value-like default");
@@ -1153,8 +1151,7 @@ VhdlParser::parse_vhdl_mode_view_indication(const Token& start)
 Type VhdlParser::parse_vhdl_unspecified_type(const Token &start) {
     Type type;
     auto info = std::make_shared<VhdlUnspecifiedTypeInfo>();
-    info->inference_identity = start.span.source_name + ":" +
-        std::to_string(start.span.begin.offset);
+    info->inference_identity = vhdl_declaration_identity(start, { });
 
     const auto accept_box = [&](const std::string_view description) {
         expect(TokenKind::Less, "'<' in " + std::string(description),

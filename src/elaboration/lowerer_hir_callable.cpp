@@ -13778,7 +13778,8 @@ std::optional<Lowerer::HirVhdlFunctionResultShape>
 Lowerer::hir_vhdl_returned_result_shape(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope,
-    const std::optional<semantic::DeclarationId> selected_body) const
+    const std::optional<semantic::DeclarationId> selected_body,
+    const bool record_result) const
 {
     // The result of a function whose return type leaves the index range
     // open has the shape of the value each return statement gives (IEEE
@@ -13852,14 +13853,20 @@ Lowerer::hir_vhdl_returned_result_shape(
     const PopBackGuard actual_scope { hir_generic_binding_frames_ };
     auto return_subtype = hir_resolver().effective_vhdl_subtype(
         *declared_return, declaration->vhdl->scope);
-    if (!return_subtype || !return_subtype->unconstrained
-        || hir_vhdl_predefined_string_type(*return_subtype)) {
+    // A record type whose elements leave bounds open (IEEE 1076-2008
+    // 5.3.3).
+    const bool open_record = record_result && return_subtype
+        && hir_vhdl_partially_constrained_record(*return_subtype);
+    if (!return_subtype
+        || (!open_record
+            && (!return_subtype->unconstrained
+                || hir_vhdl_predefined_string_type(*return_subtype)))) {
         return std::nullopt;
     }
     // A one-dimensional array type, including the predefined vectors.
     if (const auto declared = hir_vhdl_subtype_shape(
             *return_subtype, declaration->vhdl->scope);
-        !declared || declared->ranges.size() != 1U) {
+        !open_record && (!declared || declared->ranges.size() != 1U)) {
         return std::nullopt;
     }
     // Every return value of the body, including nested ones.
@@ -13909,6 +13916,33 @@ Lowerer::hir_vhdl_returned_result_shape(
     collect(collect, declaration->vhdl->statements, 0U);
     if (!complete || returned.empty()) {
         return std::nullopt;
+    }
+    if (open_record) {
+        std::optional<HirVhdlShape> shape;
+        for (const auto value : returned) {
+            auto candidate = hir_vhdl_record_value_shape(
+                value, *return_subtype, declaration->vhdl->scope);
+            if (!candidate || !candidate->ranges.empty()
+                || candidate->element_constraints.empty()
+                || (shape
+                    && shape->element_constraints
+                        != candidate->element_constraints)) {
+                return std::nullopt;
+            }
+            shape = std::move(candidate);
+        }
+        apply_hir_vhdl_shape(
+            *return_subtype, *shape, declaration->vhdl->scope);
+        const auto width = vhdl_subtype_width(*return_subtype);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
+        HirVhdlFunctionResultShape result;
+        result.width = *width;
+        result.domain = vhdl_value_domain(return_subtype->domain);
+        result.element_constraints = shape->element_constraints;
+        result.record = true;
+        return result;
     }
     // A returned string literal has the result type as its context: one
     // element per character from the index subtype's 'LEFT (9.3.2).
@@ -21833,6 +21867,17 @@ bool Lowerer::lower_hir_callable_return(
         ? hir_effective_vhdl_subtype(
               *declaration->vhdl->callable->return_type)
         : std::nullopt;
+    // An open record result takes its element bounds from a returned
+    // aggregate when no call context gave them (IEEE 1076-2008 9.3.3.3).
+    if (result_subtype && expression && expression->vhdl != nullptr
+        && expression->vhdl->kind
+            == semantic::vhdl::ExpressionKind::aggregate
+        && hir_vhdl_partially_constrained_record(*result_subtype)) {
+        if (auto completed = hir_vhdl_initialized_object_subtype(
+                *value, *result_subtype, hir_process_scope_)) {
+            result_subtype = std::move(completed);
+        }
+    }
     if (result_subtype
         && (result_subtype->unconstrained
             || !result_subtype->executable_width

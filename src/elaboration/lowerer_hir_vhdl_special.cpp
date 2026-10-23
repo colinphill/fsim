@@ -1573,6 +1573,7 @@ void Lowerer::load_hir_vhdl_protected_caches(
             && !is_two_state_domain(register_domain(*value))) {
             value = convert_to_two_state(*value);
         }
+        value = hir_vhdl_protected_storage_value(*value);
         const auto container = allocate_container_register(info.type);
         process_.operations.emplace_back(
             ReadContainerObject { container, member.storage });
@@ -1639,10 +1640,24 @@ void Lowerer::flush_hir_vhdl_protected_caches()
             ? current->second
             : cache.value;
         process_.operations.emplace_back(ContainerWrite {
-            cache.container, zero, value, true, false });
+            cache.container, zero, hir_vhdl_protected_storage_value(value),
+            true, false });
         process_.operations.emplace_back(WriteContainerObject {
             cache.storage, cache.container, std::nullopt });
     }
+}
+
+RegisterId Lowerer::hir_vhdl_protected_storage_value(const RegisterId value)
+{
+    // Container elements hold four-state values: a nine-valued member value
+    // is stored as its Logic4 projection.
+    if (register_domain(value) != frontend::ValueDomain::Logic9) {
+        return value;
+    }
+    const auto stored = allocate_register(
+        register_width(value), frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(CopyRegister { stored, value });
+    return stored;
 }
 
 void Lowerer::reload_hir_vhdl_protected_caches()

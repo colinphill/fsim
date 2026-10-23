@@ -428,6 +428,20 @@ private:
   // Package declarations and bodies declared in a package declarative region
   // (IEEE 1076-2008 4.7, 4.8), emitted as units after their enclosing unit.
   std::vector<DesignUnit> nested_package_units_;
+  // Token ranges [begin, end) expanded from design-unit-level package
+  // instances, with the instance name. Their tokens keep the template's
+  // spans, so declaration identities also name the instance: each instance
+  // declares distinct types (IEEE 1076-2008 4.9).
+  struct ExpandedPackageInstance {
+    std::size_t begin{};
+    std::size_t end{};
+    std::string name;
+  };
+  std::vector<ExpandedPackageInstance> expanded_package_instances_;
+  // The identity of a declaration begun at `start`: its source position and
+  // name, qualified by the package instance it was expanded into.
+  std::string vhdl_declaration_identity(const Token &start,
+                                        std::string_view name) const;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
   bool numeric_bit_context_{};

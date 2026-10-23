@@ -692,6 +692,8 @@ private:
         std::vector<semantic::vhdl::ElementConstraint>
             element_constraints { };
         bool null_range { };
+        // A record result: `element_constraints` is its whole shape.
+        bool record { };
     };
     struct HirVhdlArrayIndex {
         semantic::ExpressionId expression;
@@ -958,10 +960,13 @@ private:
         semantic::ScopeId process_scope,
         std::optional<semantic::DeclarationId> selected_body) const;
     // The one static shape every return value of the called function has.
+    // A partially constrained record result is shaped only for
+    // `record_result`; it has no index range.
     [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
     hir_vhdl_returned_result_shape(semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
-        std::optional<semantic::DeclarationId> selected_body) const;
+        std::optional<semantic::DeclarationId> selected_body,
+        bool record_result = false) const;
     [[nodiscard]] std::optional<bool> hir_vhdl_range_direction(
         const semantic::vhdl::RangeConstraint& range,
         semantic::ScopeId process_scope) const;
@@ -1037,6 +1042,14 @@ private:
     hir_vhdl_aggregate_target_subtype(semantic::ExpressionId target,
         const semantic::vhdl::SubtypeIndication& type,
         semantic::ScopeId scope) const;
+    // The shape a value of record subtype `record` has: an aggregate's open
+    // elements take their bounds from the values (or, for `targets`, the
+    // objects) they associate; any other value has its own shape (IEEE
+    // 1076-2008 9.3.3.2, 1076-2019 6.4.2.2).
+    [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_record_value_shape(
+        semantic::ExpressionId value,
+        const semantic::vhdl::SubtypeIndication& record,
+        semantic::ScopeId scope, bool targets = false) const;
     // Fill the open ranges and element constraints of `subtype` from
     // `shape`.
     void apply_hir_vhdl_shape(semantic::vhdl::SubtypeIndication& subtype,
@@ -1538,6 +1551,8 @@ private:
     void load_hir_vhdl_protected_caches(
         std::span<const HirVhdlProtectedMember> members);
     void flush_hir_vhdl_protected_caches();
+    [[nodiscard]] RegisterId hir_vhdl_protected_storage_value(
+        RegisterId value);
     void reload_hir_vhdl_protected_caches();
     // Clears the register, local and control state of one lowered process.
     void reset_hir_process_state();
@@ -2629,6 +2644,15 @@ private:
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_referenced_declaration(
         semantic::ExpressionId expression) const;
+    // The package instance through which an object of a generic package
+    // was last named (`p2.s`), by the object's template declaration.
+    // hir_runtime_binding binds the template object to that instance's own
+    // object (IEEE 1076-2008 4.9); see vhdl_package_object_key.
+    mutable std::unordered_map<std::uint32_t, semantic::DeclarationId>
+        hir_package_object_instances_;
+    void select_hir_package_object_instance(
+        semantic::ExpressionId expression,
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_vhdl_type_declaration(
         semantic::ExpressionId expression) const;

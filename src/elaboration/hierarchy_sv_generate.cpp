@@ -63,6 +63,9 @@ CollectionResult collect_occurrences(
                                                   const semantic::SpecializedHirUnit& parent_specialization)
         -> bool {
         using Kind = semantic::sv::GenerateKind;
+        // A failure points at the generate construct when it has a span.
+        const auto generate_source = generate.source.valid()
+            ? generate.source : unit.source;
         if (generate.kind == Kind::iterative) {
             if (std::ranges::any_of(
                     parent_specialization.specialization()
@@ -75,7 +78,7 @@ CollectionResult collect_occurrences(
                     "nested loop-generate variable '"
                         + generate.iterator
                         + "' shadows an enclosing hierarchy identity",
-                    unit.source);
+                    generate_source);
                 return false;
             }
             if (generate.iterator.empty() || !generate.initial
@@ -84,7 +87,7 @@ CollectionResult collect_occurrences(
                     "FSIM-ELAB-GEN-002",
                     "compiled loop-generate has incomplete iteration "
                     "metadata",
-                    unit.source);
+                    generate_source);
                 return false;
             }
             const auto initial
@@ -95,7 +98,7 @@ CollectionResult collect_occurrences(
                     "FSIM-ELAB-GEN-002",
                     "cannot evaluate compiled loop-generate initial "
                     "value",
-                    unit.source);
+                    generate_source);
                 return false;
             }
             std::int64_t value = *initial;
@@ -118,7 +121,7 @@ CollectionResult collect_occurrences(
                         "FSIM-ELAB-GEN-003",
                         "cannot evaluate compiled loop-generate "
                         "condition",
-                        unit.source);
+                        generate_source);
                     return false;
                 }
                 if (*condition == 0) {
@@ -129,7 +132,7 @@ CollectionResult collect_occurrences(
                         "FSIM-ELAB-GEN-014",
                         "compiled loop-generate revisits genvar value '"
                             + std::to_string(value) + "'",
-                        unit.source);
+                        generate_source);
                     return false;
                 }
                 if (count == maximum_iterations) {
@@ -137,7 +140,7 @@ CollectionResult collect_occurrences(
                         "FSIM-ELAB-GEN-004",
                         "compiled loop-generate exceeds the bounded "
                         "1,000,000-iteration elaboration limit",
-                        unit.source);
+                        generate_source);
                     return false;
                 }
                 const auto local_path = generate.label + "["
@@ -159,7 +162,7 @@ CollectionResult collect_occurrences(
                         "FSIM-ELAB-GEN-005",
                         "cannot evaluate compiled loop-generate "
                         "iteration",
-                        unit.source);
+                        generate_source);
                     return false;
                 }
                 if (*next == value) {
@@ -167,7 +170,7 @@ CollectionResult collect_occurrences(
                         "FSIM-ELAB-GEN-006",
                         "compiled loop-generate iteration does not "
                         "advance",
-                        unit.source);
+                        generate_source);
                     return false;
                 }
                 value = *next;

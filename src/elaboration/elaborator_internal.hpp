@@ -110,6 +110,16 @@ vhdl_character_control_literal_code(const std::string_view name)
         separator == std::string_view::npos ? 0U : separator + 1U));
 }
 
+// The binding key of an object of a package instance declared in a design
+// unit or block: the instance has its own objects (IEEE 1076-2008 4.9), so
+// they are bound by instance declaration and lower-case simple name.
+[[nodiscard]] inline std::string vhdl_package_object_key(
+    const semantic::DeclarationId instance, const std::string_view name)
+{
+    return "@pkgobj:" + std::to_string(instance.value()) + "."
+        + lowercase_ascii_copy(name);
+}
+
 [[nodiscard]] inline bool equal_ignoring_ascii_case(
     const std::string_view left, const std::string_view right) noexcept
 {

@@ -253,6 +253,81 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 90: Batch 89 regressions, package-instance objects, VHDL identities and shapes
+
+Batch 90 fixes the 114 cases the Batch 89 full run (`b89w1`) lost, which are
+listed with that run above, and works through `triage/b90/plan.md`. Compared
+with `b89w1`, the reruns (`b90a` for SystemVerilog, `b90v2` for VHDL) gain
+121 cases and lose none:
+- sv-tests 112, verilator 2 and ivtest 1 are the `b89w1` losses;
+- nvc genpack12, gensub7, issue726, issue946 and signal32, and
+  vhdl-compliance tb_059, are new closures.
+
+Six new closures is short of the batch minimum. The owner allows
+architectural batches below 50 (Batch 86), and the cases left need the
+larger changes listed at the end of this note.
+
+VHDL:
+- **Objects of a package instance declared in a design unit**
+  (`package p2 is new work.sigpack generic map (4)`) are now elaborated.
+  - Before, they were never elaborated: `p2.s` bound by simple name to
+    whichever `s` was visible.
+  - Each instance's signals and shared variables are elaborated under
+    `<path>.<instance>`, with that instance's generics (IEEE 1076-2008 4.9,
+    14.4.2.1).
+  - A name selected through the instance (`p2.s`), or made visible by a
+    use clause, binds to that instance's object.
+  - Closes genpack12, issue946 and tb_059 architecture A1.
+- **The actual of a generic type** is now resolved where the association is
+  written, not in the formal's package (6.5.7.2).
+  - Before, `access_type => line` with `use std.textio.line` in the
+    architecture left the type unresolved.
+  - LINE has no compiled declaration and is typed as a dynamic string, as a
+    LINE object is.
+  - Closes tb_059 architecture A4.
+- **An alias of an element** (`alias a is s.f`) named in a package body is
+  now resolved when the name is lowered (issue946).
+  - Before, analysis had left such a name unbound, and the alias was not
+    recognized.
+- **Declaration identities** of library-level package instances
+  (`source:offset@instance:name`):
+  - they are now bound when an object's subtype is resolved;
+  - in a loaded design, where sources are relocated, they are selected by
+    position and instance unit;
+  - an expanded instance's name is no longer read after its tokens are
+    replaced.
+  - These move issue881 to its last blocker, a library-level instance used
+    as an interface-package actual.
+- `G'subtype` of a generic constant now takes its bounds from the actual's
+  value in VHDL-2008, as in 2019 (6.5.6.2, 16.2.2). Closes gensub7.
+- A record variable takes its element constraints from its initial value,
+  and an aggregate returned for a partially constrained record result
+  supplies the result's constraints (9.3.3.3). Closes signal32.
+- Protected-type members of STD_ULOGIC types are now stored as four-state
+  values. Closes issue726.
+- An overloaded enumeration literal used as an index is typed by the
+  prefix's index subtype (12.5).
+- An expanded name `instance.object.method` is accepted by the selected-name
+  check (genpack8 stage 1).
+
+Exclusions: nvc reflect3 relies on mirror identity and caching that the LRM
+leaves open (16.12.1, 9.2.3), like reflect4. Verilator
+t_public_flat_rw_large_offset checks C++ offsets of `--public-flat-rw` and
+needs 6 GiB of static storage; no LRM clause applies.
+
+Left for Batch 91, all in `triage/b90`:
+- the port driving/effective split (driver12, driver23, conv13, conv19,
+  issue963, issue1208);
+- predefined subprograms as interface-subprogram actuals (gentype2,
+  issue620);
+- composite `'VALUE` and elaborated generic shapes (value2, issue815,
+  vhpi10, record14, elab35);
+- library-level instances as interface-package actuals (issue881);
+- local package declarations (gentype7);
+- protected method aliases (protected12).
+
+The full run (`b90w1`) is in progress.
+
 ### Batch 89: class formals and constraints, unit scopes, gate arrays, modport exports, VHDL generic shapes
 
 Batch 89 works through the failures Batch 88 left (`triage/b89/plan.md`) and
@@ -265,7 +340,29 @@ t_interface_modport_export and t_tri_array_bufif, and ivtest sv_darray_signed,
 sv_unit4b and scoped_events. That makes 50. The one loss in `b89o`,
 pow_reg_signed, was a load timeout during a build and passes alone.
 
-The full run (`b89w1`, frozen `b89x`) is in progress.
+The full run (`b89w1`, frozen `b89x`) confirms all 50. It loses 114 cases,
+which Batch 90 fixes:
+- 111 sv-tests UVM cases. A class method's constant name was looked up only
+  from the class body's own scope, which missed `uvm_pkg` imported into the
+  compilation unit (`UVM_LOW` in `uvm_info`).
+- ivtest array_packed and verilator t_param_type_chain. `$bits` of an
+  operand now lowers at run time instead of folding, and that exposed two
+  wrong widths:
+  - an anonymous enumeration with a packed dimension
+    (`enum logic [7:0] {..} [1:0] x`) was declared 2 bits wide;
+  - a type parameter default `foo_t [1:0]` replaced foo_t's own range
+    instead of adding an outer dimension.
+- verilator t_foreach_const. A constant function's local array was queried
+  by its declaration instead of its frame.
+
+| Suite | Batch88 passes / in scope | Batch89 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2616 / 2622 | 2630 / 2635 | 276 |
+| sv-tests | 1492 / 1497 | 1382 / 1495 | 2 |
+| verilator | 2021 / 2064 | 2042 / 2068 | 347 |
+| vests | 3645 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1206 / 1256 | 1215 / 1264 | 218 |
+| vhdl-compliance | 58 / 65 | 58 / 65 | 7 |
 
 SystemVerilog classes, constraints and randomization:
 - **Nested classes of parameterized classes** inherit the enclosing class's
