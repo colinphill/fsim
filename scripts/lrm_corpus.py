@@ -969,6 +969,12 @@ VERILATOR_NONSTANDARD = {
     # (IEEE 1800-2017 4.7).
     "t_tri_unconn": "checks a pulled net at a time-0 clock edge that races "
         "its continuous driver",
+    # After `@(posedge t.mod0.out)` the check reads `out2`, a continuous
+    # assignment of `out`; the waiting process and the assignment are both
+    # active in that time step and their order is unspecified (IEEE
+    # 1800-2023 4.7).
+    "t_clocking_virtual": "reads a continuous copy of a clocking output in "
+        "the time step of its edge, racing the continuous assignment",
     # An out-of-bounds read of an unpacked array returns the element type's
     # default (IEEE 1800-2017 7.4.6); the expected sum assumes otherwise.
     "t_array_mda": "expects a value from an out-of-bounds array read",

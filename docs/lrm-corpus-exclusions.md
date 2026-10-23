@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 294 |
+| verilator | 63 | 295 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
 | nvc | 219 | 0 |
@@ -58,6 +58,7 @@ Exclusions never count as closures.
 | `t_class_trigger_null` | out of scope | reads a member through a handle that may be null at time 0, depending on process order (IEEE 1800-2017 4.7, 8.4) |
 | `t_clocked_release_combo` | out of scope | expects release to restore a variable (IEEE 1800-2017 10.6.2 keeps the forced value) |
 | `t_clocking_drive_concat` | out of scope | drives a concatenation of clockvars |
+| `t_clocking_virtual` | out of scope | reads a continuous copy of a clocking output in the time step of its edge, racing the continuous assignment |
 | `t_config_inst_missing` | not run | lint-only test |
 | `t_config_libmap` | out of scope | declares its configuration inside its library map file; a lib.map file is limited to library specifications, include statements and comments (IEEE 1800-2023 33.3.2) |
 | `t_config_rules` | out of scope | its configuration has two default clauses with liblist expansion clauses; there cannot be more than one default clause that specifies the expansion clause (IEEE 1800-2023 33.4.1.2) |

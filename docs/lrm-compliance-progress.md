@@ -253,6 +253,78 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 92: call generic maps, package instance actuals, conversions, covergroups, VPI names and delays, clocking block events, virtual interface shadowing
+
+Batch 92 (b7e2b484) continues the architectural workstreams from the Batch 91
+re-triage. Against `b91w1`, the live tree gains 11 cases and loses none:
+- nvc 6: conv19, gentype7, issue1208, issue1388, issue881, issue970;
+- vhdl-compliance 1: tb_049;
+- verilator 2: t_class_extern_virtual_interface,
+  t_covergroup_bin_const_expr;
+- ivtest 2: vpi_br_gh317, vpi_spec_delays.
+
+The full run `b92w1`, made with the frozen `b92e` binary, gains the same 11
+cases on `b91w1` and loses none. The t_clocking_virtual exclusion below was
+added while the run was in progress, before its verilator suite started, so
+it is counted in that suite's exclusions. No intermediate archives were made;
+`b92e` is kept.
+
+| Suite | Batch91 passes / in scope | Batch92 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2631 / 2635 | 2633 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2050 / 2066 | 2052 / 2065 | 350 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1236 / 1263 | 1242 / 1263 | 219 |
+| vhdl-compliance | 61 / 65 | 62 / 65 | 7 |
+
+VHDL:
+- **Generic maps in subprogram calls.** A call with a generic map becomes an
+  implicit subprogram instance (IEEE 1076-2019 4.4, 9.3.4). A process
+  declarative part accepts `function`/`procedure ... is new` instantiations.
+  Generic array type projections, `'succ`/`'pred` of generic types,
+  `return a'subtype` and `obj'subtype` generic actuals are supported.
+- **Local package instances.** Package objects declared in block and
+  generate declarative parts are materialized. A library-level package
+  instance can be the actual of an interface package (6.5.5). Instances
+  declared in blocks, generates and processes now load their templates.
+- **Conversions and views.** An inertial leaf in a conversion aggregate,
+  view-port subelement routes and `to_integer(signed(...))` are lowered.
+
+SystemVerilog:
+- **Clocking block events** (`@(cb)`) are now triggered in the Observed
+  region, after the block's samples are updated (IEEE 1800-2023 14.10,
+  14.13). An Observed-region process toggles a hidden flag at each clocking
+  event, and `@(cb)`, `@(vif.cb)` and `@(inst.cb)` wait on it.
+  - A clocking drive accepts an indexed prefix (`vifs[0].cb.w <= ##2 1`,
+    14.16).
+  - `@(inst.cb)` names the clocking block of an instance or interface port.
+  - A package variable can be the clocking event.
+  - A real `##` cycle count is converted as `repeat` converts it.
+- **Virtual interface handles shadow same-named instances** (23.9, 25.9).
+  A formal, local or property of virtual interface type named like an
+  instance (`function f(virtual Bus bus)` beside an instance `bus`) is the
+  handle in every name path, not the instance. An interface instance array
+  can be a virtual interface array actual, and a parameterized virtual
+  interface type selects only matching specializations.
+- **Covergroups.** A covergroup handle can be declared and constructed
+  procedurally. The coverage percentage is stored as IEEE double bits.
+- **VPI.** Names that need escaping are published as escaped identifiers.
+  Module paths, path terminals and `vpi_get_delays`/`vpi_put_delays` are
+  supported (36, 38).
+
+t_clocking_virtual is excluded. With the Observed-region event its only
+failing check reads a continuous assignment of a clocking output in the time
+step of that output's edge; the waiting process and the assignment are both
+active, and IEEE 1800-2023 4.7 leaves their order unspecified.
+
+Not closed, moved to later workstreams:
+- t_clocking_drive_cycle: needs clocking blocks inside generate blocks;
+- t_mod_interface_array3: needs string ports on instance arrays and
+  multidimensional interface port arrays;
+- t_interface_array_parameter_aggregate: unpacked aggregate parameters are
+  stored as packed vectors.
+
 ### Batch 91: VHDL generic environments, element shapes, nested packages, SV packed signs, forced port nets
 
 Batch 91 (9f0a946b) works through the Fable re-triage of the 70 failures left
