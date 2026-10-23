@@ -253,6 +253,103 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 91: VHDL generic environments, element shapes, nested packages, SV packed signs, forced port nets
+
+Batch 91 (9f0a946b) works through the Fable re-triage of the 70 failures left
+after Batch 90 (`triage/b91/retriage/report.md`). The full run `b91w1`, made
+with the frozen `b91e` binary, gains 24 cases on `b90w1` and loses none:
+- nvc 16: array18, driver23, elab31, elab35, genpack15, gentype2, issue1161,
+  issue1460, issue197, issue815, issue858, protected12, range3, record14,
+  value2, vhpi10;
+- vhdl-compliance 2: tb_041, tb_072b;
+- verilator 6: t_array_packed_sign, t_force_subnet, t_interface_typedef3,
+  t_param_array_sparse, t_randomize_module_var,
+  t_virtual_interface_gen_for_ref.
+
+All 24 are new closures; none were losses. After this batch about 46
+non-parked failures remain in all six suites, so the 50-case minimum cannot
+be met. As in Batches 86 and 90, the batch closes below it, and the next
+batches are organized by architectural workstream.
+
+t_vpi_multidim is excluded. It reads a NUL byte back as a space, a Verilator
+convention that IEEE 1800-2023 38.15 does not specify.
+
+VHDL:
+- **Generic environments of deferred callables.** A subprogram whose
+  generic actuals name generics of an enclosing instance now keeps the
+  frames that bind them. Its body is lowered under those frames, and the
+  callable key includes them (IEEE 1076-2008 4.9, 6.5.3).
+  - The generic-formal name overlay takes formals from the innermost frame
+    that binds them.
+  - A generic type actual that names an enclosing generic type (`t => t`)
+    follows that generic when an active frame binds it.
+  - Closes genpack15.
+- **Protected types:**
+  - member caches load before method locals, so `constant pos : positive
+    := count;` reads the private variable;
+  - member subtypes and defaults resolve in the declaration's scope;
+  - an alias of a method in the type declaration (`alias inc1 is
+    c1.increment [];`) is accepted (6.6.2), closing protected12.
+- **Nested package instances.** A package instance inside a generic package
+  template now binds its own formals in each enclosing instance. Inside an
+  architecture-local instance, a call to a sibling subprogram adopts that
+  instance's generic frame (4.9).
+- **Constrained generic type actuals.** A type actual written with an index
+  constraint (`t => bit_vector(7 downto 0)`) keeps that constraint (6.5.7.2),
+  closing issue858.
+- **Block and generate declarative parts** now accept package declarations
+  and shared variables (3.3.2). A generic package declared there is hoisted
+  to a library unit under a unique name.
+- **Attribute specifications in an entity** now bind the unit's constants
+  (7.2), closing issue197.
+- **Elaborated values for shapes.** Composite `T'VALUE` is supported, with
+  new code FSIM-ELAB-VHVALUE-001. Predefined operators can be generic
+  function actuals. Element bounds of records and arrays are now taken from
+  generics and elaborated values. Together these close array18, elab31,
+  elab35, gentype2, issue815, range3, record14, value2 and vhpi10.
+- **Null slice targets.** Assigning to a null slice whose value has no side
+  effects changes nothing. A value with side effects, including a function
+  called with no parameters, is still evaluated (8.5, 9.3.4). Closes tb_072b.
+- Also closed: driver23, issue1161 (VHPI), issue1460 and tb_041.
+
+SystemVerilog:
+- **Packed array element signedness** is now kept through typedef layers.
+  Closes t_array_packed_sign.
+- **Forcing a port net segment** (`port_segment` on slice force and release)
+  now keeps a child's force when the parent's force is released (10.6.2).
+  Closes t_force_subnet.
+- **Typedefs through a generic interface port** are now imported after the
+  port's interface is known. Closes t_interface_typedef3.
+- **Constraints that read module variables** now bind them as solver state
+  (18.5). Closes t_randomize_module_var.
+- Also closed: virtual-interface handle forms and sparse unpacked array
+  parameters set from constant function calls.
+
+| Suite | Batch90 passes / in scope | Batch91 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2631 / 2635 | 2631 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2044 / 2067 | 2050 / 2066 | 349 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1220 / 1263 | 1236 / 1263 | 219 |
+| vhdl-compliance | 59 / 65 | 61 / 65 | 7 |
+
+Cleanup at close removed the intermediate frozen archives
+`.local-artifacts/fsim-archive/b91a`, `b91b`, `b91c` and `b91d`; `b91e`
+(committed tree) and `b90x` (previous baseline) are kept.
+
+Leads for Batch 92:
+- W4: issue1388, issue970, tb_049 (2019 call generic maps, `x'index`
+  subtypes, `return a'subtype`);
+- W3 remainder: gentype7 (objects of block-local package instances),
+  issue881 (a library-level instance as an interface-package actual),
+  genpack8 (protected types in an architecture-local instance);
+- W10: vpi_br_gh317 (escaped names), vpi_spec_delays (module paths and
+  `vpi_get_delays`/`vpi_put_delays`);
+- t_covergroup_bin_const_expr;
+- W1, the port driving/effective-value split: conv13, issue963, driver12,
+  conv19, issue1208, issue620.
+
 ### Batch 90: Batch 89 regressions, package-instance objects, VHDL identities and shapes
 
 Batch 90 fixes the 114 cases the Batch 89 full run (`b89w1`) lost, which are
