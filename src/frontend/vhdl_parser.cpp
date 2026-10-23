@@ -9,7 +9,14 @@ namespace fsim::frontend {
 
 ParseResult parse_vhdl(SourceText source, const VhdlStandard vhdl_standard)
 {
-    auto conditional = analyze_vhdl_conditionals(std::move(source), vhdl_standard);
+    return parse_vhdl(std::move(source), vhdl_standard, { });
+}
+
+ParseResult parse_vhdl(SourceText source, const VhdlStandard vhdl_standard,
+    const VhdlConditionalIdentifiers& identifiers)
+{
+    auto conditional = analyze_vhdl_conditionals(
+        std::move(source), vhdl_standard, identifiers);
     const bool conditional_profile_compatible = std::ranges::none_of(
         conditional.diagnostics, [](const Diagnostic& diagnostic) {
             return diagnostic.code == "FSIM-VHDL-CA-001"

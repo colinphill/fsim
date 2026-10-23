@@ -112,6 +112,29 @@ void append_type_reference(const ReferenceLookup& lookup,
 {
     append_reference(references, owner, type.class_identity,
         type.target.source.valid() ? type.target.source : fallback_source);
+    // A class-scoped type (`A::q_t`, IEEE 1800-2017 8.23) is declared in
+    // its class, so the design links that class even when nothing else
+    // names it.
+    if (type.class_identity.empty() && !type.target.resolved()) {
+        const auto& spelling = type.target.spelling;
+        const auto separator = spelling.rfind("::");
+        if (separator != std::string::npos) {
+            auto scope = spelling.substr(0, separator);
+            if (const auto parameters = scope.find('#');
+                parameters != std::string::npos) {
+                scope.resize(parameters);
+            }
+            while (!scope.empty() && scope.back() == ' ')
+                scope.pop_back();
+            if (const auto* selected
+                = lookup.unique_class(reference_name(scope))) {
+                append_reference(references, owner,
+                    sv::class_declaration_identity(*selected),
+                    type.target.source.valid() ? type.target.source
+                                               : fallback_source);
+            }
+        }
+    }
     // A virtual interface names an interface that need not be instantiated
     // (IEEE 1800-2017 25.9); the design links its definition.
     if (type.virtual_interface && !type.interface_type.empty()) {

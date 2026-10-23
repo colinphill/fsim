@@ -358,6 +358,13 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
       }
       if (!in_loop && token.kind == TokenKind::Identifier
           && token.text == "return") {
+        if (production_label.empty()) {
+          error(token, "FSIM-SV-UNSUPPORTED-046",
+              "return in a recursive randsequence production is not "
+              "supported");
+          valid = false;
+          continue;
+        }
         if (index + 1U < code.size()
             && code[index + 1U].kind != TokenKind::Semicolon) {
           error(token, "FSIM-SV-UNSUPPORTED-046",
@@ -372,13 +379,232 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
     }
     emit("end");
   };
+  // The productions on a call cycle (IEEE 1800-2017 18.17 places no limit
+  // on recursion) cannot expand inline; they run from a continuation stack.
+  std::set<std::string> recursive;
+  {
+    std::map<std::string, std::set<std::string>> calls;
+    for (const auto& production : productions) {
+      auto& callees = calls[production.name.text];
+      for (const auto& rule : production.rules) {
+        for (const auto& prod : rule.prods) {
+          if (prod.kind == RsProd::Kind::Code) continue;
+          if (prod.kind != RsProd::Kind::Join
+              && prod.kind != RsProd::Kind::Case) {
+            callees.insert(prod.item.name.text);
+          }
+          if (prod.else_item) callees.insert(prod.else_item->name.text);
+          for (const auto& item : prod.cases) {
+            callees.insert(item.item.name.text);
+          }
+          for (const auto& item : prod.join_items) {
+            callees.insert(item.name.text);
+          }
+        }
+      }
+    }
+    for (const auto& production : productions) {
+      std::set<std::string> seen;
+      std::vector<std::string> pending(
+          calls[production.name.text].begin(),
+          calls[production.name.text].end());
+      while (!pending.empty()) {
+        auto name = std::move(pending.back());
+        pending.pop_back();
+        if (!seen.insert(name).second) continue;
+        for (const auto& callee : calls[name]) pending.push_back(callee);
+      }
+      if (seen.contains(production.name.text)) {
+        recursive.insert(production.name.text);
+      }
+    }
+  }
+  // A weighted rule is chosen with probability weight/sum, so a sole rule
+  // of weight zero is never chosen (IEEE 1800-2017 18.17.1).
+  const auto emit_choice = [&](const RsProduction& production,
+                               const std::function<void(const RsRule&)>&
+                                   emit_rule) {
+    if (production.rules.size() == 1U
+        && production.rules.front().weight.empty()) {
+      emit_rule(production.rules.front());
+      return;
+    }
+    const auto index_suffix = suffix + "_" + std::to_string(block_counter++);
+    const auto sum = "__fsim_rs_s" + index_suffix;
+    const auto pick = "__fsim_rs_r" + index_suffix;
+    const auto emit_weight_sum = [&](const std::size_t count) {
+      emit("0");
+      for (std::size_t index = 0; index < count; ++index) {
+        emit("+ (");
+        if (production.rules[index].weight.empty()) {
+          emit("1");
+        } else {
+          append(production.rules[index].weight);
+        }
+        emit(")");
+      }
+    };
+    {
+      auto declaration = synthetic_tokens(
+          "int " + sum + ", " + pick + ";", start.span);
+      hoisted.insert(hoisted.end(), declaration.begin(), declaration.end());
+    }
+    emit("begin " + sum + " = ");
+    emit_weight_sum(production.rules.size());
+    emit("; if (" + sum + " > 0) begin " + pick + " = $urandom % " + sum
+        + ";");
+    for (std::size_t index = 0; index < production.rules.size(); ++index) {
+      emit(std::string{index == 0U ? "" : "else "} + "if (" + pick + " < ");
+      emit_weight_sum(index + 1U);
+      emit(") begin");
+      emit_rule(production.rules[index]);
+      emit("end");
+    }
+    emit("end end");
+  };
+  // A call into the recursive productions runs a loop that pops the next
+  // step from its own stack: a production's entry step chooses a rule and
+  // pushes that rule's productions, last first; every other step runs one
+  // production of a rule. `break` disables the randsequence block.
+  const auto emit_dispatcher = [&](const RsProduction& entry) {
+    const auto dispatcher = suffix + "_" + std::to_string(block_counter++);
+    const auto stack = "__fsim_rs_k" + dispatcher;
+    const auto step = "__fsim_rs_p" + dispatcher;
+    {
+      auto declaration = synthetic_tokens(
+          "int " + stack + "[$]; int " + step + ";", start.span);
+      hoisted.insert(hoisted.end(), declaration.begin(), declaration.end());
+    }
+    std::map<std::string, std::size_t> entries;
+    std::size_t steps{};
+    for (const auto& production : productions) {
+      if (!recursive.contains(production.name.text)) continue;
+      entries[production.name.text] = steps++;
+      for (const auto& rule : production.rules) steps += rule.prods.size();
+    }
+    const auto push = [&](const std::size_t id) {
+      emit(stack + ".push_front(" + std::to_string(id) + ");");
+    };
+    // An item of a recursive production pushes a recursive callee and
+    // expands any other inline, in its turn.
+    const auto emit_item = [&](const RsItem& item) {
+      if (const auto found = entries.find(item.name.text);
+          found != entries.end()) {
+        if (item.has_arguments) {
+          error(item.name, "FSIM-SV-UNSUPPORTED-046",
+              "arguments of a recursive randsequence production are not "
+              "supported");
+          valid = false;
+        }
+        emit("begin");
+        push(found->second);
+        emit("end");
+        return;
+      }
+      expand_item(item);
+    };
+    renames.emplace_back();
+    emit("begin");
+    push(entries.at(entry.name.text));
+    emit("while (" + stack + ".size() != 0) begin " + step + " = " + stack
+        + ".pop_front(); case (" + step + ")");
+    for (const auto& production : productions) {
+      const auto found = entries.find(production.name.text);
+      if (found == entries.end()) continue;
+      if (!production.formals.empty()
+          || (!production.return_type.empty()
+              && !(production.return_type.size() == 1U
+                  && production.return_type.front().text == "void"))) {
+        error(production.name, "FSIM-SV-UNSUPPORTED-046",
+            "a recursive randsequence production with arguments or a "
+            "value is not supported");
+        valid = false;
+      }
+      emit(std::to_string(found->second) + ": begin");
+      std::size_t first = found->second + 1U;
+      std::vector<std::size_t> rule_first;
+      for (const auto& rule : production.rules) {
+        rule_first.push_back(first);
+        first += rule.prods.size();
+      }
+      emit_choice(production, [&](const RsRule& rule) {
+        if (!rule.weight_code.empty()) emit_code(rule.weight_code, {});
+        const auto index = static_cast<std::size_t>(&rule - production.rules.data());
+        for (std::size_t prod = rule.prods.size(); prod != 0U; --prod) {
+          push(rule_first[index] + prod - 1U);
+        }
+      });
+      emit("end");
+      for (std::size_t rule = 0; rule < production.rules.size(); ++rule) {
+        const auto& prods = production.rules[rule].prods;
+        for (std::size_t index = 0; index < prods.size(); ++index) {
+          const auto& prod = prods[index];
+          emit(std::to_string(rule_first[rule] + index) + ": begin");
+          switch (prod.kind) {
+          case RsProd::Kind::Code:
+            emit_code(prod.tokens, {});
+            break;
+          case RsProd::Kind::Item:
+            emit_item(prod.item);
+            break;
+          case RsProd::Kind::If:
+            emit("if (");
+            append(prod.tokens);
+            emit(")");
+            emit_item(prod.item);
+            if (prod.else_item) {
+              emit("else");
+              emit_item(*prod.else_item);
+            }
+            break;
+          case RsProd::Kind::Repeat:
+            emit("repeat (");
+            append(prod.tokens);
+            emit(")");
+            emit_item(prod.item);
+            break;
+          case RsProd::Kind::Case:
+            emit("case (");
+            append(prod.tokens);
+            emit(")");
+            for (const auto& item : prod.cases) {
+              if (item.is_default) {
+                emit("default");
+              } else {
+                append(item.labels);
+              }
+              emit(":");
+              emit_item(item.item);
+            }
+            emit("endcase");
+            break;
+          case RsProd::Kind::Join:
+            // Pushed productions run after the inline ones; that order is
+            // one of the interleavings `rand join` may select.
+            for (auto item = prod.join_items.rbegin();
+                 item != prod.join_items.rend(); ++item) {
+              emit_item(*item);
+            }
+            break;
+          }
+          emit("end");
+        }
+      }
+    }
+    emit("endcase end end");
+    renames.pop_back();
+  };
   const auto expand_production = [&](const RsProduction& production,
                                      const RsItem* call) {
-    if (std::ranges::find(active, production.name.text) != active.end()) {
-      error(production.name, "FSIM-SV-UNSUPPORTED-046",
-          "recursive randsequence production '" + production.name.text
-              + "' is not supported");
-      valid = false;
+    if (recursive.contains(production.name.text)) {
+      if (call != nullptr) {
+        error(call->name, "FSIM-SV-UNSUPPORTED-046",
+            "arguments of a recursive randsequence production are not "
+            "supported");
+        valid = false;
+        return;
+      }
+      emit_dispatcher(production);
       return;
     }
     if (!production.return_type.empty()
@@ -483,45 +709,7 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
         }
       }
     };
-    // A weighted rule is chosen with probability weight/sum, so a sole rule
-    // of weight zero is never chosen (IEEE 1800-2017 18.17.1).
-    if (production.rules.size() == 1U
-        && production.rules.front().weight.empty()) {
-      emit_rule(production.rules.front());
-    } else {
-      const auto index_suffix = suffix + "_" + std::to_string(block_counter++);
-      const auto sum = "__fsim_rs_s" + index_suffix;
-      const auto pick = "__fsim_rs_r" + index_suffix;
-      const auto emit_weight_sum = [&](const std::size_t count) {
-        emit("0");
-        for (std::size_t index = 0; index < count; ++index) {
-          emit("+ (");
-          if (production.rules[index].weight.empty()) {
-            emit("1");
-          } else {
-            append(production.rules[index].weight);
-          }
-          emit(")");
-        }
-      };
-      {
-        auto declaration = synthetic_tokens(
-            "int " + sum + ", " + pick + ";", start.span);
-        hoisted.insert(hoisted.end(), declaration.begin(), declaration.end());
-      }
-      emit("begin " + sum + " = ");
-      emit_weight_sum(production.rules.size());
-      emit("; if (" + sum + " > 0) begin " + pick + " = $urandom % " + sum
-          + ";");
-      for (std::size_t index = 0; index < production.rules.size(); ++index) {
-        emit(std::string{index == 0U ? "" : "else "} + "if (" + pick + " < ");
-        emit_weight_sum(index + 1U);
-        emit(") begin");
-        emit_rule(production.rules[index]);
-        emit("end");
-      }
-      emit("end end");
-    }
+    emit_choice(production, emit_rule);
     emit("end");
     renames.pop_back();
     active.pop_back();

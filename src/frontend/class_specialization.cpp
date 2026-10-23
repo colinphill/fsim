@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
@@ -614,9 +615,17 @@ void diagnose(
             std::to_string(*maximum), {}, container.queue_maximum->span};
       }
     }
+    // The element type is the declarator's own type (`t_vector m[N]`),
+    // not a nested use of it, so it takes the same replacement.
+    for (const auto& name : substituted) {
+      replacing.erase(name);
+    }
     for (auto& element : container.element_types) {
       element = specialize_type(
           std::move(element), values, types, replacing);
+    }
+    for (const auto& name : substituted) {
+      replacing.insert(name);
     }
   }
   for (auto& actual : type.systemverilog_class_parameter_actuals) {
@@ -684,10 +693,15 @@ void diagnose(
 
 void collect_declarations(
     const SystemVerilogClassDeclaration& declaration,
-    std::map<std::string, const SystemVerilogClassDeclaration*>& index) {
+    std::map<std::string, const SystemVerilogClassDeclaration*>& index,
+    std::map<std::string, const SystemVerilogClassDeclaration*>* enclosing
+        = nullptr) {
   index.emplace(declaration.canonical_identity, &declaration);
   for (const auto& nested : declaration.nested_classes) {
-    collect_declarations(nested, index);
+    if (enclosing != nullptr) {
+      enclosing->emplace(nested.canonical_identity, &declaration);
+    }
+    collect_declarations(nested, index, enclosing);
   }
 }
 
@@ -791,13 +805,33 @@ SystemVerilogClassSpecializationResult
 specialize_systemverilog_classes(const ParsedDesign& design) {
   SystemVerilogClassSpecializationResult result;
   std::map<std::string, const SystemVerilogClassDeclaration*> declarations;
+  std::map<std::string, const SystemVerilogClassDeclaration*> enclosing;
   for (const auto& unit : design.units) {
     for (const auto& declaration : unit.systemverilog_classes) {
-      collect_declarations(declaration, declarations);
+      collect_declarations(declaration, declarations, &enclosing);
     }
   }
   for (const auto& declaration : design.systemverilog_classes) {
-    collect_declarations(declaration, declarations);
+    collect_declarations(declaration, declarations, &enclosing);
+  }
+  // A nested class uses the parameters of its enclosing classes (IEEE
+  // 1800-2017 8.23), so its specializations bind those formals first,
+  // outermost first; positional actuals bind its own formals.
+  std::deque<SystemVerilogClassDeclaration> nested_with_parameters;
+  std::map<std::string, std::size_t> inherited_parameters;
+  for (auto& [identity, declaration] : declarations) {
+    std::vector<ParameterDeclaration> inherited;
+    for (auto owner = enclosing.find(identity); owner != enclosing.end();
+         owner = enclosing.find(owner->second->canonical_identity)) {
+      inherited.insert(inherited.begin(), owner->second->parameters.begin(),
+          owner->second->parameters.end());
+    }
+    if (inherited.empty()) continue;
+    auto& effective = nested_with_parameters.emplace_back(*declaration);
+    inherited_parameters.emplace(identity, inherited.size());
+    effective.parameters.insert(effective.parameters.begin(),
+        inherited.begin(), inherited.end());
+    declaration = &effective;
   }
   std::map<std::string, Type> package_aliases;
   std::set<std::string> ambiguous_aliases;
@@ -970,16 +1004,32 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
     std::vector<bool> assigned(declaration.parameters.size(), false);
     bool saw_named = false;
     bool saw_positional = false;
+    const auto inherited_entry =
+        inherited_parameters.find(declaration.canonical_identity);
+    const std::size_t inherited = inherited_entry == inherited_parameters.end()
+        ? 0U
+        : inherited_entry->second;
     for (std::size_t actual_index = 0;
          actual_index < actuals.size(); ++actual_index) {
       const auto& actual = actuals[actual_index];
-      std::size_t formal_index = actual_index;
+      std::size_t formal_index = inherited + actual_index;
       if (actual.name) {
-        saw_named = true;
-        const auto found = std::ranges::find(
-            declaration.parameters,
-            *actual.name,
-            &ParameterDeclaration::name);
+        // An enclosing class's formal, bound by name, is not one of this
+        // class's own named actuals.
+        const auto own = std::find_if(
+            declaration.parameters.begin()
+                + static_cast<std::ptrdiff_t>(inherited),
+            declaration.parameters.end(),
+            [&](const ParameterDeclaration& formal) {
+              return formal.name == *actual.name;
+            });
+        saw_named = saw_named || own != declaration.parameters.end();
+        const auto found = own != declaration.parameters.end()
+            ? own
+            : std::ranges::find(
+                declaration.parameters,
+                *actual.name,
+                &ParameterDeclaration::name);
         if (found == declaration.parameters.end()) {
           diagnose(
               result,

@@ -253,6 +253,121 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 89: class formals and constraints, unit scopes, gate arrays, modport exports, VHDL generic shapes
+
+Batch 89 works through the failures Batch 88 left (`triage/b89/plan.md`) and
+was compared with Batch 88 (`b88w1`). The rerun of every suite (`b89o` for
+SystemVerilog, `b89r` for VHDL) closes 41 cases against `b88w1`: verilator 18,
+ivtest 12, sv-tests 1, nvc 9 and vests 1. Nine more were closed afterwards
+and checked one by one: sv-tests dynamic_array_stream_with, verilator
+t_sys_plusargs, t_randsequence_recurse, t_modport_export_task,
+t_interface_modport_export and t_tri_array_bufif, and ivtest sv_darray_signed,
+sv_unit4b and scoped_events. That makes 50. The one loss in `b89o`,
+pow_reg_signed, was a load timeout during a build and passes alone.
+
+The full run (`b89w1`, frozen `b89x`) is in progress.
+
+SystemVerilog classes, constraints and randomization:
+- **Nested classes of parameterized classes** inherit the enclosing class's
+  formals, bound by name or from the enclosing specialization. Before this,
+  `baz#(5)::Inner1` silently read the default. Closes t_class_class,
+  t_class_param_rewrite.
+- **Class-scope typedefs** of unparameterized classes bind as aliases, and a
+  property typed by one keeps its container type. Closes t_class_typedef.
+- **Constraints.** Unpacked-array and struct members join the solve, as do
+  struct elements of size-constrained arrays. `dist` items read non-constant
+  weights, `sum() with` works over arrays, and `rand_mode` reaches handle-array
+  elements. Closes t_constraint_array_sum_with, t_constraint_dist_nonconst,
+  t_constraint_dyn_size_class, t_constraint_dynarray_struct,
+  t_constraint_struct_complex, t_constraint_struct_unref,
+  t_constraint_unpacked_array, t_randomize_array.
+- **Randsequence recursion** (18.17). A production that reaches itself runs
+  through an explicit production stack, so `break`, `if` and `repeat` items
+  work around recursive calls. Recursive productions with arguments or
+  return values are still rejected. Closes t_randsequence_recurse.
+
+SystemVerilog scopes, interfaces and structure:
+- **Compilation-unit scopes** (3.12.1, 23.3.1). String-valued untyped
+  parameters get a packed 8×N image and can be read across roots. A
+  `$unit` task called from a class method has no implicit `this`, and a
+  class method's `$unit` constant resolves in the caller's specialization.
+  Hierarchical class handles rooted at a top-level module resolve. Closes
+  sv_unit1b, sv_unit2b, sv_unit3b, sv_unit4b.
+- **defparam into named blocks and tasks** (23.10.1) reaches block and task
+  parameters. Generate-scope parameters stay rejected. Closes scoped_events.
+- **Modport exports** (25.7.3). Modports may export tasks and functions by
+  prototype, interfaces may declare `extern` prototypes, and a module defines
+  them as `port.name`. Calls through an importing modport or an interface
+  port reach the exporting instance. Closes t_modport_export_task,
+  t_interface_modport_export.
+- **Gate-instance arrays with elaboration-time bounds** (28.3.5, 28.3.6)
+  expand to a loop generate. Vector terminals are split one bit per
+  instance, concatenations give one operand per instance, and scalars are
+  shared. `$left` and the other array queries of nets are constant (20.7),
+  and the array queries and `$bits` have an integer width and domain when
+  they are operands. Closes t_tri_array_bufif.
+- **Virtual interface arrays.** `vifs[i].w` with a run-time index writes
+  the interface member. Before this, it silently wrote bits of the handle.
+  Closes t_clocking_drive_same.
+- **Sequence match items** call subroutines (16.11). Closes
+  16.11--sequence-subroutine-uvm.
+- **Run-time formats** (21.3.3, 21.6). `$sformat`/`$sformatf` take a run-time
+  format string through a new run-time string-format operation, and
+  `$value$plusargs` takes a run-time user string. The runner now passes
+  environment variables and plusargs. Closes sv_darray_signed,
+  t_sys_plusargs.
+- **Streaming with `with`** (11.4.14.4). An unpack into `array with [...]`
+  grows the array and reserves bits for later fixed-size targets. Closes
+  dynamic_array_stream_with.
+- **Macro redefinition** (22.5.1) is allowed. The latest definition
+  prevails, and a different one gives warning FSIM-SV-PP-044. Closes
+  macro_redefinition, macro_replacement.
+
+VHDL:
+- **Package-instance generics** have shapes. A generic constant bound in a
+  package instance takes the shape of its actual. A type mark selected
+  through the instance (`inst.t`) uses the instance's bindings, and those
+  bindings survive across processes. Before this, `MAX'length` of an array
+  generic was silently 1.
+- **Signal subtypes after elaboration** use `'range`-direction bounds.
+- **File reads into elements and run-time slices.** `read(l, s(i))` reads
+  into an indexed element, and `READ(L, BV(1 to 2*width))` reads into a
+  run-time slice. Before this, the slice read silently filled the whole
+  object. Closes issue675, tc3202.
+- **Library names and defines.** `work.X` inside a unit analysed into a
+  named library resolves in that library, and `-D` sets VHDL-2019
+  conditional-analysis identifiers (24.2). Closes attr13, attr20, cond4.
+
+Runner (`scripts/lrm_corpus.py`):
+- ivtest EF cases (legal code Icarus fails) run as normal cases. Extra
+  source files and `-Ptop.name=value` overrides are passed through. Closes
+  br605a, br605b, br971, br_gh451, cmdline_parm1, sv_timeunit_prec_fail1,
+  sv_timeunit_prec_fail2.
+- A verilator lint-only driver that checks itself runs as a model. Closes
+  t_disable_genfor_unsup, t_disable_within_task_unsup,
+  t_force_readwrite_unsup, t_property_s_eventually_unsup,
+  t_std_randomize_mod, t_std_randomize_no_args.
+- nvc environment variables (16.5.6) and plusargs are passed, and nvc's
+  stop-delta option no longer excludes a case. Closes stdenv1, counter,
+  ieee2, issue527, lfsr.
+
+New exclusions:
+- sv-tests:
+  - 16.2--assert0-uvm: a deferred assertion's expression is evaluated when
+    the statement executes (16.4).
+  - 16.7--sequence-and-uvm: `##0 gnt2` samples gnt2 low at the first clock;
+    the test notes that every simulator fails it (16.9).
+- verilator:
+  - t_constraint_foreach: only a rand structure's random members are solved
+    (18.4).
+  - t_covergroup_coverpoint_method_unsup: coverage methods return 0 to 100
+    (19.11).
+  - t_force_complex_sel_unsup: a force target may use only constant selects
+    (10.6.2).
+- ivtest:
+  - br_gh377: expects Icarus's diagnostic for an empty `-P` value.
+  - sv_unit1c: a buf outputs x for a z input (28.5).
+
 ### Batch 88: VHDL shapes and resolution, mode views, solver synthesis, SV patterns
 
 Batch 88 finishes the audit's batch X (`triage/b88/plan.md`) and adds
@@ -261,8 +376,19 @@ Batch 87 (`b87w1`) by rerunning that run's 160 failures on the live build.
 
 The rerun closes 52 cases: 40 now pass and 12 are newly excluded. The passes
 are nvc 24, verilator 10, vests 3 and vhdl-compliance 3, and none of the
-rerun's earlier passes were lost. The full run (`b88w1`, frozen `b88f`) is in
-progress; its table lands with Batch 89.
+rerun's earlier passes were lost.
+
+The full run (`b88w1`, frozen `b88f`) confirms the passes. It loses one case,
+t_constraint_unpacked_array, which Batch 89 fixes.
+
+| Suite | Batch87 passes / in scope | Batch88 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2616 / 2622 | 2616 / 2622 | 289 |
+| sv-tests | 1492 / 1497 | 1492 / 1497 | 0 |
+| verilator | 2013 / 2072 | 2021 / 2064 | 351 |
+| vests | 3642 / 3646 | 3645 / 3646 | 2 |
+| nvc | 1182 / 1260 | 1206 / 1256 | 226 |
+| vhdl-compliance | 55 / 65 | 58 / 65 | 7 |
 
 Batch 87 losses fixed: issue610, tc144, tc145. t_event_class_fire is now
 excluded (see below).

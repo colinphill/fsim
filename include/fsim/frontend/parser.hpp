@@ -134,6 +134,13 @@ using SystemVerilogPackageMemberLookup = std::function<bool(
     const std::filesystem::path& path) noexcept;
 [[nodiscard]] ParseResult parse_vhdl(SourceText source,
     VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
+// User-defined VHDL-2019 conditional analysis identifiers and their values
+// (IEEE 1076-2019 24.2).
+using VhdlConditionalIdentifiers
+    = std::vector<std::pair<std::string, std::string>>;
+[[nodiscard]] ParseResult parse_vhdl(SourceText source,
+    VhdlStandard vhdl_standard,
+    const VhdlConditionalIdentifiers& identifiers);
 [[nodiscard]] ParseResult parse_verilog(SourceText source,
                                          bool system_verilog = true);
 [[nodiscard]] ParseResult parse_verilog(

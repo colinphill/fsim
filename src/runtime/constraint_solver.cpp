@@ -752,6 +752,155 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       variable_order.insert(variable_order.begin() + last, variable);
     }
   }
+  // A variable read by several terms of a hard clause over a sum (`a.sum()
+  // with (int'(item == v)) == 3`) is assigned before the terms' own
+  // variables, so the sum's bounds narrow as each term is assigned and
+  // decide the clause early (IEEE 1800-2023 18.5, 7.12.3).
+  {
+    std::vector<bool> ordered(variables_.size());
+    for (const auto& [earlier, later] : solve_before_) {
+      ordered[earlier] = true;
+      ordered[later] = true;
+    }
+    // Promotions apply from the most-read variable down; each moves its
+    // variable ahead of the variables read once by its clause's terms.
+    struct Promotion {
+      std::size_t reads{};
+      std::size_t clause{};
+      SystemVerilogConstraintVariableId variable{};
+    };
+    std::vector<Promotion> promotions;
+    std::vector<std::vector<std::size_t>> reads_of(clauses_.size());
+    for (std::size_t index = 0; index < clauses_.size(); ++index) {
+      const auto& clause = clauses_[index];
+      if (clause.soft || !clause.expression || clause.variables.size() < 3U
+          || std::ranges::none_of(clause.expression->nodes,
+                 [](const auto& node) {
+                   return node.operation
+                       == SystemVerilogConstraintExpressionOperator::Add;
+                 })) {
+        continue;
+      }
+      // The reads within the sum's terms; a variable node may be shared,
+      // so each operand edge is one read.
+      auto& reads = reads_of[index];
+      reads.assign(variables_.size(), 0U);
+      const auto& nodes = clause.expression->nodes;
+      std::vector<bool> in_sum(nodes.size());
+      for (auto id = nodes.size(); id-- > 0U;) {
+        const bool summed = in_sum[id]
+            || nodes[id].operation
+                == SystemVerilogConstraintExpressionOperator::Add;
+        if (!summed) continue;
+        for (const auto operand : nodes[id].operands) {
+          if (operand >= nodes.size()) continue;
+          in_sum[operand] = true;
+          if (nodes[operand].operation
+                  == SystemVerilogConstraintExpressionOperator::Variable
+              && nodes[operand].variable < variables_.size()) {
+            ++reads[nodes[operand].variable];
+          }
+        }
+      }
+      for (const auto shared : clause.variables) {
+        if (shared < variables_.size() && reads[shared] >= 2U
+            && !ordered[shared] && !guarded_variable[shared]) {
+          promotions.push_back({reads[shared], index, shared});
+        }
+      }
+    }
+    std::ranges::stable_sort(promotions, std::ranges::greater{},
+        &Promotion::reads);
+    std::vector<bool> promoted(variables_.size());
+    for (const auto& [count, index, shared] : promotions) {
+      if (promoted[shared]) continue;
+      promoted[shared] = true;
+      const auto position = std::ranges::find(variable_order, shared);
+      auto first = position;
+      for (const auto variable : clauses_[index].variables) {
+        if (variable >= variables_.size()
+            || reads_of[index][variable] != 1U || ordered[variable]) {
+          continue;
+        }
+        first = std::min(first, std::ranges::find(variable_order, variable));
+      }
+      if (position != variable_order.end() && first < position) {
+        std::rotate(first, position, position + 1);
+      }
+    }
+  }
+  // A variable whose domain is a sample of a wide range (a free `int`) is
+  // assigned after the other variables of a hard equality it shares, so
+  // the equality is solved for it (`synthesize` below) instead of
+  // searched; solve-before order is kept (IEEE 1800-2023 18.5, 18.5.9).
+  {
+    std::vector<bool> ordered(variables_.size());
+    for (const auto& [earlier, later] : solve_before_) {
+      ordered[earlier] = true;
+      ordered[later] = true;
+    }
+    const auto sampled = [&](const SystemVerilogConstraintVariableId variable) {
+      const auto& values = candidates[variable];
+      const auto width = variables_[variable].profile.width;
+      if (values.size() < 2U || width == 0U || width > 64U) return false;
+      // The candidates' values span more values than they hold when they
+      // are a sample, read as unsigned or as signed values.
+      const auto bias = std::uint64_t{1} << (width - 1U);
+      auto unsigned_low = std::numeric_limits<std::uint64_t>::max();
+      std::uint64_t unsigned_high{};
+      auto signed_low = unsigned_low;
+      std::uint64_t signed_high{};
+      for (const auto index : values) {
+        const auto& value = variables_[variable].domain[index];
+        if (value.is_logic9()) return false;
+        const auto word = value.low_word().aval;
+        unsigned_low = std::min(unsigned_low, word);
+        unsigned_high = std::max(unsigned_high, word);
+        signed_low = std::min(signed_low, word ^ bias);
+        signed_high = std::max(signed_high, word ^ bias);
+      }
+      return std::min(unsigned_high - unsigned_low, signed_high - signed_low)
+          >= values.size();
+    };
+    for (const auto& clause : clauses_) {
+      if (clause.soft || !clause.expression
+          || clause.expression->root >= clause.expression->nodes.size()
+          || clause.expression->nodes[clause.expression->root].operation
+              != SystemVerilogConstraintExpressionOperator::Equal) {
+        continue;
+      }
+      std::optional<SystemVerilogConstraintVariableId> wide;
+      bool partnered{};
+      bool single = true;
+      for (const auto variable : clause.variables) {
+        if (variable >= variables_.size()) continue;
+        if (!sampled(variable)) {
+          partnered = true;
+        } else if (!wide || *wide == variable) {
+          wide = variable;
+        } else {
+          single = false;
+        }
+      }
+      if (!wide || !partnered || !single || ordered[*wide]
+          || guarded_variable[*wide]) {
+        continue;
+      }
+      const auto position = std::ranges::find(variable_order, *wide);
+      std::ptrdiff_t last = -1;
+      for (const auto variable : clause.variables) {
+        if (variable >= variables_.size() || variable == *wide) continue;
+        const auto partner = std::ranges::find(variable_order, variable);
+        last = std::max(last,
+            std::distance(variable_order.begin(), partner));
+      }
+      const auto index = std::distance(variable_order.begin(), position);
+      if (position != variable_order.end() && last > index) {
+        variable_order.erase(position);
+        variable_order.insert(variable_order.begin() + last, *wide);
+      }
+    }
+  }
   // The values a guarded variable may take, for reordering during search.
   std::vector<std::vector<bool>> allowed(variables_.size());
   for (std::size_t variable = 0; variable < variables_.size(); ++variable) {
@@ -810,9 +959,10 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
       }
       auto antecedent = graph;
       antecedent.root = inverted.operands.front();
+      // An antecedent reading an open variable is not yet decided.
       ++clause_evaluations;
-      const auto holds =
-          evaluate_systemverilog_constraint_expression(antecedent, assignment);
+      const auto holds = evaluate_systemverilog_constraint_expression_partially(
+          antecedent, assignment);
       if (holds.is_logic9() || holds.width() == 0U || holds.width() > 64U
           || holds.low_word().bval != 0U || holds.low_word().aval == 0U) {
         return false;
@@ -840,7 +990,8 @@ SystemVerilogConstraintSolver::solve(const std::uint64_t selection) const {
         sub.root = root.operands[operand];
         ++clause_evaluations;
         const auto value =
-            evaluate_systemverilog_constraint_expression(sub, assignment);
+            evaluate_systemverilog_constraint_expression_partially(
+                sub, assignment);
         if (value.is_logic9() || value.width() == 0U || value.width() > 64U
             || value.low_word().bval != 0U) {
           return std::nullopt;

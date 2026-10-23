@@ -307,6 +307,12 @@ class SystemVerilogConstraintExpressionBuilder final {
     const SystemVerilogConstraintExpression& expression,
     const SystemVerilogConstraintAssignment& assignment);
 
+/// As above, with each unassigned variable read as all X. Evaluation is
+/// X-pessimistic, so a known result holds for every completion.
+[[nodiscard]] PackedLogic4 evaluate_systemverilog_constraint_expression_partially(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintAssignment& assignment);
+
 /// An inclusive range of value keys. A key is a value's bits with the sign
 /// bit inverted for a signed variable, so keys order like the values.
 struct SystemVerilogConstraintKeyRange {
@@ -440,6 +446,16 @@ class SystemVerilogConstraintSolver final {
   std::map<std::string, SystemVerilogConstraintContainerShape, std::less<>>
       container_shapes_;
 };
+
+/// An object's randomize with-clause names an array of the calling scope by
+/// this prefix and the container register holding a copy of it (IEEE
+/// 1800-2017 18.7).
+inline constexpr std::string_view inline_container_prefix {
+    "@inline-container-register:" };
+
+/// That array at the call: a Name node with this text, one constant operand
+/// per element and the array's size as its constant.
+inline constexpr std::string_view inline_elements_name { "@inline-elements" };
 
 /// Bind and register one source-ordered inline constraint block. The identity
 /// prefix is diagnostic/cache provenance, not a language-width limit.

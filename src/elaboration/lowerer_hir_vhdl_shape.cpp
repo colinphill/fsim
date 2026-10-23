@@ -151,6 +151,20 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_subtype_shape(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // A subtype that a package instance declares reads that instance's
+    // generics (IEEE 1076-2008 4.9).
+    const SizeRestoreGuard instance_frames { hir_generic_binding_frames_ };
+    if (declared.type_mark.spelling.find('.') != std::string::npos) {
+        semantic::vhdl::Name mark;
+        mark.spelling = declared.type_mark.spelling;
+        if (const auto member
+            = hir_resolver().resolve_vhdl_package_members(mark, scope)
+                  .unique();
+            member && member->package_instance
+            && !member->generic_bindings.empty()) {
+            hir_generic_binding_frames_.push_back(member->generic_bindings);
+        }
+    }
     const auto subtype = hir_effective_vhdl_subtype(declared).value_or(declared);
     // The number of index ranges: the array type's dimensions, one for a
     // predefined vector (IEEE 1076-2008 16.3), none for a scalar or record.
@@ -503,6 +517,33 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
             if (shape) {
                 return shape;
             }
+        }
+    }
+    // A generic constant of an unconstrained array subtype has the shape
+    // of the actual its instance binds (IEEE 1076-2008 6.5.6.2); a literal
+    // or aggregate actual takes the generic's subtype as its context.
+    if (!formal) {
+        for (auto frame = hir_generic_binding_frames_.rbegin();
+             frame != hir_generic_binding_frames_.rend(); ++frame) {
+            const auto bound = std::ranges::find(*frame, declaration,
+                &semantic::CompiledActualBinding::formal);
+            if (bound == frame->end()) {
+                continue;
+            }
+            const auto declared = specialized_hir_unit_ != nullptr
+                ? specialized_hir_unit_->find_declaration(declaration)
+                : std::nullopt;
+            if (bound->expression && declared && declared->vhdl != nullptr
+                && declared->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant
+                && declared->vhdl->subtype) {
+                auto shape = hir_vhdl_contextual_shape(*bound->expression,
+                    *declared->vhdl->subtype, declared->vhdl->scope);
+                if (shape && shape->complete()) {
+                    return shape;
+                }
+            }
+            break;
         }
     }
     if (!formal) {

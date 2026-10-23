@@ -2558,6 +2558,15 @@ CompiledDesignResolver::resolve_systemverilog_interface_member(
     while (!steps.empty()) {
         const auto dot = steps.find('.');
         const auto step = steps.substr(0U, dot);
+        // `bif.consumer.send`: a last step naming a modport of the
+        // interface selects the member through that modport (25.5).
+        if (dot == std::string_view::npos
+            && std::ranges::find(selected->systemverilog->modports, step,
+                   &sv::Modport::name)
+                != selected->systemverilog->modports.end()) {
+            modport_name = step;
+            break;
+        }
         std::optional<CompiledUnitView> next;
         for (const auto instance_id : selected->systemverilog->instances) {
             const auto instance = design_->find_instance(instance_id);

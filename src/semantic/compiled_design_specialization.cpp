@@ -474,6 +474,8 @@ const bool semantic_profile_diagnostics_enabled
 const bool vhdl_generic_trace_enabled
     = std::getenv("FSIM_VHDL_GENERIC_TRACE") != nullptr;
 
+} // namespace
+
 std::optional<std::string> parse_systemverilog_string_identity(
     const std::string_view identity)
 {
@@ -529,6 +531,8 @@ std::optional<std::string> parse_systemverilog_string_identity(
     }
     return bytes;
 }
+
+namespace {
 
 std::string_view normalized_library(const std::string_view library)
 {
@@ -16212,6 +16216,22 @@ make_specialized_hir_overlay_from_validated_design(
     if (selected->systemverilog != nullptr) {
         add_systemverilog_actuals(
             design, *selected->systemverilog, allowed);
+        // A defparam can redefine a parameter of a named block, task or
+        // function of the unit (IEEE 1800-2017 23.10.1).
+        for (const auto& actual : actuals) {
+            const auto declaration = design.find_declaration(
+                actual.declaration);
+            if (!allowed.contains(actual.declaration) && declaration
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->form
+                    == sv::DeclarationForm::parameter
+                && declaration->systemverilog->scope
+                    != selected->systemverilog->scope
+                && declaration_belongs_to(
+                    design, actual.declaration, selected_unit)) {
+                allowed.insert(actual.declaration);
+            }
+        }
     } else if (selected->vhdl != nullptr
         && (selected->vhdl->kind == vhdl::UnitKind::entity
             || selected->vhdl->kind == vhdl::UnitKind::architecture)) {
@@ -17397,6 +17417,28 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations(
 {
     return resolve_specialized_hir_associations_impl(
         design, target_unit, instance, surface, parent, nullptr);
+}
+
+SpecializedHirAssociationResult
+resolve_specialized_hir_scoped_parameter_association(
+    const CompiledDesign& design,
+    const UnitId target_unit,
+    const DeclarationId parameter,
+    const CompiledInstanceView instance,
+    const SpecializedHirUnit* const parent)
+{
+    const auto declaration = design.find_declaration(parameter);
+    if (!declaration || declaration->systemverilog == nullptr) {
+        SpecializedHirAssociationResult result;
+        result.error = "scoped parameter is not a SystemVerilog declaration";
+        return result;
+    }
+    const std::vector<AssociationFormal> formals {
+        { parameter, declaration->systemverilog->name, false },
+    };
+    return resolve_specialized_hir_associations_impl(design, target_unit,
+        instance, SpecializedHirAssociationSurface::parameters, parent,
+        &formals);
 }
 
 SpecializedHirAssociationResult

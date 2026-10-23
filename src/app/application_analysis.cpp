@@ -711,15 +711,32 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       && group.compatibility_profile != vhdl_compatibility_profile()) {
       key.add("compatibility-profile", group.compatibility_profile);
   }
+  // VHDL definitions are conditional analysis identifiers (IEEE
+  // 1076-2019 24.2).
+  frontend::VhdlConditionalIdentifiers identifiers;
+  if (group.language == frontend::Language::Vhdl2008) {
+      for (const auto& define : group.defines) {
+          const auto equals = define.find('=');
+          identifiers.emplace_back(define.substr(0, equals),
+              equals == std::string::npos ? std::string { }
+                                          : define.substr(equals + 1U));
+          key.add("conditional-identifier", define);
+      }
+  }
   key.add(
       "input-path",
       stable_cache_source_name(input.path, group.base_directory));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
-  snapshot.result = frontend::parse(
-      frontend::SourceText {
-          fsim::support::path_to_utf8(input.path), std::move(text) },
-      input.language, input.vhdl_standard);
+  snapshot.result = identifiers.empty()
+      ? frontend::parse(
+            frontend::SourceText {
+                fsim::support::path_to_utf8(input.path), std::move(text) },
+            input.language, input.vhdl_standard)
+      : frontend::parse_vhdl(
+            frontend::SourceText {
+                fsim::support::path_to_utf8(input.path), std::move(text) },
+            input.vhdl_standard, identifiers);
   for (auto& unit : snapshot.result.design.units) {
       unit.library = input.library;
       unit.compilation_unit_identity = source.compilation_unit_digest;

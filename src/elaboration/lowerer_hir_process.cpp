@@ -2645,10 +2645,56 @@ std::optional<Process> Lowerer::lower_hir_process(
                 continue;
             }
             std::optional<SignalId> signal;
-            if (sensitivity.expression
-                && sensitivity.expression->valid()) {
-                const auto declaration = hir_referenced_declaration(
-                    *sensitivity.expression);
+            // A simple name keeps no expression; an alias of an element or
+            // slice of a signal denotes that part of it (IEEE 1076-2008
+            // 6.6.2).
+            auto sensitivity_expression = sensitivity.expression;
+            if ((!sensitivity_expression || !sensitivity_expression->valid())
+                && !sensitivity.signal.empty()) {
+                semantic::vhdl::Name name;
+                name.spelling = sensitivity.signal;
+                name.canonical = support::ascii_lower(sensitivity.signal);
+                const auto alias = hir_resolver()
+                    .resolve_vhdl(name, input.scope)
+                    .unique();
+                const auto declaration = alias
+                    ? specialized_hir_unit_->find_declaration(*alias)
+                    : std::nullopt;
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::alias
+                    && declaration->vhdl->initializer) {
+                    sensitivity_expression = declaration->vhdl->initializer;
+                }
+            }
+            if (sensitivity_expression
+                && sensitivity_expression->valid()) {
+                // An alias of an element or slice of a signal denotes that
+                // part of it (IEEE 1076-2008 6.6.2).
+                auto expression_id = *sensitivity_expression;
+                if (const auto target = hir_vhdl_alias_target_expression(
+                        expression_id)) {
+                    expression_id = *target;
+                } else if (const auto named
+                    = hir_referenced_declaration(expression_id)) {
+                    const auto alias
+                        = specialized_hir_unit_->find_declaration(*named);
+                    if (alias && alias->vhdl != nullptr
+                        && alias->vhdl->form
+                            == semantic::vhdl::DeclarationForm::alias
+                        && alias->vhdl->initializer) {
+                        expression_id = *alias->vhdl->initializer;
+                    }
+                }
+                const auto target_expression
+                    = specialized_hir_unit_->find_expression(expression_id);
+                const bool part = target_expression
+                    && target_expression->vhdl != nullptr
+                    && target_expression->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::name;
+                const auto declaration = part
+                    ? std::nullopt
+                    : hir_referenced_declaration(expression_id);
                 const auto binding = declaration
                     ? hir_runtime_binding(
                           *declaration, input.scope, false)
@@ -2658,7 +2704,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
                 if (!signal) {
                     const auto dependencies = hir_signal_dependencies(
-                        *sensitivity.expression, input.scope);
+                        expression_id, input.scope);
                     if (dependencies.empty()) {
                         return std::nullopt;
                     }
@@ -2666,7 +2712,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                     // subscribes to its bits only (IEEE 1076-2008 11.3).
                     if (const auto selection = dependencies.size() == 1U
                             ? hir_root_constant_selection(
-                                  *sensitivity.expression, input.scope)
+                                  expression_id, input.scope)
                             : std::nullopt;
                         selection && selection->width != 0U
                         && dependencies.front()
@@ -4111,6 +4157,9 @@ void Lowerer::reset_hir_process_state()
     pending_hir_callables_.clear();
     active_hir_callable_.reset();
     hir_generic_binding_frames_.clear();
+    if (base_generic_binding_frame_) {
+        hir_generic_binding_frames_.push_back(*base_generic_binding_frame_);
+    }
     string_locals_.clear();
     debug_local_names_.clear();
     local_scope_.clear();

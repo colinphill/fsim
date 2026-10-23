@@ -1558,10 +1558,18 @@ bool Lowerer::hir_vhdl_elaborated_constant(
     if (hir_vhdl_shaped_profile(*declaration.subtype)) {
         return true;
     }
+    const auto effective = hir_effective_vhdl_subtype(*declaration.subtype);
+    // A STRING value that does not fold (`constant s : string := d(n)`) is
+    // computed once, when the declaration is elaborated (14.4.2.5), not at
+    // each read.
+    if (effective && effective->domain == semantic::vhdl::ValueDomain::string
+        && !specialized_hir_unit_->evaluate_string_expression(
+            *declaration.initializer)) {
+        return true;
+    }
     // An integer value that does not fold (`constant len : integer :=
     // p'length`) keeps the value it had when the declaration was elaborated,
     // whatever it was computed from changes later.
-    const auto effective = hir_effective_vhdl_subtype(*declaration.subtype);
     // Only a scalar: records and arrays keep their own paths.
     const bool composite = [&] {
         auto type_id = declaration.subtype->type_mark.target;

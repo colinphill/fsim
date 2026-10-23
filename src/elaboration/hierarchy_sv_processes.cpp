@@ -556,7 +556,13 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 && source_language == frontend::Language::SystemVerilog2017);
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
-            &systemverilog_instance_specializations_);
+            &systemverilog_instance_specializations_,
+            &systemverilog_interface_exports_);
+        {
+            const auto& disable_labels = systemverilog_disable_labels();
+            generated_lowerer.set_disable_labels(
+                &disable_labels.targets, &disable_labels.declared);
+        }
         generated_lowerer.set_systemverilog_program_owner(
             program_owner);
         auto generated_concurrent_statements
@@ -822,7 +828,13 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             &materialization.type_owner_contexts);
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
-            &systemverilog_instance_specializations_);
+            &systemverilog_instance_specializations_,
+            &systemverilog_interface_exports_);
+        {
+            const auto& disable_labels = systemverilog_disable_labels();
+            generated_lowerer.set_disable_labels(
+                &disable_labels.targets, &disable_labels.declared);
+        }
         generated_lowerer.set_systemverilog_program_owner(program_owner);
         auto& specialization
             = design_.specializations_[specialization_index];
@@ -996,7 +1008,8 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
             &materialization.type_owner_contexts);
         lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
-            &systemverilog_instance_specializations_);
+            &systemverilog_instance_specializations_,
+            &systemverilog_interface_exports_);
         lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         {

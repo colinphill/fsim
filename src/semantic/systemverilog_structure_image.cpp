@@ -192,6 +192,25 @@ const TypeDefinition* systemverilog_type_definition(
     return definition;
 }
 
+const TypeReference& systemverilog_array_alias_type(
+    const Hir& hir, const TypeReference& type)
+{
+    const auto* current = &type;
+    for (std::size_t depth = 0; depth < 16U; ++depth) {
+        if (current->container_form || !current->unpacked_dimensions.empty()) {
+            return *current;
+        }
+        const auto* definition = named_definition(hir, *current);
+        if (definition == nullptr || !definition->members.empty()
+            || definition->form == TypeForm::enumeration
+            || &definition->base == current) {
+            break;
+        }
+        current = &definition->base;
+    }
+    return type;
+}
+
 const TypeDefinition* systemverilog_structure_definition(
     const Hir& hir, const TypeReference& type)
 {
@@ -209,7 +228,8 @@ const TypeDefinition* systemverilog_structure_definition(
 std::optional<std::size_t> systemverilog_structure_image_width(
     const Hir& hir, const TypeReference& type)
 {
-    if (type.container_form || !type.unpacked_dimensions.empty()
+    const auto& shape = systemverilog_array_alias_type(hir, type);
+    if (shape.container_form || !shape.unpacked_dimensions.empty()
         || !type.class_identity.empty() || type.virtual_interface) {
         return std::nullopt;
     }

@@ -258,6 +258,10 @@ class Resolver final {
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
       std::string_view spelling, const Scope& scope,
       const Type* parsed = nullptr) const;
+  // The selection with the selected class's own actuals only.
+  [[nodiscard]] std::optional<ClassSelection> resolve_own_class_selection(
+      std::string_view spelling, const Scope& scope,
+      const Type* parsed) const;
   [[nodiscard]] Type specialize_selected_type(
       Type type, const ClassSelection& selection) const;
   [[nodiscard]] Type canonicalize_selected_type(

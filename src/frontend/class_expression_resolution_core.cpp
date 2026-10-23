@@ -1713,6 +1713,55 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
 [[nodiscard]] std::optional<ClassSelection> Resolver::resolve_class_selection(
     const std::string_view spelling, const Scope& scope,
     const Type* parsed) const {
+  auto selection = resolve_own_class_selection(spelling, scope, parsed);
+  if (!selection) return selection;
+  // A class nested in a parameterized class is selected through a
+  // specialization of the enclosing class (`baz#(bar_e)::Inner1`, IEEE
+  // 1800-2017 8.23, 8.25.1); its actuals bind the enclosing formals, by
+  // name.
+  std::size_t depth{};
+  std::optional<std::size_t> cut;
+  for (std::size_t index = 0; index + 1U < spelling.size(); ++index) {
+    if (spelling[index] == '(') ++depth;
+    else if (spelling[index] == ')' && depth != 0U) --depth;
+    else if (depth == 0U && spelling[index] == ':'
+             && spelling[index + 1U] == ':') {
+      cut = index;
+      ++index;
+    }
+  }
+  if (!cut) return selection;
+  const auto prefix = spelling.substr(0U, *cut);
+  if (prefix.find('#') == std::string_view::npos) return selection;
+  const auto owner = resolve_class_selection(prefix, scope);
+  if (!owner
+      || owner->declaration->canonical_identity + "::"
+              + selection->declaration->name
+          != selection->declaration->canonical_identity) {
+    return selection;
+  }
+  auto& actuals = selection->type.systemverilog_class_parameter_actuals;
+  std::size_t next_positional{};
+  for (const auto& actual :
+       owner->type.systemverilog_class_parameter_actuals) {
+    auto named = actual;
+    if (!named.name) {
+      if (next_positional >= owner->declaration->parameters.size()) break;
+      named.name = owner->declaration->parameters[next_positional++].name;
+    }
+    if (std::ranges::any_of(actuals, [&](const auto& existing) {
+          return existing.name == named.name;
+        })) {
+      continue;
+    }
+    actuals.push_back(std::move(named));
+  }
+  return selection;
+}
+[[nodiscard]] std::optional<ClassSelection>
+Resolver::resolve_own_class_selection(
+    const std::string_view spelling, const Scope& scope,
+    const Type* parsed) const {
   const auto declarations = resolve_class_name(spelling, scope);
   if (declarations.size() != 1U) return std::nullopt;
   ClassSelection selection{
@@ -1971,7 +2020,8 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
   // The class's own typedefs, in declaration order, type the selected
   // type's members too (`typedef struct {t_vector m0[2*SIZE-1:0];} t`); an
   // enumeration keeps its name and literals.
-  if (any_value_actual || any_default || !type_bindings.empty()) {
+  if (any_value_actual || any_default || !type_bindings.empty()
+      || !selection.declaration->type_aliases.empty()) {
     for (const auto& alias : selection.declaration->type_aliases) {
       if (!alias.enum_literals.empty()
           || type_bindings.contains(alias.name)) {
@@ -2019,10 +2069,15 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       }
     }
     if (retained.systemverilog_container) {
+      // A kept outer container's element is the declarator's own type
+      // (`T m[N]`), which takes the same binding.
+      const bool own_element = replaced && outer_container;
+      if (own_element) replacing.erase(*replaced);
       for (auto& element :
            retained.systemverilog_container->element_types) {
         element = self(self, std::move(element));
       }
+      if (own_element) replacing.insert(*replaced);
     }
     for (auto& actual : retained.systemverilog_class_parameter_actuals) {
       if (actual.type_actual) {
@@ -2840,8 +2895,19 @@ void Resolver::retain_result_type(
         && scope.instances.contains(components[1])) {
       components.erase(components.begin());
     }
+    // A path may also start at a top-level module, whose implicit instance
+    // has the module's name (IEEE 1800-2017 23.3.1, 23.6).
+    const bool rooted_at_module = components.size() >= 2U
+        && !scope.instances.contains(components.front())
+        && !scope.objects.contains(components.front())
+        && std::ranges::count_if(design_.units, [&](const DesignUnit& unit) {
+             return unit.name == components.front()
+                 && unit.kind == UnitKind::VerilogModule
+                 && effective_library(unit.library) == scope.library;
+           }) == 1;
     if (components.size() >= 2U
-        && scope.instances.contains(components.front())) {
+        && (scope.instances.contains(components.front())
+            || rooted_at_module)) {
       const auto select_unit = [&](const std::string_view unit_name,
                                    const std::string_view library)
           -> const DesignUnit* {
@@ -2862,7 +2928,10 @@ void Resolver::retain_result_type(
       const auto root_instance
           = scope.instances.find(components.front());
       const DesignUnit* target = select_unit(
-          root_instance->second, scope.library);
+          root_instance != scope.instances.end()
+              ? std::string_view { root_instance->second }
+              : components.front(),
+          scope.library);
       for (std::size_t index = 1U;
            target != nullptr && index + 1U < components.size(); ++index) {
         const Instance* child = nullptr;

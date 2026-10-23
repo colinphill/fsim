@@ -127,6 +127,10 @@ struct SpecializedHirNamedIdentity {
 /// without retaining source spelling or parser-owned expression records.
 [[nodiscard]] std::string systemverilog_string_identity(
     std::string_view bytes);
+/// The bytes of a `systemverilog_string_identity`, or nothing for any other
+/// identity.
+[[nodiscard]] std::optional<std::string> parse_systemverilog_string_identity(
+    std::string_view identity);
 
 enum class SpecializedHirAssociationSurface : std::uint8_t {
     parameters,
@@ -665,6 +669,17 @@ resolve_specialized_hir_associations(
     UnitId target_unit,
     CompiledInstanceView instance,
     SpecializedHirAssociationSurface surface,
+    const SpecializedHirUnit* parent = nullptr);
+
+/// Resolve a defparam's redefinition of `parameter`, a parameter declared in
+/// a named block, task or function of the target unit (IEEE 1800-2017
+/// 23.10.1), as the instance's one parameter actual.
+[[nodiscard]] SpecializedHirAssociationResult
+resolve_specialized_hir_scoped_parameter_association(
+    const CompiledDesign& design,
+    UnitId target_unit,
+    DeclarationId parameter,
+    CompiledInstanceView instance,
     const SpecializedHirUnit* parent = nullptr);
 
 /// Resolve one retained VHDL block's generic map against the generic

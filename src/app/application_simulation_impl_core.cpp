@@ -609,7 +609,12 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                                      const auto& aggregate) -> bool {
         const auto& type = value.type;
         if (type.fixed && type.dimensions.size() > 1U) {
-            if (type.element_kind != ContainerElementKind::Packed) {
+            // Its elements are packed values or unpacked structures.
+            const bool structures
+                = type.element_kind == ContainerElementKind::Aggregate
+                && !type.aggregate_value;
+            if (type.element_kind != ContainerElementKind::Packed
+                && !structures) {
                 return false;
             }
             const auto rank = type.dimensions.size();
@@ -622,31 +627,35 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             if (strides.front()
                     * extent(type.dimensions.front().first,
                         type.dimensions.front().second)
-                != value.elements.size()) {
+                != (structures ? value.nested_elements.size()
+                               : value.elements.size())) {
                 return false;
             }
             // Elements are stored with the rightmost dimension varying
             // fastest.
+            bool listed = true;
             const auto dimension = [&](auto&& next, const std::size_t k,
                                        const std::size_t offset,
                                        const std::string& prefix) -> void {
                 const auto [left, right] = type.dimensions[k];
                 const auto count = extent(left, right);
                 node(prefix, count, fixed_shape(left, right));
-                for (std::size_t position = 0; position < count;
+                for (std::size_t position = 0; position < count && listed;
                      ++position) {
                     const auto child
                         = prefix + "[" + std::to_string(position) + "]";
                     const auto at = offset + position * strides[k];
-                    if (k + 1U == rank) {
-                        leaf(child, value.elements[at]);
-                    } else {
+                    if (k + 1U != rank) {
                         next(next, k + 1U, at, child);
+                    } else if (structures) {
+                        listed = aggregate(child, value.nested_elements[at]);
+                    } else {
+                        leaf(child, value.elements[at]);
                     }
                 }
             };
             dimension(dimension, 0U, 0U, path);
-            return true;
+            return listed;
         }
         runtime::SystemVerilogConstraintContainerShape shape;
         if (type.fixed) shape = fixed_shape(type.index_left, type.index_right);
@@ -753,11 +762,13 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     // The members of an unpacked structure held as a value (an element of
     // an array of structures), in declaration order: `visit` receives each
     // packed member's path, value, type and whether it is random.
+    // An unpacked-array member is listed element by element, its shape
+    // through `node` (7.2, 7.4).
     const auto box_leaves = [&](auto&& self,
                                 runtime::simir::ContainerValue& box,
                                 const semantic::sv::TypeDefinition& definition,
                                 const std::string& path, const bool random,
-                                const auto& visit) -> bool {
+                                const auto& visit, const auto& node) -> bool {
         if (box.nested_elements.size() != definition.members.size()) {
             return false;
         }
@@ -768,7 +779,44 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             const bool member_random = random && member.random;
             if (const auto* nested = structure_of(member.type)) {
                 if (!self(self, held, *nested, path + "." + member.name,
-                        member_random, visit)) {
+                        member_random, visit, node)) {
+                    return false;
+                }
+                continue;
+            }
+            // A member of a typedef'd array type has that array's shape.
+            const auto& member_type = semantic::sv::systemverilog_array_alias_type(
+                built.systemverilog_hir, member.type);
+            const bool member_array = (member_type.container_form
+                    && member_type.container_element_types.size() == 1U)
+                || !member_type.unpacked_dimensions.empty();
+            if (member_array && !held.type.aggregate_value) {
+                // A fixed-size array member's elements have its type
+                // without the unpacked dimensions.
+                auto fixed_element = member_type;
+                fixed_element.unpacked_dimensions.clear();
+                const auto* element_type = member_type.container_form
+                    ? &member_type.container_element_types.front()
+                    : &fixed_element;
+                while (element_type->container_form
+                    && element_type->container_element_types.size() == 1U) {
+                    element_type
+                        = &element_type->container_element_types.front();
+                }
+                const auto* element_structure = structure_of(*element_type);
+                const auto leaf = [&](const std::string& element_path,
+                                      runtime::PackedLogic4& value) {
+                    visit(element_path, value, *element_type, member_random);
+                };
+                const auto aggregate
+                    = [&](const std::string& element_path,
+                          runtime::simir::ContainerValue& element) {
+                          return element_structure != nullptr
+                              && self(self, element, *element_structure,
+                                  element_path, member_random, visit, node);
+                      };
+                if (!visit_container(visit_container, held,
+                        path + "." + member.name, leaf, node, aggregate)) {
                     return false;
                 }
                 continue;
@@ -797,8 +845,10 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         box.element_width = 0U;
         box.aggregate_value = true;
         for (const auto& member : definition.members) {
-            if (member.type.container_form
-                || !member.type.unpacked_dimensions.empty()) {
+            const auto& member_type = semantic::sv::systemverilog_array_alias_type(
+                built.systemverilog_hir, member.type);
+            if (member_type.container_form
+                || !member_type.unpacked_dimensions.empty()) {
                 return std::nullopt;
             }
             const auto* nested = structure_of(member.type);
@@ -886,6 +936,46 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                 }
                 const auto& held = class_heap.property(
                     target, property.canonical_identity);
+                // A structure held as a value (one with an unpacked-array
+                // member) joins the solve member by member and element by
+                // element (IEEE 1800-2017 7.2, 18.4).
+                if (held.container && held.container->type.aggregate_value
+                    && structure->form
+                        == semantic::sv::TypeForm::unpacked_structure) {
+                    runtime::SystemVerilogClassRandomizeContainer container;
+                    container.node = node;
+                    container.name = property.canonical_identity;
+                    auto shaped = *held.container;
+                    const auto shape_node
+                        = [&](const std::string& path, const std::size_t size,
+                              runtime::SystemVerilogConstraintContainerShape
+                                  shape) {
+                              container.shapes.push_back(
+                                  { path, size, std::move(shape) });
+                          };
+                    if (!box_leaves(box_leaves, shaped, *structure,
+                            std::string { }, true,
+                            [&](const std::string& member_path,
+                                const runtime::PackedLogic4& value,
+                                const semantic::sv::TypeReference& type,
+                                const bool random) {
+                                container.element_paths.push_back(member_path);
+                                container.values.push_back(value);
+                                container.element_profiles.push_back(
+                                    leaf_profile(type, value, random));
+                            },
+                            shape_node)
+                        || container.element_profiles.empty()) {
+                        continue;
+                    }
+                    container.element = container.element_profiles.front();
+                    shaped_values.resize(containers.size());
+                    shaped_values.push_back(std::move(shaped));
+                    element_structures.resize(containers.size());
+                    element_structures.push_back(structure);
+                    containers.push_back(std::move(container));
+                    continue;
+                }
                 const auto width = structure == nullptr ? std::nullopt
                     : image_width(image_width, property.type);
                 std::vector<StructureLeaf> leaves;
@@ -1026,12 +1116,46 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                             container.values.push_back(value);
                             container.element_profiles.push_back(
                                 leaf_profile(type, value, random));
-                        });
+                        },
+                        shape_node);
                 };
                 if (!visit_container(visit_container, shaped, std::string { },
                         leaf, shape_node, aggregate)
                     || !valid) {
                     continue;
+                }
+                // A dynamic array or queue of structures without nested
+                // containers can be resized: its members' paths and
+                // initial values for a new element (IEEE 1800-2017 7.5.1).
+                const auto element_box = resizable && !nested
+                        && container.shapes.size() == 1U
+                    ? runtime::simir::nested_element_container_type(
+                          shaped.type)
+                    : std::nullopt;
+                if (element_box) {
+                    auto box = runtime::simir::default_container_value(
+                        *element_box);
+                    bool flat = true;
+                    if (box_leaves(box_leaves, box, *element_structure,
+                            std::string { }, true,
+                            [&](const std::string& member_path,
+                                const runtime::PackedLogic4& value,
+                                const semantic::sv::TypeReference& type,
+                                const bool random) {
+                                container.member_paths.push_back(member_path);
+                                container.member_profiles.push_back(
+                                    leaf_profile(type, value, random));
+                            },
+                            [&](const std::string&, std::size_t,
+                                const runtime::SystemVerilogConstraintContainerShape&) {
+                                flat = false;
+                            })
+                        && flat && !container.member_paths.empty()) {
+                        container.resizable = true;
+                    } else {
+                        container.member_paths.clear();
+                        container.member_profiles.clear();
+                    }
                 }
                 container.element = container.element_profiles.empty()
                     ? leaf_profile(*leaf_type,
@@ -1261,10 +1385,28 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
                         [&](const std::string&, runtime::PackedLogic4& value,
                             const semantic::sv::TypeReference&, bool) {
                             value = container.values.at(next++);
-                        });
+                        },
+                        shape_node);
             };
-            (void)visit_container(visit_container, *shaped, std::string { },
-                leaf, shape_node, aggregate);
+            // A resized array of structures keeps its leading elements;
+            // a new element starts from its default value.
+            if (!container.member_paths.empty()) {
+                const auto count = container.values.size()
+                    / container.member_paths.size();
+                const auto element_box
+                    = runtime::simir::nested_element_container_type(
+                        shaped->type);
+                if (element_box) {
+                    shaped->nested_elements.resize(count,
+                        runtime::simir::default_container_value(*element_box));
+                }
+            }
+            if (shaped->type.aggregate_value) {
+                (void)aggregate(std::string { }, *shaped);
+            } else {
+                (void)visit_container(visit_container, *shaped,
+                    std::string { }, leaf, shape_node, aggregate);
+            }
             stored = std::move(*shaped);
             continue;
         }

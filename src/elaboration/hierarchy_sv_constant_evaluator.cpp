@@ -48,6 +48,37 @@ using ScalarKind = frontend::SystemVerilogScalarKind;
         || form == Form::enumeration_literal;
 }
 
+/// Whether `scope` lies in a class or package body: one lowered for a
+/// caller's specialization (a method called through a handle, a package
+/// subprogram) keeps its lexical constants (IEEE 1800-2017 8.10, 26.3).
+[[nodiscard]] bool class_or_package_body(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ScopeId scope)
+{
+    const auto& design = specialization.design();
+    std::optional<semantic::ScopeId> current { scope };
+    for (std::size_t depth { }; current && depth < 4096U; ++depth) {
+        const auto* record = design.find_scope(*current);
+        if (record == nullptr) {
+            return false;
+        }
+        if (std::ranges::any_of(design.systemverilog_hir.classes(),
+                [&](const semantic::sv::ClassDeclaration& candidate) {
+                    return candidate.scope == record->id;
+                })) {
+            return true;
+        }
+        const auto unit = design.find_unit(record->unit);
+        if (unit && unit->systemverilog != nullptr
+            && unit->systemverilog->kind
+                == semantic::sv::UnitKind::package) {
+            return true;
+        }
+        current = record->parent;
+    }
+    return false;
+}
+
 [[nodiscard]] std::optional<semantic::DeclarationId>
 resolve_constant_name_declaration(
     const semantic::SpecializedHirUnit& specialization,
@@ -85,7 +116,9 @@ resolve_constant_name_declaration(
                           target->systemverilog->scope)
                     : nullptr;
                 if (target_scope != nullptr
-                    && target_scope->unit == specialization.unit()) {
+                    && target_scope->unit == specialization.unit()
+                    && !class_or_package_body(
+                        specialization, expression.scope)) {
                     return rebound;
                 }
             }
@@ -97,11 +130,16 @@ resolve_constant_name_declaration(
     // target occurrence is known. A target parameter name can consequently
     // carry an implicit-net placeholder in the immutable HIR. Re-resolve only
     // non-constant selections in the effective target specialization; real
-    // lexical and package constants retain their linked declaration.
+    // lexical and package constants retain their linked declaration. A class
+    // or package body resolves from its own scope.
+    const auto lookup_scope
+        = class_or_package_body(specialization, expression.scope)
+        ? expression.scope
+        : specialization.scope();
     if (const auto rebound
         = semantic::CompiledDesignResolver { specialization }
               .resolve_systemverilog_constant(
-                  expression.text, specialization.scope(), false,
+                  expression.text, lookup_scope, false,
                   expression.referenced_name
                       ? expression.referenced_name->source_order
                       : 0U)
@@ -116,7 +154,7 @@ resolve_constant_name_declaration(
             = semantic::CompiledDesignResolver { specialization }
                   .resolve_systemverilog_constant(
                       std::string_view { expression.text }.substr(0U, dot),
-                      specialization.scope(), false,
+                      lookup_scope, false,
                       expression.referenced_name
                           ? expression.referenced_name->source_order
                           : 0U)
@@ -3600,6 +3638,192 @@ private:
         return result;
     }
 
+    struct ArrayQueryDimensions {
+        std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
+        std::size_t unpacked { };
+    };
+
+    /// The dimensions of a named fixed-size unpacked array, unpacked ones
+    /// first and then those of its packed element (IEEE 1800-2017 20.7);
+    /// nothing for any other operand.
+    [[nodiscard]] std::optional<ArrayQueryDimensions> array_query_dimensions(
+        const semantic::ExpressionId operand)
+    {
+        const auto view = specialization_.find_expression(operand);
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->kind != ExpressionKind::name) {
+            return std::nullopt;
+        }
+        auto declaration = systemverilog_constant_name_declaration(
+            specialization_, *view->systemverilog);
+        if (!declaration) {
+            // An unpacked array parameter is held as a constant variable
+            // (6.20.1), which a package import may make visible.
+            declaration = semantic::CompiledDesignResolver { specialization_ }
+                .resolve_systemverilog_expression(operand,
+                    [](const semantic::CompiledDeclarationView& candidate) {
+                        return candidate.systemverilog != nullptr
+                            && (candidate.systemverilog->array_parameter
+                                || candidate.systemverilog
+                                       ->array_local_parameter);
+                    })
+                .unique();
+        }
+        // A query of a fixed-size net or variable is a constant function
+        // of its declared dimensions (IEEE 1800-2017 20.7).
+        using Form = semantic::sv::DeclarationForm;
+        if (!declaration) {
+            declaration = semantic::CompiledDesignResolver { specialization_ }
+                .resolve_systemverilog_expression(operand,
+                    [](const semantic::CompiledDeclarationView& candidate) {
+                        return candidate.systemverilog != nullptr
+                            && (candidate.systemverilog->form == Form::net
+                                || candidate.systemverilog->form
+                                    == Form::variable
+                                || candidate.systemverilog->form
+                                    == Form::port);
+                    })
+                .unique();
+        }
+        // Only an array parameter or object itself, possibly
+        // package-qualified, is queried here; a member path (`a[i].m.f`)
+        // selects within it.
+        const auto record = declaration
+            ? specialization_.find_declaration(*declaration) : std::nullopt;
+        const std::string_view text { view->systemverilog->text };
+        const bool object = record && record->systemverilog != nullptr
+            && (record->systemverilog->form == Form::net
+                || record->systemverilog->form == Form::variable
+                || record->systemverilog->form == Form::port);
+        if (!record || record->systemverilog == nullptr
+            || !(record->systemverilog->array_parameter
+                || record->systemverilog->array_local_parameter
+                || record->systemverilog->form == Form::parameter
+                || record->systemverilog->form == Form::local_parameter
+                || object)
+            || !(text == record->systemverilog->name
+                || (text.ends_with(record->systemverilog->name)
+                    && text.substr(0U,
+                           text.size() - record->systemverilog->name.size())
+                        .ends_with("::")))) {
+            return std::nullopt;
+        }
+        const auto type = declaration_type(*declaration);
+        if (!type || (type->unpacked_dimensions.empty() && !object)
+            || (type->container_form
+                && *type->container_form
+                    != semantic::sv::TypeForm::static_array)) {
+            return std::nullopt;
+        }
+        const auto bound = [&](const std::optional<std::int64_t> value,
+                               const std::optional<semantic::ExpressionId>
+                                   expression) -> std::optional<std::int64_t> {
+            if (value || !expression) {
+                return value;
+            }
+            const auto evaluated = evaluate(*expression);
+            return evaluated ? evaluated->integer_value() : std::nullopt;
+        };
+        ArrayQueryDimensions result;
+        const auto append = [&](const semantic::sv::PackedRange& range) {
+            const auto left = bound(range.left, range.left_expression);
+            const auto right = bound(range.right, range.right_expression);
+            if (!left || !right) {
+                return false;
+            }
+            result.ranges.emplace_back(*left, *right);
+            return true;
+        };
+        for (const auto& range : type->unpacked_dimensions) {
+            if (!append(range)) {
+                return std::nullopt;
+            }
+        }
+        result.unpacked = result.ranges.size();
+        auto element = *type;
+        element.unpacked_dimensions.clear();
+        element.container_form.reset();
+        if (!element.packed_dimensions.empty()) {
+            for (const auto& range : element.packed_dimensions) {
+                if (!append(range)) {
+                    return std::nullopt;
+                }
+            }
+        } else if (element.packed_range) {
+            if (!append(*element.packed_range)) {
+                return std::nullopt;
+            }
+        } else {
+            // An integral element without declared ranges (`int`, a packed
+            // structure) is one dimension of its width (7.4.1).
+            std::unordered_set<std::uint32_t> visiting;
+            const auto width
+                = resolved_type_width(element, &specialization_, visiting);
+            const auto form = element.value_form;
+            if (width && *width != 0U
+                && (form == semantic::sv::TypeForm::packed_integral
+                    || form == semantic::sv::TypeForm::packed_structure
+                    || form == semantic::sv::TypeForm::packed_union
+                    || form == semantic::sv::TypeForm::enumeration)) {
+                result.ranges.emplace_back(
+                    static_cast<std::int64_t>(*width) - 1, 0);
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<Value> evaluate_array_query(
+        const semantic::sv::Expression& record,
+        const ArrayQueryDimensions& dimensions)
+    {
+        const auto known = [](const std::int64_t value) {
+            return make_known(static_cast<std::uint64_t>(value), 32U, true,
+                false, frontend::ValueDomain::Integer);
+        };
+        if (record.text == "$dimensions") {
+            return known(static_cast<std::int64_t>(dimensions.ranges.size()));
+        }
+        if (record.text == "$unpacked_dimensions") {
+            return known(static_cast<std::int64_t>(dimensions.unpacked));
+        }
+        std::uint64_t selected { 1U };
+        if (record.operands.size() == 2U) {
+            const auto dimension = evaluate(record.operands.back());
+            const auto count = dimension
+                ? nonnegative_count(*dimension, error_) : std::nullopt;
+            if (!count) {
+                return std::nullopt;
+            }
+            selected = *count;
+        }
+        if (selected == 0U || selected > dimensions.ranges.size()) {
+            error_ = record.text + " dimension "
+                + std::to_string(selected) + " is out of range";
+            return std::nullopt;
+        }
+        const auto [left, right] = dimensions.ranges[selected - 1U];
+        if (record.text == "$size") {
+            return known(static_cast<std::int64_t>(
+                support::index_distance(left, right) + 1U));
+        }
+        if (record.text == "$left") {
+            return known(left);
+        }
+        if (record.text == "$right") {
+            return known(right);
+        }
+        if (record.text == "$low") {
+            return known(std::min(left, right));
+        }
+        if (record.text == "$high") {
+            return known(std::max(left, right));
+        }
+        if (record.text == "$increment") {
+            return known(left >= right ? 1 : -1);
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_query(
         const semantic::sv::Expression& record)
     {
@@ -3650,6 +3874,12 @@ private:
                 width && *width != 0U) {
                 return make_known(*width, 32U, true, false,
                     frontend::ValueDomain::Integer);
+            }
+        }
+        if (record.text != "$bits") {
+            if (const auto dimensions
+                = array_query_dimensions(record.operands.front())) {
+                return evaluate_array_query(record, *dimensions);
             }
         }
         const auto operand = evaluate(record.operands.front());

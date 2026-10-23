@@ -870,6 +870,12 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             return collection_type;
         }
         if (statement.target.kind == ExpressionKind::Identifier) {
+            // A container property of the class being parsed (8.11).
+            if (const auto found = class_foreach_types_.find(
+                    statement.target.text);
+                found != class_foreach_types_.end()) {
+                return found->second;
+            }
             if (const auto found = unit_foreach_types_.find(
                     statement.target.text);
                 found != unit_foreach_types_.end()) {

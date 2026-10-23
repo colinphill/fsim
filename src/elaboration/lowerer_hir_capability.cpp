@@ -4,6 +4,7 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include "vhdl_hir_type_validation.hpp"
 
 #include <array>
@@ -53,6 +54,15 @@ std::optional<std::size_t> wide_unsized_decimal_width(
     return bits > 64U ? std::optional { bits + 1U } : std::nullopt;
 }
 namespace {
+
+    [[nodiscard]] bool systemverilog_integer_query_call(
+        const std::string_view name) noexcept
+    {
+        return name == "$left" || name == "$right" || name == "$low"
+            || name == "$high" || name == "$increment" || name == "$size"
+            || name == "$bits" || name == "$dimensions"
+            || name == "$unpacked_dimensions";
+    }
 
     // The type a VHDL subtype chain denotes, through resolved subtypes and
     // aliases (`subtype r is resolve rec`) to its record definition.
@@ -1249,10 +1259,14 @@ void Lowerer::set_disable_labels(
 void Lowerer::set_systemverilog_interface_handles(
     const std::unordered_map<std::string, std::uint64_t>* const handles,
     const std::unordered_map<std::string, std::string>* const types,
-    const HirInstanceUnits* const instance_units)
+    const HirInstanceUnits* const instance_units,
+    const std::unordered_map<std::string, std::string>* const exports)
     noexcept
 {
     systemverilog_interface_handles_ = handles;
+    if (exports != nullptr) {
+        systemverilog_interface_exports_ = exports;
+    }
     if (types != nullptr) {
         systemverilog_interface_types_ = types;
     }
@@ -6261,13 +6275,41 @@ Lowerer::hir_virtual_interface_member(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->systemverilog == nullptr
-        || expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name) {
+    if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
-    return hir_virtual_interface_member(
-        expression->systemverilog->text, expression->systemverilog->scope);
+    const auto& source = *expression->systemverilog;
+    constexpr std::string_view indexed_member { "index." };
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && source.text.starts_with(indexed_member)
+        && source.operands.size() == 2U) {
+        // `vifs[i].m`: a member through an element of an array of virtual
+        // interface handles (IEEE 1800-2017 7.4, 25.9).
+        const auto element = hir_container_element_binding(
+            expression_id, true);
+        const auto declaration = element && element->width == 64U
+            ? specialized_hir_unit_->find_declaration(element->declaration)
+            : std::nullopt;
+        if (!declaration || declaration->systemverilog == nullptr
+            || !hir_systemverilog_virtual_interface_type(
+                *declaration->systemverilog)) {
+            return std::nullopt;
+        }
+        auto member = hir_virtual_interface_member(
+            declaration->systemverilog->name + "."
+                + source.text.substr(indexed_member.size()),
+            source.scope);
+        if (!member || member->object || member->handle_signal
+            || member->receiver != element->declaration) {
+            return std::nullopt;
+        }
+        member->element = expression_id;
+        return member;
+    }
+    if (source.kind != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    return hir_virtual_interface_member(source.text, source.scope);
 }
 
 std::optional<semantic::sv::TypeReference>
@@ -6901,6 +6943,13 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
             return std::nullopt;
         }
         const auto record = specialized_hir_unit_->find_declaration(*declaration);
+        // A class property named in a method is the object's member, never
+        // a same-named signal of the calling instance (IEEE 1800-2017 8.5,
+        // 23.9).
+        if (record && record->systemverilog != nullptr
+            && hir_class_body_scope(record->systemverilog->scope)) {
+            return std::nullopt;
+        }
         const auto package_signal
             = record && record->systemverilog != nullptr
                     && (record->systemverilog->form
@@ -7768,6 +7817,11 @@ Lowerer::hir_runtime_binding(
     if (declaration->systemverilog != nullptr) {
         const auto& source = *declaration->systemverilog;
         result.name = source.name;
+        // A class property is object or class storage, not a signal of the
+        // instance whose process names it (IEEE 1800-2017 8.5, 8.9).
+        if (!materialized_local && hir_class_body_scope(source.scope)) {
+            return std::nullopt;
+        }
         package_constant = hir_static_variable_signal(declaration_id);
         // A package initializer uses the package unit scope as its synthetic
         // process scope. Unit-scope declarations still bind to design-global
@@ -8863,8 +8917,13 @@ Lowerer::hir_container_element_member(
     const auto declaration
         = specialized_hir_unit_->find_declaration(element->declaration);
     const auto element_type = hir_container_element_packed_type(*element);
+    // A member through a virtual interface handle (`vifs[i].m`) is the
+    // designated instance's member, not bits of the handle (IEEE 1800-2017
+    // 25.9).
     if (!declaration || declaration->systemverilog == nullptr
-        || !element_type) {
+        || !element_type
+        || hir_systemverilog_virtual_interface_type(
+            *declaration->systemverilog)) {
         return std::nullopt;
     }
     const auto member = hir_systemverilog_type_member_path(*element_type,
@@ -11004,6 +11063,9 @@ Lowerer::hir_string_binding(
             || (source.scope == process_scope
                 && (source.form
                         == semantic::vhdl::DeclarationForm::variable
+                    || (source.form
+                            == semantic::vhdl::DeclarationForm::constant
+                        && hir_vhdl_elaborated_constant(source))
                     || (source.form
                             == semantic::vhdl::DeclarationForm::port
                         && callable_formal)));
@@ -15785,6 +15847,12 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                 || source.text == "$countbits")) {
             return frontend::ValueDomain::Bit2;
         }
+        // The array query functions and $bits return integer (IEEE
+        // 1800-2017 20.6.2, 20.7).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && systemverilog_integer_query_call(source.text)) {
+            return frontend::ValueDomain::Logic4;
+        }
         if (source.kind == semantic::sv::ExpressionKind::call
             && systemverilog_sampled_value_call(source.text)) {
             if (!systemverilog_sampled_value_preserves_signal(
@@ -17080,14 +17148,8 @@ std::uint32_t Lowerer::hir_systemverilog_decimal_width(
     if (!width || *width == 0U) {
         return minimum_width;
     }
-    // The digits of 2^w - 1 (unsigned) or of 2^(w-1) plus a sign; neither
-    // power of two is a power of ten, so the digit count is exact.
-    const bool signed_value = hir_expression_signed(expression);
-    const auto magnitude_bits = signed_value ? *width - 1U : *width;
-    const auto digits = static_cast<std::uint32_t>(
-        std::floor(static_cast<long double>(magnitude_bits)
-            * std::log10(2.0L))) + 1U;
-    return digits + (signed_value ? 1U : 0U);
+    return runtime::simir::automatic_decimal_width(
+        *width, hir_expression_signed(expression));
 }
 
 bool Lowerer::hir_vhdl_character_typed(
@@ -17126,6 +17188,24 @@ bool Lowerer::hir_vhdl_predefined_character_subtype(
         && vhdl_predefined_character_subtype(
             *specialized_hir_unit_, subtype, use_scope,
             hir_generic_binding_frames_);
+}
+
+bool Lowerer::hir_class_body_scope(const semantic::ScopeId scope) const
+{
+    if (specialized_hir_unit_ == nullptr || !scope.valid()) {
+        return false;
+    }
+    const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
+    if (hir_class_body_scope_hir_ != &hir
+        || hir_class_body_scope_revision_ != hir.revision()) {
+        hir_class_body_scope_hir_ = &hir;
+        hir_class_body_scope_revision_ = hir.revision();
+        hir_class_body_scopes_.clear();
+        for (const auto& declaration : hir.classes()) {
+            hir_class_body_scopes_.insert(declaration.scope.value());
+        }
+    }
+    return hir_class_body_scopes_.contains(scope.value());
 }
 
 void Lowerer::collect_hir_vhdl_character_contexts() const
@@ -19103,6 +19183,19 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                         return binding->width;
                     }
                 }
+                // An unconstrained array generic takes its length from its
+                // actual (IEEE 1076-2008 6.5.6.2); with no actual in view,
+                // the declaration's one-bit placeholder is not its length.
+                if (unconstrained_array
+                    && declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::generic_constant) {
+                    const auto packed = specialized_hir_unit_
+                        ->evaluate_vhdl_packed_value_declaration(*selected);
+                    if (packed && !packed->bits.empty()) {
+                        return packed->bits.size();
+                    }
+                    return std::nullopt;
+                }
             }
             if (subtype) {
                 const auto unconstrained_port
@@ -19235,7 +19328,8 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && (source.text == "$countones"
-                || source.text == "$countbits")) {
+                || source.text == "$countbits"
+                || systemverilog_integer_query_call(source.text))) {
             return 32U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
@@ -21746,6 +21840,11 @@ Lowerer::hir_systemverilog_indexed_member(
         || !declaration->systemverilog->type) {
         return std::nullopt;
     }
+    // `vifs[i].m` names a member of the instance the handle designates,
+    // not bits of the handle (IEEE 1800-2017 25.9).
+    if (hir_systemverilog_virtual_interface_type(*declaration->systemverilog)) {
+        return std::nullopt;
+    }
     // With `element_relative`, `u[1].hi` of an unpacked array of packed
     // structures selects within the element; the offset is relative to it.
     const auto& root_type = *declaration->systemverilog->type;
@@ -21813,7 +21912,9 @@ Lowerer::hir_systemverilog_type_member_path(
         // another unit's type kept only by spelling.
         current = type_resolver.underlying_systemverilog_type(current, scope)
                       .value_or(current);
-        if (!current.target.target.valid()) {
+        // A virtual interface handle has no packed members: `v.m` names a
+        // member of the instance it designates (IEEE 1800-2017 25.9).
+        if (!current.target.target.valid() || current.virtual_interface) {
             return std::nullopt;
         }
         auto definition = specialized_hir_unit_->find_type(

@@ -2063,7 +2063,35 @@ Expression VerilogParser::parse_primary_impl()
                     "streaming concatenation requires at least one operand");
             } else {
                 do {
-                    operands.push_back(parse_expression());
+                    auto operand = parse_expression();
+                    if (keyword("with") && at(TokenKind::LeftBracket, 1U)) {
+                        // `array with [range]` streams only the items of
+                        // the range (IEEE 1800-2017 11.4.14.4): operands
+                        // are the array and the range's one or two bounds.
+                        const auto with = advance();
+                        advance();
+                        std::vector<Expression> parts;
+                        parts.push_back(std::move(operand));
+                        parts.push_back(parse_expression());
+                        std::string text = "@stream-with";
+                        if (match(TokenKind::Colon)) {
+                            text = "@stream-with-range";
+                            parts.push_back(parse_expression());
+                        } else if (match(TokenKind::PlusColon)) {
+                            text = "@stream-with-plus";
+                            parts.push_back(parse_expression());
+                        } else if (match(TokenKind::MinusColon)) {
+                            text = "@stream-with-minus";
+                            parts.push_back(parse_expression());
+                        }
+                        expect(TokenKind::RightBracket,
+                            "']' after a streaming with range",
+                            "FSIM-SV-PARSE-193");
+                        operand = Expression { ExpressionKind::Call,
+                            std::move(text), std::move(parts),
+                            span_from(with, previous()) };
+                    }
+                    operands.push_back(std::move(operand));
                 } while (match(TokenKind::Comma));
             }
             expect(

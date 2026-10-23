@@ -764,9 +764,22 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             statement.kind = StatementKind::Disable;
             const auto target = expect_identifier("disable target");
             statement.task_name = target.text;
+            // A generate block instance in the hierarchical name is named
+            // by its constant index (`genblk[0].init`, IEEE 1800-2023
+            // 23.6, 27.6).
+            const auto generate_index = [&] {
+                while (at(TokenKind::LeftBracket) && at(TokenKind::Number, 1U)
+                    && at(TokenKind::RightBracket, 2U)) {
+                    advance();
+                    statement.task_name += "[" + std::string { advance().text } + "]";
+                    advance();
+                }
+            };
+            generate_index();
             while (match(TokenKind::Dot)) {
                 statement.task_name += ".";
                 statement.task_name += expect_identifier("disable target").text;
+                generate_index();
             }
         }
         expect(

@@ -1498,8 +1498,16 @@ bool reference_name_matches(
                             const std::string_view right) {
         return vhdl ? same_vhdl_identifier(left, right) : left == right;
     };
-    if (!equals(normalized_library(unit.library),
-            normalized_library(reference.library))) {
+    // VHDL `work` denotes the library of the unit naming it (IEEE
+    // 1076-2008 13.2).
+    auto library = normalized_library(reference.library);
+    if (vhdl && same_vhdl_identifier(library, "work")) {
+        if (const auto* owner = reference_owner(design, reference);
+            owner != nullptr && owner->language == Language::vhdl) {
+            library = normalized_library(owner->library);
+        }
+    }
+    if (!equals(normalized_library(unit.library), library)) {
         return false;
     }
     if (unit.kind == UnitKind::vhdl_context) {

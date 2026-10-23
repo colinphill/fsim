@@ -1273,10 +1273,17 @@ void Interpreter::Impl::execute_file(
                 "VHDL TextIO STRING target exceeds scan limit"
             };
         }
-        if (operation.string_source) {
+        // An invalid run-time format, or one whose conversions do not match
+        // the targets, assigns nothing.
+        const bool format_valid = !operation.runtime_format
+            || apply_runtime_scan_format(effective_operation,
+                get_string_register(process, *operation.runtime_format));
+        if (!format_valid) {
+        } else if (operation.string_source) {
             auto& source = get_string_register(process, operation.source);
             scanned = scan_formatted_string(
                 effective_operation, source, active_time_format);
+            complete_plusarg_value(effective_operation, source, scanned);
             consume_scanned_source(operation, source, scanned);
         } else {
             const auto handle = known_file_handle(process, operation.handle);
@@ -1291,7 +1298,8 @@ void Interpreter::Impl::execute_file(
             scanned = scan_formatted_input(
                 effective_operation, read, unread, active_time_format);
         }
-        const bool complete = file_scan_complete(operation, scanned);
+        const bool complete = format_valid
+            && file_scan_complete(effective_operation, scanned);
         if (operation.success) {
             get_register(process, *operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
         }
@@ -1303,7 +1311,7 @@ void Interpreter::Impl::execute_file(
         for (std::size_t index = 0; index < scanned.values.size(); ++index) {
             if (!scanned.values[index])
                 continue;
-            const auto& target = operation.conversions[index].target;
+            const auto& target = effective_operation.conversions[index].target;
             auto& value = *scanned.values[index];
             switch (target.kind) {
             case InputScanTargetKind::packed_register:

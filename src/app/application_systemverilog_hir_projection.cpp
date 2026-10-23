@@ -687,15 +687,16 @@ template <typename Input>
     const semantic::ScopeId scope,
     const semantic::OriginId parent)
 {
-    // A scalar parameter of a task or function is a local parameter of its
-    // scope (IEEE 1800-2017 6.20.1, 6.20.4).
+    // A scalar parameter of a task, function or block is a constant of its
+    // scope (IEEE 1800-2017 6.20.1, 6.20.4); one declared with `parameter`
+    // stays a parameter a defparam can redefine (23.10.1).
     if (input.systemverilog_local_parameter
         && !input.type.systemverilog_container && input.initializer) {
         frontend::ParameterDeclaration parameter;
         parameter.name = input.name;
         parameter.type = input.type;
         parameter.default_value = *input.initializer;
-        parameter.local = true;
+        parameter.local = !input.systemverilog_parameter;
         parameter.span = input.span;
         return add_parameter(parameter, scope, parent);
     }
@@ -713,7 +714,8 @@ template <typename Input>
     } else if (input.systemverilog_static) {
         declaration(id).lifetime = sv::Lifetime::static_lifetime;
     }
-    declaration(id).array_parameter = input.systemverilog_parameter;
+    declaration(id).array_parameter = input.systemverilog_parameter
+        && !input.systemverilog_local_parameter;
     declaration(id).array_local_parameter
         = input.systemverilog_local_parameter;
     if (input.type.systemverilog_virtual_interface) {

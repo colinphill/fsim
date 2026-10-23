@@ -402,10 +402,12 @@ endmodule
     const auto conflicting_redefinition = preprocess_verilog(
         SourceText { "macro-redefinition.sv", "`define VALUE 1\n`define VALUE 2\n" },
         Language::SystemVerilog2017);
-    require(!conflicting_redefinition.ok() && std::ranges::any_of(conflicting_redefinition.lexed.diagnostics, [](const Diagnostic& diagnostic) {
-        return diagnostic.code == "FSIM-SV-PP-044" && !diagnostic.expansion_stack.empty();
+    require(conflicting_redefinition.ok() && std::ranges::any_of(conflicting_redefinition.lexed.diagnostics, [](const Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SV-PP-044"
+            && diagnostic.severity == DiagnosticSeverity::Warning
+            && !diagnostic.expansion_stack.empty();
     }),
-        "a conflicting macro redefinition retains the prior location");
+        "a conflicting macro redefinition warns, retaining the prior location, and the latest definition prevails");
 
     const auto cross_close = directory / "cross-close.svh";
     const auto cross_open = directory / "cross-open.svh";

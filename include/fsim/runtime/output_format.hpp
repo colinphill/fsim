@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/frontend/design_core.hpp"
 #include "fsim/runtime/simir.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -54,5 +56,24 @@ namespace fsim::runtime::simir {
     std::uint32_t minimum_width,
     bool left_justify,
     bool zero_pad);
+
+/// The SimIR format of a conversion that consumes a value: %p and %v show
+/// decimal digits; %m, %l and %t do not consume a value and are rejected.
+[[nodiscard]] OutputFormat runtime_output_format(frontend::OutputFormat format);
+
+/// The digits `%d` shows of a `width`-bit value without an explicit field
+/// width (IEEE 1800-2017 21.2.1.3): those of its largest magnitude, plus a
+/// sign for a signed value.
+[[nodiscard]] std::uint32_t automatic_decimal_width(
+    std::size_t width, bool signed_value) noexcept;
+
+/// The text of a run-time format applied to its arguments (IEEE 1800-2017
+/// 21.3.3), with values read through `packed` and `text`. Throws for a
+/// malformed format or one that needs more arguments than it has.
+[[nodiscard]] std::string format_runtime_string(
+    const RuntimeStringFormat& operation, std::string_view format,
+    const std::function<PackedLogic4(const RuntimeFormatArgument&)>& packed,
+    const std::function<std::string(const RuntimeFormatArgument&)>& text,
+    SimulationTick tick, const SystemVerilogTimeFormat& time_format);
 
 } // namespace fsim::runtime::simir

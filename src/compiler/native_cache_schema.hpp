@@ -6,6 +6,6 @@
 namespace fsim::compiler::llvm_detail {
 
 inline constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v274";
+    "fsim-llvm-native-object-v275";
 
 } // namespace fsim::compiler::llvm_detail

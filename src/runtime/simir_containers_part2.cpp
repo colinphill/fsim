@@ -1316,15 +1316,17 @@ void append_container_bits(
 }
 
 // Consume bits into a container value's elements; a variable-size
-// container takes as many elements as the remaining bits fill, the last
-// one padded with zero bits (IEEE 1800-2017 11.4.14.4).
+// container takes as many elements as the remaining bits fill, less the
+// `reserved` bits of the fixed-size targets after it, the last one padded
+// with zero bits (IEEE 1800-2017 11.4.14.4).
 void consume_container_bits(
     const ProcessId process,
     const InstructionIndex instruction,
     const std::vector<PackedLogic4>& bits,
     std::size_t& position,
     ContainerValue& value,
-    const bool variable_size)
+    const bool variable_size,
+    const std::size_t reserved = 0U)
 {
     // A 2-state element converts X and Z bits to 0 (IEEE 1800-2017 6.22).
     const bool two_state = value.type.two_state
@@ -1367,7 +1369,8 @@ void consume_container_bits(
             container_error(process, instruction,
                 "a variable-size bit-stream target needs packed elements");
         }
-        const auto remaining = bits.size() - std::min(position, bits.size());
+        const auto available = bits.size() - std::min(position, bits.size());
+        const auto remaining = available - std::min(reserved, available);
         const auto count = (remaining + element_bits - 1U) / element_bits;
         resize_container_value(value, count);
     }
@@ -1474,8 +1477,9 @@ void Interpreter::Impl::execute_container(
         auto& destination
             = get_container_register(process, operation.container);
         std::size_t position { };
+        // `slice` holds the bits reserved for the later fixed-size targets.
         consume_container_bits(process.id, process.pc, bits.elements,
-            position, destination, true);
+            position, destination, true, operation.slice);
         if (position > bits.elements.size()) {
             container_error(process.id, process.pc,
                 "a bit stream is smaller than its targets");

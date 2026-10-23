@@ -565,6 +565,70 @@ void Resolver::retain_task_profile(
           && class_identity(property.property->declaration.type)
           && !property.property->declaration.type.systemverilog_container;
     };
+    // The call on `receiver` sets the mode of `target`: a random property
+    // or constraint block by canonical identity, or `@object` for every one
+    // of the object.
+    const auto mode_call = [&](Expression receiver, const std::string& target) {
+      expression.operands.front() = std::move(receiver);
+      expression.text = "@sv-method:@builtin-"
+          + std::string{expression.text == ".rand_mode"
+                ? "rand-mode:" : "constraint-mode:"}
+          + target;
+      expression.call_argument_names.resize(expression.operands.size());
+      expression.call_argument_directions.assign(
+          expression.operands.size(), PortDirection::Input);
+      for (auto& operand : expression.operands | std::views::drop(1)) {
+        resolve_expression(operand, scope);
+      }
+      Type result{
+          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+      retain_result_type(expression, result);
+      return result;
+    };
+    // The random property or constraint block `member` of class `identity`
+    // names, diagnosed when it is not a visible one.
+    const auto mode_target = [&](const std::optional<std::string>& identity,
+                                 const std::string_view member)
+        -> std::optional<std::string> {
+      std::string canonical;
+      SystemVerilogClassVisibility visibility{
+          SystemVerilogClassVisibility::Public};
+      const SystemVerilogClassDeclaration* owner{};
+      if (identity && expression.text == ".rand_mode") {
+        const auto property = find_property(*identity, member);
+        if (property.property
+            && (property.property->is_rand
+                || property.property->is_randc)) {
+          canonical = property.owner->canonical_identity + "::"
+              + property.property->declaration.name;
+          visibility = property.property->visibility;
+          owner = property.owner;
+        }
+      } else if (identity) {
+        const auto constraint = find_constraint(*identity, member);
+        if (constraint.constraint) {
+          canonical = constraint.constraint->canonical_identity;
+          visibility = constraint.constraint->visibility;
+          owner = constraint.owner;
+        }
+      }
+      if (canonical.empty() || expression.operands.size() > 2U) {
+        diagnose(
+            diagnostics_, "FSIM-SV-CLASS-020",
+            "randomization mode call does not select a visible random "
+            "property or constraint block",
+            expression.span);
+        return std::nullopt;
+      }
+      if (owner != nullptr && !can_access(visibility, *owner, scope)) {
+        diagnose(
+            diagnostics_, "FSIM-SV-CLASS-021",
+            "randomization mode call cannot access a nonpublic member",
+            expression.span);
+        return std::nullopt;
+      }
+      return canonical;
+    };
     if (built_in_mode && expression.operands.size() == 2U
         && !implicit_member
         && expression.operands.front().kind == ExpressionKind::Identifier
@@ -573,19 +637,7 @@ void Resolver::retain_task_profile(
       const auto receiver_type = resolve_expression(receiver, scope);
       if (receiver_type && class_identity(*receiver_type)
           && !receiver_type->systemverilog_container) {
-        expression.operands.front() = std::move(receiver);
-        expression.text = "@sv-method:@builtin-"
-            + std::string{expression.text == ".rand_mode"
-                  ? "rand-mode:" : "constraint-mode:"}
-            + "@object";
-        expression.call_argument_names.resize(expression.operands.size());
-        expression.call_argument_directions.assign(
-            expression.operands.size(), PortDirection::Input);
-        resolve_expression(expression.operands.back(), scope);
-        Type result{
-            ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
-        retain_result_type(expression, result);
-        return result;
+        return mode_call(std::move(receiver), "@object");
       }
     }
     if (built_in_mode
@@ -599,61 +651,54 @@ void Resolver::retain_task_profile(
         const auto receiver_type = resolve_expression(receiver, scope);
         const auto identity = receiver_type
             ? class_identity(*receiver_type) : std::nullopt;
-        const auto member = expression.operands.front().text.substr(
-            selected + 1U);
-        std::string canonical;
-        SystemVerilogClassVisibility visibility{
-            SystemVerilogClassVisibility::Public};
-        const SystemVerilogClassDeclaration* owner{};
-        if (identity && expression.text == ".rand_mode") {
-          const auto property = find_property(*identity, member);
-          if (property.property
-              && (property.property->is_rand
-                  || property.property->is_randc)) {
-            canonical = property.owner->canonical_identity + "::"
-                + property.property->declaration.name;
-            visibility = property.property->visibility;
-            owner = property.owner;
-          }
-        } else if (identity) {
-          const auto constraint = find_constraint(*identity, member);
-          if (constraint.constraint) {
-            canonical = constraint.constraint->canonical_identity;
-            visibility = constraint.constraint->visibility;
-            owner = constraint.owner;
-          }
+        const auto canonical = mode_target(identity,
+            std::string_view{expression.operands.front().text}.substr(
+                selected + 1U));
+        if (!canonical) return std::nullopt;
+        return mode_call(std::move(receiver), *canonical);
+      }
+    }
+    // `a[i].rand_mode(b)` and `a[i].m.rand_mode(b)`: an element of an
+    // array of handles, or a member below one: an index node whose text
+    // carries the member path, or its member selection once resolved
+    // (IEEE 1800-2017 8.22, 18.8).
+    constexpr std::string_view selected_prefix{"@sv-select:"};
+    const auto& mode_receiver = expression.operands.front();
+    const bool indexed = mode_receiver.kind == ExpressionKind::Index
+        && mode_receiver.operands.size() == 2U
+        && (mode_receiver.text == "index"
+            || mode_receiver.text.starts_with("index."));
+    const bool selected_member = mode_receiver.kind == ExpressionKind::Call
+        && mode_receiver.text.starts_with(selected_prefix)
+        && mode_receiver.operands.size() == 1U;
+    if (built_in_mode && !implicit_member && (indexed || selected_member)) {
+      auto whole = mode_receiver;
+      const auto whole_type = resolve_expression(whole, scope);
+      if (whole_type && class_identity(*whole_type)
+          && !whole_type->systemverilog_container
+          && expression.operands.size() == 2U) {
+        return mode_call(std::move(whole), "@object");
+      }
+      std::optional<Expression> receiver;
+      std::string member;
+      if (selected_member) {
+        receiver = mode_receiver.operands.front();
+        member = mode_receiver.text.substr(selected_prefix.size());
+      } else if (const auto dot = mode_receiver.text.rfind('.');
+                 dot != std::string::npos) {
+        receiver = mode_receiver;
+        receiver->text = mode_receiver.text.substr(0, dot);
+        member = mode_receiver.text.substr(dot + 1U);
+      }
+      if (receiver) {
+        const auto receiver_type = resolve_expression(*receiver, scope);
+        const auto identity = receiver_type
+            ? class_identity(*receiver_type) : std::nullopt;
+        if (identity && !receiver_type->systemverilog_container) {
+          const auto canonical = mode_target(identity, member);
+          if (!canonical) return std::nullopt;
+          return mode_call(std::move(*receiver), *canonical);
         }
-        if (canonical.empty() || expression.operands.size() > 2U) {
-          diagnose(
-              diagnostics_, "FSIM-SV-CLASS-020",
-              "randomization mode call does not select a visible random "
-              "property or constraint block",
-              expression.span);
-          return std::nullopt;
-        }
-        if (owner != nullptr && !can_access(visibility, *owner, scope)) {
-          diagnose(
-              diagnostics_, "FSIM-SV-CLASS-021",
-              "randomization mode call cannot access a nonpublic member",
-              expression.span);
-          return std::nullopt;
-        }
-        expression.operands.front() = std::move(receiver);
-        expression.text = "@sv-method:@builtin-"
-            + std::string{expression.text == ".rand_mode"
-                  ? "rand-mode:" : "constraint-mode:"}
-            + canonical;
-        expression.call_argument_names.resize(expression.operands.size());
-        expression.call_argument_directions.assign(
-            expression.operands.size(), PortDirection::Input);
-        for (auto& operand : expression.operands | std::views::drop(1)) {
-          resolve_expression(operand, scope);
-        }
-        Type result{
-            ValueDomain::Integer, "int",
-            PackedRange{31, 0, true}, true};
-        retain_result_type(expression, result);
-        return result;
       }
     }
     // An unqualified method call in a randomize with-clause is called on
@@ -2400,6 +2445,13 @@ void Resolver::resolve_task(TaskDeclaration& task, Scope scope) {
 void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope scope) {
   scope.class_owner = &declaration;
   scope.lexical_identity = declaration.canonical_identity;
+  // A property of the class or a base hides an object of the same name in
+  // an enclosing scope, such as the compilation unit (IEEE 1800-2017 8.5,
+  // 8.13, 23.9).
+  scope.objects.hide_if([&](const std::string& name) {
+    return find_property(declaration.canonical_identity, name).property
+        != nullptr;
+  });
   // A parameter default naming another specialization's constant
   // (`parameter int v = C#(7)::b`, IEEE 1800-2017 8.25.1).
   for (auto& parameter : declaration.parameters) {

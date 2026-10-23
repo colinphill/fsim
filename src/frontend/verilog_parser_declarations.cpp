@@ -818,6 +818,70 @@ void VerilogParser::validate_non_ansi_port_selections(
   }
 }
 
+namespace {
+
+template <typename Declaration>
+[[nodiscard]] bool declares_callable(
+    const DesignUnit& unit, const Declaration& declaration) {
+  return std::ranges::any_of(unit.functions,
+             [&](const FunctionDeclaration& existing) {
+               return existing.name == declaration.name;
+             })
+      || std::ranges::any_of(unit.tasks, [&](const TaskDeclaration& existing) {
+           return existing.name == declaration.name;
+         });
+}
+
+}  // namespace
+
+void VerilogParser::declare_interface_prototype(
+    DesignUnit& unit, const Token& start, FunctionDeclaration function) {
+  if (replace_modport_prototype(unit, function)) return;
+  if (declares_callable(unit, function)) {
+    error(start, "FSIM-SV-SEM-066",
+        "duplicate module function '" + function.name + "'");
+    return;
+  }
+  unit.functions.push_back(std::move(function));
+}
+
+void VerilogParser::declare_interface_prototype(
+    DesignUnit& unit, const Token& start, TaskDeclaration task) {
+  if (replace_modport_prototype(unit, task)) return;
+  if (declares_callable(unit, task)) {
+    error(start, "FSIM-SV-SEM-073",
+        "duplicate module task '" + task.name + "'");
+    return;
+  }
+  unit.tasks.push_back(std::move(task));
+}
+
+bool VerilogParser::replace_modport_prototype(
+    DesignUnit& unit, FunctionDeclaration& function) {
+  const auto existing = std::ranges::find(
+      unit.functions, function.name, &FunctionDeclaration::name);
+  if (!modport_prototype_callables_.contains(function.name)
+      || existing == unit.functions.end()) {
+    return false;
+  }
+  modport_prototype_callables_.erase(function.name);
+  *existing = std::move(function);
+  return true;
+}
+
+bool VerilogParser::replace_modport_prototype(
+    DesignUnit& unit, TaskDeclaration& task) {
+  const auto existing =
+      std::ranges::find(unit.tasks, task.name, &TaskDeclaration::name);
+  if (!modport_prototype_callables_.contains(task.name)
+      || existing == unit.tasks.end()) {
+    return false;
+  }
+  modport_prototype_callables_.erase(task.name);
+  *existing = std::move(task);
+  return true;
+}
+
 void VerilogParser::parse_modport(
     DesignUnit& unit,
     const Token& start) {
@@ -879,10 +943,71 @@ void VerilogParser::parse_modport(
         callable_access = CallableAccess::None;
       } else if (!at(TokenKind::RightParen)) {
         std::optional<bool> explicit_function;
+        // A modport import or export may give the subroutine's prototype
+        // (`export task send(input int v)`, IEEE 1800-2017 25.7.2); one the
+        // interface does not declare declares it.
+        std::optional<Token> prototype_name;
         if (callable_access != CallableAccess::None
             && (keyword("function") || keyword("task"))) {
           explicit_function = keyword("function");
-          advance();
+          const auto keyword_token = advance();
+          std::size_t open = index_;
+          while (open < tokens_.size()
+              && tokens_[open].kind != TokenKind::LeftParen
+              && tokens_[open].kind != TokenKind::Comma
+              && tokens_[open].kind != TokenKind::RightParen
+              && tokens_[open].kind != TokenKind::EndOfFile) {
+            ++open;
+          }
+          if (open < tokens_.size() && open > index_
+              && tokens_[open].kind == TokenKind::LeftParen
+              && tokens_[open - 1U].kind == TokenKind::Identifier) {
+            std::size_t close = open;
+            for (std::size_t depth{}; close < tokens_.size(); ++close) {
+              if (tokens_[close].kind == TokenKind::LeftParen) {
+                ++depth;
+              } else if (tokens_[close].kind == TokenKind::RightParen
+                  && --depth == 0U) {
+                break;
+              }
+            }
+            if (close < tokens_.size()) {
+              prototype_name = tokens_[open - 1U];
+              std::vector<Token> header(
+                  tokens_.begin() + static_cast<std::ptrdiff_t>(index_),
+                  tokens_.begin() + static_cast<std::ptrdiff_t>(close + 1U));
+              auto terminator = synthetic_tokens(";", keyword_token.span);
+              header.insert(header.end(), terminator.begin(), terminator.end());
+              Token end;
+              end.kind = TokenKind::EndOfFile;
+              end.span = keyword_token.span;
+              header.push_back(std::move(end));
+              auto saved_tokens = std::move(tokens_);
+              const auto saved_index = close + 1U;
+              tokens_ = std::move(header);
+              index_ = 0;
+              std::optional<FunctionDeclaration> function;
+              std::optional<TaskDeclaration> task;
+              if (*explicit_function) {
+                function = parse_function(keyword_token, true);
+              } else {
+                task = parse_task(keyword_token, true);
+              }
+              tokens_ = std::move(saved_tokens);
+              index_ = saved_index;
+              const bool declared = function
+                  ? declares_callable(unit, *function)
+                  : declares_callable(unit, *task);
+              if (!declared) {
+                modport_prototype_callables_.insert(prototype_name->text);
+                if (function) {
+                  unit.functions.push_back(std::move(*function));
+                } else {
+                  unit.tasks.push_back(std::move(*task));
+                }
+              }
+            }
+          }
         }
         // A modport expression `.alias(signal)` names an interface signal
         // by a port-visible alias (IEEE 1800-2017 25.5.4).
@@ -900,6 +1025,7 @@ void VerilogParser::parse_modport(
         // net as wide as the select, driven by it.
         std::optional<Expression> selected_signal;
         auto member = [&] {
+          if (prototype_name) return *prototype_name;
           if (!alias_token || direction != PortDirection::Input
               || !at(TokenKind::Identifier)
               || !at(TokenKind::LeftBracket, 1U)
@@ -2198,8 +2324,10 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   // A parameter of a block, function or task is a local parameter (IEEE
-  // 1800-2017 6.20.1); it is kept as a local initialized by its value.
-  const bool local_parameter = match_keyword("parameter") || match_keyword("localparam");
+  // 1800-2017 6.20.1); it is kept as a local initialized by its value. One
+  // declared with `parameter` can still be redefined by a defparam (23.10.1).
+  const bool overridable_parameter = match_keyword("parameter");
+  const bool local_parameter = overridable_parameter || match_keyword("localparam");
   // block_item_declaration ::= [const] [var] [lifetime] data_type_or_implicit
   // (IEEE 1800-2017 A.2.8, 6.8, 6.20.6). A constant variable is never
   // written by legal code, so it is an ordinary initialized variable here.
@@ -2308,6 +2436,8 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     // (IEEE 1800-2017 6.20.1), usable in its declarations' ranges.
     block.declarations.back().systemverilog_local_parameter
         = local_parameter;
+    block.declarations.back().systemverilog_parameter
+        = overridable_parameter;
     block.declarations.back().systemverilog_automatic = automatic
         || (!static_lifetime && unit_default_automatic_
             && !in_task_ && current_function_name_.empty());
@@ -2513,10 +2643,187 @@ void VerilogParser::check_verilog_primitive_net_terminal(const Expression& termi
   }
 }
 
+GenerateRegion VerilogParser::generate_gate_array(const Token& instance_start,
+    const std::string& instance_name,
+    const std::pair<std::size_t, std::size_t> header,
+    const std::array<std::size_t, 4U> bounds,
+    const std::vector<const Expression*>& terminals,
+    const std::vector<std::pair<std::size_t, std::size_t>>& terminal_tokens,
+    const std::size_t outputs,
+    const std::vector<SignalDeclaration>& signals,
+    const std::vector<SignalDeclaration>& ports) {
+  // `bufif1 b[W-1:0] (y, a, e);` with bounds known only at elaboration is
+  // the loop generate
+  //   for (genvar g = L; L >= R ? g >= R : g <= R; g = L >= R ? g-1 : g+1)
+  //   begin : b localparam int o = L >= R ? L - g : g - L; <gate> end
+  // whose gate takes bit o from the left of each vector terminal or input
+  // expression, operand o of each concatenation, and a scalar whole (IEEE
+  // 1800-2017 28.3.6).
+  std::vector<Token> out;
+  const auto emit = [&](const std::string_view text) {
+    auto tokens = synthetic_tokens(text, instance_start.span);
+    out.insert(out.end(), tokens.begin(), tokens.end());
+  };
+  const auto emit_tokens = [&](const std::size_t begin, const std::size_t end) {
+    out.insert(out.end(), tokens_.begin() + static_cast<std::ptrdiff_t>(begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(end));
+  };
+  const auto emit_bound = [&](const std::size_t which) {
+    emit("(");
+    emit_tokens(bounds[which * 2U], bounds[which * 2U + 1U]);
+    emit(")");
+  };
+  const auto descending = [&] {
+    emit("(");
+    emit_bound(0U);
+    emit(">=");
+    emit_bound(1U);
+    emit(")");
+  };
+  const auto suffix = std::to_string(generated_statement_counter_++);
+  const auto variable = "__fsim_ga" + suffix;
+  const auto ordinal = "__fsim_gao" + suffix;
+  // A concatenation of scalar operands: its operands' token ranges.
+  std::vector<std::vector<std::pair<std::size_t, std::size_t>>> operands(
+      terminals.size());
+  std::optional<std::size_t> count;
+  for (std::size_t index = 0; index < terminals.size(); ++index) {
+    const auto [begin, end] = terminal_tokens[index];
+    if (terminals[index]->kind != ExpressionKind::Concatenation
+        || end - begin < 2U || tokens_[begin].kind != TokenKind::LeftBrace
+        || tokens_[end - 1U].kind != TokenKind::RightBrace) {
+      continue;
+    }
+    std::size_t depth{};
+    auto operand_begin = begin + 1U;
+    for (auto position = begin + 1U; position < end - 1U; ++position) {
+      const auto kind = tokens_[position].kind;
+      if (kind == TokenKind::LeftParen || kind == TokenKind::LeftBracket
+          || kind == TokenKind::LeftBrace) {
+        ++depth;
+      } else if ((kind == TokenKind::RightParen
+                     || kind == TokenKind::RightBracket
+                     || kind == TokenKind::RightBrace)
+          && depth != 0U) {
+        --depth;
+      } else if (kind == TokenKind::Comma && depth == 0U) {
+        operands[index].emplace_back(operand_begin, position);
+        operand_begin = position + 1U;
+      }
+    }
+    operands[index].emplace_back(operand_begin, end - 1U);
+    if (count && *count != operands[index].size()) {
+      error(instance_start, "FSIM-SV-SEM-114",
+          "a gate-array terminal must be scalar or match the instance count");
+    }
+    count = operands[index].size();
+  }
+  const auto declaration_of = [&](const Expression& terminal)
+      -> const SignalDeclaration* {
+    if (terminal.kind != ExpressionKind::Identifier) return nullptr;
+    for (const auto* declarations : {&signals, &ports}) {
+      const auto found = std::ranges::find(
+          *declarations, terminal.text, &SignalDeclaration::name);
+      if (found != declarations->end()) return &*found;
+    }
+    return nullptr;
+  };
+  const auto emit_gate = [&](const std::size_t arm) {
+    emit_tokens(header.first, header.second);
+    emit("(");
+    for (std::size_t index = 0; index < terminals.size(); ++index) {
+      if (index != 0U) emit(",");
+      const auto [begin, end] = terminal_tokens[index];
+      if (!operands[index].empty()) {
+        const auto [operand_begin, operand_end] = operands[index][arm];
+        emit_tokens(operand_begin, operand_end);
+        continue;
+      }
+      const auto* declaration = declaration_of(*terminals[index]);
+      const auto width = declaration ? declaration->type.width()
+                                     : decltype(declaration->type.width()){};
+      if (declaration != nullptr && width && *width == 1U) {
+        emit_tokens(begin, end);
+        continue;
+      }
+      if (declaration == nullptr && index < outputs) {
+        // An output is a scalar net or bit-select.
+        emit_tokens(begin, end);
+        continue;
+      }
+      if (declaration == nullptr || (!width && index >= outputs)) {
+        // An input expression as wide as the array gives each instance one
+        // bit, its leftmost bit to the leftmost instance; one of width 1
+        // is shared by every instance.
+        emit("1'((");
+        emit_tokens(begin, end);
+        emit(") >> (($bits(");
+        emit_tokens(begin, end);
+        emit(") == 1) ? 0 : $bits(");
+        emit_tokens(begin, end);
+        emit(") - 1 - " + ordinal + "))");
+        continue;
+      }
+      const auto& name = terminals[index]->text;
+      emit(name + "[($left(" + name + ") >= $right(" + name + ")) ? $left("
+          + name + ") - " + ordinal + " : $left(" + name + ") + " + ordinal
+          + "]");
+    }
+    emit(");");
+  };
+  emit("( genvar " + variable + " = ");
+  emit_bound(0U);
+  emit(";");
+  descending();
+  emit("? " + variable + " >=");
+  emit_bound(1U);
+  emit(": " + variable + " <=");
+  emit_bound(1U);
+  emit("; " + variable + " = ");
+  descending();
+  emit("? " + variable + " - 1 : " + variable + " + 1 ) begin : "
+      + instance_name + " localparam int " + ordinal + " = ");
+  descending();
+  emit("?");
+  emit_bound(0U);
+  emit("- " + variable + " : " + variable + " - ");
+  emit_bound(0U);
+  emit(";");
+  if (count) {
+    emit("case (" + ordinal + ")");
+    for (std::size_t arm = 0; arm < *count; ++arm) {
+      emit(std::to_string(arm) + ": begin");
+      emit_gate(arm);
+      emit("end");
+    }
+    emit("endcase");
+  } else {
+    emit_gate(0U);
+  }
+  emit("end");
+  Token end;
+  end.kind = TokenKind::EndOfFile;
+  end.span = instance_start.span;
+  out.push_back(std::move(end));
+  auto saved_tokens = std::move(tokens_);
+  const auto saved_index = index_;
+  const auto saved_synthetic_stream = synthetic_token_stream_;
+  tokens_ = std::move(out);
+  index_ = 0;
+  synthetic_token_stream_ = true;
+  auto region = parse_iterative_generate(instance_start);
+  tokens_ = std::move(saved_tokens);
+  index_ = saved_index;
+  synthetic_token_stream_ = saved_synthetic_stream;
+  return region;
+}
+
 void VerilogParser::parse_gate_primitive(
     std::vector<Statement>& statements,
     const std::vector<SignalDeclaration>& signals,
-    const std::vector<SignalDeclaration>& ports) {
+    const std::vector<SignalDeclaration>& ports,
+    std::vector<GenerateRegion>* const regions) {
+  const auto gate_begin = index_;
   const auto start = advance();
   const auto operation = detail::ascii_lower(start.text);
   if (program_generate_context_) {
@@ -2533,6 +2840,9 @@ void VerilogParser::parse_gate_primitive(
         || operation == "notif1";
     delay = parse_verilog_delay(previous(), tristate ? 3 : 2);
   }
+  // The primitive, drive strength and delay, repeated for each element of
+  // a generated gate array.
+  const auto header_end = index_;
 
   const bool unary = operation == "buf" || operation == "not";
   const bool tristate = operation == "bufif0"
@@ -2547,14 +2857,20 @@ void VerilogParser::parse_gate_primitive(
       instance_name = advance().text;
     }
     std::vector<std::int64_t> instance_indices;
+    // The token ranges of bounds that are not literals.
+    std::optional<std::array<std::size_t, 4U>> generated_bounds;
     if (match(TokenKind::LeftBracket)) {
       const auto range_start = previous();
+      const auto left_begin = index_;
       const auto left = parse_expression();
+      const auto left_end = index_;
       expect(
           TokenKind::Colon,
           "':' in gate-instance array range",
           "FSIM-SV-PARSE-210");
+      const auto right_begin = index_;
       const auto right = parse_expression();
+      const auto right_end = index_;
       expect(
           TokenKind::RightBracket,
           "']' after gate-instance array range",
@@ -2588,17 +2904,41 @@ void VerilogParser::parse_gate_primitive(
           };
       const auto left_value = literal_value(literal_value, left);
       const auto right_value = literal_value(literal_value, right);
+      // A net, variable or port in a bound, other than as the argument of
+      // a system function such as $left, is not constant (IEEE 1800-2017
+      // 28.3.5).
+      const auto names_object =
+          [&](auto& self, const Expression& expression) -> bool {
+            if (expression.kind == ExpressionKind::Call
+                && expression.text.starts_with('$')) {
+              return false;
+            }
+            if (expression.kind == ExpressionKind::Identifier) {
+              return std::ranges::find(signals, expression.text,
+                         &SignalDeclaration::name) != signals.end()
+                  || std::ranges::find(ports, expression.text,
+                         &SignalDeclaration::name) != ports.end();
+            }
+            return std::ranges::any_of(expression.operands,
+                [&](const Expression& operand) {
+                  return self(self, operand);
+                });
+          };
       if (instance_name.empty()) {
         error(
             range_start,
             "FSIM-SV-SEM-111",
             "a gate-instance array requires an instance name");
-      } else if (!left_value || !right_value) {
+      } else if ((!left_value || !right_value)
+          && (regions == nullptr || names_object(names_object, left)
+              || names_object(names_object, right))) {
         error(
             range_start,
             "FSIM-SV-SEM-112",
-            "gate-instance array bounds must be decimal locally static "
-            "integers in this bounded slice");
+            "gate-instance array bounds must be constant expressions");
+      } else if (!left_value || !right_value) {
+        generated_bounds = std::array<std::size_t, 4U> {
+            left_begin, left_end, right_begin, right_end };
       } else {
         const auto distance
             = support::index_distance(*left_value, *right_value);
@@ -2632,10 +2972,15 @@ void VerilogParser::parse_gate_primitive(
       return;
     }
     const auto saved_context = std::exchange(implicit_net_context_, true);
+    std::vector<std::pair<std::size_t, std::size_t>> terminal_tokens;
+    const auto target_begin = index_;
     auto target = parse_lvalue();
+    terminal_tokens.emplace_back(target_begin, index_);
     std::vector<Expression> inputs;
     while (match(TokenKind::Comma)) {
+      const auto input_begin = index_;
       inputs.push_back(parse_expression());
+      terminal_tokens.emplace_back(input_begin, index_);
     }
     implicit_net_context_ = saved_context;
     expect(
@@ -2664,6 +3009,15 @@ void VerilogParser::parse_gate_primitive(
       for (std::size_t index = 0; index + 1 < inputs.size(); ++index) {
         check_verilog_primitive_net_terminal(inputs[index], signals, instance_start);
       }
+    }
+    if (generated_bounds) {
+      std::vector<const Expression*> terminals{&target};
+      for (const auto& input : inputs) terminals.push_back(&input);
+      regions->push_back(generate_gate_array(instance_start, instance_name,
+          {gate_begin, header_end}, *generated_bounds, terminals,
+          terminal_tokens, unary ? terminals.size() - 1U : 1U, signals,
+          ports));
+      continue;
     }
     std::vector<Expression> targets;
     targets.push_back(std::move(target));
@@ -2704,6 +3058,14 @@ void VerilogParser::parse_gate_primitive(
         [&](Expression terminal,
             const std::size_t ordinal,
             const std::int64_t instance_index) {
+          // A concatenation of one operand per instance gives each
+          // instance its operand, the leftmost to the leftmost instance
+          // (IEEE 1800-2017 28.3.6).
+          if (terminal.kind == ExpressionKind::Concatenation
+              && instance_indices.size() > 1U
+              && terminal.operands.size() == instance_indices.size()) {
+            return std::move(terminal.operands[ordinal]);
+          }
           auto terminal_index = instance_index;
           const SignalDeclaration* declaration = nullptr;
           if (terminal.kind == ExpressionKind::Identifier) {

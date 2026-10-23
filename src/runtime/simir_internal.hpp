@@ -5517,4 +5517,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::string& message) const;
 };
 
+/// The constraints with each calling-scope array they name replaced by its
+/// elements, read from the container register it names; no value when no
+/// constraint names one (IEEE 1800-2017 18.7).
+[[nodiscard]] std::optional<std::vector<SystemVerilogConstraintTemplate>>
+bind_inline_constraint_containers(
+    std::span<const SystemVerilogConstraintTemplate> constraints,
+    const std::function<ContainerValue(ContainerRegisterId)>& read);
+
 } // namespace fsim::runtime::simir

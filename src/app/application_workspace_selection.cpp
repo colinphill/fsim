@@ -445,6 +445,12 @@ namespace {
             const auto library = owner ? normalized_library(owner->identity->library) : "work";
             const auto language = owner && owner->vhdl ? std::string_view { "vhdl" }
                 : std::string_view { "systemverilog" };
+            // VHDL `work` denotes the library of the unit naming it (IEEE
+            // 1076-2008 13.2).
+            const std::string referenced_library = owner && owner->vhdl
+                    && workspace_name_equal(reference.library, "work", "vhdl")
+                ? std::string { library }
+                : std::string { reference.library };
             if (owner && owner->vhdl && !owner->vhdl->standard_package_revision.empty()) {
                 return;
             }
@@ -462,7 +468,7 @@ namespace {
                 || reference.kind == Kind::context || reference.kind == Kind::class_declaration) {
                 for (std::size_t index = 0; index < records_.size(); ++index) {
                     if (!workspace_name_equal(location(index).name,
-                            reference.library, language)) {
+                            referenced_library, language)) {
                         continue;
                     }
                     for (const auto& owned : artifact(index).units) {
@@ -499,14 +505,14 @@ namespace {
                 }
                 return;
             }
-            Target target { { }, reference.library, reference.name, { } };
+            Target target { { }, referenced_library, reference.name, { } };
             if (reference.kind == Kind::architecture) {
                 if (target_unit && target_unit->vhdl
                     && target_unit->vhdl->kind
                         == semantic::vhdl::UnitKind::architecture) {
                     const auto& architecture = *target_unit->vhdl;
                     select_architectures(
-                        reference.library, architecture.primary_name,
+                        referenced_library, architecture.primary_name,
                         architecture.name,
                         architecture.extended_primary_name
                             ? library::VhdlIdentifierForm::extended
@@ -529,6 +535,11 @@ namespace {
                     target.name_form = target_unit->vhdl->extended_name
                         ? library::VhdlIdentifierForm::extended
                         : library::VhdlIdentifierForm::basic;
+                } else if (owner && owner->vhdl) {
+                    // An entity aspect left unresolved at analysis (`work`
+                    // of a named library) is found by its spelling.
+                    target.name_form = vhdl_identifier_form(
+                        support::is_extended_vhdl_identifier(reference.name));
                 }
                 const auto paired = std::ranges::find_if(design.references(), [&](const auto& candidate) {
                     if (candidate.kind != Kind::architecture

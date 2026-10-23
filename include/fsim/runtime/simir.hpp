@@ -589,8 +589,8 @@ struct ContainerBitstream {
     ContainerRegisterId bits { };
     RegisterId value { };
     ContainerRegisterId container { };
-    // The slice size of `reverse`, or the value width of to_value and
-    // take_value.
+    // The slice size of `reverse`, the value width of to_value and
+    // take_value, or the bits take_container leaves for later targets.
     std::uint32_t slice { };
 };
 

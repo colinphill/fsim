@@ -969,6 +969,29 @@ using namespace runtime::simir;
                         break;
                     }
                 } else if constexpr (
+                    std::is_same_v<OperationType, ContainerBitstream>) {
+                    // Interpreter-only (recorded below), like VhdlShaped.
+                    using runtime::simir::ContainerBitstreamOperation;
+                    switch (operation.operation) {
+                    case ContainerBitstreamOperation::append_value:
+                        record_use(operation.value, index);
+                        break;
+                    case ContainerBitstreamOperation::to_value:
+                    case ContainerBitstreamOperation::take_value:
+                        record_definition(operation.value, index);
+                        if (operation.slice != 0U) {
+                            constrain_width(
+                                operation.value, operation.slice, index);
+                        }
+                        break;
+                    case ContainerBitstreamOperation::clear:
+                    case ContainerBitstreamOperation::append_container:
+                    case ContainerBitstreamOperation::reverse:
+                    case ContainerBitstreamOperation::to_container:
+                    case ContainerBitstreamOperation::take_container:
+                        break;
+                    }
+                } else if constexpr (
                     std::is_same_v<OperationType, DynamicEvent>) {
                     using runtime::simir::DynamicEventOperation;
                     if (operation.operation != DynamicEventOperation::create) {
@@ -1146,6 +1169,23 @@ using namespace runtime::simir;
                     validate_string_register(
                         operation.destination, index, "destination");
                     (void)referenced_signal_width(operation.signal, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType,
+                        runtime::simir::RuntimeStringFormat>) {
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.destination, index, "destination");
+                    validate_string_register(operation.format, index, "format");
+                    for (const auto& argument : operation.arguments) {
+                        if (argument.string) {
+                            validate_string_register(
+                                argument.value, index, "argument");
+                        } else {
+                            record_use(argument.value, index);
+                            constrain_width(
+                                argument.value, argument.width, index);
+                        }
+                    }
                 } else if constexpr (
                     std::is_same_v<OperationType,
                         VhdlEnvironmentGetenv>) {

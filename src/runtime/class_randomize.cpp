@@ -756,7 +756,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     for (std::size_t c = 0; c < containers.size(); ++c) {
       const auto& container = containers[c];
       if (container.resizable && randomized_container[c]
-          && container.element_paths.empty()) {
+          && (container.element_paths.empty()
+              || !container.member_paths.empty())) {
         const auto index = synthetic(container.node,
             container.name + ".size()",
             count_property(container.values.size(), true), true);
@@ -1235,12 +1236,55 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     return {result, std::move(selected), std::move(solved.values)};
   };
 
+  // A resizable array of structures takes its solved size: its elements
+  // are rebuilt from the call's starting elements, a new element taking
+  // its members' initial values (IEEE 1800-2017 7.5.1, 18.4).
+  struct StructureElements {
+    std::vector<std::string> paths;
+    std::vector<PackedLogic4> values;
+    std::vector<SystemVerilogClassPropertyValue> profiles;
+  };
+  std::vector<StructureElements> structure_elements(containers.size());
+  for (std::size_t c = 0; c < containers.size(); ++c) {
+    if (!containers[c].member_paths.empty()) {
+      structure_elements[c] = {containers[c].element_paths,
+          containers[c].values, containers[c].element_profiles};
+    }
+  }
+  const auto resize_structures = [&](const std::size_t c,
+                                     const std::size_t count) {
+    auto& container = containers[c];
+    const auto& start = structure_elements[c];
+    const auto members = container.member_paths.size();
+    container.element_paths.clear();
+    container.values.clear();
+    container.element_profiles.clear();
+    for (std::size_t index = 0; index < count; ++index) {
+      for (std::size_t member = 0; member < members; ++member) {
+        const auto at = index * members + member;
+        container.element_paths.push_back("[" + std::to_string(index) + "]"
+            + container.member_paths[member]);
+        if (at < start.values.size()) {
+          container.values.push_back(start.values[at]);
+          container.element_profiles.push_back(start.profiles[at]);
+        } else {
+          container.values.push_back(
+              container.member_profiles[member].packed);
+          container.element_profiles.push_back(
+              container.member_profiles[member]);
+        }
+      }
+    }
+    if (!container.shapes.empty()) container.shapes.front().size = count;
+  };
+
   try {
     const bool sized = std::ranges::any_of(
         std::views::iota(std::size_t{}, containers.size()),
         [&](const std::size_t c) {
           return containers[c].resizable && randomized_container[c]
-              && containers[c].element_paths.empty();
+              && (containers[c].element_paths.empty()
+                  || !containers[c].member_paths.empty());
         }) || std::ranges::any_of(handle_containers, sized_handles);
     std::vector<std::size_t> sizes(containers.size());
     for (std::size_t c = 0; c < containers.size(); ++c) {
@@ -1264,7 +1308,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
         }
         for (std::size_t c = 0; c < containers.size(); ++c) {
           if (!containers[c].resizable || !randomized_container[c]
-              || !containers[c].element_paths.empty()) {
+              || (!containers[c].element_paths.empty()
+                  && containers[c].member_paths.empty())) {
             continue;
           }
           auto& node = nodes[containers[c].node];
@@ -1281,6 +1326,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
           if (chosen == sizing.selected.end()) continue;
           const auto& value = sizing.values.at(chosen->property.variable);
           sizes[c] = static_cast<std::size_t>(value.low_word().aval);
+          if (!containers[c].member_paths.empty()) {
+            resize_structures(c, sizes[c]);
+            sizes[c] = containers[c].values.size();
+          }
         }
         for (std::size_t h = 0; h < handle_containers.size(); ++h) {
           if (!sized_handles(handle_containers[h])) continue;

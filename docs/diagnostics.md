@@ -279,7 +279,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VHDL-PROTECT-003` | error | A protected decryption envelope requires a key provider that this build does not supply. |
 | `FSIM-VHDL-PROTECT-004` | error | A protected source or decryption envelope is unterminated. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
-| `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
+| `FSIM-FE-PP-0001` | error | Include directories were supplied for a VHDL source set; they apply only to Verilog/SystemVerilog or SystemC. A VHDL definition sets a conditional analysis identifier (IEEE 1076-2019 24.2). |
 
 ## Standard Delay Format frontend
 
@@ -1058,7 +1058,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-041` | error | A `` `line`` logical file name is not a string literal. |
 | `FSIM-SV-PP-042` | error | A `` `line`` logical file name contains an invalid escape. |
 | `FSIM-SV-PP-043` | error | A `` `line`` level is not `0`, `1`, or `2`. |
-| `FSIM-SV-PP-044` | error | A macro is redefined with a different parameter list, defaults, or replacement. |
+| `FSIM-SV-PP-044` | warning | A macro is redefined with a different parameter list, defaults, or replacement; the latest definition prevails. |
 | `FSIM-SV-PP-045` | error | Reserved legacy diagnostic; textual include semantics no longer emit an include-end conditional restriction. |
 | `FSIM-SV-PP-046` | error | Reserved legacy diagnostic; textual include semantics no longer emit a cross-file conditional restriction. |
 | `FSIM-SV-PP-048` | error | `` `nounconnected_drive`` appears without active `` `unconnected_drive`` state. |
@@ -1511,7 +1511,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-109` | error | A procedural fork closing label has no opening label or does not match it. |
 | `FSIM-SV-SEM-110` | error | A net-declaration delay is attached to a variable rather than a `wire` net. |
 | `FSIM-SV-SEM-111` | error | A static gate-instance array has no instance name. |
-| `FSIM-SV-SEM-112` | error | A static gate-instance array bound is not a decimal locally static integer in the bounded slice. |
+| `FSIM-SV-SEM-112` | error | A gate-instance array bound names a net, variable or port, so it is not a constant expression. |
 | `FSIM-SV-SEM-113` | error | Materializing a static gate-instance array would exceed the frontend owning-storage budget. |
 | `FSIM-SV-SEM-114` | error | A gate-array terminal is neither scalar nor equal in width to the instance count. |
 | `FSIM-SV-SEM-115` | error | A modport declaration appears outside a SystemVerilog interface. |
@@ -1760,7 +1760,7 @@ scheduler.
 | `FSIM-ELAB-CLOCK-007` | error | A modport clocking member is absent from its retained interface HIR. |
 | `FSIM-ELAB-CLOCK-008` | error | A clocking skew is not a known nonnegative elaboration-time constant after parameter and constant-function evaluation. |
 | `FSIM-ELAB-CLOCK-009` | error | A folded clocking skew exceeds the 64-bit simulation-time range. |
-| `FSIM-ELAB-SVRAND-001` | error | `std::randomize` has no arguments or appears outside SystemVerilog execution. |
+| `FSIM-ELAB-SVRAND-001` | error | `std::randomize` appears outside SystemVerilog execution. |
 | `FSIM-ELAB-SVRAND-002` | error | A `std::randomize` argument is not a writable local identifier. |
 | `FSIM-ELAB-SVRAND-003` | error | A `std::randomize` argument is not a supported packed scalar local. |
 | `FSIM-ELAB-SVRAND-004` | error | A packed `std::randomize` local has no nonempty width representable by SimIR metadata. |
@@ -2818,7 +2818,7 @@ scheduler.
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
-| `FSIM-ELAB-GENERIC-011` | error | A top-level generic override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for the generic's type. |
+| `FSIM-ELAB-GENERIC-011` | error | A top-level generic or parameter override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for a VHDL generic, or an integer or quoted string for a SystemVerilog parameter. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

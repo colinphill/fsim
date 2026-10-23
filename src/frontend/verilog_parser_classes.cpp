@@ -218,6 +218,7 @@ bool VerilogParser::parse_class_property(
       // 1800-2017 13.4.5).
       if (type.systemverilog_container) {
         unit_container_names_.insert(name.text);
+        class_foreach_types_.insert_or_assign(name.text, type);
       }
       if (type.systemverilog_container
           && type.systemverilog_container->associative_index_type) {
@@ -810,7 +811,8 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     ClassAssociativeScope(const ClassAssociativeScope&) = delete;
     ClassAssociativeScope& operator=(const ClassAssociativeScope&) = delete;
     ~ClassAssociativeScope() { types = std::move(saved); }
-  } class_associative_scope { class_associative_index_types_ };
+  } class_associative_scope { class_associative_index_types_ },
+      class_foreach_scope { class_foreach_types_ };
   declaration.standard_revision = standard_revision_;
   declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.enclosing_scope = std::move(enclosing_scope);

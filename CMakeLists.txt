@@ -557,7 +557,11 @@ add_library(fsim_semantic ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
   src/semantic/systemverilog_type_descriptor.cpp
   src/semantic/systemverilog_hir.cpp
   src/semantic/sva_plan.cpp
-  src/semantic/vhdl_hir.cpp)
+  src/semantic/vhdl_hir.cpp
+  # The runtime parses run-time formats too (IEEE 1800-2017 21.3.3,
+  # 21.3.4.3).
+  src/frontend/input_format.cpp
+  src/frontend/output_format.cpp)
 add_library(fsim::semantic ALIAS fsim_semantic)
 fsim_configure_subsystem_library(fsim_semantic)
 target_link_libraries(fsim_semantic PRIVATE fsim_boost_pfr_headers)
@@ -565,8 +569,6 @@ target_link_libraries(fsim_semantic PRIVATE fsim_boost_pfr_headers)
 set(
   FSIM_FRONTEND_SOURCES
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
-  "${PROJECT_SOURCE_DIR}/src/frontend/input_format.cpp"
-  "${PROJECT_SOURCE_DIR}/src/frontend/output_format.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/parser_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution_core.cpp"

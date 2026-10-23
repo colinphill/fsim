@@ -3503,6 +3503,9 @@ Lowerer::hir_inline_constraints(
                 return self(self, operand, depth + 1U);
             });
     };
+    // The array an index selects from; an object's randomize reads such an
+    // element of a calling-scope array as a value (18.7).
+    std::optional<semantic::ExpressionId> indexed_array;
     std::function<std::optional<Template>(semantic::ExpressionId)> lower;
     lower = [&](const semantic::ExpressionId id) -> std::optional<Template> {
         const auto record = specialized_hir_unit_->find_expression(id);
@@ -3545,7 +3548,35 @@ Lowerer::hir_inline_constraints(
                                = hir_container_object_binding(id);
                            return binding && binding->type != nullptr;
                        }());
-            if (array_value) {
+            // An array of the randomized object itself is solved with it.
+            const auto own_array = [&] {
+                if (!randomized_object
+                    || source.kind != semantic::sv::ExpressionKind::call
+                    || source.operands.empty()) {
+                    return false;
+                }
+                auto current = source.operands.front();
+                for (std::size_t depth { }; depth < 64U; ++depth) {
+                    if (same_lvalue(same_lvalue, current, *randomized_object,
+                            0U)) {
+                        return true;
+                    }
+                    const auto next = specialized_hir_unit_->find_expression(
+                        current);
+                    if (!next || next->systemverilog == nullptr
+                        || next->systemverilog->operands.empty()
+                        || (next->systemverilog->kind
+                                != semantic::sv::ExpressionKind::class_property
+                            && next->systemverilog->kind
+                                != semantic::sv::ExpressionKind::index)) {
+                        return false;
+                    }
+                    current = next->systemverilog->operands.front();
+                }
+                return true;
+            };
+            if (array_value && !own_array()
+                && (!randomized_object || indexed_array != id)) {
                 auto slot = std::ranges::find_if(*runtime_containers,
                     [&](const semantic::ExpressionId known) {
                         return same_lvalue(same_lvalue, id, known, 0U);
@@ -3554,10 +3585,24 @@ Lowerer::hir_inline_constraints(
                     runtime_containers->push_back(id);
                     slot = std::prev(runtime_containers->end());
                 }
+                const auto position = std::to_string(
+                    std::distance(runtime_containers->begin(), slot));
                 output.kind = TemplateKind::Name;
-                output.text = "@std-randomize-container:"
-                    + std::to_string(
-                        std::distance(runtime_containers->begin(), slot));
+                if (!randomized_object) {
+                    output.text = "@std-randomize-container:" + position;
+                    return output;
+                }
+                // An object's randomize reads the array's elements at the
+                // call; a plain name keeps its spelling, since a member of
+                // the randomized object takes precedence (18.7).
+                Template elements;
+                elements.kind = TemplateKind::Name;
+                elements.text = "@inline-container:" + position;
+                if (source.kind != semantic::sv::ExpressionKind::name
+                    || (member_names && !member_names->contains(source.text))) {
+                    return elements;
+                }
+                output.operands.push_back(std::move(elements));
                 return output;
             }
         }
@@ -4083,6 +4128,10 @@ Lowerer::hir_inline_constraints(
             }
         }
         for (const auto operand : source.operands) {
+            if (output.kind == TemplateKind::Index
+                && operand == source.operands.front()) {
+                indexed_array = operand;
+            }
             auto lowered = lower(operand);
             if (!lowered) {
                 foreach_iterators.resize(enclosing_iterators);
@@ -4852,7 +4901,11 @@ Lowerer::hir_class_task_profile(
                         == semantic::sv::ClassMethodKind::function
                     && !hir_class_function_interpreted(
                         selected->declaration)))
-            || ((selected->pure || !selected->defined) && !native_uvm)) {
+            // A call through a handle dispatches to the object's override,
+            // so a pure virtual prototype supplies only the signature
+            // (IEEE 1800-2017 8.21).
+            || ((selected->pure || !selected->defined) && !native_uvm
+                && !(instance_call && selected->pure))) {
             return std::nullopt;
         }
         selected_declaration = selected->declaration;
@@ -4931,11 +4984,82 @@ Lowerer::hir_class_task_profile(
                 selected_declaration = function_instance->first;
                 interface_receiver = function_instance->second;
                 instance_function = true;
+            } else if (const auto modport_instance
+                = hir_interface_instance_through_modport(receiver)) {
+                // `bif.consumer.send(...)`: a task of an interface instance
+                // through one of its modports (25.5, 25.7).
+                for (const bool function : { false, true }) {
+                    if (const auto callable = hir_instance_callable(
+                            *modport_instance, identity.substr(separator + 1U),
+                            function)) {
+                        selected_declaration = callable->first;
+                        interface_receiver = callable->second;
+                        instance_function = function;
+                        break;
+                    }
+                }
+            }
+        }
+        // A simple name declared neither here nor in a visible scope names
+        // a task or function of the nearest enclosing instance whose module
+        // declares it (IEEE 1800-2023 23.8). A class method is outside the
+        // instance hierarchy.
+        const bool class_method = hir_class_receiver_register_
+            || (active_hir_callable_
+                && *active_hir_callable_ < hir_callable_frames_.size()
+                && (hir_callable_frames_[*active_hir_callable_].class_receiver
+                    || hir_callable_frames_[*active_hir_callable_]
+                           .class_specialization));
+        if (!selected_declaration && !class_method
+            && identity.find_first_of(".:$") == std::string_view::npos) {
+            const auto& units
+                = specialized_hir_unit_->design().systemverilog_hir.units();
+            for (auto ancestor = hierarchy_; !selected_declaration;) {
+                const auto dot = ancestor.rfind('.');
+                if (dot == std::string::npos) {
+                    break;
+                }
+                ancestor.resize(dot);
+                const auto found = std::ranges::find(design_.specializations_,
+                    ancestor, &SpecializationInfo::instance);
+                if (found == design_.specializations_.end()
+                    || !found->source_unit) {
+                    continue;
+                }
+                const auto unit = std::ranges::find(units,
+                    *found->source_unit, &semantic::sv::Unit::id);
+                if (unit == units.end()) {
+                    continue;
+                }
+                for (const bool function : { false, true }) {
+                    if (const auto enclosing = hir_instance_callable(
+                            unit->name, identity, function)) {
+                        selected_declaration = enclosing->first;
+                        interface_receiver = enclosing->second;
+                        instance_function = function;
+                        break;
+                    }
+                }
             }
         }
     }
     if (!selected_declaration) {
         return std::nullopt;
+    }
+    // `ifc.send(...)` of a subroutine a modport exports runs the exporting
+    // instance's definition (IEEE 1800-2017 25.7.3).
+    if (const auto separator = identity.rfind('.');
+        !class_call && separator != std::string_view::npos
+        && separator != 0U) {
+        if (const auto exported = hir_exported_interface_callable(
+                identity.substr(0U, separator), *selected_declaration,
+                instance_function)) {
+            if (!exported->first.valid()) {
+                return std::nullopt;
+            }
+            selected_declaration = exported->first;
+            interface_receiver = exported->second;
+        }
     }
     const auto declaration = specialized_hir_unit_->find_declaration(
         *selected_declaration);
@@ -5354,7 +5478,10 @@ bool Lowerer::can_lower_hir_class_method_call(
     if (!profile) {
         return false;
     }
-    if (!hir_inline_constraints(expression, process_scope)) {
+    std::vector<semantic::ExpressionId> inline_values;
+    std::vector<semantic::ExpressionId> inline_containers;
+    if (!hir_inline_constraints(expression, process_scope, &inline_values,
+            &inline_containers)) {
         return false;
     }
     if (profile->receiver
@@ -5573,8 +5700,26 @@ bool Lowerer::lower_hir_class_property_initializers(
     const auto restore = [&] { hir_class_receiver_register_ = saved_receiver; };
     bool containers_written { };
     for (const auto& property : declaration.properties) {
-        if (property.static_storage || property.parameter
-            || !property.initializer) {
+        if (property.static_storage || property.parameter) {
+            continue;
+        }
+        // An array of unpacked structures, or a structure held as a value
+        // container, starts as its type's default value (IEEE 1800-2017
+        // 7.2, 7.4, 8.5), so randomization and reads see its elaborated
+        // shape before any write.
+        if (!property.initializer && property.type.class_identity.empty()
+            && (property.type.container_form
+                || hir_systemverilog_boxed_aggregate(property.type))) {
+            const auto type = hir_systemverilog_container_type(property.type);
+            if (type && type->element_kind == ContainerElementKind::Aggregate) {
+                process_.operations.emplace_back(ClassPropertyContainerWrite {
+                    receiver, allocate_container_register(*type),
+                    property.canonical_identity });
+                containers_written = true;
+            }
+            continue;
+        }
+        if (!property.initializer) {
             continue;
         }
         // An array of values, or a structure held as a value container,
@@ -6821,8 +6966,9 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         return std::nullopt;
     }
     std::vector<semantic::ExpressionId> inline_values;
+    std::vector<semantic::ExpressionId> inline_containers;
     auto inline_constraints = hir_inline_constraints(
-        expression, hir_process_scope_, &inline_values);
+        expression, hir_process_scope_, &inline_values, &inline_containers);
     if (!inline_constraints) {
         return std::nullopt;
     }
@@ -6929,6 +7075,55 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         actual_names.push_back("@inline-value:" + std::to_string(index));
         actual_directions.push_back(
             static_cast<std::uint8_t>(frontend::PortDirection::Input));
+    }
+    // An array of the calling scope that the with-clause reads is copied
+    // into a register whose elements the call reads (IEEE 1800-2017 18.7).
+    std::vector<HirStaticContainerValue> held_containers;
+    for (const auto container : inline_containers) {
+        std::optional<HirSvValuePath> path;
+        std::optional<ContainerObjectId> object;
+        auto held = lower_hir_randomize_array(container, path, object);
+        if (!held) {
+            return std::nullopt;
+        }
+        held_containers.push_back(std::move(*held));
+    }
+    if (!held_containers.empty()) {
+        constexpr std::string_view container_prefix = "@inline-container:";
+        const auto bind_containers = [&](const auto& self,
+                                         runtime::SystemVerilogConstraintTemplate&
+                                             node) -> void {
+            if (node.kind == runtime::SystemVerilogConstraintTemplateKind::Name
+                && node.text.starts_with(container_prefix)) {
+                const auto slot = std::stoull(
+                    node.text.substr(container_prefix.size()));
+                if (slot < held_containers.size()) {
+                    const auto& type = held_containers[slot].type;
+                    node.text = std::string { runtime::inline_container_prefix }
+                        + std::to_string(held_containers[slot].value);
+                    node.profile = {
+                        type.element_nominal_type == "int"
+                                || type.element_nominal_type == "integer"
+                            ? runtime::SystemVerilogConstraintDomainKind::Integer
+                            : runtime::SystemVerilogConstraintDomainKind::
+                                  BitVector,
+                        type.element_width,
+                        type.signed_elements,
+                        type.element_nominal_type.empty()
+                            ? std::string { "$inline-element" }
+                            : type.element_nominal_type,
+                        false,
+                    };
+                }
+                return;
+            }
+            for (auto& operand : node.operands) {
+                self(self, operand);
+            }
+        };
+        for (auto& constraint : *inline_constraints) {
+            bind_containers(bind_containers, constraint);
+        }
     }
 
     if (profile->string_result) {
@@ -7603,9 +7798,18 @@ bool Lowerer::lower_hir_class_task_call(
             return false;
         }
     } else if (!profile->static_method && hir_class_receiver_register_
-        && !profile->interface_receiver) {
+        && !profile->interface_receiver
+        && std::ranges::any_of(
+            specialized_hir_unit_->design().systemverilog_hir.classes(),
+            [&](const semantic::sv::ClassDeclaration& owner) {
+                return std::ranges::any_of(owner.methods,
+                    [&](const semantic::sv::ClassMethod& method) {
+                        return method.declaration == profile->declaration;
+                    });
+            })) {
         // A method called by its simple name inside another method of the
-        // object runs on `this` (8.11).
+        // object runs on `this` (8.11); a compilation-unit or package task
+        // has no object.
         receiver = *hir_class_receiver_register_;
     }
 
@@ -9896,6 +10100,126 @@ std::vector<semantic::DeclarationId> inactive_generate_declarations(
 }
 
 } // namespace
+
+std::optional<std::string_view>
+Lowerer::hir_interface_instance_through_modport(
+    const std::string_view receiver) const
+{
+    const auto separator = receiver.rfind('.');
+    if (systemverilog_interface_handles_ == nullptr
+        || systemverilog_interface_types_ == nullptr
+        || separator == std::string_view::npos || separator == 0U) {
+        return std::nullopt;
+    }
+    const auto instance = receiver.substr(0U, separator);
+    const auto modport = receiver.substr(separator + 1U);
+    for (std::string_view scope = hierarchy_;;) {
+        const auto path = scope.empty()
+            ? std::string { instance }
+            : std::string { scope } + "." + std::string { instance };
+        if (const auto type = systemverilog_interface_types_->find(path);
+            type != systemverilog_interface_types_->end()
+            && systemverilog_interface_handles_->contains(path)) {
+            const auto& design = specialized_hir_unit_->design();
+            const auto unit = std::ranges::find_if(
+                design.systemverilog_hir.units(),
+                [&](const semantic::sv::Unit& candidate) {
+                    return candidate.kind
+                            == semantic::sv::UnitKind::interface
+                        && candidate.name == type->second;
+                });
+            if (unit != design.systemverilog_hir.units().end()
+                && std::ranges::find(unit->modports, modport,
+                       &semantic::sv::Modport::name)
+                    != unit->modports.end()) {
+                return instance;
+            }
+            return std::nullopt;
+        }
+        if (scope.empty()) {
+            return std::nullopt;
+        }
+        const auto dot = scope.rfind('.');
+        scope = dot == std::string_view::npos ? std::string_view { }
+                                              : scope.substr(0U, dot);
+    }
+}
+
+std::optional<std::pair<semantic::DeclarationId, std::string>>
+Lowerer::hir_exported_interface_callable(const std::string_view receiver,
+    const semantic::DeclarationId declaration, const bool function) const
+{
+    if (systemverilog_interface_exports_ == nullptr
+        || systemverilog_interface_handles_ == nullptr
+        || specialized_hir_unit_ == nullptr || receiver.empty()) {
+        return std::nullopt;
+    }
+    const auto prototype
+        = specialized_hir_unit_->design().find_declaration(declaration);
+    if (!prototype || prototype->systemverilog == nullptr
+        || !prototype->systemverilog->statements.empty()) {
+        return std::nullopt;
+    }
+    const auto& name = prototype->systemverilog->name;
+    const auto& design = specialized_hir_unit_->design();
+    const auto* owner = design.find_scope(prototype->systemverilog->scope);
+    const auto unit = owner != nullptr ? design.find_unit(owner->unit)
+                                       : std::nullopt;
+    if (!unit || unit->systemverilog == nullptr
+        || std::ranges::none_of(unit->systemverilog->modports,
+            [&](const semantic::sv::Modport& modport) {
+                return std::ranges::any_of(modport.members,
+                    [&](const semantic::sv::ModportMember& member) {
+                        using Kind = semantic::sv::ModportMemberKind;
+                        return (member.kind == Kind::function_export
+                                   || member.kind == Kind::task_export)
+                            && member.name.spelling == name;
+                    });
+            })) {
+        return std::nullopt;
+    }
+    // The interface instance: the receiver, or the receiver without its
+    // modport (`bif.consumer`), searched upward from the calling scope.
+    std::optional<std::uint64_t> handle;
+    for (std::string instance { receiver };
+         !handle && !instance.empty();) {
+        for (std::string_view scope = hierarchy_;;) {
+            const auto path = scope.empty()
+                ? instance
+                : std::string { scope } + "." + instance;
+            if (const auto found = systemverilog_interface_handles_->find(path);
+                found != systemverilog_interface_handles_->end()) {
+                handle = found->second;
+                break;
+            }
+            if (scope.empty()) {
+                break;
+            }
+            const auto separator = scope.rfind('.');
+            scope = separator == std::string_view::npos
+                ? std::string_view { }
+                : scope.substr(0U, separator);
+        }
+        const auto separator = instance.rfind('.');
+        if (separator == std::string::npos) {
+            break;
+        }
+        instance.resize(separator);
+    }
+    if (!handle) {
+        return std::nullopt;
+    }
+    const auto exporter = systemverilog_interface_exports_->find(
+        std::to_string(*handle) + ":" + name);
+    if (exporter == systemverilog_interface_exports_->end()) {
+        // The exporting instance may be elaborated after this process; the
+        // call fails and the process is retried then.
+        hierarchical_reference_missed_ = true;
+        return std::pair { semantic::DeclarationId { }, std::string { } };
+    }
+    return hir_instance_callable(exporter->second, name, function)
+        .value_or(std::pair { semantic::DeclarationId { }, std::string { } });
+}
 
 std::optional<std::pair<semantic::DeclarationId, std::string>>
 Lowerer::hir_instance_callable(const std::string_view receiver,
@@ -13800,13 +14124,32 @@ Lowerer::hir_interface_function_profile(
               hir_generic_interface_type(receiver_name))
               .unique();
     if (declaration) {
+        if (const auto exported = hir_exported_interface_callable(
+                receiver_name, *declaration, true)) {
+            if (!exported->first.valid()) {
+                return std::nullopt;
+            }
+            return HirInterfaceFunctionProfile {
+                exported->first, exported->second, { } };
+        }
         return HirInterfaceFunctionProfile {
             *declaration, receiver_name, receiver_scope };
     }
-    // `u.f(...)`: a function of a module instance (23.8).
-    if (const auto instance = hir_instance_callable(
-            receiver->systemverilog->text,
+    // `u.f(...)`: a function of a module instance (23.8), or of an
+    // interface instance through one of its modports (25.5).
+    const auto instance_receiver
+        = hir_interface_instance_through_modport(receiver->systemverilog->text)
+              .value_or(std::string_view { receiver->systemverilog->text });
+    if (const auto instance = hir_instance_callable(instance_receiver,
             std::string_view { call.text }.substr(1U), true)) {
+        if (const auto exported = hir_exported_interface_callable(
+                instance_receiver, instance->first, true)) {
+            if (!exported->first.valid()) {
+                return std::nullopt;
+            }
+            return HirInterfaceFunctionProfile {
+                exported->first, exported->second, { } };
+        }
         return HirInterfaceFunctionProfile { instance->first, instance->second, { } };
     }
     return std::nullopt;

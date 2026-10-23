@@ -1213,6 +1213,8 @@ void lower_suffix_operation(
                     || std::is_same_v<OperationType,
                         runtime::simir::SignalStrengthText>
                     || std::is_same_v<OperationType,
+                        runtime::simir::RuntimeStringFormat>
+                    || std::is_same_v<OperationType,
                         VhdlEnvironmentCallPath>
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentGetCallPath>
@@ -1227,6 +1229,9 @@ void lower_suffix_operation(
                 } else if constexpr (std::is_same_v<OperationType, Report>) {
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, StringReport>) {
+                    // The host report callback reads the severity register
+                    // from the frame.
+                    synchronize_uses_to_frame();
                     output_lowerer.lower(operation);
                 } else if constexpr (std::is_same_v<OperationType, Jump>) {
                     control_lowerer.lower(operation);

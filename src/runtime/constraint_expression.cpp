@@ -654,7 +654,8 @@ namespace {
 PackedLogic4 evaluate_graph(
     const SystemVerilogConstraintExpression& expression,
     const SystemVerilogConstraintAssignment& assignment,
-    const bool partial) {
+    const bool partial,
+    std::vector<PackedLogic4>* const node_values = nullptr) {
   if (expression.nodes.empty() || expression.root >= expression.nodes.size()) {
     throw std::invalid_argument{"constraint expression graph has no root"};
   }
@@ -820,7 +821,249 @@ PackedLogic4 evaluate_graph(
       values.push_back(truth_value(result));
     }
   }
-  return values[expression.root];
+  auto root = values[expression.root];
+  if (node_values != nullptr) {
+    *node_values = std::move(values);
+  }
+  return root;
+}
+
+// The values a node may take under every completion of a partial
+// assignment, as a range of its value read with its profile's signedness.
+// An unbounded range admits every value.
+struct Bounds {
+  bool bounded{};
+  __int128 low{};
+  __int128 high{};
+};
+
+[[nodiscard]] Bounds full_bounds() { return {}; }
+
+[[nodiscard]] Bounds bounds_range(
+    const std::size_t width, const bool signed_value) {
+  if (width == 0U || width > 64U) return full_bounds();
+  const __int128 span = static_cast<__int128>(1) << width;
+  return signed_value ? Bounds{true, -(span / 2), span / 2 - 1}
+                      : Bounds{true, 0, span - 1};
+}
+
+// The same values read at `width` bits with `signed_value`: a value
+// outside that range wraps, so only an exact one stays bounded.
+[[nodiscard]] Bounds bounds_as(
+    const Bounds& value, const std::size_t width, const bool signed_value) {
+  const auto range = bounds_range(width, signed_value);
+  if (!value.bounded || !range.bounded) return range;
+  if (value.low >= range.low && value.high <= range.high) return value;
+  if (value.low != value.high) return range;
+  const __int128 span = static_cast<__int128>(1) << width;
+  __int128 wrapped = value.low % span;
+  if (wrapped < 0) wrapped += span;
+  if (signed_value && wrapped > range.high) wrapped -= span;
+  return {true, wrapped, wrapped};
+}
+
+// A known value of at most 64 bits, read with `signed_value`.
+[[nodiscard]] std::optional<__int128> known_integer(
+    const PackedLogic4& value, const bool signed_value) {
+  const auto word = word_of(value);
+  if (!word || !word->known()) return std::nullopt;
+  __int128 result = word->aval;
+  const auto width = value.width();
+  if (signed_value && ((word->aval >> (width - 1U)) & 1U) != 0U) {
+    result -= static_cast<__int128>(1) << width;
+  }
+  return result;
+}
+
+[[nodiscard]] Truth bounds_truth(const Bounds& value) {
+  if (!value.bounded) return Truth::Unknown;
+  if (value.low == 0 && value.high == 0) return Truth::False;
+  return value.low > 0 || value.high < 0 ? Truth::True : Truth::Unknown;
+}
+
+[[nodiscard]] Bounds truth_bounds(const Truth value) {
+  return value == Truth::True ? Bounds{true, 1, 1}
+      : value == Truth::False ? Bounds{true, 0, 0}
+                              : Bounds{true, 0, 1};
+}
+
+// Decides a predicate over a partial assignment by the ranges its sums,
+// differences and comparisons can reach: `a.sum() with (int'(item == v))
+// == 3` fails once too few unassigned elements remain (IEEE 1800-2017
+// 18.5). The X-pessimistic node values supply every exact operand; a
+// `===` reading an unassigned X is never trusted.
+[[nodiscard]] Truth decide_by_bounds(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintAssignment& assignment) {
+  std::vector<PackedLogic4> values;
+  const auto root = evaluate_graph(expression, assignment, true, &values);
+  std::vector<Bounds> bounds(expression.nodes.size());
+  // A `===` over an unassigned operand compares its X placeholder, so its
+  // value and everything computed from it says nothing about completions.
+  std::vector<bool> tainted(expression.nodes.size());
+  for (std::size_t id = 0; id < expression.nodes.size(); ++id) {
+    const auto& node = expression.nodes[id];
+    const auto& profile = node.profile;
+    const auto known = known_integer(values[id], profile.signed_value);
+    tainted[id] = std::ranges::any_of(node.operands,
+        [&](const auto operand) { return tainted[operand]; })
+        || ((node.operation == Operator::CaseEqual
+                || node.operation == Operator::CaseNotEqual)
+            && std::ranges::any_of(node.operands, [&](const auto operand) {
+                 return !bounds[operand].bounded
+                     || bounds[operand].low != bounds[operand].high;
+               }));
+    if (known && !tainted[id]) {
+      bounds[id] = {true, *known, *known};
+      continue;
+    }
+    const auto operand = [&](const std::size_t index) -> const Bounds& {
+      return bounds[node.operands[index]];
+    };
+    const auto operand_node = [&](const std::size_t index) -> const auto& {
+      return expression.nodes[node.operands[index]];
+    };
+    switch (node.operation) {
+      case Operator::Variable:
+        bounds[id] = bounds_range(profile.width, profile.signed_value);
+        break;
+      case Operator::UnaryPlus:
+        bounds[id] = bounds_as(
+            operand(0), profile.width, profile.signed_value);
+        break;
+      case Operator::UnaryMinus: {
+        const auto& value = operand(0);
+        bounds[id] = value.bounded
+            ? bounds_as(Bounds{true, -value.high, -value.low},
+                  profile.width, profile.signed_value)
+            : bounds_range(profile.width, profile.signed_value);
+        break;
+      }
+      case Operator::LogicalNot: {
+        const auto value = bounds_truth(operand(0));
+        bounds[id] = truth_bounds(value == Truth::True ? Truth::False
+                : value == Truth::False ? Truth::True : Truth::Unknown);
+        break;
+      }
+      case Operator::LogicalAnd:
+      case Operator::LogicalOr: {
+        const auto left = bounds_truth(operand(0));
+        const auto right = bounds_truth(operand(1));
+        const auto absorbing = node.operation == Operator::LogicalAnd
+            ? Truth::False : Truth::True;
+        bounds[id] = truth_bounds(
+            left == absorbing || right == absorbing ? absorbing
+                : left != Truth::Unknown && right != Truth::Unknown
+                ? left : Truth::Unknown);
+        break;
+      }
+      case Operator::Conditional: {
+        const auto condition = bounds_truth(operand(0));
+        const auto branch = [&](const std::size_t index) {
+          return bounds_as(bounds_as(operand(index),
+                               operand_node(index).profile.width,
+                               operand_node(index).profile.signed_value),
+              profile.width, profile.signed_value);
+        };
+        if (condition == Truth::True) {
+          bounds[id] = branch(1);
+        } else if (condition == Truth::False) {
+          bounds[id] = branch(2);
+        } else {
+          const auto when_true = branch(1);
+          const auto when_false = branch(2);
+          bounds[id] = when_true.bounded && when_false.bounded
+              ? Bounds{true, std::min(when_true.low, when_false.low),
+                    std::max(when_true.high, when_false.high)}
+              : bounds_range(profile.width, profile.signed_value);
+        }
+        break;
+      }
+      case Operator::Add:
+      case Operator::Subtract:
+      case Operator::Multiply:
+      case Operator::Equal:
+      case Operator::NotEqual:
+      case Operator::Less:
+      case Operator::LessEqual:
+      case Operator::Greater:
+      case Operator::GreaterEqual: {
+        const auto width = std::max(
+            operand_node(0).profile.width, operand_node(1).profile.width);
+        const bool signed_values = operand_node(0).profile.signed_value
+            && operand_node(1).profile.signed_value;
+        const auto left = bounds_as(operand(0), width, signed_values);
+        const auto right = bounds_as(operand(1), width, signed_values);
+        if (!left.bounded || !right.bounded) {
+          bounds[id] = node.operation >= Operator::Equal
+              ? truth_bounds(Truth::Unknown)
+              : bounds_range(profile.width, profile.signed_value);
+          break;
+        }
+        switch (node.operation) {
+          case Operator::Add:
+            bounds[id] = bounds_as(Bounds{true, left.low + right.low,
+                                       left.high + right.high},
+                profile.width, profile.signed_value);
+            break;
+          case Operator::Subtract:
+            bounds[id] = bounds_as(Bounds{true, left.low - right.high,
+                                       left.high - right.low},
+                profile.width, profile.signed_value);
+            break;
+          case Operator::Multiply: {
+            const std::array products{left.low * right.low,
+                left.low * right.high, left.high * right.low,
+                left.high * right.high};
+            bounds[id] = bounds_as(
+                Bounds{true, std::ranges::min(products),
+                    std::ranges::max(products)},
+                profile.width, profile.signed_value);
+            break;
+          }
+          case Operator::Equal:
+          case Operator::NotEqual: {
+            const bool disjoint
+                = left.high < right.low || right.high < left.low;
+            const auto equal = disjoint ? Truth::False : Truth::Unknown;
+            bounds[id] = truth_bounds(node.operation == Operator::Equal
+                    ? equal
+                    : equal == Truth::False ? Truth::True : Truth::Unknown);
+            break;
+          }
+          case Operator::Less:
+          case Operator::GreaterEqual: {
+            const auto less = left.high < right.low ? Truth::True
+                : left.low >= right.high ? Truth::False : Truth::Unknown;
+            bounds[id] = truth_bounds(node.operation == Operator::Less
+                    ? less
+                    : less == Truth::True ? Truth::False
+                    : less == Truth::False ? Truth::True : Truth::Unknown);
+            break;
+          }
+          default: {
+            const auto greater = left.low > right.high ? Truth::True
+                : left.high <= right.low ? Truth::False : Truth::Unknown;
+            bounds[id] = truth_bounds(node.operation == Operator::Greater
+                    ? greater
+                    : greater == Truth::True ? Truth::False
+                    : greater == Truth::False ? Truth::True
+                                              : Truth::Unknown);
+            break;
+          }
+        }
+        break;
+      }
+      default:
+        bounds[id] = logical_result(node.operation)
+            ? truth_bounds(Truth::Unknown)
+            : bounds_range(profile.width, profile.signed_value);
+        break;
+    }
+  }
+  if (tainted[expression.root]) return Truth::Unknown;
+  if (truth(root) != Truth::Unknown) return truth(root);
+  return bounds_truth(bounds[expression.root]);
 }
 
 }  // namespace
@@ -829,6 +1072,12 @@ PackedLogic4 evaluate_systemverilog_constraint_expression(
     const SystemVerilogConstraintExpression& expression,
     const SystemVerilogConstraintAssignment& assignment) {
   return evaluate_graph(expression, assignment, false);
+}
+
+PackedLogic4 evaluate_systemverilog_constraint_expression_partially(
+    const SystemVerilogConstraintExpression& expression,
+    const SystemVerilogConstraintAssignment& assignment) {
+  return evaluate_graph(expression, assignment, true);
 }
 
 SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
@@ -900,14 +1149,35 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
     }
     return resolving;
   }();
+  // A clause comparing sums or differences of several variables can be
+  // decided by the ranges its unassigned terms may still reach.
+  const bool bounded_early = clause.variables.size() > 1U
+      && clause.expression->nodes.size() <= 4096U
+      && clause.expression->nodes[clause.expression->root].profile.width == 1U
+      && std::ranges::any_of(clause.expression->nodes, [](const auto& node) {
+           return node.operation == Operator::Add
+               || node.operation == Operator::Subtract;
+         });
   clause.evaluate = [expression = clause.expression,
-                     dependencies = clause.variables, resolves_early](
+                     dependencies = clause.variables, resolves_early,
+                     bounded_early](
       const SystemVerilogConstraintAssignment& assignment) {
     const bool complete = std::ranges::all_of(
         dependencies, [&](const SystemVerilogConstraintVariableId variable) {
           return assignment.assigned(variable);
         });
     if (!complete) {
+      if (bounded_early && std::ranges::any_of(dependencies,
+              [&](const SystemVerilogConstraintVariableId variable) {
+                return assignment.assigned(variable);
+              })) {
+        const auto decided = decide_by_bounds(*expression, assignment);
+        return decided == Truth::True
+            ? SystemVerilogConstraintClauseState::Satisfied
+            : decided == Truth::False
+            ? SystemVerilogConstraintClauseState::Violated
+            : SystemVerilogConstraintClauseState::Undetermined;
+      }
       if (!resolves_early) {
         return SystemVerilogConstraintClauseState::Undetermined;
       }
@@ -1528,6 +1798,25 @@ namespace {
                                 PackedLogic4::from_aval_bval(1, 0, 0),
                                 truth_profile());
                         }
+                    } else if (const auto* values = inline_elements(item)) {
+                        // An array of the calling scope contributes its
+                        // elements at the call (IEEE 1800-2017 18.7).
+                        for (const auto& value : values->operands) {
+                            const auto element = lower(value);
+                            if (!element)
+                                return std::nullopt;
+                            const auto equal = builder_.binary(
+                                Operator::Equal, *subject, *element);
+                            selected = selected
+                                ? builder_.binary(
+                                      Operator::LogicalOr, *selected, equal)
+                                : equal;
+                        }
+                        if (!selected) {
+                            selected = builder_.constant(
+                                PackedLogic4::from_aval_bval(1, 0, 0),
+                                truth_profile());
+                        }
                     } else {
                         if (deferred_)
                             return std::nullopt;
@@ -1964,6 +2253,24 @@ namespace {
         }
 
         /// `a.size` names the size method of array `a`.
+        /// The elements of an array of the calling scope that `node` names
+        /// when the randomized object has no array of its name (IEEE
+        /// 1800-2017 18.7).
+        [[nodiscard]] const Template* inline_elements(const Template& node)
+        {
+            if (node.kind != TemplateKind::Name)
+                return nullptr;
+            if (node.text == inline_elements_name)
+                return &node;
+            if (node.operands.size() == 1U
+                && node.operands.front().kind == TemplateKind::Name
+                && node.operands.front().text == inline_elements_name
+                && container(node.text) == nullptr && !deferred_
+                && !find_optional_template_variable(variables_, node.text))
+                return &node.operands.front();
+            return nullptr;
+        }
+
         [[nodiscard]] std::optional<Template> size_method(
             const Template& expression)
         {
@@ -2075,6 +2382,11 @@ namespace {
                     = container(expression.operands[0].text)) {
                     return builder_.constant(PackedLogic4::from_aval_bval(
                                                  32, elements->size(), 0),
+                        index_profile());
+                }
+                if (const auto* values
+                    = inline_elements(expression.operands[0])) {
+                    return builder_.constant(values->constant,
                         index_profile());
                 }
                 // While sizes are solved, a random array's size is a

@@ -5,6 +5,7 @@
 // thread runs until it suspends on a delay, a dynamic or static wait, a fork
 // join, a halt or $finish; waits on kernel-owned slots and on host inputs, and
 // delays on a kernel timer queue, make it ready again.
+#include "fsim/runtime/file_scanning.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_static_kernel_state.hpp"
 
@@ -287,31 +288,14 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
         } else if constexpr (std::is_same_v<T, CopyStringRegister>) {
             string_register(op.destination) = string_register(op.source);
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
-            const auto query = string_register(op.query);
-            const std::string* selected = nullptr;
-            for (const auto& argument : impl_.plusargs) {
-                auto candidate = std::string_view { argument };
-                if (candidate.starts_with('+')) {
-                    candidate.remove_prefix(1);
-                }
-                if (candidate.starts_with(query)) {
-                    selected = &argument;
-                    break;
-                }
-            }
+            const auto selected = select_plusarg(
+                impl_.plusargs, string_register(op.query), op.format_query);
             if (op.selected) {
-                auto& destination = string_register(*op.selected);
-                destination.clear();
-                if (selected != nullptr) {
-                    auto candidate = std::string_view { *selected };
-                    if (candidate.starts_with('+')) {
-                        candidate.remove_prefix(1);
-                    }
-                    destination.assign(candidate);
-                }
+                string_register(*op.selected).assign(
+                    selected.value_or(std::string_view { }));
             }
             packed_register(op.destination) = PackedLogic4::from_aval_bval(
-                32, selected != nullptr ? 1U : 0U, 0);
+                32, selected ? 1U : 0U, 0);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             if (member.private_frame(op.identity)) {
                 member.saved_array_marks.push_back(member.saved_arrays.size());

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
 
+#include "fsim/frontend/output_format.hpp"
+#include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/string_methods.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
+
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <bit>
@@ -709,6 +714,239 @@ std::string format_container_assignment_pattern(const ContainerValue& value)
     std::string text;
     append_assignment_pattern(text, value);
     return text;
+}
+
+OutputFormat runtime_output_format(const frontend::OutputFormat format)
+{
+    using Source = frontend::OutputFormat;
+    switch (format) {
+    case Source::Binary: return OutputFormat::binary;
+    case Source::Hexadecimal: return OutputFormat::hexadecimal;
+    case Source::Octal: return OutputFormat::octal;
+    case Source::Decimal: return OutputFormat::decimal;
+    case Source::Character: return OutputFormat::character;
+    case Source::String: return OutputFormat::string;
+    case Source::RealScientific: return OutputFormat::real_scientific;
+    case Source::RealFixed: return OutputFormat::real_fixed;
+    case Source::RealGeneral: return OutputFormat::real_general;
+    case Source::Unformatted2: return OutputFormat::unformatted2;
+    case Source::Unformatted4: return OutputFormat::unformatted4;
+    case Source::Pattern:
+    case Source::Strength: return OutputFormat::decimal;
+    case Source::Hierarchy:
+    case Source::Library:
+    case Source::Time: break;
+    }
+    throw std::logic_error { "invalid runtime string format" };
+}
+
+std::uint32_t automatic_decimal_width(
+    const std::size_t width, const bool signed_value) noexcept
+{
+    // The digits of 2^w - 1 (unsigned) or of 2^(w-1) plus a sign; neither
+    // power of two is a power of ten, so the digit count is exact.
+    const auto magnitude_bits = signed_value ? width - 1U : width;
+    const auto digits = static_cast<std::uint32_t>(
+        std::floor(static_cast<long double>(magnitude_bits)
+            * std::log10(2.0L))) + 1U;
+    return digits + (signed_value ? 1U : 0U);
+}
+
+std::string format_runtime_string(const RuntimeStringFormat& operation,
+    const std::string_view format,
+    const std::function<PackedLogic4(const RuntimeFormatArgument&)>& packed,
+    const std::function<std::string(const RuntimeFormatArgument&)>& text,
+    const SimulationTick tick, const SystemVerilogTimeFormat& time_format)
+{
+    using Format = frontend::OutputFormat;
+    const auto parsed = frontend::parse_output_format(format);
+    if (!parsed.valid) {
+        throw std::invalid_argument { "run-time format string is malformed" };
+    }
+    const auto& arguments = operation.arguments;
+    std::string result;
+    const auto append = [&](const std::string_view part) {
+        if (part.size() > maximum_string_bytes - result.size()) {
+            throw std::length_error {
+                "formatted string exceeds 4096-byte limit"
+            };
+        }
+        result += part;
+    };
+    const auto method_for = [](const frontend::ParsedOutputConversion& conversion) {
+        StringMethod method;
+        method.minimum_width = conversion.minimum_width;
+        method.precision = conversion.precision;
+        method.left_justify = conversion.left_justify;
+        method.zero_pad = conversion.zero_pad;
+        method.suppress_leading_zero = conversion.suppress_leading_zero;
+        return method;
+    };
+    const auto consumes_value = [](const frontend::ParsedOutputConversion& conversion) {
+        return conversion.format != Format::Hierarchy
+            && conversion.format != Format::Library
+            && conversion.format != Format::Time;
+    };
+    // The value conversions as the literal-format lowering performs them
+    // (IEEE 1800-2017 21.2.1): %p shows a string quoted and other singular
+    // values as %0d or %g, %e/%f/%g convert an integral value to real, and
+    // %d rounds a real.
+    const auto append_value = [&](frontend::ParsedOutputConversion conversion,
+                                  const RuntimeFormatArgument& argument) {
+        append(conversion.prefix);
+        if (conversion.format == Format::Pattern) {
+            if (argument.string) {
+                append("\"");
+                append(text(argument));
+                append("\"");
+                return;
+            }
+            conversion.suppress_leading_zero = conversion.minimum_width == 0U
+                || conversion.suppress_leading_zero;
+            conversion.format = frontend::is_real_scalar_kind(argument.scalar_kind)
+                ? Format::RealGeneral
+                : Format::Decimal;
+        }
+        if (conversion.format == Format::Strength) {
+            throw std::invalid_argument {
+                "a run-time format cannot show strengths (%v)"
+            };
+        }
+        auto method = method_for(conversion);
+        PackedLogic4 value { 1, Logic4::zero };
+        auto scalar = SystemVerilogScalarKind::None;
+        bool signed_value { };
+        if (argument.string) {
+            const auto characters = text(argument);
+            if (conversion.format == Format::String) {
+                method.operation = StringMethodOperator::format_string;
+                execute_string_format(method, result,
+                    PackedLogic4 { 1, Logic4::zero }, characters, tick,
+                    time_format);
+                return;
+            }
+            value = pack_file_text(characters, static_cast<std::uint32_t>(
+                std::max<std::size_t>(characters.size(), 1U) * 8U));
+        } else {
+            value = packed(argument);
+            scalar = argument.scalar_kind;
+            signed_value = argument.is_signed;
+        }
+        const bool real_conversion = conversion.format == Format::RealScientific
+            || conversion.format == Format::RealFixed
+            || conversion.format == Format::RealGeneral;
+        if (real_conversion && scalar == SystemVerilogScalarKind::None) {
+            PackedLogic4 known(value.width(), Logic4::zero);
+            for (std::size_t bit = 0; bit < value.width(); ++bit) {
+                if (to_logic4(value.get_logic9(bit)) == Logic4::one) {
+                    known.set(bit, Logic4::one);
+                }
+            }
+            auto real = systemverilog_math_payload(
+                SystemVerilogMathFunction::Itor, known,
+                SystemVerilogScalarKind::None, signed_value, nullptr,
+                SystemVerilogScalarKind::None, false);
+            if (!real) {
+                throw std::invalid_argument {
+                    "a run-time %e/%f/%g value cannot convert to real"
+                };
+            }
+            value = std::move(real.value);
+            scalar = SystemVerilogScalarKind::Real;
+        }
+        const bool real_decimal = conversion.format == Format::Decimal
+            && frontend::is_real_scalar_kind(scalar);
+        if (real_decimal) {
+            auto integral = systemverilog_scalar_binary_payload(
+                SystemVerilogScalarBinaryOperator::Convert, value, scalar,
+                value, scalar, SystemVerilogScalarKind::None);
+            if (!integral) {
+                throw std::invalid_argument {
+                    "a run-time %d real value cannot convert to an integer"
+                };
+            }
+            value = std::move(integral.value);
+            scalar = SystemVerilogScalarKind::None;
+        }
+        method.operation = StringMethodOperator::format_packed;
+        method.format = runtime_output_format(conversion.format);
+        method.scalar_kind = scalar;
+        method.signed_decimal = method.format == OutputFormat::decimal
+            && (real_decimal || signed_value);
+        if (!real_decimal && method.format == OutputFormat::decimal
+            && !conversion.suppress_leading_zero && !conversion.left_justify
+            && conversion.minimum_width == 0U
+            && (scalar == SystemVerilogScalarKind::None
+                || scalar == SystemVerilogScalarKind::Time)) {
+            method.minimum_width
+                = automatic_decimal_width(value.width(), signed_value);
+        }
+        execute_string_format(method, result, value, { }, tick, time_format);
+    };
+
+    std::size_t next { };
+    // %t takes an argument when the arguments outnumber the other
+    // conversions; otherwise it shows the current time (IEEE 1800-2017
+    // 21.2.1.3).
+    const auto other_values = static_cast<std::size_t>(
+        std::ranges::count_if(parsed.conversions, consumes_value));
+    auto time_values = arguments.size() > other_values
+        ? arguments.size() - other_values
+        : std::size_t { };
+    for (const auto& conversion : parsed.conversions) {
+        if (conversion.format == Format::Hierarchy) {
+            append(conversion.prefix);
+            append(operation.hierarchy);
+            continue;
+        }
+        if (conversion.format == Format::Library) {
+            append(conversion.prefix);
+            append(operation.library_cell);
+            continue;
+        }
+        if (conversion.format == Format::Time) {
+            append(conversion.prefix);
+            const RuntimeFormatArgument* argument = nullptr;
+            if (time_values != 0U && next < arguments.size()) {
+                argument = &arguments[next++];
+                --time_values;
+            }
+            auto method = method_for(conversion);
+            method.operation = StringMethodOperator::format_time;
+            method.use_timeformat_width = conversion.minimum_width == 0U
+                && !conversion.suppress_leading_zero;
+            PackedLogic4 value { 1, Logic4::zero };
+            // An integral value other than $time is in the module's time
+            // unit.
+            if (argument != nullptr && !argument->current_time
+                && !argument->string && argument->width != 0U
+                && argument->width <= 64U
+                && (argument->scalar_kind == SystemVerilogScalarKind::None
+                    || argument->scalar_kind == SystemVerilogScalarKind::Time)) {
+                value = packed(*argument);
+                method.time_unit_femtoseconds = operation.time_unit_femtoseconds;
+                method.time_signed = argument->is_signed;
+            }
+            execute_string_format(method, result, value, { }, tick, time_format);
+            continue;
+        }
+        if (next >= arguments.size()) {
+            throw std::invalid_argument {
+                "run-time format names more values than it is given"
+            };
+        }
+        append_value(conversion, arguments[next++]);
+    }
+    append(parsed.trailing_text);
+    // Values past the format show as $display shows them: a string's
+    // characters and another value's decimal form.
+    while (next < arguments.size()) {
+        const auto& argument = arguments[next++];
+        frontend::ParsedOutputConversion conversion;
+        conversion.format = argument.string ? Format::String : Format::Decimal;
+        append_value(conversion, argument);
+    }
+    return result;
 }
 
 } // namespace fsim::runtime::simir

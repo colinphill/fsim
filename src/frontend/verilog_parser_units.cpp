@@ -1034,8 +1034,8 @@ void VerilogParser::parse_generate_branch(
         // An empty generate item (`if (0);`, IEEE 1800-2017 A.4.1.1;
         // generate_block_or_null in IEEE 1364-2005 12.4).
     } else if (is_gate_primitive()) {
-        parse_gate_primitive(
-            body.concurrent_statements, body.signals, { });
+        parse_gate_primitive(body.concurrent_statements, body.signals, { },
+            &body.generate_regions);
     } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                    "rpmos", "tran", "rtran", "tranif0", "tranif1",
                    "rtranif0", "rtranif1", "pullup", "pulldown" })) {

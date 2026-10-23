@@ -243,6 +243,17 @@ def standard_args(language: str, standard: str | None) -> list[str]:
     return args
 
 
+# sv-tests cases whose expected result contradicts IEEE 1800, by path.
+SV_TESTS_NONSTANDARD = {
+    "chapter-16/16.2--assert0-uvm.sv": "expects a deferred assertion to "
+        "see a nonblocking update made in the same time step; its expression "
+        "is evaluated when the statement executes (IEEE 1800-2023 16.4)",
+    "chapter-16/16.7--sequence-and-uvm.sv": "expects the attempt started "
+        "at the first clock to pass although '##0 gnt2' samples gnt2 low "
+        "there; the test notes every simulator fails it (IEEE 1800-2023 16.9)",
+}
+
+
 def sv_tests_cases(root: Path) -> list[Case]:
     base = root / "sources" / "sv-tests"
     tests_dir = base / "tests"
@@ -339,6 +350,8 @@ def sv_tests_cases(root: Path) -> list[Case]:
             fail_by=mode,
             checker="sv_tests",
             skip=skip,
+            out_of_scope=("out of scope: " + SV_TESTS_NONSTANDARD[str(relative)]
+                          if str(relative) in SV_TESTS_NONSTANDARD else None),
             timeout=timeout,
             uvm_release=uvm_release,
         ))
@@ -520,6 +533,12 @@ ICARUS_EXTENSION_SYNTAX = re.compile(
 # semantics and options.
 _ICARUS_RACE = "depends on Icarus's process order within a time step"
 ICARUS_NONSTANDARD = {
+    "sv_unit1c": "expects z from a buf gate whose input is an undriven "
+        "implicit wire; a buf outputs x for a z input (IEEE 1800-2023 28.5, "
+        "Table 28-4)",
+    "br_gh377": "expects Icarus's command-line diagnostic for an empty -P "
+        "parameter value; command-line overrides are a tool option outside "
+        "IEEE 1364 and IEEE 1800",
     "sv_string3": "uses a string variable as a $display format; only string "
         "literal arguments carry format specifications (IEEE 1800-2017 "
         "21.2.1)",
@@ -700,6 +719,15 @@ VERILATOR_STANDARD_2023 = {
 }
 
 VERILATOR_NONSTANDARD = {
+    "t_covergroup_coverpoint_method_unsup": "compares get_inst_coverage "
+        "with fractions of 1; coverage methods return a percentage from 0 "
+        "to 100 (IEEE 1800-2023 19.11)",
+    "t_constraint_foreach": "expects members of a non-rand structure member "
+        "(cfg_t.subcfg) to randomize; only a rand structure's random members "
+        "are solved (IEEE 1800-2023 18.4)",
+    "t_force_complex_sel_unsup": "forces and releases an element selected "
+        "by a non-constant ($random) index; a force target may use only "
+        "constant selects (IEEE 1800-2023 10.6.2)",
     **{name: "an imported function calls an exported task; IEEE 1800-2023 35.8 makes that "
        "never legal" for name in ("t_dpi_export", "t_dpi_export_noopt", "t_dpi_qw")},
     **{name: "expects a %p image of a class or virtual-interface handle, "
@@ -1379,8 +1407,19 @@ def verilator_cases(root: Path) -> list[Case]:
             and pli_companion.is_file()
         if re.search(r"\.(cpp|c|sv)['\"]", source) and "--exe" in source and not uses_pli:
             skip = "requires a C++ harness"
+        # A lint-only driver whose design checks itself ("*-* All Finished
+        # *-*") runs as a model when the lint passes or fails only with
+        # Verilator's own UNSUPPORTED diagnostic for the construct.
+        lint_model = False
         if "test.lint(" in source and "test.execute(" not in source:
-            skip = skip or "lint-only test"
+            golden = tdir / f"{name}.out"
+            lint_fails = re.search(r"test\.lint\([^)]*fails\s*=", source, re.S)
+            lint_model = top_file.exists() \
+                and "*-* All Finished *-*" in read_text(top_file) \
+                and (not lint_fails or (golden.is_file() and read_text(
+                    golden).startswith("%Error-UNSUPPORTED")))
+            if not lint_model:
+                skip = skip or "lint-only test"
         # Cases Verilator gates on its constraint solver run: class and
         # scope randomization bound wide variables instead of enumerating
         # them (2026-10-12).
@@ -1664,7 +1703,7 @@ def verilator_cases(root: Path) -> list[Case]:
             commands.append(host)
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
-        executes = "test.execute(" in source
+        executes = "test.execute(" in source or lint_model
         # Verilator's compile also elaborates, so an expected compile
         # failure may come from fsim's elaborate step.
         elab = ["elaborate", "-q", "--no-aot"]
@@ -1705,9 +1744,9 @@ def verilator_cases(root: Path) -> list[Case]:
             checker_data={"allow_stop": verilator_only_failure,
                           "check_finished": executes
                           and not (compile_fails or execute_fails)
-                          and bool(re.search(
+                          and (lint_model or bool(re.search(
                               r"test\.execute\([^)]*check_finished\s*=\s*True",
-                              source, re.S))},
+                              source, re.S)))},
             writes=([("verilator_shell.sv", shell)] if shell else [])
             + ([("vc_hdrs.h", '#include "fsim_dpi.h"\n')] if foreign == "dpi" else [])
             + [("obj_dir/.keep", "")],
@@ -1885,6 +1924,11 @@ def ivtest_cases(root: Path) -> list[Case]:
         # support event arrays. Run its original wake-count checks instead.
         if name == "event_array" and test_type == "CE":
             test_type = "normal"
+        # EF marks a legal case Icarus fails (procedural continuous
+        # assignments of variable expressions, IEEE 1364-2005 9.3.1); it
+        # runs as a normal case.
+        if test_type == "EF":
+            test_type = "normal"
         directory = fields[2] if len(fields) > 2 else ""
         gold = None
         module = None
@@ -1910,9 +1954,22 @@ def ivtest_cases(root: Path) -> list[Case]:
         compile_args = ["compile", "-q"]
         plusargs = []
         delay_mode: list[str] = []
+        # Extra source files on the command line, and `-Ptop.name=value`
+        # root parameter overrides.
+        extra_sources: list[Path] = []
+        overrides: list[str] = []
+        separate_units = False
         skip = None
         for arg in args:
-            if arg in ("-Tmin", "-Ttyp", "-Tmax"):
+            if arg.endswith((".v", ".sv")) and not arg.startswith("-"):
+                extra_sources.append(base / arg)
+            elif arg == "-u":
+                # Each file is a separate compilation unit (IEEE 1800-2017
+                # 3.12.1); otherwise iverilog compiles them as one.
+                separate_units = True
+            elif re.fullmatch(r"-P\w+\.\w+=.*", arg):
+                overrides.append(arg[2:].split(".", 1)[1])
+            elif arg in ("-Tmin", "-Ttyp", "-Tmax"):
                 # iverilog's min/typ/max delay selection.
                 delay_mode = ["--delay-mode", arg[2:]]
             elif arg in ("-g2005-sv", "-g2009", "-g2012"):
@@ -1933,7 +1990,7 @@ def ivtest_cases(root: Path) -> list[Case]:
                 pass  # iverilog-specific generation or warning flags
             else:
                 skip = f"iverilog option {arg}"
-        if test_type in ("NI", "EF", "TE", "CN") or test_type.startswith("vlog95"):
+        if test_type in ("NI", "TE", "CN") or test_type.startswith("vlog95"):
             skip = skip or f"ivtest type {test_type}"
         if not source.exists():
             skip = skip or "source not present"
@@ -1959,12 +2016,19 @@ def ivtest_cases(root: Path) -> list[Case]:
         compile_args += standard_args(language, standard)
         # iverilog runs from the ivtest root, so an include named
         # "ivltests/x.v" resolves against it as well (IEEE 1800-2017 22.4).
-        compile_args += ["-I", str(base / directory), "-I", str(base), str(source)]
+        compile_args += ["-I", str(base / directory), "-I", str(base)]
+        if extra_sources:
+            compile_args += ["--compilation-unit",
+                             "file" if separate_units else "source-set"]
+            if not all(path.is_file() for path in extra_sources):
+                skip = skip or "source not present"
+        compile_args += [str(path) for path in extra_sources] + [str(source)]
         commands = [Command("compile", compile_args)]
         if source.exists():
             # A module may come from an included file.
-            texts = [read_text(source)]
-            pending = [texts[0]]
+            texts = [read_text(path) for path in extra_sources
+                     if path.is_file()] + [read_text(source)]
+            pending = list(texts)
             for _ in range(4):
                 found = []
                 for text in pending:
@@ -1979,6 +2043,8 @@ def ivtest_cases(root: Path) -> list[Case]:
             elab = ["elaborate", "-q", "--no-aot"] + delay_mode
             for top in tops:
                 elab += ["--top", top]
+            for override in overrides:
+                elab += ["--generic", override]
             # iverilog's compile step includes elaboration, so a CE test
             # may be rejected by fsim's elaborate as well, and a CO
             # (compile-only) test passes once it elaborates.
@@ -2408,7 +2474,7 @@ NVC_NONSTANDARD = {
 
 NVC_SKIP_FLAGS = {
     "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
-    "dump-arrays", "export", "define", "H", "exit",
+    "dump-arrays", "export", "H", "exit",
 }
 
 # This source is legal VHDL-93, but its function returns a record aggregate
@@ -2454,6 +2520,10 @@ def nvc_cases(root: Path) -> list[Case]:
         standard = "93"
         generics: list[str] = []
         stop_time = None
+        work_library = None
+        defines: list[str] = []
+        environment: dict[str, str] = {}
+        plusargs: list[str] = []
         skip = None
         verilog = False
         mixed = False
@@ -2474,25 +2544,33 @@ def nvc_cases(root: Path) -> list[Case]:
                 # a component declaration (default binding across languages,
                 # docs/cross-language-semantics.md).
                 mixed = True
-            elif key == "stop-time":
+            elif key in ("stop-time", "stop"):
+                # nvc's `stop=T` is its --stop-time option.
                 stop_time = value
+            elif key == "work":
+                work_library = value
+            elif key == "define":
+                # A VHDL-2019 conditional analysis identifier (IEEE
+                # 1076-2019 24.2), set like nvc's --define.
+                defines.append(value)
             elif key.startswith("guut."):
                 skip = skip or "hierarchical generic override"
             elif key.startswith("g") and value and len(key) > 1:
                 generics.append(f"{key[1:]}={value}")
             elif key in ("seed", "slow", "!windows", "O0", "O2", "no-collapse",
-                         "shuffle", "per-file", "psl", "work", "stop"):
-                if key == "work":
-                    skip = skip or "requires named work library"
-                if key == "stop":
-                    skip = skip or "nvc stop-delta option"
+                         "shuffle", "per-file", "psl"):
                 if key == "shuffle":
                     # Process execution order within a cycle is unspecified
                     # (IEEE 1076-2008 14.7.5); the test asserts nvc's
                     # --shuffle reordering.
                     skip = skip or "nvc --shuffle process order"
-            elif key.startswith("+") or key.startswith("$"):
-                skip = skip or f"nvc option {flag}"
+            elif key.startswith("$"):
+                # An environment variable the test reads through
+                # std.env.getenv (IEEE 1076-2019 16.5.6).
+                environment[key[1:]] = value
+            elif key.startswith("+"):
+                # A plusarg for the simulation (the VHPI tool arguments).
+                plusargs.append(flag)
             elif key in NVC_SKIP_FLAGS:
                 skip = skip or f"nvc-specific test kind {key}"
         if name in NVC_NONSTANDARD:
@@ -2514,6 +2592,11 @@ def nvc_cases(root: Path) -> list[Case]:
             top = vhdl_top_spec(name, [read_text(source)])
         if not source.exists():
             skip = skip or "source not present"
+        for define in defines:
+            compile_args += ["-D", define]
+        if work_library:
+            compile_args += ["--library", work_library]
+            top = f"{work_library}.{top}"
         compile_args.append(str(source))
         commands = [Command("compile", compile_args)]
         if mixed:
@@ -2534,7 +2617,8 @@ def nvc_cases(root: Path) -> list[Case]:
         sim = ["simulate", "--engine", "{engine}"]
         if stop_time:
             sim += ["--duration", stop_time]
-        env = {}
+        sim += plusargs
+        env = dict(environment)
         if vhpi:
             if not (root / "sources" / "nvc-vhpi" / "test" / "vhpi").is_dir():
                 skip = skip or "source not present"

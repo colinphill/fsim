@@ -207,6 +207,56 @@ std::string compiled_systemverilog_type_identity(
 
 namespace fsim::elaboration {
 
+std::optional<semantic::DeclarationId>
+HierarchyBuilder::compiled_systemverilog_scoped_parameter(
+    const semantic::CompiledUnitView& child,
+    const std::string_view scope_path,
+    const std::string_view name) const
+{
+    std::vector<std::string_view> segments;
+    for (std::size_t begin { }; begin <= scope_path.size();) {
+        const auto end = std::min(scope_path.find('.', begin),
+            scope_path.size());
+        segments.push_back(scope_path.substr(begin, end - begin));
+        begin = end + 1U;
+    }
+    std::optional<semantic::DeclarationId> found;
+    for (const auto& declaration : compiled_->systemverilog_hir.declarations()) {
+        if (declaration.form != semantic::sv::DeclarationForm::parameter
+            || declaration.name != name
+            || declaration.scope == child.systemverilog->scope) {
+            continue;
+        }
+        // The named scopes between the declaration and the unit, innermost
+        // first; an unnamed process or block scope adds no name.
+        std::vector<std::string_view> names;
+        bool inside { };
+        std::optional<semantic::ScopeId> current { declaration.scope };
+        for (std::size_t depth { }; current && depth < 4096U; ++depth) {
+            if (*current == child.systemverilog->scope) {
+                inside = true;
+                break;
+            }
+            const auto* scope = compiled_->find_scope(*current);
+            if (scope == nullptr) {
+                break;
+            }
+            if (!scope->name.empty() && !scope->name.starts_with('<')) {
+                names.push_back(scope->name);
+            }
+            current = scope->parent;
+        }
+        if (inside && std::ranges::equal(names | std::views::reverse,
+                          segments)) {
+            if (found) {
+                return std::nullopt;
+            }
+            found = declaration.id;
+        }
+    }
+    return found;
+}
+
 HierarchyBuilder::CompiledSystemVerilogParameterResult
 HierarchyBuilder::resolve_compiled_systemverilog_parameters(
     const semantic::CompiledUnitView& child,
@@ -279,8 +329,23 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
         }
     }
     for (auto& defparam : active_compiled_systemverilog_defparams_) {
+        // A parameter of a named block, task or function in the instance
+        // is redefined through its scope's hierarchical name (IEEE
+        // 1800-2017 23.10.1).
+        std::optional<semantic::DeclarationId> scoped_parameter;
         if (defparam.target_path != child_path) {
-            continue;
+            if (defparam.target_path.size() <= child_path.size() + 1U
+                || !defparam.target_path.starts_with(child_path)
+                || defparam.target_path[child_path.size()] != '.') {
+                continue;
+            }
+            scoped_parameter = compiled_systemverilog_scoped_parameter(
+                child, std::string_view { defparam.target_path }.substr(
+                           child_path.size() + 1U),
+                defparam.parameter);
+            if (!scoped_parameter) {
+                continue;
+            }
         }
         defparam.matched = true;
         auto override_instance = record;
@@ -292,13 +357,18 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             std::nullopt,
             defparam.source,
         });
-        const auto override_bindings
-            = semantic::resolve_specialized_hir_associations(
-                *compiled_, child.identity->id,
-                semantic::CompiledInstanceView {
-                    &override_instance, nullptr },
-                semantic::SpecializedHirAssociationSurface::parameters,
-                defparam.owner);
+        const auto override_bindings = scoped_parameter
+            ? semantic::resolve_specialized_hir_scoped_parameter_association(
+                  *compiled_, child.identity->id, *scoped_parameter,
+                  semantic::CompiledInstanceView {
+                      &override_instance, nullptr },
+                  defparam.owner)
+            : semantic::resolve_specialized_hir_associations(
+                  *compiled_, child.identity->id,
+                  semantic::CompiledInstanceView {
+                      &override_instance, nullptr },
+                  semantic::SpecializedHirAssociationSurface::parameters,
+                  defparam.owner);
         if (!override_bindings
             || override_bindings.bindings.size() != 1U) {
             const auto local_parameter = std::ranges::find_if(

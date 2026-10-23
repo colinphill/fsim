@@ -65,6 +65,11 @@ struct SystemVerilogClassRandomizeContainer {
   /// `.b.c`), each with its own profile here; a member that is not random
   /// keeps its value (IEEE 1800-2017 7.2, 18.4).
   std::vector<SystemVerilogClassPropertyValue> element_profiles;
+  /// A resizable array of structures: the member paths of one element
+  /// (`.a`, `.b.c`) with their profiles for a new element. Its size is
+  /// solved first when constrained; its elements are then `[i]` + path.
+  std::vector<std::string> member_paths;
+  std::vector<SystemVerilogClassPropertyValue> member_profiles;
 };
 
 /// The non-null objects reachable from `root` through class-handle

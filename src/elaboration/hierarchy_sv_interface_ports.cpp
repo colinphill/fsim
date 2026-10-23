@@ -452,7 +452,16 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
                             child_specialization, *expected->systemverilog,
                             *declaration->systemverilog);
             });
-        if (!supplied) {
+        if (supplied) {
+            if (const auto interface_handle
+                = systemverilog_interface_handles_.find(source_path);
+                interface_handle != systemverilog_interface_handles_.end()) {
+                systemverilog_interface_exports_.insert_or_assign(
+                    std::to_string(interface_handle->second) + ":"
+                        + member.name.spelling,
+                    child_path);
+            }
+        } else {
             diagnose(
                 "FSIM-ELAB-SVIFACE-009",
                 "modport export '" + member.name.spelling

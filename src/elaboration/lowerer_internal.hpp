@@ -246,7 +246,8 @@ public:
     void set_systemverilog_interface_handles(
         const std::unordered_map<std::string, std::uint64_t>* handles,
         const std::unordered_map<std::string, std::string>* types = nullptr,
-        const HirInstanceUnits* instance_units = nullptr)
+        const HirInstanceUnits* instance_units = nullptr,
+        const std::unordered_map<std::string, std::string>* exports = nullptr)
         noexcept;
     // Design-wide disable target labels (named blocks and tasks that a
     // disable statement may name from another process) and the labels a
@@ -431,6 +432,12 @@ public:
     void set_package_constant_signal(PackageConstantSignal materialize)
     {
         package_constant_signal_ = std::move(materialize);
+    }
+    // Binds generics, such as a package instance's generic map, for every
+    // process lowered next (IEEE 1076-2008 4.9, 6.5.6.2).
+    void set_base_generic_binding_frame(semantic::CompiledBindingFrame frame)
+    {
+        base_generic_binding_frame_ = std::move(frame);
     }
     // Materializes a SystemVerilog package unpacked-array variable as a
     // design-global container object on its first use.
@@ -1176,6 +1183,9 @@ private:
         std::optional<semantic::DeclarationId> object;
         // A handle variable named hierarchically (`t.vif.m`): its signal.
         std::optional<SignalId> handle_signal;
+        // An element of an array of handles (`vifs[i].m`): the selection,
+        // whose element binding holds the handle.
+        std::optional<semantic::ExpressionId> element;
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
         // A parameter of the interface (`vif.P`): each instance's value.
         std::vector<std::pair<std::uint64_t, PackedLogic4>> parameters;
@@ -1594,6 +1604,12 @@ private:
     // context (assignment target, initialized object, comparison operand,
     // case selector, or attribute prefix) is CHARACTER.
     void collect_hir_vhdl_character_contexts() const;
+    // Whether a scope is a class body: its declarations are object or class
+    // storage, never storage of the instance that names them (8.5, 8.9).
+    [[nodiscard]] bool hir_class_body_scope(semantic::ScopeId scope) const;
+    mutable const semantic::sv::Hir* hir_class_body_scope_hir_ { };
+    mutable std::uint64_t hir_class_body_scope_revision_ { };
+    mutable std::unordered_set<std::uint32_t> hir_class_body_scopes_;
     mutable const semantic::vhdl::Hir* hir_vhdl_character_context_hir_ { };
     mutable std::uint64_t hir_vhdl_character_context_revision_ { };
     mutable std::unordered_set<std::uint32_t>
@@ -2515,6 +2531,11 @@ private:
     [[nodiscard]] bool hir_expression_is_string(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // A string, or an integral value read as one: a plusarg string or a
+    // run-time format (IEEE 1800-2017 21.3.3, 21.6).
+    [[nodiscard]] bool hir_text_operand(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::size_t>
     hir_vhdl_predefined_string_concat_length(
         semantic::ExpressionId expression,
@@ -2541,6 +2562,11 @@ private:
         semantic::ScopeId process_scope) const;
     [[nodiscard]] HirStringFormatStatus hir_string_format_task_status(
         semantic::StatementId statement,
+        semantic::ScopeId process_scope) const;
+    // A format operand known only at run time and its value arguments
+    // (IEEE 1800-2017 21.3.3).
+    [[nodiscard]] HirStringFormatStatus hir_runtime_format_status(
+        std::span<const semantic::ExpressionId> arguments,
         semantic::ScopeId process_scope) const;
     // The `width`-bit `selection` of `value`; fails when the selection is
     // not `width` bits or leaves the register.
@@ -2573,6 +2599,10 @@ private:
     lower_hir_string_expression(
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    // A string operand, or a packed one's bytes with zero bytes dropped
+    // (IEEE 1800-2017 6.16, 6.24.1).
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_text_value(
+        semantic::ExpressionId operand);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_format_expression(
         semantic::ExpressionId expression);
@@ -2580,6 +2610,9 @@ private:
     lower_hir_formatted_string(
         std::span<const semantic::ExpressionId> arguments,
         std::optional<frontend::OutputFormat> default_format);
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_runtime_formatted_string(
+        std::span<const semantic::ExpressionId> arguments);
     [[nodiscard]] bool lower_hir_string_format_task(
         semantic::StatementId statement);
     [[nodiscard]] bool lower_hir_statements(
@@ -3094,6 +3127,10 @@ private:
         bool& applies);
     [[nodiscard]] std::optional<HirStaticContainerValue>
     lower_hir_static_container_value(semantic::ExpressionId expression);
+    [[nodiscard]] std::optional<HirStaticContainerValue>
+    lower_hir_randomize_array(semantic::ExpressionId operand,
+        std::optional<HirSvValuePath>& path,
+        std::optional<runtime::simir::ContainerObjectId>& object);
     enum class HirContainerExpressionPurpose : std::uint8_t {
         reduction_transformation,
         locator_predicate,
@@ -3884,6 +3921,9 @@ private:
     // allocates that declaration's class specialization (IEEE 1800-2017
     // 8.25, 8.7).
     std::optional<semantic::DeclarationId> hir_allocation_target_;
+    // A class property target's type in the receiver's specialization
+    // (`c.sc = new` with `Cls #(int) c`, IEEE 1800-2017 8.23, 8.25).
+    std::optional<semantic::sv::TypeReference> hir_allocation_target_type_;
     [[nodiscard]] std::optional<std::string>
     hir_allocation_target_specialization(
         std::string_view class_identity);
@@ -4249,6 +4289,10 @@ private:
     // function or task called through the instance has its types
     // (IEEE 1800-2017 25.7).
     const HirInstanceUnits* systemverilog_instance_units_ { };
+    // The instance defining each subroutine a modport exports, keyed
+    // "<interface handle>:<name>" (IEEE 1800-2017 25.7.3).
+    const std::unordered_map<std::string, std::string>*
+        systemverilog_interface_exports_ { };
     [[nodiscard]] const semantic::SpecializedHirUnit* hir_callee_unit(
         std::string_view receiver) const;
     // Lowers in another specialization for its lifetime; a null unit keeps
@@ -4467,6 +4511,7 @@ private:
         hir_case_pattern_binding_frames_;
     mutable std::vector<semantic::CompiledBindingFrame>
         hir_generic_binding_frames_;
+    std::optional<semantic::CompiledBindingFrame> base_generic_binding_frame_;
     mutable std::unordered_set<std::uint32_t>
         hir_vhdl_function_shape_frames_;
     Process process_;
@@ -4628,6 +4673,17 @@ private:
     [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
     hir_instance_callable(std::string_view receiver, std::string_view member,
         bool function) const;
+    // An interface subroutine prototype called through `receiver` whose
+    // body a module connected through an exporting modport defines (IEEE
+    // 1800-2017 25.7.3): that instance's task or function, or an invalid
+    // declaration while the exporting instance is not yet elaborated.
+    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
+    hir_exported_interface_callable(std::string_view receiver,
+        semantic::DeclarationId declaration, bool function) const;
+    // `bif.consumer` names interface instance `bif` through its modport
+    // `consumer` (IEEE 1800-2017 25.5): the instance's name.
+    [[nodiscard]] std::optional<std::string_view>
+    hir_interface_instance_through_modport(std::string_view receiver) const;
     [[nodiscard]] std::optional<std::string> hir_systemverilog_constant_path(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(

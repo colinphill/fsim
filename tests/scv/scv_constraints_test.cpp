@@ -139,7 +139,10 @@ int main()
         == ScvConstraintStatus::rejected);
     assert(has_code(overflow_diagnostics, "FSIM-SCV-Q001"));
 
-    auto resource = unsatisfiable;
+    // The single-variable clauses of `unsatisfiable` empty x's values before
+    // any search step, so the step limit is exercised by a request that
+    // must search.
+    auto resource = request;
     resource.limits.max_search_steps = 1U;
     fsim::diagnostic::Engine resource_diagnostics;
     const auto exhausted = solve_scv_constraints(

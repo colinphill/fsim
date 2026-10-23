@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/frontend/design_core.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 
@@ -66,16 +67,7 @@ namespace fsim::elaboration {
 }
 
 /// The SimIR format of a conversion that consumes a value; %m and %t do not.
-[[nodiscard]] inline runtime::simir::OutputFormat runtime_output_format(
-    const frontend::OutputFormat format)
-{
-    if (format == frontend::OutputFormat::Hierarchy
-        || format == frontend::OutputFormat::Library
-        || format == frontend::OutputFormat::Time) {
-        throw std::logic_error { "invalid runtime string format" };
-    }
-    return runtime_output_format(hir_output_format(format));
-}
+using runtime::simir::runtime_output_format;
 
 [[nodiscard]] constexpr semantic::sv::AssertionSeverity hir_assertion_severity(
     const frontend::AssertionSeverity severity) noexcept

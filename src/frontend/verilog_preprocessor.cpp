@@ -1369,18 +1369,19 @@ namespace {
                 name.text, std::move(parameters), std::move(replacement),
                 name.span
             };
+            // Redefinition is allowed and the latest definition prevails
+            // (IEEE 1800-2023 22.5.1); a different one is worth a warning.
             if (const auto existing = macros_.find(name.text);
                 existing != macros_.end()
                 && !same_macro(existing->second, definition)) {
-                diagnose(
+                diagnostics_.push_back({ DiagnosticSeverity::Warning,
                     "FSIM-SV-PP-044",
                     "macro `" + name.text
                         + "' is redefined with a different parameter list or "
                           "replacement",
                     name.span,
                     { "previous definition at "
-                        + location_text(existing->second.definition) });
-                return;
+                        + location_text(existing->second.definition) } });
             }
             macros_[name.text] = std::move(definition);
         }

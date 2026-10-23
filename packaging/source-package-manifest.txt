@@ -2119,6 +2119,7 @@ tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_final_procedure_termination.sv
 tests/fixtures/compliance/sv_force_switches_and_strengths.sv
 tests/fixtures/compliance/sv_function_statements.sv
+tests/fixtures/compliance/sv_gate_array_parameter_bounds_batch89.sv
 tests/fixtures/compliance/sv_generate_interfaces_and_upward_names.sv
 tests/fixtures/compliance/sv_generate_references.sv
 tests/fixtures/compliance/sv_generated_scope_callable_batch58_20261013.sv
@@ -2141,6 +2142,7 @@ tests/fixtures/compliance/sv_language_details_batch53.sv
 tests/fixtures/compliance/sv_language_details_batch54.sv
 tests/fixtures/compliance/sv_local_queue_output_index_20261013.sv
 tests/fixtures/compliance/sv_macro_continued_comments_batch56.sv
+tests/fixtures/compliance/sv_modport_export_batch89.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_mutable_index_callable_fold_batch58.sv
 tests/fixtures/compliance/sv_nested_interface_member_port_20261013.sv
@@ -2158,8 +2160,10 @@ tests/fixtures/compliance/sv_patterns_and_aggregates.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_queue_pop_result_type_20261013.sv
 tests/fixtures/compliance/sv_randsequence.sv
+tests/fixtures/compliance/sv_randsequence_recursion_batch89.sv
 tests/fixtures/compliance/sv_real_to_time_assignment_batch58.sv
 tests/fixtures/compliance/sv_real_values_and_events.sv
+tests/fixtures/compliance/sv_runtime_format_and_stream_with_batch89.sv
 tests/fixtures/compliance/sv_sequence_properties.sv
 tests/fixtures/compliance/sv_sformat_packed_output_batch58.sv
 tests/fixtures/compliance/sv_sscanf_hierarchy_batch58.sv

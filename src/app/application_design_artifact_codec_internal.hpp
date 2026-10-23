@@ -960,7 +960,8 @@ namespace codec_detail {
             value.destination, value.handle, value.source, value.string_source,
             value.conversions, value.trailing_text, value.require_assignments,
             value.success, value.consume_string_source,
-            value.hierarchy_path, value.time_unit_femtoseconds);
+            value.hierarchy_path, value.time_unit_femtoseconds,
+            value.runtime_format, value.plusarg_value);
     }
 
     template <typename T>

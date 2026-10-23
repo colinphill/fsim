@@ -175,6 +175,7 @@ namespace fsim::runtime::simir {
         || operation_holds<VhdlEnvironmentDirectory>(operation)
         || operation_holds<VhdlEnvironmentGetenv>(operation)
         || operation_holds<SignalStrengthText>(operation)
+        || operation_holds<RuntimeStringFormat>(operation)
         || operation_holds<ClassPropertyContainerRead>(operation)
         || operation_holds<ClassPropertyContainerWrite>(operation)
         || operation_holds<VhdlEnvironmentCallPath>(operation)

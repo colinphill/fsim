@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
@@ -327,6 +328,73 @@ constexpr std::size_t vhdl_directory_text_limit = 1024U * 1024U;
 
 
 } // namespace
+
+std::optional<std::vector<SystemVerilogConstraintTemplate>>
+bind_inline_constraint_containers(
+    const std::span<const SystemVerilogConstraintTemplate> constraints,
+    const std::function<ContainerValue(ContainerRegisterId)>& read)
+{
+    const auto names_container = [&](const auto& self,
+                                     const SystemVerilogConstraintTemplate&
+                                         node) -> bool {
+        return node.text.starts_with(inline_container_prefix)
+            || std::ranges::any_of(node.operands,
+                [&](const auto& operand) { return self(self, operand); });
+    };
+    if (!std::ranges::any_of(constraints, [&](const auto& node) {
+            return names_container(names_container, node);
+        })) {
+        return std::nullopt;
+    }
+    std::vector<SystemVerilogConstraintTemplate> bound {
+        constraints.begin(), constraints.end() };
+    const auto fill = [&](const auto& self,
+                          SystemVerilogConstraintTemplate& node) -> void {
+        if (!node.text.starts_with(inline_container_prefix)) {
+            for (auto& operand : node.operands) {
+                self(self, operand);
+            }
+            return;
+        }
+        const auto value = read(static_cast<ContainerRegisterId>(std::stoul(
+            node.text.substr(inline_container_prefix.size()))));
+        if (value.type.element_kind != ContainerElementKind::Packed) {
+            throw std::invalid_argument {
+                "randomize with-clause array must hold packed elements"
+            };
+        }
+        // A fixed-size array's size is that of its first dimension (IEEE
+        // 1800-2017 7.4.5, 7.5.1).
+        auto size = value.elements.size();
+        if (value.type.fixed && value.type.dimensions.size() > 1U) {
+            const auto [left, right] = value.type.dimensions.front();
+            size = static_cast<std::size_t>(
+                       left >= right ? left - right : right - left)
+                + 1U;
+        }
+        node.kind = SystemVerilogConstraintTemplateKind::Name;
+        node.text = std::string { inline_elements_name };
+        node.constant = PackedLogic4::from_aval_bval(32U, size, 0U);
+        node.operands.clear();
+        for (const auto& element : value.elements) {
+            SystemVerilogConstraintTemplate constant;
+            constant.kind = SystemVerilogConstraintTemplateKind::Constant;
+            constant.profile = node.profile;
+            if (element.width() != node.profile.width) {
+                throw std::invalid_argument {
+                    "randomize with-clause array element does not match its "
+                    "constraint"
+                };
+            }
+            constant.constant = element;
+            node.operands.push_back(std::move(constant));
+        }
+    };
+    for (auto& node : bound) {
+        fill(fill, node);
+    }
+    return bound;
+}
 
 void Interpreter::Impl::execute_scope_randomize(
     ProcessState& process,
@@ -859,35 +927,17 @@ void Interpreter::Impl::handle_boundary(
             process.pc = instruction;
             fail(process, "plusarg boundary requires an executor");
         }
-        const auto prefix = process.executor->read_string_register(
-            query->query);
-        const std::string* selected = nullptr;
-        for (const auto& argument : plusargs) {
-            auto candidate = std::string_view { argument };
-            if (candidate.starts_with('+')) {
-                candidate.remove_prefix(1);
-            }
-            if (candidate.starts_with(prefix)) {
-                selected = &argument;
-                break;
-            }
-        }
+        const auto selected = select_plusarg(plusargs,
+            process.executor->read_string_register(query->query),
+            query->format_query);
         if (query->selected) {
-            auto selected_text = std::string_view { };
-            if (selected != nullptr) {
-                selected_text = *selected;
-                if (selected_text.starts_with('+')) {
-                    selected_text.remove_prefix(1);
-                }
-            }
             process.executor->write_string_register(
-                *query->selected, selected_text);
+                *query->selected, selected.value_or(std::string_view { }));
         }
         write_process_register(
             process,
             query->destination,
-            PackedLogic4::from_aval_bval(
-                32, selected != nullptr ? 1U : 0U, 0));
+            PackedLogic4::from_aval_bval(32, selected ? 1U : 0U, 0));
         return;
     }
     if (const auto* command
@@ -1991,6 +2041,40 @@ void Interpreter::Impl::handle_boundary(
         }
         return;
     }
+    if (const auto* format
+        = fsim::runtime::simir::operation_get_if<
+            RuntimeStringFormat>(&operation)) {
+        try {
+            auto text = format_runtime_string(*format,
+                process.executor
+                    ? process.executor->read_string_register(format->format)
+                    : get_string_register(process, format->format),
+                [&](const RuntimeFormatArgument& argument) {
+                    return process.executor
+                        ? process.executor->read_register(
+                              argument.value, argument.width)
+                        : get_register(process, argument.value);
+                },
+                [&](const RuntimeFormatArgument& argument) {
+                    return process.executor
+                        ? process.executor->read_string_register(
+                              argument.value)
+                        : get_string_register(process, argument.value);
+                },
+                scheduler.now(), time_format);
+            if (process.executor) {
+                process.executor->write_string_register(
+                    format->destination, text);
+            } else {
+                get_string_register(process, format->destination)
+                    = std::move(text);
+            }
+        } catch (const std::exception& error) {
+            process.pc = instruction;
+            fail(process, error.what());
+        }
+        return;
+    }
     if (const auto* environment
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentGetenv>(&operation)) {
@@ -2380,6 +2464,12 @@ void Interpreter::Impl::handle_boundary(
             method->receiver)
                                 .low_word()
                                 .aval;
+        const auto bound_constraints = bind_inline_constraint_containers(
+            method->inline_constraints, [&](const ContainerRegisterId id) {
+                return process.executor
+                    ? process.executor->read_container_register(id)
+                    : read_container_register(process, id);
+            });
         write_process_register(
             process,
             method->destination,
@@ -2392,7 +2482,11 @@ void Interpreter::Impl::handle_boundary(
                           string_actuals,
                           method->actual_names,
                           method->actual_directions,
-                          method->inline_constraints,
+                          bound_constraints
+                              ? std::span<const SystemVerilogConstraintTemplate> {
+                                    *bound_constraints }
+                              : std::span<const SystemVerilogConstraintTemplate> {
+                                    method->inline_constraints },
                           method->virtual_dispatch),
                 method->result_width));
         for (std::size_t index = 0; index < actuals.size(); ++index) {

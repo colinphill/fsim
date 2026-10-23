@@ -443,10 +443,19 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     "VHDL TextIO STRING target exceeds scan limit"
                 };
             }
-            if (scan->string_source) {
+            // An invalid run-time format, or one whose conversions do not
+            // match the targets, assigns nothing.
+            const bool format_valid = !scan->runtime_format
+                || runtime::simir::apply_runtime_scan_format(effective_scan,
+                    state.executor->read_string_register(
+                        *scan->runtime_format));
+            if (!format_valid) {
+            } else if (scan->string_source) {
                 auto& source = state.executor->string_registers_.at(scan->source);
                 scanned = runtime::simir::scan_formatted_string(
                     effective_scan, source, active_time_format);
+                runtime::simir::complete_plusarg_value(
+                    effective_scan, source, scanned);
                 runtime::simir::consume_scanned_source(*scan, source, scanned);
             } else {
                 const auto handle = checked_file_handle(input0_aval, input0_bval);
@@ -463,8 +472,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 scanned = runtime::simir::scan_formatted_input(
                     effective_scan, read, unread, active_time_format);
             }
-            const bool complete
-                = runtime::simir::file_scan_complete(*scan, scanned);
+            const bool complete = format_valid
+                && runtime::simir::file_scan_complete(effective_scan, scanned);
             if (scan->success) {
                 state.executor->write_register(
                     *scan->success,
@@ -479,7 +488,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             for (std::size_t index = 0; index < scanned.values.size(); ++index) {
                 if (!scanned.values[index])
                     continue;
-                const auto& target = scan->conversions[index].target;
+                const auto& target = effective_scan.conversions[index].target;
                 auto& value = *scanned.values[index];
                 switch (target.kind) {
                 case runtime::simir::InputScanTargetKind::packed_register:

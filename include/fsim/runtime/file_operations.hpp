@@ -145,6 +145,14 @@ struct FileScan {
     // The lexical time unit for %t conversions; the active $timeformat is
     // supplied at execution because $timeformat can change at run time.
     std::uint64_t time_unit_femtoseconds { };
+    // A string register holding a run-time format (IEEE 1800-2017 21.3.4.3,
+    // 21.6). `conversions` then hold only the targets of the unsuppressed
+    // conversions, in order; execution parses the format and pairs them.
+    std::optional<std::uint32_t> runtime_format;
+    // $value$plusargs conversion (IEEE 1800-2017 21.6): a remainder with no
+    // digits stores zero or an empty string, one with characters illegal for
+    // the conversion stores 'bx.
+    bool plusarg_value { };
     FileScan(
         std::uint32_t destination_value = 0,
         std::uint32_t handle_value = 0,

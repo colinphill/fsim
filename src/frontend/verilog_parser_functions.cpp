@@ -109,6 +109,13 @@ FunctionDeclaration VerilogParser::parse_function(
     const auto name_position = position();
     const auto name = expect_identifier("function name");
     function.name = name.text;
+    // `function int port.f(...)` defines the function `f` that a modport
+    // of the interface port exports (IEEE 1800-2017 25.7.3).
+    if (language_ == Language::SystemVerilog2017 && at(TokenKind::Dot)
+        && at(TokenKind::Identifier, 1)) {
+      advance();
+      function.name = expect_identifier("exported function name").text;
+    }
     auto& recorded = callable_type_tokens_[function.name];
     recorded = { true, { tokens_.begin()
                              + static_cast<std::ptrdiff_t>(return_begin),
@@ -797,6 +804,13 @@ TaskDeclaration VerilogParser::parse_task(
 
   const auto name = expect_identifier("task name");
   task.name = name.text;
+  // `task port.send(...)` defines the task `send` that a modport of the
+  // interface port exports (IEEE 1800-2017 25.7.3).
+  if (language_ == Language::SystemVerilog2017 && at(TokenKind::Dot)
+      && at(TokenKind::Identifier, 1)) {
+    advance();
+    task.name = expect_identifier("exported task name").text;
+  }
   while (match(TokenKind::Scope)) {
     task.name += "::";
     task.name += expect_identifier("selected task name").text;

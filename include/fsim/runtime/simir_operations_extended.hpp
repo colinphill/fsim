@@ -616,6 +616,9 @@ struct PlusArgSelect {
     RegisterId destination { };
     StringRegisterId query { };
     std::optional<StringRegisterId> selected;
+    // `query` is a $value$plusargs user string whose plusarg string precedes
+    // its one conversion (IEEE 1800-2017 21.6).
+    bool format_query { };
 };
 
 /// Execute the standard SystemVerilog $system host boundary. An absent command
@@ -1256,6 +1259,63 @@ inline auto archive_fields(const VhdlEnvironmentGetenv& operation)
 inline auto archive_fields(VhdlEnvironmentGetenv& operation)
 {
     return std::tie(operation.destination, operation.name);
+}
+
+/// One value of a run-time format: a string register, or a packed register
+/// of `width` bits with its signedness and scalar kind.
+struct RuntimeFormatArgument {
+    std::uint32_t value { };
+    bool string { };
+    std::uint32_t width { };
+    bool is_signed { };
+    SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+    // `$time` itself, which %t shows as the current time.
+    bool current_time { };
+
+    friend bool operator==(const RuntimeFormatArgument&,
+        const RuntimeFormatArgument&) = default;
+};
+
+inline auto archive_fields(const RuntimeFormatArgument& argument)
+{
+    return std::tie(argument.value, argument.string, argument.width,
+        argument.is_signed, argument.scalar_kind, argument.current_time);
+}
+
+inline auto archive_fields(RuntimeFormatArgument& argument)
+{
+    return std::tie(argument.value, argument.string, argument.width,
+        argument.is_signed, argument.scalar_kind, argument.current_time);
+}
+
+/// $sformat, $sformatf or $swrite whose format is known only at run time
+/// (IEEE 1800-2017 21.3.3): the format is parsed as it executes and its
+/// conversions take `arguments` in order; `%m` shows `hierarchy` and `%l`
+/// `library_cell`.
+struct RuntimeStringFormat {
+    StringRegisterId destination { };
+    StringRegisterId format { };
+    std::vector<RuntimeFormatArgument> arguments;
+    std::uint64_t time_unit_femtoseconds { };
+    std::string hierarchy;
+    std::string library_cell;
+
+    friend bool operator==(const RuntimeStringFormat&,
+        const RuntimeStringFormat&) = default;
+};
+
+inline auto archive_fields(const RuntimeStringFormat& operation)
+{
+    return std::tie(operation.destination, operation.format,
+        operation.arguments, operation.time_unit_femtoseconds,
+        operation.hierarchy, operation.library_cell);
+}
+
+inline auto archive_fields(RuntimeStringFormat& operation)
+{
+    return std::tie(operation.destination, operation.format,
+        operation.arguments, operation.time_unit_femtoseconds,
+        operation.hierarchy, operation.library_cell);
 }
 
 /// The `%v` text of a net: each bit's strength and value

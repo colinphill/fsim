@@ -35,6 +35,8 @@ struct SequenceMatchItem {
     std::string target;
     Expression value;
     SourceSpan span;
+    // A subroutine call item (IEEE 1800-2023 16.11): its tokens.
+    std::vector<Token> call;
 };
 using SequenceMatchItems = std::vector<SequenceMatchItem>;
 using PropertyLocalNames = std::set<std::string, std::less<>>;
@@ -863,7 +865,7 @@ private:
                         span };
                 }
                 return SequenceMatchItem {
-                    item.front().text, std::move(*value), span };
+                    item.front().text, std::move(*value), span, { } };
             }
         }
         if (item.size() == 2U) {
@@ -887,7 +889,7 @@ private:
                             "1", { }, target->span } },
                     span };
                 return SequenceMatchItem { target->text,
-                    std::move(value), span };
+                    std::move(value), span, { } };
             }
         }
         if (item.size() >= 3U
@@ -949,14 +951,15 @@ private:
                 }
                 call.operands.push_back(std::move(*value));
             }
-            return SequenceMatchItem { { }, std::move(call), span };
+            return SequenceMatchItem { { }, std::move(call), span,
+                { item.begin(), item.end() } };
         }
         if (mentions_local(item)) {
             return std::nullopt;
         }
         return SequenceMatchItem {
             { }, Expression { ExpressionKind::BooleanLiteral, "1", { }, span },
-            span };
+            span, { } };
     }
 
     [[nodiscard]] SequencePointer parse_primary()
@@ -1067,6 +1070,19 @@ private:
                 for (std::size_t item_index = 1U;
                     item_index < elements.size(); ++item_index) {
                     const auto item = elements[item_index];
+                    if (item.size() >= 3U
+                        && item.front().kind == TokenKind::Identifier
+                        && item[1U].kind == TokenKind::LeftParen
+                        && item.back().kind == TokenKind::RightParen) {
+                        // A subroutine call item (16.11).
+                        const auto span
+                            = cover(item.front().span, item.back().span);
+                        match_items.push_back({ { },
+                            Expression { ExpressionKind::BooleanLiteral,
+                                "1", { }, span },
+                            span, { item.begin(), item.end() } });
+                        continue;
+                    }
                     if (item.size() < 3U
                         || item.front().kind != TokenKind::Identifier
                         || item[1U].kind != TokenKind::Assign) {
@@ -1079,7 +1095,7 @@ private:
                     }
                     match_items.push_back({ item.front().text,
                         std::move(*value),
-                        cover(item.front().span, item.back().span) });
+                        cover(item.front().span, item.back().span), { } });
                 }
                 auto node = std::make_shared<SequenceNode>();
                 node->condition = std::move(condition);
@@ -2381,6 +2397,22 @@ private:
             std::string effects;
             if (per_slot) {
                 for (const auto& item : transition.match_items) {
+                    if (item.target.empty() && !item.call.empty()) {
+                        // The call runs as a statement, a local read as
+                        // the attempt's slot.
+                        for (const auto& token : item.call) {
+                            const auto local = token.kind
+                                    == TokenKind::Identifier
+                                ? local_storage_.find(token.text)
+                                : local_storage_.end();
+                            effects += local == local_storage_.end()
+                                ? token.text
+                                : local->second + "[" + index + "]";
+                            effects += ' ';
+                        }
+                        effects += "; ";
+                        continue;
+                    }
                     const auto storage = local_storage_.find(item.target);
                     if (storage == local_storage_.end()) {
                         return false;

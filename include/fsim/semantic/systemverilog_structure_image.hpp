@@ -29,6 +29,12 @@ namespace fsim::semantic::sv {
 [[nodiscard]] const TypeDefinition* systemverilog_type_definition(
     const Hir& hir, const TypeReference& type);
 
+/// `type`, or, when it names a typedef of an unpacked array, dynamic array,
+/// queue or associative array (`arr_t m;`), that typedef's array type (IEEE
+/// 1800-2017 6.18).
+[[nodiscard]] const TypeReference& systemverilog_array_alias_type(
+    const Hir& hir, const TypeReference& type);
+
 /// The packed or unpacked structure `type` denotes, or null.
 [[nodiscard]] const TypeDefinition* systemverilog_structure_definition(
     const Hir& hir, const TypeReference& type);

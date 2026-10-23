@@ -1657,7 +1657,13 @@ namespace {
             sv::Declaration output;
             output.id = declaration_id;
             output.scope = scope;
-            output.form = sv::DeclarationForm::variable;
+            // A block `parameter` stays a constant a defparam can redefine
+            // (IEEE 1800-2017 6.20.1, 23.10.1).
+            output.form = input.systemverilog_parameter
+                    && !input.type.systemverilog_container
+                    && input.initializer
+                ? sv::DeclarationForm::parameter
+                : sv::DeclarationForm::variable;
             output.name = input.name;
             output.lifetime = input.systemverilog_automatic
                 ? sv::Lifetime::automatic

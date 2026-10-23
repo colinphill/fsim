@@ -109,6 +109,7 @@ struct OperationCacheTraits;
     X(VhdlEnvironmentGetenv, "VhdlEnvironmentGetenv") \
     X(VhdlEnvironmentCallPath, "VhdlEnvironmentCallPath") \
     X(SignalStrengthText, "SignalStrengthText") \
+    X(RuntimeStringFormat, "RuntimeStringFormat") \
     X(SystemVerilogScalarBinary, "SystemVerilogScalarBinary") \
     X(SystemVerilogMath, "SystemVerilogMath") \
     X(ResizeContainer, "ResizeContainer") \
@@ -280,7 +281,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 200U);
+static_assert(operation_cache_tags.size() == 201U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 
@@ -373,7 +374,8 @@ void add_semantic_value(CacheKeyBuilder& builder, const Value& value)
             value.source, value.string_source, value.conversions,
             value.trailing_text, value.require_assignments, value.success,
             value.consume_string_source, value.hierarchy_path,
-            value.time_unit_femtoseconds));
+            value.time_unit_femtoseconds, value.runtime_format,
+            value.plusarg_value));
     } else if constexpr (requires { typename std::tuple_size<Type>::type; }) {
         add_key_u64(builder, "field-count", std::tuple_size_v<Type>);
         std::apply([&](const auto&... field) {

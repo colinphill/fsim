@@ -6,6 +6,7 @@
 #include "scoped_bindings.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "../runtime/simir_process_program.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -635,6 +636,8 @@ private:
         const semantic::vhdl::Declaration& declaration);
     // The value of `expression` computed by running it at elaboration, as
     // the initial value of `destination`; nullopt when it cannot run.
+    // `generic_bindings` binds the generics of a package instance whose
+    // member the expression belongs to.
     std::optional<PackedLogic4> evaluate_compiled_vhdl_value(
         const semantic::SpecializedHirUnit& specialization,
         semantic::ExpressionId expression,
@@ -643,7 +646,8 @@ private:
         const std::string& path,
         SignalMap& signals,
         ReadOnlySignalSet& read_only_signals,
-        ContainerMap& container_objects);
+        ContainerMap& container_objects,
+        const semantic::CompiledBindingFrame* generic_bindings = nullptr);
     // An INTEGER-valued expression (an index bound) folded, or else run at
     // elaboration in a scratch signal of `width` bits.
     std::optional<std::int64_t> evaluate_compiled_vhdl_integer(
@@ -654,7 +658,8 @@ private:
         SignalMap& signals,
         ReadOnlySignalSet& read_only_signals,
         ContainerMap& container_objects,
-        frontend::ValueDomain domain = frontend::ValueDomain::Integer);
+        frontend::ValueDomain domain = frontend::ValueDomain::Integer,
+        const semantic::CompiledBindingFrame* generic_bindings = nullptr);
     // A composite VHDL constant whose elements are not single logic values,
     // materialized as a read-only signal named `name` holding its static
     // value; nullopt when the constant keeps the folding paths.
@@ -1060,6 +1065,13 @@ private:
         frontend::PortDirection direction,
         const frontend::SourceSpan& declaration_span);
 
+    // The `parameter` named `name` declared in the named block, task or
+    // function of `child` at `scope_path` (IEEE 1800-2017 23.10.1).
+    [[nodiscard]] std::optional<semantic::DeclarationId>
+    compiled_systemverilog_scoped_parameter(
+        const semantic::CompiledUnitView& child,
+        std::string_view scope_path,
+        std::string_view name) const;
     CompiledSystemVerilogParameterResult
     resolve_compiled_systemverilog_parameters(
         const semantic::CompiledUnitView& child,
@@ -1952,6 +1964,10 @@ private:
 
     std::unordered_map<std::string, std::uint64_t>
         systemverilog_interface_handles_;
+    // The instance that defines each subroutine a modport exports, keyed
+    // "<interface handle>:<name>" (IEEE 1800-2017 25.7.3).
+    std::unordered_map<std::string, std::string>
+        systemverilog_interface_exports_;
     std::unordered_map<std::string,
         std::vector<std::pair<std::string, std::string>>>
         systemverilog_interface_parameter_identities_;
@@ -2017,6 +2033,9 @@ private:
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);
+    [[nodiscard]] std::vector<semantic::SpecializedHirActualIdentity>
+    compiled_systemverilog_root_parameter_actuals(
+        const semantic::sv::Unit& root);
     struct PackageObjectBindings {
         SignalMap signals;
         ContainerMap containers;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
@@ -784,6 +785,12 @@ void Interpreter::Impl::execute(ProcessId id)
                                 : std::string { });
                     }
                     const auto handle = get_register(process, op.receiver).low_word().aval;
+                    const auto bound_constraints
+                        = bind_inline_constraint_containers(
+                            op.inline_constraints,
+                            [&](const ContainerRegisterId id) {
+                                return read_container_register(process, id);
+                            });
                     get_register(process, op.destination)
                         = class_method_call_context_hook(
                               process.id,
@@ -793,7 +800,11 @@ void Interpreter::Impl::execute(ProcessId id)
                               string_actuals,
                               op.actual_names,
                               op.actual_directions,
-                              op.inline_constraints,
+                              bound_constraints
+                                  ? std::span<const SystemVerilogConstraintTemplate> {
+                                        *bound_constraints }
+                                  : std::span<const SystemVerilogConstraintTemplate> {
+                                        op.inline_constraints },
                               op.virtual_dispatch);
                     for (std::size_t index = 0; index < actuals.size(); ++index) {
                         const auto string_actual = !op.actual_kinds.empty()
@@ -1021,31 +1032,14 @@ void Interpreter::Impl::execute(ProcessId id)
                 } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
                     execute_string(process, op);
                 } else if constexpr (std::is_same_v<OperationType, PlusArgSelect>) {
-                    const auto& query = get_string_register(process, op.query);
-                    const std::string* selected = nullptr;
-                    for (const auto& argument : plusargs) {
-                        auto candidate = std::string_view { argument };
-                        if (candidate.starts_with('+')) {
-                            candidate.remove_prefix(1);
-                        }
-                        if (candidate.starts_with(query)) {
-                            selected = &argument;
-                            break;
-                        }
-                    }
+                    const auto selected = select_plusarg(plusargs,
+                        get_string_register(process, op.query), op.format_query);
                     if (op.selected) {
-                        auto& destination = get_string_register(process, *op.selected);
-                        destination.clear();
-                        if (selected != nullptr) {
-                            auto candidate = std::string_view { *selected };
-                            if (candidate.starts_with('+')) {
-                                candidate.remove_prefix(1);
-                            }
-                            destination.assign(candidate);
-                        }
+                        get_string_register(process, *op.selected).assign(
+                            selected.value_or(std::string_view { }));
                     }
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(
-                        32, selected != nullptr ? 1U : 0U, 0);
+                        32, selected ? 1U : 0U, 0);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SystemCommand>) {
                     if (!system_command_hook) {
@@ -2480,6 +2474,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentGetCallPath>
                     || std::is_same_v<OperationType, SignalStrengthText>
+                    || std::is_same_v<OperationType, RuntimeStringFormat>
                     || std::is_same_v<OperationType, ClassPropertyContainerRead>
                     || std::is_same_v<OperationType, ClassPropertyContainerWrite>) {
                     boundary = true;

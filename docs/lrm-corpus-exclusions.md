@@ -10,11 +10,19 @@ Exclusions never count as closures.
 
 | suite | not run | out of scope |
 |---|---:|---:|
-| verilator | 70 | 289 |
-| ivtest | 20 | 299 |
+| sv-tests | 0 | 2 |
+| verilator | 63 | 292 |
+| ivtest | 7 | 301 |
 | vests | 2 | 0 |
-| nvc | 226 | 0 |
+| nvc | 218 | 0 |
 | vhdl-compliance | 7 | 0 |
+
+## sv-tests
+
+| case | kind | reason |
+|---|---|---|
+| `chapter-16/16.2--assert0-uvm.sv` | out of scope | expects a deferred assertion to see a nonblocking update made in the same time step; its expression is evaluated when the statement executes (IEEE 1800-2023 16.4) |
+| `chapter-16/16.7--sequence-and-uvm.sv` | out of scope | expects the attempt started at the first clock to pass although '##0 gnt2' samples gnt2 low there; the test notes every simulator fails it (IEEE 1800-2023 16.9) |
 
 ## verilator
 
@@ -59,6 +67,7 @@ Exclusions never count as closures.
 | `t_constraint_dist_if_foreach` | out of scope | writes a dist inside parentheses, which IEEE 1800-2017 A.1.10 does not allow (dist is a constraint item, not an expression) |
 | `t_constraint_dist_randmode_unsup` | out of scope | expects a Verilator unsupported-feature error for legal code |
 | `t_constraint_dist_weight` | out of scope | expects randomize to succeed with only zero-weight dist values; zero weights are constraints, so it fails (IEEE 1800-2017 18.5.4) |
+| `t_constraint_foreach` | out of scope | expects members of a non-rand structure member (cfg_t.subcfg) to randomize; only a rand structure's random members are solved (IEEE 1800-2023 18.4) |
 | `t_constraint_real_struct_field` | out of scope | expects members of a rand unpacked struct declared without rand to be random; only members with a rand or randc modifier are (IEEE 1800-2017 18.4) |
 | `t_cover_fsm_sel_assign` | out of scope | uses a Verilator metacomment |
 | `t_cover_line_cc` | out of scope | needs a zero-delay always loop to terminate |
@@ -70,14 +79,13 @@ Exclusions never count as closures.
 | `t_cover_sequence` | out of scope | expects Verilator's extra end-of-match count; the case notes other simulators count 95 |
 | `t_cover_toggle` | out of scope | mixes continuous and procedural assignments to one struct variable |
 | `t_cover_toggle_underscore` | out of scope | mixes continuous and procedural assignments to one struct variable |
+| `t_covergroup_coverpoint_method_unsup` | out of scope | compares get_inst_coverage with fractions of 1; coverage methods return a percentage from 0 to 100 (IEEE 1800-2023 19.11) |
 | `t_cpure` | out of scope | Verilator $c extension |
 | `t_detectarray_1` | out of scope | writes a variable member with both a continuous assignment and a procedural assignment, which is an error (IEEE 1800-2017 6.5) |
 | `t_detectarray_2` | out of scope | writes a variable member with both a continuous assignment and a procedural assignment, which is an error (IEEE 1800-2017 6.5) |
 | `t_disable_fork_instances` | out of scope | calls push_back on a function-result temporary |
 | `t_disable_fork_join` | out of scope | Verilator $c extension |
-| `t_disable_genfor_unsup` | not run | lint-only test |
 | `t_disable_inside` | out of scope | Verilator $c extension |
-| `t_disable_within_task_unsup` | not run | lint-only test |
 | `t_display` | out of scope | uses the left-justify format flag (%-d, %-0d), which IEEE 1800-2023 21.2.1.3 does not define |
 | `t_display_enum_format` | out of scope | calls $sformatf in a constant expression |
 | `t_display_noopt` | out of scope | uses the left-justify format flag (%-d, %-0d), which IEEE 1800-2023 21.2.1.3 does not define |
@@ -132,9 +140,8 @@ Exclusions never count as closures.
 | `t_flag_parameter_pkg` | out of scope | depends on a Verilator command-line flag |
 | `t_force_array_element_index` | out of scope | expects an out-of-range 64-bit index to truncate to the array's index width; an out-of-bounds read returns x (IEEE 1800-2017 7.4.6, 11.5.1) |
 | `t_force_assign` | out of scope | depends on the order of same-time-step processes |
-| `t_force_complex_sel_unsup` | not run | lint-only test |
+| `t_force_complex_sel_unsup` | out of scope | forces and releases an element selected by a non-constant ($random) index; a force target may use only constant selects (IEEE 1800-2023 10.6.2) |
 | `t_force_mid` | not run | needs the Verilator C++ model API |
-| `t_force_readwrite_unsup` | not run | lint-only test |
 | `t_forceable_net_cmt` | not run | needs the Verilator C++ model API |
 | `t_forceable_net_cmt_trace` | not run | needs the Verilator C++ model API |
 | `t_forceable_net_vlt` | not run | needs the Verilator C++ model API |
@@ -233,7 +240,6 @@ Exclusions never count as closures.
 | `t_property_abort_implication` | out of scope | expects Verilator's sync_reject_on failure counts (IEEE 1800-2017 16.12.14) |
 | `t_property_if_else` | out of scope | depends on the order of same-time-step processes |
 | `t_property_range_ring` | out of scope | expects a consequent failure at the tick after its last possible start; it fails when no match remains (IEEE 1800-2017 16.12.6) |
-| `t_property_s_eventually_unsup` | not run | lint-only test |
 | `t_property_sexpr_disable` | out of scope | expects Verilator's disable iff pass count; the disable condition uses current values from the attempt's start through its end (IEEE 1800-2017 16.12) |
 | `t_property_unsup` | not run | lint-only test |
 | `t_property_until_implication` | out of scope | counts failures once per cycle; each attempt fails separately (IEEE 1800-2017 16.14.1) |
@@ -271,8 +277,6 @@ Exclusions never count as closures.
 | `t_split_var_5` | out of scope | assumes two-state initial values |
 | `t_split_var_types` | out of scope | needs a zero-delay always loop to terminate |
 | `t_static_task_args` | out of scope | expects automatic argument storage in recursive static tasks (IEEE 1800-2017 13.3.2) |
-| `t_std_randomize_mod` | not run | lint-only test |
-| `t_std_randomize_no_args` | not run | lint-only test |
 | `t_stream` | out of scope | expects a wide source unpacked by << to keep its rightmost bits; unpacking consumes bits from the left (IEEE 1800-2017 11.4.14.3) |
 | `t_stream_bitqueue` | out of scope | compares %p text against Verilator's hexadecimal elements |
 | `t_stream_crc_example` | out of scope | compares %p text against Verilator's hexadecimal elements |
@@ -407,8 +411,6 @@ Exclusions never count as closures.
 | `br1019` | out of scope | depends on Icarus's process order within a time step |
 | `br1029a` | out of scope | formats a real with %d/%x/%b |
 | `br1029b` | out of scope | formats a real with %d/%x/%b |
-| `br605a` | not run | ivtest type EF |
-| `br605b` | not run | ivtest type EF |
 | `br916a` | out of scope | Icarus diagnostic in gold output |
 | `br916b` | out of scope | Icarus diagnostic in gold output |
 | `br921` | out of scope | Icarus diagnostic in gold output |
@@ -416,7 +418,6 @@ Exclusions never count as closures.
 | `br960b` | out of scope | SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2) |
 | `br960c` | out of scope | SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2) |
 | `br960d` | out of scope | SDF file without the required SDFVERSION header (IEEE 1497-2001 5.2) |
-| `br971` | not run | ivtest type EF |
 | `br978` | out of scope | Icarus system task extension |
 | `br979` | out of scope | uses Icarus preprocessor behavior |
 | `br988` | out of scope | depends on Icarus's process order within a time step |
@@ -435,9 +436,8 @@ Exclusions never count as closures.
 | `br_gh1298` | out of scope | expects an unspecified x-condition string result |
 | `br_gh156` | out of scope | expects Icarus's VCD layout |
 | `br_gh315` | out of scope | uses the non-standard %-d flag |
-| `br_gh377` | not run | iverilog option -Ptest.name= |
+| `br_gh377` | out of scope | expects Icarus's command-line diagnostic for an empty -P parameter value; command-line overrides are a tool option outside IEEE 1364 and IEEE 1800 |
 | `br_gh433` | out of scope | Icarus diagnostic in gold output |
-| `br_gh451` | not run | iverilog option -Ptest.foo=4 |
 | `br_gh456` | out of scope | Icarus syntax extension |
 | `br_gh484` | out of scope | uses `" or `__LINE__ in Verilog-2005 mode |
 | `br_gh531` | out of scope | uses SystemVerilog constructs in Verilog-2005 mode |
@@ -463,7 +463,6 @@ Exclusions never count as closures.
 | `cast_real_unsigned` | out of scope | Icarus syntax extension |
 | `cfunc_assign_op_mixed` | out of scope | expects Icarus's compound assignment result |
 | `clog2` | out of scope | Icarus syntax extension |
-| `cmdline_parm1` | not run | iverilog option -Pmain.foo=2 |
 | `compare_bool_reg` | out of scope | Icarus syntax extension |
 | `concat1` | out of scope | Icarus system task extension |
 | `concat2` | out of scope | Icarus system task extension |
@@ -656,14 +655,8 @@ Exclusions never count as closures.
 | `sv_queue_vec_bounded` | out of scope | Icarus diagnostic in gold output |
 | `sv_string3` | out of scope | uses a string variable as a $display format; only string literal arguments carry format specifications (IEEE 1800-2017 21.2.1) |
 | `sv_string6` | out of scope | expects Icarus's hextoa of a negative value |
-| `sv_timeunit_prec_fail1` | not run | iverilog option ./ivltests/sv_timeunit_prec_fail1e.v |
-| `sv_timeunit_prec_fail2` | not run | iverilog option ./ivltests/sv_timeunit_prec_fail2c.v |
 | `sv_typedef_nested_array` | out of scope | expects nested typedef array dimensions in Icarus order instead of outermost-first order (IEEE 1800-2017 7.4.5, 20.7) |
-| `sv_unit1b` | not run | iverilog option ./ivltests/sv_unit1a.v |
-| `sv_unit1c` | not run | iverilog option ./ivltests/sv_unit1a.v |
-| `sv_unit2b` | not run | iverilog option ./ivltests/sv_unit2a.v |
-| `sv_unit3b` | not run | iverilog option ./ivltests/sv_unit3a.v |
-| `sv_unit4b` | not run | iverilog option ./ivltests/sv_unit4a.v |
+| `sv_unit1c` | out of scope | expects z from a buf gate whose input is an undriven implicit wire; a buf outputs x for a z input (IEEE 1800-2023 28.5, Table 28-4) |
 | `swrite` | out of scope | Icarus diagnostic in gold output |
 | `sys_func_as_task` | out of scope | Icarus diagnostic in gold output |
 | `sysargs` | out of scope | Icarus system task extension |
@@ -719,9 +712,7 @@ Exclusions never count as closures.
 | `agg7` | not run | expects a descending array-valued range association in an ascending constrained target (IEEE 1076-2008 9.3.3.3) |
 | `array13` | not run | nvc-specific test kind relaxed |
 | `assign9` | not run | assigns an untyped string literal to an aggregate target; neither type is determinable from context (IEEE 1076-2008 10.6.2.1, 9.3.2) |
-| `attr13` | not run | requires named work library |
 | `attr16` | not run | applies scalar bound attributes to A'RANGE; RANGE denotes a range, not a scalar type or subtype (IEEE 1076-2008 16.2.2/16.2.3) |
-| `attr20` | not run | requires named work library |
 | `attr21` | not run | names a character literal as an attribute prefix, which IEEE 1076-2008 8.1 added; the test runs as VHDL-2002 |
 | `binary8` | not run | uses ~& and ~\| as binary operators |
 | `cmdline1` | not run | nvc-specific test kind shell |
@@ -743,10 +734,8 @@ Exclusions never count as closures.
 | `cmdline6` | not run | nvc-specific test kind shell |
 | `cmdline7` | not run | nvc-specific test kind shell |
 | `cmdline8` | not run | nvc-specific test kind shell |
-| `cond4` | not run | nvc-specific test kind define |
 | `conv20` | not run | maps an unconstrained out port through a formal conversion function whose parameter subtype is unconstrained; it shall define the index constraint (IEEE 1076-2008 5.3.2.2) |
 | `conv21` | not run | maps an unconstrained out port through a formal conversion function whose parameter subtype is unconstrained; it shall define the index constraint (IEEE 1076-2008 5.3.2.2) |
-| `counter` | not run | nvc stop-delta option |
 | `cover1` | not run | nvc-specific test kind cover |
 | `cover10` | not run | nvc-specific test kind cover |
 | `cover11` | not run | nvc-specific test kind cover |
@@ -780,7 +769,6 @@ Exclusions never count as closures.
 | `debug4` | not run | leaves p2(7 downto 4) of an individually associated port unassociated (IEEE 1076-2008 6.5.7.1); the gold is nvc's call stack |
 | `elab39` | not run | nvc-specific test kind shell |
 | `file1` | not run | expects READ's LENGTH to be 3 for the 5-character value "hello" (IEEE 1076-2008 5.5.2) and reads a character file through a string file type, whose format is implementation-defined |
-| `ieee2` | not run | nvc stop-delta option |
 | `image2` | not run | asserts the 'IMAGE of a record with a REAL element as "((42,-5),true,2.5)"; the image of a floating-point value has implementation-defined digits and notation (IEEE 1076-2019 16.2.2, 5.2.5.1) |
 | `integer1` | not run | declares a 64-bit integer type |
 | `integer2` | not run | expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; out-of-range INTEGER arithmetic is erroneous (IEEE 1076-2019 5.2.3.1) |
@@ -828,7 +816,6 @@ Exclusions never count as closures.
 | `issue493` | not run | nvc-specific test kind shell |
 | `issue507` | not run | nvc-specific test kind shell |
 | `issue524` | not run | nvc-specific test kind shell |
-| `issue527` | not run | nvc stop-delta option |
 | `issue536` | not run | nvc-specific test kind wave |
 | `issue548` | not run | nvc-specific test kind shell |
 | `issue550` | not run | nvc-specific test kind relaxed |
@@ -865,7 +852,6 @@ Exclusions never count as closures.
 | `issue983` | not run | nvc-specific test kind relaxed |
 | `issue985` | not run | nvc-specific test kind wave |
 | `issue988` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |
-| `lfsr` | not run | nvc stop-delta option |
 | `libdir1` | not run | nvc-specific test kind shell |
 | `libdir2` | not run | nvc-specific test kind shell |
 | `libdir3` | not run | nvc-specific test kind shell |
@@ -908,7 +894,6 @@ Exclusions never count as closures.
 | `siginit2` | not run | nvc-specific test kind plugin |
 | `siginit3` | not run | nvc-specific test kind plugin |
 | `signal28` | not run | nvc-specific test kind relaxed |
-| `stdenv1` | not run | nvc option $FOO=123 |
 | `stdenv3` | not run | expects the call-path name element in nvc's uppercase form ("P1"); IEEE 1076-2019 16.5.6 does not define its case, and fsim gives basic identifiers in lowercase as E'SIMPLE_NAME does (16.2.5) |
 | `tcl1` | not run | nvc-specific test kind tcl |
 | `tcl2` | not run | nvc-specific test kind tcl |
@@ -917,7 +902,7 @@ Exclusions never count as closures.
 | `tcl5` | not run | nvc-specific test kind tcl |
 | `textio4` | not run | expects READ of a BIT_VECTOR to read past embedded spaces; a character that cannot be part of the value ends the read (IEEE 1076-2008 16.4) |
 | `toplevel3` | not run | hierarchical generic override |
-| `vhpi1` | not run | nvc option +foo=bar |
+| `vhpi1` | not run | expects nvc's tool name, its vhpiRandomSeedP property and its unit-name spelling; vhpiRandomSeedP is an nvc extension absent from IEEE 1076-2019 clause 19 and Annex B |
 | `vhpi14` | not run | expects vhpi_iterator to return an iterator for a call with no parameters; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |
 | `vhpi18` | not run | reads 64-bit integer and physical values through VHPI |
 | `vhpi20` | not run | nvc-specific test kind tcl |

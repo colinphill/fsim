@@ -34,7 +34,8 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     const std::string& path,
     SignalMap& signals,
     ReadOnlySignalSet& read_only_signals,
-    ContainerMap& container_objects)
+    ContainerMap& container_objects,
+    const semantic::CompiledBindingFrame* const generic_bindings)
 {
     if (destination >= design_.signals_.size()) {
         return std::nullopt;
@@ -61,6 +62,9 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
             return compiled_vhdl_package_constant_signal(
                 specialization, constant);
         });
+    if (generic_bindings != nullptr) {
+        lowerer.set_base_generic_binding_frame(*generic_bindings);
+    }
     auto process = lowerer.lower_hir_input_actual(expression, destination,
         frontend::Language::Vhdl2008, path, 0U, subtype);
     if (!process || lowerer.has_generated_processes()
@@ -109,11 +113,14 @@ std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
     SignalMap& signals,
     ReadOnlySignalSet& read_only_signals,
     ContainerMap& container_objects,
-    const frontend::ValueDomain domain)
+    const frontend::ValueDomain domain,
+    const semantic::CompiledBindingFrame* const generic_bindings)
 {
-    if (const auto folded
-        = specialization.evaluate_integral_expression(expression)) {
-        return folded;
+    if (generic_bindings == nullptr) {
+        if (const auto folded
+            = specialization.evaluate_integral_expression(expression)) {
+            return folded;
+        }
     }
     const bool boolean = domain == frontend::ValueDomain::Boolean;
     if (width == 0U || width > 64U) {
@@ -143,7 +150,7 @@ std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
     });
     const auto value = evaluate_compiled_vhdl_value(specialization,
         expression, scratch, std::nullopt, path, signals, read_only_signals,
-        container_objects);
+        container_objects, generic_bindings);
     if (design_.signals_.size() != scratch + 1U
         || design_.signal_info_.size() != scratch + 1U) {
         throw std::logic_error(

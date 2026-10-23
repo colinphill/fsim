@@ -1479,10 +1479,30 @@ DesignUnit VerilogParser::parse_module(
             unit.systemverilog_class_method_definitions.push_back(
                 parse_class_out_of_block_method(
                     previous(), SystemVerilogClassMethodKind::Function));
+        } else if (language_ == Language::SystemVerilog2017
+            && unit_kind == "interface" && keyword("extern")
+            && (keyword("function", 1) || keyword("task", 1))) {
+            // An interface subroutine prototype whose body a module
+            // connected through an exporting modport defines (IEEE
+            // 1800-2017 25.7.3).
+            module_has_non_time_item_ = true;
+            advance();
+            const auto keyword_token = advance();
+            if (keyword_token.text == "function") {
+                auto function = parse_function(keyword_token, true);
+                declare_member_enumerations(unit);
+                declare_interface_prototype(unit, start, std::move(function));
+            } else {
+                declare_interface_prototype(
+                    unit, start, parse_task(keyword_token, true));
+            }
         } else if (previous().text == "function" || match_keyword("function")) {
             module_has_non_time_item_ = true;
             auto function = parse_function(previous());
             declare_member_enumerations(unit);
+            if (replace_modport_prototype(unit, function)) {
+                continue;
+            }
             const bool duplicate = std::ranges::any_of(
                                        unit.functions,
                                        [&](const FunctionDeclaration& existing) {
@@ -1510,6 +1530,9 @@ DesignUnit VerilogParser::parse_module(
         } else if (previous().text == "task" || match_keyword("task")) {
             module_has_non_time_item_ = true;
             auto task = parse_task(previous());
+            if (replace_modport_prototype(unit, task)) {
+                continue;
+            }
             const bool duplicate = std::ranges::any_of(
                                        unit.tasks,
                                        [&](const TaskDeclaration& existing) {
@@ -1650,8 +1673,8 @@ DesignUnit VerilogParser::parse_module(
             parse_declaration(unit);
         } else if (is_gate_primitive()) {
             module_has_non_time_item_ = true;
-            parse_gate_primitive(
-                unit.concurrent_statements, unit.signals, unit.ports);
+            parse_gate_primitive(unit.concurrent_statements, unit.signals,
+                unit.ports, &unit.generate_regions);
         } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                        "rpmos", "tran", "rtran", "tranif0", "tranif1",
                        "rtranif0", "rtranif1", "pullup", "pulldown" })) {
@@ -1926,6 +1949,7 @@ DesignUnit VerilogParser::parse_module(
       }
     }
     pending_modport_callables_.clear();
+    modport_prototype_callables_.clear();
     // A specparam is a constant usable in expressions outside the specify
     // block (IEEE 1800-2017 6.20.5); expose it as a local parameter. An
     // overridable parameter's value shall not name a specparam.

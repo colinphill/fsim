@@ -532,6 +532,8 @@ module invalid_scope_randomize;
   initial begin
     logic local_value;
     int result;
+    // std::randomize() with no arguments only checks its with constraints
+    // (IEEE 1800-2017 18.12), so it is legal here.
     result = std::randomize();
     result = std::randomize(local_value + 1);
     // A module variable is a legal std::randomize argument (IEEE 1800-2017
@@ -552,7 +554,6 @@ endmodule
     const auto project = fsim::app::build_project(config, diagnostics);
     assert(!project);
     for (const auto code : {
-             "FSIM-ELAB-SVRAND-001",
              "FSIM-ELAB-SVRAND-002",
              "FSIM-ELAB-SVRAND-003",
              "FSIM-ELAB-SVRAND-007",
@@ -562,6 +563,10 @@ endmodule
                 return diagnostic.code == code;
             }));
     }
+    assert(std::ranges::none_of(
+        diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVRAND-001";
+        }));
 }
 
 } // namespace

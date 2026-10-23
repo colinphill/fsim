@@ -41,8 +41,10 @@ namespace {
 
     class ConditionExpression {
     public:
-        explicit ConditionExpression(const std::string_view text)
+        ConditionExpression(const std::string_view text,
+            const VhdlConditionalIdentifiers& identifiers)
             : text_(text)
+            , identifiers_(identifiers)
         {
             advance();
         }
@@ -211,9 +213,23 @@ namespace {
             return parse_comparison();
         }
 
-        [[nodiscard]] static std::string identifier_value(
-            const std::string_view identifier)
+        // A user-defined identifier (`-D NAME=VALUE`) or a standard one;
+        // identifiers match ignoring case (IEEE 1076-2019 24.2).
+        [[nodiscard]] std::string identifier_value(
+            const std::string_view identifier) const
         {
+            for (const auto& [name, value] : identifiers_) {
+                if (name.size() == identifier.size()
+                    && std::ranges::equal(name, identifier,
+                        [](const char left, const char right) {
+                            return std::tolower(
+                                       static_cast<unsigned char>(left))
+                                == std::tolower(
+                                    static_cast<unsigned char>(right));
+                        })) {
+                    return value;
+                }
+            }
             return std::string { support::vhdl_tool_identity(identifier)
                                      .value_or(std::string_view { }) };
         }
@@ -275,6 +291,7 @@ namespace {
         }
 
         std::string_view text_;
+        const VhdlConditionalIdentifiers& identifiers_;
         std::size_t position_ { };
         ExpressionToken current_;
     };
@@ -295,10 +312,12 @@ namespace {
 
     class ConditionalAnalysis {
     public:
-        ConditionalAnalysis(SourceText source, const VhdlStandard standard)
+        ConditionalAnalysis(SourceText source, const VhdlStandard standard,
+            const VhdlConditionalIdentifiers& identifiers)
             : source_(std::move(source))
             , output_(source_)
             , standard_(standard)
+            , identifiers_(identifiers)
         {
         }
 
@@ -556,7 +575,8 @@ namespace {
                     span);
                 return std::nullopt;
             }
-            const auto result = ConditionExpression(before_last).evaluate();
+            const auto result
+                = ConditionExpression(before_last, identifiers_).evaluate();
             if (!result) {
                 diagnose("FSIM-VHDL-CA-002",
                     "invalid conditional analysis expression", span);
@@ -743,6 +763,7 @@ namespace {
         SourceText source_;
         SourceText output_;
         VhdlStandard standard_;
+        const VhdlConditionalIdentifiers& identifiers_;
         std::size_t block_comment_depth_ { };
         std::size_t overflow_depth_ { };
         std::vector<ConditionalFrame> stack_;
@@ -753,9 +774,10 @@ namespace {
 } // namespace
 
 VhdlConditionalAnalysisResult analyze_vhdl_conditionals(
-    SourceText source, const VhdlStandard standard)
+    SourceText source, const VhdlStandard standard,
+    const VhdlConditionalIdentifiers& identifiers)
 {
-    return ConditionalAnalysis(std::move(source), standard).run();
+    return ConditionalAnalysis(std::move(source), standard, identifiers).run();
 }
 
 } // namespace fsim::frontend

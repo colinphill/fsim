@@ -356,13 +356,14 @@ static std::optional<CompilationWorkspace> check_project_impl(
           "VHDL files are independent analysis units; compilation_unit "
           "grouping applies to Verilog/SystemVerilog");
     }
+    // A VHDL definition sets a conditional analysis identifier (IEEE
+    // 1076-2019 24.2).
     if (source_set.language == project::Language::vhdl
-        && (!source_set.include_directories.empty()
-            || !source_set.defines.empty())) {
+        && !source_set.include_directories.empty()) {
       diagnostics.error(
           "FSIM-FE-PP-0001",
-          "include directories and macro definitions are only valid for "
-          "Verilog/SystemVerilog and SystemC source sets");
+          "include directories are only valid for Verilog/SystemVerilog and "
+          "SystemC source sets");
     }
     if (source_set.language == project::Language::systemc) {
       systemc_source_count += source_set.files.size();

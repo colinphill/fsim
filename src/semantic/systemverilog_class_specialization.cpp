@@ -235,7 +235,7 @@ public:
             }
             const auto found = classes_.find(type.class_identity);
             if (found == classes_.end()
-                || found->second->parameters.empty()) {
+                || !parameterized(*found->second)) {
                 return std::nullopt;
             }
             std::vector<ResolvedActual> actuals;
@@ -363,6 +363,36 @@ private:
     {
         const auto found = classes_.find(std::string { identity });
         return found == classes_.end() ? nullptr : found->second;
+    }
+
+    // The formals a specialization of `declaration` binds: a nested class
+    // uses the parameters of its enclosing classes (IEEE 1800-2017 8.23),
+    // so it has one specialization per enclosing specialization. The
+    // enclosing classes' formals come first, outermost first.
+    std::vector<const ClassParameter*> class_formals(
+        const ClassDeclaration& declaration) const
+    {
+        std::vector<const ClassDeclaration*> enclosing;
+        for (const auto* current = class_for(declaration.enclosing_identity);
+            current != nullptr && enclosing.size() < 32U;
+            current = class_for(current->enclosing_identity)) {
+            enclosing.push_back(current);
+        }
+        std::vector<const ClassParameter*> result;
+        for (const auto* owner : enclosing | std::views::reverse) {
+            for (const auto& parameter : owner->parameters) {
+                result.push_back(&parameter);
+            }
+        }
+        for (const auto& parameter : declaration.parameters) {
+            result.push_back(&parameter);
+        }
+        return result;
+    }
+
+    bool parameterized(const ClassDeclaration& declaration) const
+    {
+        return !class_formals(declaration).empty();
     }
 
     // The class a relation naming a type parameter of `owner` binds
@@ -1163,7 +1193,7 @@ private:
             // back to the default specialization.
             const bool recorded = !input.interface_parameter_actuals.empty()
                 || input.target.spelling.find('#') == std::string::npos;
-            if (!target->parameters.empty()
+            if (parameterized(*target)
                 && input.class_specialization.empty() && recorded) {
                 const auto errors = result_.errors.size();
                 if (auto nested = nested_specialization(
@@ -1177,13 +1207,13 @@ private:
             // has a default.
             const bool defaults
                 = input.target.spelling.find('#') == std::string::npos
-                && std::ranges::all_of(target->parameters,
-                [](const ClassParameter& parameter) {
-                    return parameter.type_parameter
-                        ? parameter.default_type.has_value()
-                        : parameter.default_value.has_value();
+                && std::ranges::all_of(class_formals(*target),
+                [](const ClassParameter* parameter) {
+                    return parameter->type_parameter
+                        ? parameter->default_type.has_value()
+                        : parameter->default_value.has_value();
                 });
-            if (!target->parameters.empty() && !defaults
+            if (parameterized(*target) && !defaults
                 && input.class_specialization.empty()) {
                 report(ClassSpecializationErrorKind::
                         unsupported_parameterized_class_handle,
@@ -1343,31 +1373,48 @@ private:
         const std::span<const ResolvedActual> actuals)
     {
         const auto identity = class_declaration_identity(declaration);
-        std::vector<std::optional<ResolvedActual>> assigned(
-            declaration.parameters.size());
+        const auto formals = class_formals(declaration);
+        // Positional actuals bind the class's own formals; an enclosing
+        // class's formal is bound by name.
+        const auto inherited = formals.size() - declaration.parameters.size();
+        std::vector<std::optional<ResolvedActual>> assigned(formals.size());
         bool named { };
         bool positional { };
+        std::size_t next_positional = inherited;
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto& actual = actuals[index];
-            std::size_t formal_index = index;
+            std::size_t formal_index = next_positional;
             if (actual.formal) {
-                named = true;
-                const auto found = std::ranges::find(
+                const auto own = std::ranges::find(
                     declaration.parameters, *actual.formal,
                     &ClassParameter::name);
-                if (found == declaration.parameters.end()) {
+                const auto enclosing_end = formals.begin()
+                    + static_cast<std::ptrdiff_t>(inherited);
+                const auto enclosing = std::find_if(
+                    formals.begin(), enclosing_end,
+                    [&](const ClassParameter* formal) {
+                        return formal->name == *actual.formal;
+                    });
+                if (own != declaration.parameters.end()) {
+                    named = true;
+                    formal_index = inherited
+                        + static_cast<std::size_t>(std::distance(
+                            declaration.parameters.begin(), own));
+                } else if (enclosing != enclosing_end) {
+                    formal_index = static_cast<std::size_t>(
+                        std::distance(formals.begin(), enclosing));
+                } else {
                     report(ClassSpecializationErrorKind::unknown_parameter,
                         identity, actual.source,
                         "class '" + identity + "' has no parameter named '"
                             + *actual.formal + "'");
                     return std::nullopt;
                 }
-                formal_index = static_cast<std::size_t>(std::distance(
-                    declaration.parameters.begin(), found));
             } else {
                 positional = true;
+                ++next_positional;
             }
-            if (formal_index >= declaration.parameters.size()) {
+            if (formal_index >= formals.size()) {
                 report(ClassSpecializationErrorKind::unknown_parameter,
                     identity, actual.source,
                     "too many parameter actuals for class '" + identity + "'");
@@ -1377,7 +1424,7 @@ private:
                 report(ClassSpecializationErrorKind::duplicate_parameter,
                     identity, actual.source,
                     "duplicate actual for class parameter '"
-                        + declaration.parameters[formal_index].name + "'");
+                        + formals[formal_index]->name + "'");
                 return std::nullopt;
             }
             assigned[formal_index] = actual;
@@ -1392,9 +1439,8 @@ private:
         BoundParameters result;
         std::ostringstream specialization;
         specialization << identity << '<';
-        for (std::size_t index = 0;
-            index < declaration.parameters.size(); ++index) {
-            const auto& parameter = declaration.parameters[index];
+        for (std::size_t index = 0; index < formals.size(); ++index) {
+            const auto& parameter = *formals[index];
             const auto actual = assigned[index];
             SpecializedClassParameter retained;
             retained.declaration = parameter.declaration;
@@ -1676,6 +1722,42 @@ private:
                 if (!retained.resolved_type) {
                     return std::nullopt;
                 }
+            }
+            actuals.push_back(std::move(retained));
+        }
+        // A class nested in the specialization being built (`SubCls sc;`
+        // in `Cls#(int)`) takes that specialization's bindings of the
+        // enclosing parameters (IEEE 1800-2017 8.23).
+        const auto formals = class_formals(target);
+        const auto inherited = formals.size() - target.parameters.size();
+        for (std::size_t index = 0; index < inherited; ++index) {
+            const auto& formal = *formals[index];
+            if (std::ranges::any_of(actuals, [&](const ResolvedActual& actual) {
+                    return actual.formal == formal.name;
+                })) {
+                continue;
+            }
+            ResolvedActual retained;
+            retained.formal = formal.name;
+            retained.source = source;
+            if (formal.type_parameter) {
+                const auto* member = record_for(
+                    declarations_, formal.declaration);
+                const auto bound = member != nullptr && member->declared_type
+                    ? environment.types.find(*member->declared_type)
+                    : environment.types.end();
+                if (bound == environment.types.end()) {
+                    continue;
+                }
+                retained.kind = ActualKind::type;
+                retained.resolved_type = bound->second;
+            } else {
+                const auto bound = environment.values.find(formal.declaration);
+                if (bound == environment.values.end()) {
+                    continue;
+                }
+                retained.kind = ActualKind::expression;
+                retained.resolved_value = bound->second;
             }
             actuals.push_back(std::move(retained));
         }
@@ -2532,7 +2614,7 @@ private:
             for (const auto* selection : selections->second) {
                 const auto& owner = selection->class_owner.front();
                 const auto* target = class_for(owner.class_identity);
-                if (target == nullptr || target->parameters.empty()) {
+                if (target == nullptr || !parameterized(*target)) {
                     continue;
                 }
                 const auto errors = result_.errors.size();

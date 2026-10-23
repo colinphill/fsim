@@ -329,6 +329,8 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<
             SignalStrengthText>(operation)
         || fsim::runtime::simir::operation_holds<
+            RuntimeStringFormat>(operation)
+        || fsim::runtime::simir::operation_holds<
             VhdlEnvironmentCallPath>(operation)
         || fsim::runtime::simir::operation_holds<
             VhdlEnvironmentGetCallPath>(operation)
@@ -615,6 +617,9 @@ std::optional<std::string> validate_file_scan_metadata(
         = process_layout_detail::ProcessLayoutAccess::view(process.register_value_kinds);
     if (operation.string_source && operation.source >= process.string_register_count)
         return "FileScan source string register is out of range";
+    if (operation.runtime_format
+        && *operation.runtime_format >= process.string_register_count)
+        return "FileScan run-time format string register is out of range";
     if (operation.conversions.empty() || operation.conversions.size() > 64U
         || operation.trailing_text.size() > maximum_string_bytes
         || operation.hierarchy_path.size() > maximum_string_bytes)
@@ -708,7 +713,10 @@ std::optional<std::string> validate_file_scan_metadata(
             return "FileScan target string register is out of range";
         }
     }
-    if (has_time_conversion != (operation.time_unit_femtoseconds != 0U))
+    // A run-time format's conversions are placeholders for its targets; the
+    // time unit serves any %t the format names.
+    if (!operation.runtime_format
+        && has_time_conversion != (operation.time_unit_femtoseconds != 0U))
         return "FileScan time-unit metadata is inconsistent";
     return std::nullopt;
 }

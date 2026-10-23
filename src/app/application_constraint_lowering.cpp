@@ -613,7 +613,17 @@ class Lowerer final {
       const bool element_of_container = expression.operands[0].kind
               == sv::ConstraintExpressionKind::index
           && names_subarray(expression.operands[0]);
-      const bool packed = !element_of_container
+      // `a[i].m[j]` selects an element of an array member.
+      const bool member_array = expression.operands[0].kind
+              == sv::ConstraintExpressionKind::call
+          && expression.operands[0].text.starts_with(member_prefix)
+          && [&] {
+               const auto prior_error = error_;
+               const auto path = aggregate_path(expression.operands[0]);
+               error_ = prior_error;
+               return path.has_value();
+             }();
+      const bool packed = !element_of_container && !member_array
           && (binding == nullptr
               || (!container_variables_.contains(binding->canonical_identity)
                   && !variables_.contains(
@@ -699,12 +709,18 @@ class Lowerer final {
       return variable_node(found->second,
           solver_variables_[found->second].profile);
     }
+    // An element of an array member of a structure element (`a[i].m[j]`)
+    // is selected from that member (IEEE 1800-2017 7.2, 18.4).
     if (expression.kind == sv::ConstraintExpressionKind::index
         && expression.operands.size() == 2U
         && (expression.operands[0].kind
                 == sv::ConstraintExpressionKind::name
             || expression.operands[0].kind
-                == sv::ConstraintExpressionKind::index)) {
+                == sv::ConstraintExpressionKind::index
+            || (expression.operands[0].kind
+                    == sv::ConstraintExpressionKind::call
+                && expression.operands[0].text.starts_with(member_prefix)
+                && expression.operands[0].operands.size() == 1U))) {
       const auto select_from = [&](const std::string& path,
                                    const std::string& typed)
           -> std::optional<ExpressionId> {
@@ -897,12 +913,18 @@ class Lowerer final {
     if (expression.kind == sv::ConstraintExpressionKind::foreach_constraint
         && expression.operands.size() == 2U) {
       const auto& selection = expression.operands[0];
+      // The array is named, an element of an outer array, or an array
+      // member of a structure element (`foreach (a[i].m[j])`, 7.2).
       if (selection.kind != sv::ConstraintExpressionKind::index
           || selection.operands.size() != 2U
           || (selection.operands[0].kind
                   != sv::ConstraintExpressionKind::name
               && selection.operands[0].kind
-                  != sv::ConstraintExpressionKind::index)
+                  != sv::ConstraintExpressionKind::index
+              && !(selection.operands[0].kind
+                      == sv::ConstraintExpressionKind::call
+                  && selection.operands[0].text.starts_with(member_prefix)
+                  && selection.operands[0].operands.size() == 1U))
           || selection.operands[1].kind
               != sv::ConstraintExpressionKind::name) {
         error_ = "constraint foreach requires one named container index";
@@ -1277,11 +1299,94 @@ class Lowerer final {
       }
       // A dist below guards or in a loop weights its variable where the
       // guards hold (IEEE 1800-2017 18.5.4).
-      if (auto weighted = guarded_distribution(expression)) {
-        clauses.push_back(std::move(*weighted));
+      for (auto& weighted : weighted_distributions(expression)) {
+        clauses.push_back(std::move(weighted));
       }
     }
     return leaf([&] { return lower(expression); }, clauses, soft);
+  }
+
+  /// The weighted distributions of a dist. An item naming a random
+  /// variable (`x dist {y :/ 90, 9 :/ 10}`) weights the subject by that
+  /// variable's chosen value: one distribution per value, guarded by it
+  /// (IEEE 1800-2023 18.5.3).
+  [[nodiscard]] std::vector<Clause> weighted_distributions(
+      const sv::ConstraintExpression& expression) {
+    std::vector<Clause> result;
+    if (auto one = guarded_distribution(expression)) {
+      result.push_back(std::move(*one));
+      return result;
+    }
+    error_.clear();
+    std::optional<runtime::SystemVerilogConstraintVariableId> random;
+    const sv::ConstraintExpression* random_source{};
+    std::string random_identity;
+    const auto note = [&](const sv::ConstraintExpression& value) {
+      if (constant_value(value)) return true;
+      if (value.kind != sv::ConstraintExpressionKind::name
+          || iterator(value.text) != nullptr) {
+        return false;
+      }
+      const auto* binding = exact_binding(value);
+      if (binding == nullptr || !binding->constant_value.empty()) return false;
+      const auto found = variables_.find(binding->canonical_identity);
+      if (found == variables_.end()
+          || found->second >= solver_variables_.size()
+          || (random && *random != found->second)) {
+        return false;
+      }
+      random = found->second;
+      random_source = &value;
+      random_identity = binding->canonical_identity;
+      return true;
+    };
+    for (std::size_t index = 1; index < expression.operands.size(); ++index) {
+      const auto& item = expression.operands[index];
+      if (item.kind != sv::ConstraintExpressionKind::distribution_item
+          || item.operands.size() != 2U) {
+        return result;
+      }
+      const auto& choice = item.operands[0];
+      const bool known = choice.kind == sv::ConstraintExpressionKind::inside_range
+              && choice.operands.size() == 2U
+          ? note(choice.operands[0]) && note(choice.operands[1])
+          : note(choice);
+      if (!known) return result;
+    }
+    if (!random) return result;
+    const auto& held = solver_variables_[*random];
+    const auto width = held.profile.width;
+    std::vector<runtime::PackedLogic4> values = held.domain;
+    if (values.empty() && width != 0U && width <= 8U) {
+      for (std::uint64_t value = 0; value < (std::uint64_t{1} << width);
+           ++value) {
+        values.push_back(low_value(width, value));
+      }
+    }
+    if (values.empty() || values.size() > 256U) return result;
+    for (const auto& value : values) {
+      if (value.width() == 0U || value.width() > 64U || value.is_logic9()
+          || value.low_word().bval != 0U) {
+        result.clear();
+        return result;
+      }
+      auto word = value.low_word().aval;
+      if (held.profile.signed_value && value.width() < 64U
+          && ((word >> (value.width() - 1U)) & 1U) != 0U) {
+        word |= ~((std::uint64_t{1} << value.width()) - 1U);
+      }
+      pinned_ = Pinned{random_identity, static_cast<std::int64_t>(word),
+          random_source, value, held.profile};
+      auto one = guarded_distribution(expression);
+      pinned_.reset();
+      if (!one) {
+        error_.clear();
+        result.clear();
+        return result;
+      }
+      result.push_back(std::move(*one));
+    }
+    return result;
   }
 
   [[nodiscard]] std::optional<Clause> guarded_distribution(
@@ -1425,6 +1530,16 @@ class Lowerer final {
       }
       holds = builder_.binary(Operator::LogicalAnd, holds, *condition);
     }
+    if (pinned_) {
+      const auto chosen = lower(*pinned_->source);
+      if (!chosen) {
+        error_.clear();
+        return std::nullopt;
+      }
+      holds = builder_.binary(Operator::LogicalAnd, holds,
+          builder_.binary(Operator::Equal, *chosen,
+              builder_.constant(pinned_->value, pinned_->profile)));
+    }
     Clause clause{std::move(builder_).finish(holds), dependencies_, false,
         false, {}, std::move(distribution)};
     builder_ = {};
@@ -1557,6 +1672,19 @@ class Lowerer final {
         return binding->canonical_identity;
       }
       (void)container(binding->canonical_identity);
+      return std::nullopt;
+    }
+    // An array member of a structure element (`a[i].m`, 7.2).
+    if (expression.kind == sv::ConstraintExpressionKind::call
+        && expression.text.starts_with(member_prefix)
+        && expression.operands.size() == 1U) {
+      const auto prior_error = error_;
+      auto path = member_path(expression);
+      if (!path) {
+        error_ = prior_error;
+        return std::nullopt;
+      }
+      if (path->empty() || node_size(*path)) return path;
       return std::nullopt;
     }
     if (expression.kind != sv::ConstraintExpressionKind::index
@@ -2216,6 +2344,9 @@ class Lowerer final {
       }
       const auto* binding = exact_binding(expression);
       if (binding == nullptr) return std::nullopt;
+      if (pinned_ && binding->canonical_identity == pinned_->identity) {
+        return pinned_->number;
+      }
       // A state variable holds its value during the call.
       if (binding->constant_value.empty()) {
         const auto variable = variables_.find(binding->canonical_identity);
@@ -2294,6 +2425,15 @@ class Lowerer final {
   std::string& error_;
   std::vector<Iterator> iterators_;
   std::vector<Guard> guards_;
+  // A random variable a dist item names, at one of its values.
+  struct Pinned {
+    std::string identity;
+    std::int64_t number{};
+    const sv::ConstraintExpression* source{};
+    runtime::PackedLogic4 value;
+    runtime::SystemVerilogConstraintVariableProfile profile;
+  };
+  std::optional<Pinned> pinned_;
   bool deferred_{};
   std::span<const runtime::SystemVerilogConstraintVariable> solver_variables_;
   const std::map<std::string, std::vector<std::string>>* nested_{};

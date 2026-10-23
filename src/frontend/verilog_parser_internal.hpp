@@ -6,6 +6,7 @@
 #include "parser_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -816,8 +817,20 @@ class VerilogParser final : private detail::ParserBase {
 
   [[nodiscard]] bool is_gate_primitive() const;
 
+  // A gate-instance array whose bounds are not literals becomes a loop
+  // generate in `regions` (IEEE 1800-2017 28.3.5, 27.4).
   void parse_gate_primitive(
       std::vector<Statement>& statements,
+      const std::vector<SignalDeclaration>& signals,
+      const std::vector<SignalDeclaration>& ports,
+      std::vector<GenerateRegion>* regions = nullptr);
+  GenerateRegion generate_gate_array(const Token& instance_start,
+      const std::string& instance_name,
+      std::pair<std::size_t, std::size_t> header,
+      std::array<std::size_t, 4U> bounds,
+      const std::vector<const Expression*>& terminals,
+      const std::vector<std::pair<std::size_t, std::size_t>>& terminal_tokens,
+      std::size_t outputs,
       const std::vector<SignalDeclaration>& signals,
       const std::vector<SignalDeclaration>& ports);
 
@@ -1027,6 +1040,17 @@ class VerilogParser final : private detail::ParserBase {
     std::optional<bool> explicit_function;
   };
   std::vector<PendingModportCallable> pending_modport_callables_;
+  // Interface subroutines declared only by a modport prototype (`export
+  // task send(input int v)`, IEEE 1800-2017 25.7.2); a definition in the
+  // interface replaces the prototype.
+  std::unordered_set<std::string> modport_prototype_callables_;
+  void declare_interface_prototype(
+      DesignUnit& unit, const Token& start, FunctionDeclaration function);
+  void declare_interface_prototype(
+      DesignUnit& unit, const Token& start, TaskDeclaration task);
+  bool replace_modport_prototype(
+      DesignUnit& unit, FunctionDeclaration& function);
+  bool replace_modport_prototype(DesignUnit& unit, TaskDeclaration& task);
   std::unordered_set<std::string> port_type_refinements_;
   // Non-ANSI ports whose direction declaration names a net or data type;
   // such a port cannot be declared again (IEEE 1800-2017 23.2.2.1).
@@ -1053,6 +1077,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_map<std::string, Type> unit_associative_index_types_;
   // Associative-array properties of the class being parsed.
   std::unordered_map<std::string, Type> class_associative_index_types_;
+  // Container properties of the class being parsed, for foreach levels.
+  std::unordered_map<std::string, Type> class_foreach_types_;
   // Types of unit-level variables used to validate foreach array rank.
   std::unordered_map<std::string, Type> unit_foreach_types_;
   // Nonzero while parsing a constraint block or a delay value, where `->`

@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <tuple>
 
 namespace fsim::runtime::simir {
@@ -1392,6 +1393,176 @@ void consume_scanned_source(const FileScan& operation, std::string& source,
     if (operation.consume_string_source) {
         source.erase(0, std::min(source.size(), scanned.consumed));
     }
+}
+
+InputScanFormat runtime_input_format(const frontend::InputScanFormat format)
+{
+    switch (format) {
+    case frontend::InputScanFormat::Binary:
+        return InputScanFormat::binary;
+    case frontend::InputScanFormat::Octal:
+        return InputScanFormat::octal;
+    case frontend::InputScanFormat::Decimal:
+        return InputScanFormat::decimal;
+    case frontend::InputScanFormat::UnsignedDecimal:
+        return InputScanFormat::unsigned_decimal;
+    case frontend::InputScanFormat::Hexadecimal:
+        return InputScanFormat::hexadecimal;
+    case frontend::InputScanFormat::Character:
+        return InputScanFormat::character;
+    case frontend::InputScanFormat::String:
+        return InputScanFormat::string;
+    case frontend::InputScanFormat::Real:
+        return InputScanFormat::real;
+    case frontend::InputScanFormat::Unformatted2:
+        return InputScanFormat::unformatted2;
+    case frontend::InputScanFormat::Unformatted4:
+        return InputScanFormat::unformatted4;
+    case frontend::InputScanFormat::Hierarchy:
+        return InputScanFormat::hierarchy;
+    case frontend::InputScanFormat::Time:
+        return InputScanFormat::time;
+    }
+    throw std::logic_error { "invalid input scan format" };
+}
+
+bool input_scan_target_accepts(
+    const InputScanTarget& target, const InputScanFormat format) noexcept
+{
+    const bool text = format == InputScanFormat::string
+        || format == InputScanFormat::character
+        || format == InputScanFormat::hierarchy;
+    if (target.kind == InputScanTargetKind::string_register
+        || target.kind == InputScanTargetKind::string_object) {
+        return text;
+    }
+    switch (target.scalar_kind) {
+    case SystemVerilogScalarKind::None:
+        return format != InputScanFormat::real;
+    case SystemVerilogScalarKind::Time:
+        return format == InputScanFormat::decimal
+            || format == InputScanFormat::unsigned_decimal
+            || format == InputScanFormat::real;
+    case SystemVerilogScalarKind::Chandle:
+        return format == InputScanFormat::hexadecimal;
+    default:
+        return frontend::is_real_scalar_kind(target.scalar_kind)
+            && format == InputScanFormat::real;
+    }
+}
+
+bool apply_runtime_scan_format(FileScan& operation, const std::string_view format)
+{
+    const auto parsed = frontend::parse_input_format(format);
+    if (!parsed.valid) {
+        return false;
+    }
+    if (operation.plusarg_value
+        && (parsed.conversions.size() != 1U
+            || parsed.conversions.front().suppress)) {
+        return false;
+    }
+    std::vector<InputScanConversion> conversions;
+    conversions.reserve(parsed.conversions.size());
+    std::size_t target { };
+    for (const auto& parsed_conversion : parsed.conversions) {
+        InputScanConversion conversion;
+        conversion.prefix = parsed_conversion.prefix;
+        conversion.format = runtime_input_format(parsed_conversion.format);
+        conversion.maximum_characters = parsed_conversion.maximum_characters;
+        conversion.suppress = parsed_conversion.suppress;
+        if (operation.plusarg_value
+            && (conversion.format == InputScanFormat::unformatted2
+                || conversion.format == InputScanFormat::unformatted4
+                || conversion.format == InputScanFormat::hierarchy
+                || conversion.format == InputScanFormat::time)) {
+            return false;
+        }
+        if (!conversion.suppress) {
+            if (target >= operation.conversions.size()) {
+                return false;
+            }
+            conversion.target = operation.conversions[target++].target;
+            if (!input_scan_target_accepts(
+                    conversion.target, conversion.format)) {
+                return false;
+            }
+        }
+        conversions.push_back(std::move(conversion));
+    }
+    if (target != operation.conversions.size()) {
+        return false;
+    }
+    operation.conversions = std::move(conversions);
+    operation.trailing_text = parsed.trailing_text;
+    return true;
+}
+
+std::optional<std::string> plusarg_format_prefix(
+    const std::string_view user_string)
+{
+    auto parsed = frontend::parse_input_format(user_string);
+    if (!parsed.valid || parsed.conversions.size() != 1U
+        || parsed.conversions.front().suppress) {
+        return std::nullopt;
+    }
+    return std::move(parsed.conversions.front().prefix);
+}
+
+std::optional<std::string_view> select_plusarg(
+    const std::vector<std::string>& plusargs, const std::string_view query,
+    const bool format_query)
+{
+    std::optional<std::string> prefix;
+    if (format_query) {
+        prefix = plusarg_format_prefix(query);
+        if (!prefix) {
+            return std::nullopt;
+        }
+    }
+    const std::string_view wanted = prefix ? std::string_view { *prefix } : query;
+    for (const auto& argument : plusargs) {
+        auto candidate = std::string_view { argument };
+        if (candidate.starts_with('+')) {
+            candidate.remove_prefix(1);
+        }
+        if (candidate.starts_with(wanted)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
+void complete_plusarg_value(const FileScan& operation,
+    const std::string_view source, InputScanResult& scanned)
+{
+    if (!operation.plusarg_value || operation.conversions.size() != 1U
+        || scanned.values.size() != 1U || scanned.values.front()) {
+        return;
+    }
+    // With no matching plusarg the source is empty and the variable is not
+    // modified.
+    const auto& conversion = operation.conversions.front();
+    if (source.empty() || !source.starts_with(conversion.prefix)) {
+        return;
+    }
+    auto remainder = source;
+    remainder.remove_prefix(conversion.prefix.size());
+    const bool empty = std::ranges::all_of(
+        remainder, [](const char character) { return character == '_'; });
+    const auto& target = conversion.target;
+    InputScanValue value;
+    if (target.kind == InputScanTargetKind::string_register
+        || target.kind == InputScanTargetKind::string_object) {
+        value.string = true;
+    } else {
+        const bool two_state = target.two_state
+            || target.scalar_kind != SystemVerilogScalarKind::None;
+        value.packed = PackedLogic4(target.width,
+            empty || two_state ? Logic4::zero : Logic4::x);
+    }
+    scanned.values.front() = std::move(value);
+    scanned.assignments = 1;
 }
 
 bool file_scan_complete(
