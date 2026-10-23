@@ -429,6 +429,15 @@ public:
     vhdl_package_instance_binding(DeclarationId instance,
         ScopeId use_scope) const;
 
+    /// The library package unit that the interface-package actual
+    /// `actual` (`library.package`) names when no package instance
+    /// declaration does: a library-level instance of a generic package is
+    /// itself a package unit (IEEE 1076-2008 6.5.5, 6.5.7.2), whose members
+    /// are the members of the interface package. Null when the actual names
+    /// no such unit.
+    [[nodiscard]] const vhdl::Unit* vhdl_library_package_actual(
+        ExpressionId actual) const;
+
     /// Return whether a package member is visible from a VHDL unit. Governed
     /// standard packages expose a compact declaration-name surface instead of
     /// synthetic callable declarations; this is the canonical visibility

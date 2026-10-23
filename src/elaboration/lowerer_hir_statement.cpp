@@ -2745,10 +2745,53 @@ Lowerer::hir_named_clocking_event(
     const semantic::ScopeId scope) const
 {
     if (sensitivities.size() != 1U
-        || sensitivities.front().expression
         || sensitivities.front().edge
             != semantic::sv::EdgeKind::any) {
         return std::nullopt;
+    }
+    // `@(buses[1].cb)` names the clocking block of an element of an
+    // instance array by a constant select path (IEEE 1800-2023 14.3, 23.6).
+    std::string selected_path;
+    if (sensitivities.front().expression) {
+        const auto path = [&](const auto& self,
+                              const semantic::ExpressionId id)
+            -> std::optional<std::string> {
+            const auto part = specialized_hir_unit_->find_expression(id);
+            if (!part || part->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& node = *part->systemverilog;
+            constexpr std::string_view select_prefix { "@sv-select:" };
+            if (node.kind == semantic::sv::ExpressionKind::name) {
+                return node.text;
+            }
+            if (node.kind == semantic::sv::ExpressionKind::call
+                && node.text.starts_with(select_prefix)
+                && node.operands.size() == 1U) {
+                auto prefix = self(self, node.operands.front());
+                return prefix
+                    ? std::optional { *prefix + "."
+                          + node.text.substr(select_prefix.size()) }
+                    : std::nullopt;
+            }
+            if (node.kind == semantic::sv::ExpressionKind::index
+                && node.text == "index" && node.operands.size() == 2U) {
+                auto prefix = self(self, node.operands.front());
+                const auto index
+                    = specialized_hir_unit_->evaluate_integral_expression(
+                        node.operands.back());
+                return prefix && index
+                    ? std::optional { *prefix + "["
+                          + std::to_string(*index) + "]" }
+                    : std::nullopt;
+            }
+            return std::nullopt;
+        };
+        auto resolved = path(path, *sensitivities.front().expression);
+        if (!resolved || resolved->find('.') == std::string::npos) {
+            return std::nullopt;
+        }
+        selected_path = std::move(*resolved);
     }
     // The clocking blocks of the unit declaring the statement:
     // an interface task called through a virtual interface
@@ -2765,10 +2808,30 @@ Lowerer::hir_named_clocking_event(
         return std::nullopt;
     }
     const auto& blocks = selected->systemverilog->clocking_blocks;
-    const auto& name = sensitivities.front().signal;
+    const auto& name = sensitivities.front().expression
+        ? selected_path
+        : sensitivities.front().signal;
     const auto block = std::ranges::find(blocks, name,
         &semantic::sv::ClockingBlock::name);
-    if (block != blocks.end() && !block->event.empty()) {
+    // The clocking block event is the observed-region flag the block
+    // toggles after updating its samples (IEEE 1800-2023 14.10, 14.13).
+    const auto clocking_flag = [](const std::string_view block_name) {
+        return "$clocking$" + std::string { block_name } + "$event";
+    };
+    const auto flag_event = [&](semantic::sv::Sensitivity event,
+                                std::string signal) {
+        event.signal = std::move(signal);
+        event.edge = semantic::sv::EdgeKind::any;
+        event.expression.reset();
+        event.source_order = sensitivities.front().source_order;
+        return std::vector<semantic::sv::Sensitivity> { std::move(event) };
+    };
+    if (block != blocks.end() && !block->event.empty()
+        && !sensitivities.front().expression) {
+        if (block->event.size() == 1U
+            && signals_.contains(clocking_flag(name))) {
+            return flag_event(block->event.front(), clocking_flag(name));
+        }
         return block->event;
     }
     // `@(vif.cb)`: the clocking event of the instance the
@@ -2780,11 +2843,17 @@ Lowerer::hir_named_clocking_event(
         return std::nullopt;
     }
     const auto handle_path = std::string_view { name }.substr(0U, separator);
+    const auto member_flag = clocking_flag(
+        std::string_view { name }.substr(separator + 1U));
     std::optional<semantic::sv::TypeReference> interface_type;
+    // Every instance of the interface a virtual handle may name has the
+    // block's flag; a named instance is checked.
+    bool use_flag = false;
     if (name.find('.') != separator) {
         if (auto hierarchical
             = hir_hierarchical_virtual_interface(handle_path)) {
             interface_type = std::move(hierarchical->type);
+            use_flag = true;
         } else if (systemverilog_interface_types_ != nullptr) {
             // `@(t.ifc.cb)`: a clocking block of an interface instance
             // named hierarchically, from the innermost scope outward.
@@ -2799,6 +2868,8 @@ Lowerer::hir_named_clocking_event(
                     semantic::sv::TypeReference type;
                     type.interface_type = found->second;
                     interface_type = std::move(type);
+                    use_flag = design_.signal_by_name_.contains(
+                        path + "." + member_flag);
                     break;
                 }
                 if (ancestor.empty()) {
@@ -2826,6 +2897,47 @@ Lowerer::hir_named_clocking_event(
             ? hir_systemverilog_virtual_interface_type(
                   *handle_declaration->systemverilog)
             : std::nullopt;
+        use_flag = interface_type.has_value();
+        // An interface port names the interface it is declared with
+        // (`b.cb`, IEEE 1800-2023 25.5).
+        if (!interface_type && handle_declaration
+            && handle_declaration->systemverilog != nullptr
+            && handle_declaration->systemverilog->type
+            && !handle_declaration->systemverilog->type->interface_type
+                    .empty()) {
+            interface_type = *handle_declaration->systemverilog->type;
+        }
+    }
+    // An instance named from this scope or an enclosing one (`u.cb`,
+    // `buses[1].cb`) has the clocking blocks of its own unit (IEEE
+    // 1800-2023 14.3, 23.6). Instances are created after the processes of
+    // their parent, so a miss is retried.
+    if (!interface_type) {
+        for (std::string_view ancestor = hierarchy_;;) {
+            const auto path = ancestor.empty()
+                ? std::string { handle_path }
+                : std::string { ancestor } + "." + std::string { handle_path };
+            const auto instance = std::ranges::find(design_.specializations_,
+                path, &SpecializationInfo::instance);
+            if (instance != design_.specializations_.end()) {
+                semantic::sv::TypeReference type;
+                type.interface_type = instance->unit;
+                interface_type = std::move(type);
+                use_flag = design_.signal_by_name_.contains(
+                    path + "." + member_flag);
+                break;
+            }
+            if (ancestor.empty()) {
+                break;
+            }
+            const auto up = ancestor.find_last_of('.');
+            ancestor = up == std::string_view::npos
+                ? std::string_view { }
+                : ancestor.substr(0U, up);
+        }
+        if (!interface_type && hierarchical_reference_retry_) {
+            hierarchical_reference_missed_ = true;
+        }
     }
     if (!interface_type) {
         return std::nullopt;
@@ -2847,8 +2959,15 @@ Lowerer::hir_named_clocking_event(
             return std::nullopt;
         }
         auto event = interface_block->event.front();
-        event.signal = name.substr(0U, separator) + "."
-            + event.signal;
+        if (use_flag) {
+            return flag_event(std::move(event),
+                std::string { handle_path } + "." + member_flag);
+        }
+        // A package variable keeps its package-scoped name (`pkg::clk`).
+        if (event.signal.find("::") == std::string::npos) {
+            event.signal = name.substr(0U, separator) + "."
+                + event.signal;
+        }
         event.source_order = sensitivities.front()
             .source_order;
         return std::vector<semantic::sv::Sensitivity> { event };
@@ -3960,9 +4079,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                                const semantic::ExpressionId limit_expression,
                                                const std::span<const semantic::StatementId> wildcard_statements
                                                = { }) -> bool {
-        auto limit = lower_hir_expression(limit_expression, 32U);
+        // A real count rounds to an integer (IEEE 1800-2023 6.12.1,
+        // 14.11).
+        const auto limit_kind = hir_systemverilog_scalar_kind(limit_expression);
+        const bool real_limit = frontend::is_real_scalar_kind(limit_kind);
+        auto limit = real_limit
+            ? lower_hir_expression(limit_expression,
+                  limit_kind == frontend::SystemVerilogScalarKind::ShortReal
+                      ? 32U
+                      : 64U,
+                  limit_kind)
+            : lower_hir_expression(limit_expression, 32U);
         if (!limit) {
             return false;
+        }
+        if (real_limit) {
+            limit = convert_hir_real_to_integral(*limit, limit_kind);
         }
         if (register_width(*limit) != 32U) {
             limit = resize_register(
@@ -17169,6 +17301,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             if ((!choice_width || *choice_width == 0U)
                 && !systemverilog && hir_constant_integer(choice)) {
+                choice_width = selector_width;
+            }
+            // A static integer choice is a value of the selector's integer
+            // type, so it takes that type's width (a 64-bit INTEGER under
+            // VHDL-2019, IEEE 1076-2019 5.2.3.2, 10.9).
+            if (!systemverilog && choice_width && *choice_width != 0U
+                && *choice_width != *selector_width
+                && hir_expression_domain(*condition, hir_process_scope_)
+                    == std::optional { frontend::ValueDomain::Integer }
+                && hir_constant_integer(choice)) {
                 choice_width = selector_width;
             }
             if (!choice_width || *choice_width == 0U) {

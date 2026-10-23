@@ -2102,6 +2102,17 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                         fail("$sformatf format conversions require "
                             "matching value arguments");
                     } else {
+                        const auto unresolved_hierarchical = [&]
+                            (const semantic::ExpressionId value) {
+                                const auto expression
+                                    = specialized_hir_unit_->find_expression(
+                                        value);
+                                return expression
+                                    && expression->systemverilog != nullptr
+                                    && expression->systemverilog->text.find('.')
+                                        != std::string::npos
+                                    && !hir_referenced_declaration(value);
+                            };
                         const auto compatible = [&]
                             (const semantic::ExpressionId value,
                              const frontend::OutputFormat output) {
@@ -2149,6 +2160,13 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                 }
                                 const auto width = hir_expression_width(
                                     value, call.scope);
+                                // A hierarchical reference to an instance
+                                // elaborated after this process has no
+                                // type yet; its lowering retries once the
+                                // instance exists (IEEE 1800-2023 23.6).
+                                if (!width && unresolved_hierarchical(value)) {
+                                    return true;
+                                }
                                 return width && *width != 0U;
                             };
                         std::size_t value_index = 1U;

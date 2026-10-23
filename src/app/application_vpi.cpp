@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <functional>
@@ -346,6 +347,36 @@ namespace {
             return std::string { local_path };
         }
         return std::string { instance_path } + '.' + std::string { local_path };
+    }
+
+    // The end of a path's parent. An escaped leaf identifier may itself
+    // hold periods, so the leaf's own spelling decides where it starts
+    // (IEEE 1800-2023 5.6.1, 23.6).
+    [[nodiscard]] std::size_t path_parent_end(
+        const std::string_view path, const std::string_view leaf)
+    {
+        if (!leaf.empty() && path.size() > leaf.size()
+            && path.ends_with(leaf) && path[path.size() - leaf.size() - 1U] == '.') {
+            return path.size() - leaf.size() - 1U;
+        }
+        return path.find_last_of('.');
+    }
+
+    // A VPI name for a design object. A simple identifier holds no period
+    // or white space, so a name that does (an internal net derived from an
+    // escaped port name) is published as an escaped identifier (IEEE
+    // 1800-2023 5.6.1).
+    [[nodiscard]] std::string vpi_identifier(const std::string_view name)
+    {
+        if (name.starts_with('\\')
+            || std::ranges::none_of(name, [](const char character) {
+                   return character == '.'
+                       || std::isspace(static_cast<unsigned char>(character))
+                       != 0;
+               })) {
+            return std::string { name };
+        }
+        return '\\' + std::string { name };
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiDirection vpi_direction(
@@ -1307,7 +1338,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto has_non_vpi_parent = instance.parent
             && !instance_profiles.contains(instance.parent->value());
         auto ancestor_path = instance_path;
-        const auto parent_separator = ancestor_path.find_last_of('.');
+        const auto parent_separator
+            = path_parent_end(ancestor_path, instance.name);
         ancestor_path = parent_separator == std::string::npos
             ? std::string { }
             : ancestor_path.substr(0U, parent_separator);
@@ -1327,7 +1359,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
 
         if (ancestor != nullptr) {
             descriptor.parent = self(self, *ancestor);
-            const auto direct_parent_end = instance_path.find_last_of('.');
+            const auto direct_parent_end
+                = path_parent_end(instance_path, instance.name);
             const auto direct_parent = instance_path.substr(0U,
                 direct_parent_end == std::string::npos ? 0U
                                                        : direct_parent_end);
@@ -1920,9 +1953,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             continue;
         }
         auto object_parent = owner->second;
-        const auto parent_separator = path.find_last_of('.');
-        if (parent_separator != std::string::npos) {
-            const auto parent_path = path.substr(0U, parent_separator);
+        const auto parent_end = path_parent_end(path, object.name);
+        if (parent_end != std::string::npos) {
+            const auto parent_path = path.substr(0U, parent_end);
             const auto published_parent = published_paths.find(parent_path);
             if (published_parent != published_paths.end()) {
                 object_parent = published_parent->second.second;
@@ -2015,7 +2048,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             ? runtime::SystemVerilogVpiObjectKind::Net
             : runtime::SystemVerilogVpiObjectKind::Variable;
         descriptor.parent = object_parent;
-        descriptor.name = object.name;
+        descriptor.name = vpi_identifier(object.name);
         const auto direction = port == ports.end()
             ? runtime::SystemVerilogVpiDirection::None
             : vpi_direction(port->second->direction);
@@ -2102,7 +2135,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto path = vpi_occurrence_path(instance,
             project.design_ir.path(object.path));
         auto parent = owner->second;
-        const auto separator = path.find_last_of('.');
+        const auto separator = path_parent_end(path, object.name);
         if (separator != std::string::npos) {
             const auto parent_path = path.substr(0U, separator);
             if (const auto nested_instance = instance_paths.find(parent_path);
@@ -2158,7 +2191,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Memory;
         descriptor.parent = parent;
-        descriptor.name = object.name;
+        descriptor.name = vpi_identifier(object.name);
         descriptor.type = memory_type(specialization.language, type);
         descriptor.type->language
             = vpi_profile_language(project, specialization);

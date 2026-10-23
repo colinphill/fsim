@@ -1203,6 +1203,10 @@ Expression VhdlParser::parse_primary()
     if (at(TokenKind::Identifier)) {
         const auto name = advance();
         std::string canonical = vhdl_name(name.text);
+        // `f generic map (...) (args)` calls an implicit instance of the
+        // generic function `f` (IEEE 1076-2019 9.3.4).
+        canonical = parse_vhdl_call_generic_map(
+            name, std::move(canonical), false);
         // An attribute of an external-name alias other than a name
         // attribute applies to the object it denotes (IEEE 1076-2008 6.6.2).
         const bool object_attribute = at(TokenKind::Apostrophe)

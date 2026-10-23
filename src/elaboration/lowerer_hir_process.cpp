@@ -3467,8 +3467,16 @@ Lowerer::lower_hir_vhdl_conversion_program(
     description.input_actual_program = true;
     description.kind = frontend::ProcessKind::VhdlProcess;
     hir_vhdl_resolver_registers_.reset();
+    // Inertial parts of an aggregate actual follow their signals a delta
+    // later than its other parts (IEEE 1076-2008 6.5.7.1, 14.7.3.3).
+    struct InertialPartDelay {
+        bool& flag;
+        ~InertialPartDelay() { flag = false; }
+    } inertial_part_delay { hir_delay_inertial_actual_parts_ };
+    hir_delay_inertial_actual_parts_ = true;
     auto process = lower_hir_process_body(
         description, frontend::Language::Vhdl2008, hierarchy);
+    hir_delay_inertial_actual_parts_ = false;
     if (!process || !hir_vhdl_resolver_registers_) {
         return std::nullopt;
     }
@@ -4658,7 +4666,16 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             *description.input_actual_string_object, *text });
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
-        const auto& signal = design_.signal_info_[destination];
+        // An implicit signal created while the actual is lowered may
+        // reallocate the signal table, so a conversion program keeps its
+        // own copy of the destination's description.
+        std::optional<SignalInfo> destination_copy;
+        if (description.input_actual_program) {
+            destination_copy = design_.signal_info_[destination];
+        }
+        const auto& signal = destination_copy
+            ? *destination_copy
+            : design_.signal_info_[destination];
         auto actual = *description.input_actual;
         auto actual_expression
             = specialized_hir_unit_->find_expression(actual);

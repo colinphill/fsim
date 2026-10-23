@@ -583,6 +583,17 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
                && at(TokenKind::Identifier, lookahead + 1)) {
           lookahead += 2;
         }
+        // A VHDL-2019 call may carry a generic map before its actuals.
+        if (vhdl_standard_ >= VhdlStandard::Vhdl2019
+            && keyword("generic", lookahead, true)
+            && keyword("map", lookahead + 1U, true)
+            && at(TokenKind::LeftParen, lookahead + 2U)) {
+          const auto map_closed = skip_vhdl_parentheses(lookahead + 2U);
+          if (!map_closed) {
+            return false;
+          }
+          lookahead = *map_closed;
+        }
         if (at(TokenKind::Semicolon, lookahead)) {
           return true;
         }
@@ -744,6 +755,10 @@ VhdlParser::parse_vhdl_procedure_call() {
     name += vhdl_name(
         expect_identifier("selected procedure name").text);
   }
+
+  // `p generic map (...) (args);` calls an implicit instance of the generic
+  // procedure `p` (IEEE 1076-2019 9.3.4).
+  name = parse_vhdl_call_generic_map(start, std::move(name), true);
 
   Statement statement;
   statement.kind = StatementKind::ProcedureCall;

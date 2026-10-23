@@ -1838,19 +1838,62 @@ Simulation::Impl::Impl(
                 };
             }
         });
-    interpreter->set_coverage_query_hook([this](const auto kind) {
+    interpreter->set_coverage_query_hook([this](
+                                             const auto kind,
+                                             const std::string& identity) {
+        using runtime::simir::CoverageQueryKind;
         const auto& coverage = built.systemverilog_coverage;
         const auto adapter = project_systemverilog_coverage_state(
             coverage, built.systemverilog_hir, built.semantics);
-        const auto percentage = kind
-                == runtime::simir::CoverageQueryKind::overall_instance
-            ? frontend::calculate_systemverilog_overall_instance_coverage_percentage(
-                  adapter.declarations, adapter.instances)
-            : frontend::calculate_systemverilog_overall_coverage_percentage(
-                  adapter.declarations, adapter.instances);
+        const auto declaration_named = [&](const std::string& name)
+            -> const frontend::SystemVerilogCovergroupDeclaration& {
+            const auto found = std::ranges::find(
+                adapter.declarations, name,
+                &frontend::SystemVerilogCovergroupDeclaration::
+                    canonical_identity);
+            if (found == adapter.declarations.end()) {
+                throw std::runtime_error {
+                    "SystemVerilog coverage query names no covergroup '"
+                    + name + "'"
+                };
+            }
+            return *found;
+        };
+        // IEEE 1800-2023 19.8: get_inst_coverage() is the coverage of one
+        // instance and get_coverage() that of the covergroup type; both,
+        // like the overall queries, are unrounded reals (19.11).
+        frontend::SystemVerilogCoveragePercentage percentage;
+        if (kind == CoverageQueryKind::covergroup_instance) {
+            const auto instance = std::ranges::find(
+                adapter.instances, identity,
+                &frontend::SystemVerilogCovergroupInstance::runtime_identity);
+            if (instance == adapter.instances.end()) {
+                throw std::runtime_error {
+                    "SystemVerilog coverage query names no covergroup "
+                    "instance '" + identity + "'"
+                };
+            }
+            percentage = frontend::
+                calculate_systemverilog_covergroup_instance_percentage(
+                    declaration_named(instance->declaration_identity),
+                    *instance)
+                    .coverage;
+        } else if (kind == CoverageQueryKind::covergroup_type) {
+            percentage = frontend::
+                calculate_systemverilog_covergroup_type_percentage(
+                    declaration_named(identity), adapter.instances)
+                    .coverage;
+        } else if (kind == CoverageQueryKind::overall_instance) {
+            percentage = frontend::
+                calculate_systemverilog_overall_instance_coverage_percentage(
+                    adapter.declarations, adapter.instances);
+        } else {
+            percentage = frontend::
+                calculate_systemverilog_overall_coverage_percentage(
+                    adapter.declarations, adapter.instances);
+        }
         const auto encoded = runtime::encode_systemverilog_scalar_payload(
-            runtime::SystemVerilogScalarValue::real(
-                static_cast<double>(percentage.basis_points) / 100.0));
+            runtime::SystemVerilogScalarValue::real(percentage.percent()));
         if (!encoded) {
             throw std::logic_error {
                 "SystemVerilog overall coverage cannot be encoded as real"

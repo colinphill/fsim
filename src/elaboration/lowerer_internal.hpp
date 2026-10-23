@@ -1393,6 +1393,19 @@ private:
     [[nodiscard]] std::optional<std::uint64_t>
     hir_systemverilog_interface_handle(
         semantic::ExpressionId expression) const;
+    // The handles of the elements of an interface instance array an
+    // expression names (`bus_array`), in declaration order (IEEE 1800-2023
+    // 25.4, 25.9); nothing when it names no such array.
+    [[nodiscard]] std::optional<std::vector<std::uint64_t>>
+    hir_systemverilog_interface_array_handles(
+        semantic::ExpressionId expression) const;
+    // Whether the interface instance at `instance_path` is of the
+    // specialization a virtual interface type designates: a virtual
+    // interface of a parameterized interface holds only instances with
+    // those parameter values (IEEE 1800-2023 25.9).
+    [[nodiscard]] bool hir_virtual_interface_instance_matches(
+        const semantic::sv::TypeReference& virtual_type,
+        std::string_view instance_path) const;
     [[nodiscard]] std::optional<std::vector<semantic::sv::Sensitivity>>
     hir_default_clocking_event() const;
     [[nodiscard]] std::optional<std::size_t> hir_loop_iteration_count(
@@ -4177,6 +4190,10 @@ private:
         std::string_view name) const;
     [[nodiscard]] bool hir_interface_path_has_lexical_root_binding(
         semantic::ExpressionId expression) const;
+    // Whether the first segment of `name` names a virtual interface handle
+    // visible from `scope`; such a handle hides a same-named instance.
+    [[nodiscard]] bool hir_virtual_interface_root(
+        std::string_view name, semantic::ScopeId scope) const;
     [[nodiscard]] std::optional<HirHierarchicalSignalMember>
     hir_hierarchical_signal_member(semantic::ExpressionId expression) const;
     // A parameter or local parameter of a selected, non-loop generate block
@@ -4611,6 +4628,12 @@ private:
         std::size_t contextual_width,
         std::optional<HirPackedRange> formal_range, std::string callable_key);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
+    // Set while a port conversion program is lowered: an inertial part of
+    // the actual reads its signal through the implicit signal S'DELAYED(0),
+    // which follows the signal a delta later (IEEE 1076-2008 6.5.7.1,
+    // 14.7.3.3), while the other parts follow their signals in the same
+    // cycle.
+    bool hir_delay_inertial_actual_parts_ { };
     std::vector<HirCallableFrame> hir_callable_frames_;
     std::vector<HirVhdlCapturedScalarRange>
         hir_vhdl_captured_scalar_ranges_;

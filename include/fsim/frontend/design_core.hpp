@@ -1159,6 +1159,20 @@ struct ParameterOverride {
     }
 };
 
+/// A declarative VHDL-2008 generic subprogram instantiation.
+///
+/// Function and procedure instances use separate DesignUnit collections so
+/// their kind remains explicit even before template lookup succeeds. The
+/// parser also derives one from a VHDL-2019 call's generic map (IEEE
+/// 1076-2019 9.3.4), which is an implicit instance of the named template.
+struct GenericSubprogramInstantiation {
+    std::string name;
+    std::string template_name;
+    std::vector<ParameterOverride> generic_map;
+    bool generic_map_box { };
+    SourceSpan span;
+};
+
 struct InterfacePackageProfile {
     // Canonical VHDL selected name of the generic package template.
     std::string template_name;
@@ -1894,6 +1908,10 @@ struct Process {
     SourceSpan span;
     std::vector<VhdlAttributeDeclaration> vhdl_attributes;
     std::vector<VhdlGroupDeclaration> vhdl_groups;
+    // Implicit instances of generic subprograms named by a call's generic
+    // map inside this process (IEEE 1076-2019 9.3.4).
+    std::vector<GenericSubprogramInstantiation> generic_function_instances;
+    std::vector<GenericSubprogramInstantiation> generic_procedure_instances;
 };
 
 /// Typed source-level HDL function.

@@ -396,9 +396,12 @@ class VerilogParser final : private detail::ParserBase {
 
   SystemVerilogClockingSkew parse_clocking_skew();
 
+  // `parameter_unit` is the unit whose value parameters a bin's constant
+  // expressions may name (IEEE 1800-2017 19.5).
   SystemVerilogCovergroupDeclaration parse_covergroup_declaration(
       const Token& start,
-      SystemVerilogCovergroupOwnerKind owner_kind);
+      SystemVerilogCovergroupOwnerKind owner_kind,
+      const DesignUnit* parameter_unit = nullptr);
 
   void structure_covergroup_header(
       SystemVerilogCovergroupDeclaration& declaration);

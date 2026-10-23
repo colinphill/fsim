@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <utility>
 
@@ -32,16 +33,27 @@ namespace {
             quotient + (remainder >= (denominator + 1U) / 2U ? 1U : 0U));
     }
 
+    // `exact_covered` is `covered` before any rounding of its terms, in the
+    // same units; it defaults to `covered`.
     SystemVerilogCoveragePercentage percentage(
         const std::uint64_t covered,
         const std::uint64_t eligible,
-        const std::uint32_t goal)
+        const std::uint32_t goal,
+        const std::optional<double> exact_covered = std::nullopt)
     {
         SystemVerilogCoveragePercentage result;
         result.goal = goal;
         if (eligible == 0U)
             return result;
         result.empty = false;
+        const auto exact_raw = std::min(
+            100.0,
+            100.0 * exact_covered.value_or(static_cast<double>(covered))
+                / static_cast<double>(eligible));
+        result.set_percent(goal == 0U
+                ? 100.0
+                : std::min(
+                      100.0, exact_raw * 100.0 / static_cast<double>(goal)));
         result.raw_basis_points = std::min(
             full_coverage_basis_points,
             rounded_ratio(covered, eligible, full_coverage_basis_points));
@@ -198,6 +210,7 @@ calculate_systemverilog_covergroup_instance_percentage(
         return result;
     }
     std::uint64_t weighted_coverage { };
+    double exact_weighted_coverage { };
     std::uint64_t total_weight { };
     result.declarations.reserve(declaration.coverage_declarations.size());
     for (const auto& item : declaration.coverage_declarations) {
@@ -208,13 +221,16 @@ calculate_systemverilog_covergroup_instance_percentage(
                 weighted_coverage,
                 static_cast<std::uint64_t>(item_result.coverage.basis_points)
                     * item.effective_weight);
+            exact_weighted_coverage += item_result.coverage.percent() * 100.0
+                * static_cast<double>(item.effective_weight);
         }
         result.declarations.push_back(std::move(item_result));
     }
     result.coverage = percentage(
         weighted_coverage,
         total_weight * full_coverage_basis_points,
-        declaration.effective_instance_goal);
+        declaration.effective_instance_goal,
+        exact_weighted_coverage);
     return result;
 }
 
@@ -245,6 +261,7 @@ calculate_systemverilog_covergroup_type_percentage(
         return result;
 
     std::uint32_t type_raw { };
+    double exact_type_raw { };
     bool empty { true };
     if (declaration.effective_merge_instances) {
         SystemVerilogCovergroupInstance merged;
@@ -256,20 +273,25 @@ calculate_systemverilog_covergroup_type_percentage(
         const auto merged_result = calculate_systemverilog_covergroup_instance_percentage(
             declaration, merged);
         type_raw = merged_result.coverage.basis_points;
+        exact_type_raw = merged_result.coverage.percent() * 100.0;
         empty = merged_result.coverage.empty;
     } else {
         std::uint64_t sum { };
+        double exact_sum { };
         for (const auto& instance : result.instances) {
             sum = saturating_add(sum, instance.coverage.basis_points);
+            exact_sum += instance.coverage.percent() * 100.0;
             empty = empty && instance.coverage.empty;
         }
         type_raw = rounded_ratio(sum, result.instances.size(), 1U);
+        exact_type_raw
+            = exact_sum / static_cast<double>(result.instances.size());
     }
     if (empty)
         return result;
     result.coverage = percentage(
         type_raw, full_coverage_basis_points,
-        declaration.effective_type_goal);
+        declaration.effective_type_goal, exact_type_raw);
     return result;
 }
 
@@ -279,6 +301,7 @@ calculate_systemverilog_overall_coverage_percentage(
     const std::span<const SystemVerilogCovergroupInstance> instances)
 {
     std::uint64_t weighted_coverage { };
+    double exact_weighted_coverage { };
     std::uint64_t total_weight { };
     for (const auto& declaration : declarations) {
         if (declaration.effective_type_weight == 0U)
@@ -294,11 +317,14 @@ calculate_systemverilog_overall_coverage_percentage(
             weighted_coverage,
             static_cast<std::uint64_t>(coverage.basis_points)
                 * declaration.effective_type_weight);
+        exact_weighted_coverage += coverage.percent() * 100.0
+            * static_cast<double>(declaration.effective_type_weight);
     }
     return percentage(
         weighted_coverage,
         total_weight * full_coverage_basis_points,
-        100U);
+        100U,
+        exact_weighted_coverage);
 }
 
 SystemVerilogCoveragePercentage
@@ -307,6 +333,7 @@ calculate_systemverilog_overall_instance_coverage_percentage(
     const std::span<const SystemVerilogCovergroupInstance> instances)
 {
     std::uint64_t weighted_coverage { };
+    double exact_weighted_coverage { };
     std::uint64_t total_weight { };
     for (const auto& declaration : declarations) {
         if (declaration.effective_instance_weight == 0U)
@@ -328,12 +355,15 @@ calculate_systemverilog_overall_instance_coverage_percentage(
                 weighted_coverage,
                 static_cast<std::uint64_t>(coverage.basis_points)
                     * declaration.effective_instance_weight);
+            exact_weighted_coverage += coverage.percent() * 100.0
+                * static_cast<double>(declaration.effective_instance_weight);
         }
     }
     return percentage(
         weighted_coverage,
         total_weight * full_coverage_basis_points,
-        100U);
+        100U,
+        exact_weighted_coverage);
 }
 
 } // namespace fsim::frontend

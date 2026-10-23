@@ -15111,7 +15111,9 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
     const semantic::SpecializedHirUnit& specialization,
     const std::string& path,
     SignalMap& signals,
-    std::vector<Process>& clocking_processes)
+    std::vector<Process>& clocking_processes,
+    const std::function<std::optional<SignalId>(semantic::DeclarationId)>&
+        package_signal)
 {
     const auto clocking_signal_name = [&](const semantic::sv::ClockingSignal& member)
         -> std::optional<std::string> {
@@ -15411,9 +15413,26 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                     compiled_source_span(*compiled_, block.source));
                 continue;
             }
-            const auto event = signals.find(
-                block.event.front().signal);
-            if (event == signals.end()) {
+            auto event_signal = [&]() -> std::optional<SignalId> {
+                if (const auto found = signals.find(
+                        block.event.front().signal);
+                    found != signals.end()) {
+                    return found->second;
+                }
+                // A package variable names the clocking event
+                // (`@(posedge pkg::clk)`, IEEE 1800-2023 14.3, 26.3).
+                if (!package_signal) {
+                    return std::nullopt;
+                }
+                const auto selected = semantic::CompiledDesignResolver {
+                    specialization }
+                                          .resolve_systemverilog(
+                                              block.event.front().signal,
+                                              unit.scope, { }, true)
+                                          .unique();
+                return selected ? package_signal(*selected) : std::nullopt;
+            }();
+            if (!event_signal) {
                 report(
                     "FSIM-ELAB-CLOCK-002",
                     "unknown event signal '"
@@ -15424,9 +15443,9 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                         *compiled_, block.event.front().source));
                 continue;
             }
-            signals.insert_or_assign(block.name, event->second);
+            signals.insert_or_assign(block.name, *event_signal);
             systemverilog_clocking_event_signals_.insert_or_assign(
-                path + "." + block.name, event->second);
+                path + "." + block.name, *event_signal);
             for (const auto& member : block.signals) {
                 const auto actual_name = clocking_signal_name(member);
                 if (!actual_name) {
@@ -15513,7 +15532,7 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                         *request,
                         *pending,
                         actual->second,
-                        event->second,
+                        *event_signal,
                         drive_edge,
                         *delay);
                 }
@@ -15569,12 +15588,46 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
                         + member.name.spelling + "$sample",
                     sample_source,
                     *sampled,
-                    event->second,
+                    *event_signal,
                     selected_edge,
                     0U,
                     false,
                     true);
             }
+            // The clocking block event (`@(cb)`) is triggered in the
+            // Observed region, after the block's samples are updated (IEEE
+            // 1800-2023 14.10, 14.13): an observed process toggles a hidden
+            // flag at each clocking event, and `@(cb)` waits on the flag.
+            const auto flag = add_clocking_flag(
+                path + ".$clocking$" + block.name + "$event");
+            if (!flag) {
+                continue;
+            }
+            signals.insert_or_assign(
+                "$clocking$" + block.name + "$event", *flag);
+            Process process;
+            process.name = path + ".$clocking$" + block.name + "$event";
+            process.scheduling_domain
+                = runtime::simir::ProcessSchedulingDomain::systemverilog;
+            process.register_count = 2U;
+            process.register_value_kinds = {
+                value_kind(frontend::ValueDomain::Bit2),
+                value_kind(frontend::ValueDomain::Bit2),
+            };
+            process.static_sensitivity.push_back({ *event_signal,
+                clocking_edge(block.event.front().edge) });
+            process.initialize = true;
+            process.observed = true;
+            process.operations.emplace_back(WaitSensitivity { });
+            process.operations.emplace_back(ReadSignal { 0U, *flag });
+            process.operations.emplace_back(runtime::simir::LoadConstant {
+                1U, unsigned_value(1U, 1U) });
+            process.operations.emplace_back(runtime::simir::Binary {
+                runtime::simir::BinaryOperator::bit_xor, 0U, 0U, 1U });
+            process.operations.emplace_back(WriteBlocking { *flag, 0U });
+            process.operations.emplace_back(Jump { 0U });
+            process.driver_regions.push_back({ *flag, 0U, 1U, true });
+            clocking_processes.push_back(std::move(process));
         }
     }
 }
@@ -16172,7 +16225,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
 
     std::vector<Process> clocking_processes;
     materialize_systemverilog_clocking_blocks(
-        unit, *specialized, path, signals, clocking_processes);
+        unit, *specialized, path, signals, clocking_processes,
+        [&](const semantic::DeclarationId declaration) {
+            return compiled_systemverilog_package_variable_signal(
+                *specialized, declaration, packed_type_resolver,
+                packed_default_resolver, packed_fallback_resolver);
+        });
     std::vector<SystemVerilogHirMaterialization>
         generated_materializations;
     if (!materialize_compiled_systemverilog_generated_scopes(
@@ -19419,6 +19477,24 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             design_.signal_by_name_.emplace(
                 constant_name, id);
             actual_signal = id;
+            // A default that does not fold (a function call, a record
+            // aggregate) is run at elaboration: it is the initial value of
+            // the formal's driver, which the actual's driver set takes up
+            // (IEEE 1076-2008 6.5.2, 14.7.3.2).
+            if (produces_output && !value && !static_value && !port_default
+                && formal_declaration.initializer
+                && formal_declaration.subtype && !null_input) {
+                auto default_signals = working_signals;
+                auto default_read_only_signals = working_read_only_signals;
+                const auto evaluated = evaluate_compiled_vhdl_value(
+                    child_interface_specialization,
+                    *formal_declaration.initializer, id,
+                    formal_declaration.subtype, child_path, default_signals,
+                    default_read_only_signals, container_objects);
+                if (evaluated && evaluated->width() == *width) {
+                    design_.signals_[id].initial_value = *evaluated;
+                }
+            }
             if (null_input) {
                 return CompiledVhdlPortActual {
                     id,
@@ -19476,6 +19552,17 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     working_path, formal_declaration.subtype,
                     architecture)) {
                 record_lowering_census(vhdl_port_input_actual_occurrences_);
+                // The implicit signals the program reads (an inertial part's
+                // S'DELAYED) are driven by processes of their own.
+                for (auto& generated : actual_lowerer.take_generated_processes()) {
+                    generated.language_standard = architecture.standard;
+                    generated.compatibility_profile
+                        = architecture.compatibility_profile;
+                    canonicalize_process_operations(generated);
+                    design_.specializations_[specialization_id]
+                        .processes.push_back(generated.id);
+                    design_.append_process_record(std::move(generated));
+                }
                 return CompiledVhdlPortActual {
                     id,
                     std::move(actual_hir_type_identity),
@@ -19538,6 +19625,170 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
         std::move(actual_hir_declaration),
         std::move(actual_hir_scope),
     };
+}
+
+std::optional<std::vector<HierarchyBuilder::VhdlHirMaterialization::BlockViewRoute>>
+HierarchyBuilder::compiled_vhdl_view_subelement_routes(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::vhdl::Declaration& formal,
+    const SignalId formal_signal,
+    const semantic::ExpressionId actual,
+    const SignalMap& actual_signals)
+{
+    using Route = VhdlHirMaterialization::BlockViewRoute;
+    if (!formal.subtype || !formal.interface_view
+        || formal.interface_view->composition
+            != semantic::vhdl::ModeViewCompositionState::complete
+        || formal_signal >= design_.signal_info_.size()
+        || formal_signal >= design_.signals_.size()) {
+        return std::nullopt;
+    }
+    const auto& formal_info = design_.signal_info_[formal_signal];
+    auto endpoint_type = compiled_vhdl_signal_type(
+        specialization, *formal.subtype, formal.scope);
+    if (!endpoint_type) {
+        return std::nullopt;
+    }
+    // A formal with an unconstrained element takes the elaborated layout
+    // of its signal (IEEE 1076-2008 6.5.6.3, 5.3.3).
+    if (!formal_info.packed_members.empty()
+        && std::ranges::any_of(endpoint_type->packed_members,
+            [](const PackedMemberMetadata& view_member) {
+                const auto member_width
+                    = compiled_vhdl_mode_view_member_type(view_member)
+                          .width();
+                return !member_width || *member_width == 0U;
+            })) {
+        endpoint_type->packed_members = formal_info.packed_members;
+        endpoint_type->packed_range = formal_info.packed_range;
+    }
+    // Each scalar part of the view with its direction and place in the
+    // formal's storage (IEEE 1076-2019 6.5.2).
+    std::vector<VhdlModeViewElementBinding> endpoints;
+    std::string endpoint_error;
+    if (!materialize_compiled_vhdl_mode_view_endpoints(*compiled_,
+            specialization, formal.scope, *endpoint_type,
+            *formal.interface_view, formal_signal, formal_info.width,
+            formal.name, formal.name, endpoints, endpoint_error)) {
+        return std::nullopt;
+    }
+    const auto under = [](const std::string& path, const std::string& base) {
+        const auto lower_path = lowercase_ascii_copy(path);
+        const auto lower_base = lowercase_ascii_copy(base);
+        return lower_path.starts_with(lower_base)
+            && (lower_path.size() == lower_base.size()
+                || lower_path[lower_base.size()] == '.'
+                || lower_path[lower_base.size()] == '(');
+    };
+    std::vector<Route> routes;
+    bool valid { true };
+    const auto visit = [&](const auto& self,
+                           const semantic::vhdl::Expression& aggregate,
+                           const std::string& prefix,
+                           const std::size_t depth) -> void {
+        for (const auto& association : aggregate.associations) {
+            if (!valid) {
+                return;
+            }
+            const auto value = specialization.find_expression(
+                association.value);
+            if (!value || value->vhdl == nullptr || depth > 16U
+                || association.choice_spelling.empty()
+                || association.choice_spelling == "@array") {
+                valid = false;
+                return;
+            }
+            // An OPEN part is left unassociated (6.5.7.1).
+            if (value->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                && compiled_vhdl_name_equal(value->vhdl->text, "open")) {
+                continue;
+            }
+            const auto path = prefix + "." + association.choice_spelling;
+            if (value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+                && value->vhdl->text == "@vhdl-formal-subelements") {
+                self(self, *value->vhdl, path, depth + 1U);
+                continue;
+            }
+            if (value->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+                valid = false;
+                return;
+            }
+            auto actual_name = std::string_view { value->vhdl->text };
+            if (value->vhdl->referenced_name) {
+                actual_name = value->vhdl->referenced_name->text();
+            }
+            const auto signal = actual_signals.find(std::string { actual_name });
+            if (signal == actual_signals.end()
+                || signal->second >= design_.signal_info_.size()
+                || signal->second >= design_.signals_.size()) {
+                valid = false;
+                return;
+            }
+            // The part and the signal are of one layout, so a scalar of
+            // the part lies at the same offset in the signal.
+            std::vector<const VhdlModeViewElementBinding*> part;
+            std::uint64_t low { std::numeric_limits<std::uint64_t>::max() };
+            std::uint64_t high { };
+            std::uint64_t covered { };
+            for (const auto& endpoint : endpoints) {
+                if (under(endpoint.formal_path, path)) {
+                    part.push_back(&endpoint);
+                    low = std::min(low, endpoint.lsb_offset);
+                    high = std::max(high, endpoint.lsb_offset + endpoint.width);
+                    covered += endpoint.width;
+                }
+            }
+            const auto& target = design_.signal_info_[signal->second];
+            if (part.empty() || covered != high - low
+                || covered != target.width
+                || target.source_domain != formal_info.source_domain
+                || design_.signals_[signal->second].value_kind
+                    != design_.signals_[formal_signal].value_kind
+                || high > formal_info.width
+                || covered > std::numeric_limits<std::uint32_t>::max()) {
+                valid = false;
+                return;
+            }
+            for (const auto* endpoint : part) {
+                const auto relative = static_cast<std::uint32_t>(
+                    endpoint->lsb_offset - low);
+                const auto offset
+                    = static_cast<std::uint32_t>(endpoint->lsb_offset);
+                const auto width = static_cast<std::uint32_t>(endpoint->width);
+                switch (endpoint->direction) {
+                case frontend::PortDirection::Input:
+                    routes.push_back(Route { signal->second, relative,
+                        formal_signal, offset, width });
+                    break;
+                case frontend::PortDirection::Output:
+                case frontend::PortDirection::Buffer:
+                    routes.push_back(Route { formal_signal, offset,
+                        signal->second, relative, width });
+                    break;
+                case frontend::PortDirection::Inout:
+                    routes.push_back(Route { signal->second, relative,
+                        formal_signal, offset, width });
+                    routes.push_back(Route { formal_signal, offset,
+                        signal->second, relative, width });
+                    break;
+                default:
+                    valid = false;
+                    return;
+                }
+            }
+        }
+    };
+    const auto aggregate = specialization.find_expression(actual);
+    if (!aggregate || aggregate->vhdl == nullptr
+        || aggregate->vhdl->kind != semantic::vhdl::ExpressionKind::aggregate
+        || aggregate->vhdl->text != "@vhdl-formal-subelements") {
+        return std::nullopt;
+    }
+    visit(visit, *aggregate->vhdl, formal.name, 0U);
+    if (!valid || routes.empty()) {
+        return std::nullopt;
+    }
+    return routes;
 }
 
 void HierarchyBuilder::register_compiled_vhdl_formal_resolution(
@@ -21423,12 +21674,18 @@ bool HierarchyBuilder::bind_compiled_vhdl_package_objects(
 bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
     const semantic::SpecializedHirUnit& specialization,
     const std::string& path,
-    const semantic::vhdl::Unit& unit,
+    const std::span<const semantic::DeclarationId> declarations,
+    const std::string_view library,
     SignalMap& signals,
     ContainerMap& container_objects)
 {
     using Form = semantic::vhdl::DeclarationForm;
-    for (const auto instance_id : unit.declarations) {
+    const bool trace = std::getenv("FSIM_VHDL_PACKAGE_OBJECT_TRACE") != nullptr;
+    if (trace) {
+        std::cerr << "[fsim-vhdl-package-objects] path=" << path
+                  << " declarations=" << declarations.size() << '\n';
+    }
+    for (const auto instance_id : declarations) {
         const auto instance = specialization.find_declaration(instance_id);
         if (!instance || instance->vhdl == nullptr
             || instance->vhdl->form != Form::package_instance
@@ -21438,7 +21695,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
         // An unknown or ambiguous template is reported by
         // validate_compiled_vhdl_package_instances.
         const auto candidates = compiled_vhdl_package_template_candidates(
-            instance->vhdl->package->template_name, unit.library);
+            instance->vhdl->package->template_name, library);
+        if (trace) {
+            std::cerr << "[fsim-vhdl-package-objects] instance "
+                      << instance->vhdl->name << " template "
+                      << instance->vhdl->package->template_name.text()
+                      << " candidates=" << candidates.size() << '\n';
+        }
         if (candidates.size() != 1U) {
             continue;
         }
@@ -21454,12 +21717,18 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
             }
         }
         if (objects.empty()) {
+            if (trace) {
+                std::cerr << "[fsim-vhdl-package-objects] no objects\n";
+            }
             continue;
         }
         const auto bindings
             = semantic::resolve_specialized_hir_vhdl_package_associations(
                 *compiled_, *instance->vhdl, package, specialization);
         if (!bindings) {
+            if (trace) {
+                std::cerr << "[fsim-vhdl-package-objects] no bindings\n";
+            }
             continue;
         }
         std::vector<semantic::SpecializedHirActualIdentity> actuals;
@@ -21475,6 +21744,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
             auto actual = compiled_vhdl_specialization_actual(
                 *compiled_, specialization, binding);
             if (binding.identity.empty() || actual.requires_static_value) {
+                if (trace) {
+                    std::cerr << "[fsim-vhdl-package-objects] non-static "
+                                 "actual identity-empty="
+                              << binding.identity.empty() << '\n';
+                }
                 static_actuals = false;
                 break;
             }
@@ -25099,7 +25373,17 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                                 declaration->vhdl->form);
                         });
                 });
-            if (!binding.actual_declaration
+            // A library-level instance `library.package` of a generic
+            // package is a package unit and a valid actual (IEEE 1076-2008
+            // 6.5.5, 6.5.7.2); its members stand for the interface
+            // package's.
+            const bool library_instance = !binding.actual_declaration
+                && separator != std::string_view::npos
+                && binding.expression
+                && association_resolver.vhdl_library_package_actual(
+                       *binding.expression)
+                    != nullptr;
+            if (!binding.actual_declaration && !library_instance
                 && separator != std::string_view::npos) {
                 report(
                     "FSIM-ELAB-VHPKG-011",
@@ -25990,7 +26274,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             continue;
         }
         auto unconstrained = type.base;
-        const auto constraints = unconstrained.constraints;
+        // The constraints of `obj'index` or `obj'element` describe the
+        // prefix object (IEEE 1076-2019 16.2.3); the attribute selects a
+        // subtype of that prefix, so they are no derived constraint here.
+        const auto constraints = type.base.predefined_attribute
+            ? std::vector<semantic::vhdl::RangeConstraint> { }
+            : unconstrained.constraints;
         unconstrained.constraints.clear();
         std::unordered_set<std::uint32_t> visiting;
         auto profile = resolve_profile(
@@ -30163,9 +30452,11 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
     if (!add_unit_declarations(*entity)
         || !add_unit_declarations(architecture)
         || !materialize_compiled_vhdl_local_package_objects(
-            *specialized, path, *entity, signals, container_objects)
+            *specialized, path, entity->declarations, entity->library,
+            signals, container_objects)
         || !materialize_compiled_vhdl_local_package_objects(
-            *specialized, path, architecture, signals, container_objects)
+            *specialized, path, architecture.declarations,
+            architecture.library, signals, container_objects)
         || !bind_compiled_vhdl_package_objects(
             *specialized, signals, container_objects)) {
         return false;
@@ -34060,6 +34351,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
         { },
         { },
         { },
+        { },
     };
     // Retain the generated labels and indices while excluding the owning
     // entity-instance path, so the same loop iteration can replay across
@@ -34153,6 +34445,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
     std::vector<std::optional<std::pair<
         semantic::ExpressionId, semantic::SourceSpanId>>>
         block_output_drivers(block_ports.size());
+    // A mode-view port associated part by part keeps its own signal; each
+    // of its scalar parts is routed by its mode (IEEE 1076-2019 6.5.2).
+    std::vector<std::optional<std::pair<
+        semantic::ExpressionId, semantic::SourceSpanId>>>
+        block_view_actuals(block_ports.size());
     for (const auto& association : region.port_map) {
         const semantic::vhdl::Declaration* formal = nullptr;
         std::optional<std::size_t> formal_index;
@@ -34285,6 +34582,17 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 "compiled VHDL block port actual was invalidated",
                 compiled_source_span(*compiled_, association.source));
             return false;
+        }
+        if (formal->interface_view
+            && actual->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && actual->vhdl->text == "@vhdl-formal-subelements") {
+            local_block_ports[*formal_index] = true;
+            block_view_actuals[*formal_index] = std::pair {
+                *association.expression,
+                association.source,
+            };
+            continue;
         }
         // An output or buffer port associated with a slice or element of
         // a signal drives that part through its own signal (IEEE 1076-2008
@@ -34613,6 +34921,29 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             return false;
         }
         association_materialized_block_ports.push_back(port->id);
+        if (block_view_actuals[index]) {
+            const auto view_port = materialization.signals.find(port->name);
+            if (view_port == materialization.signals.end()) {
+                report(
+                    "FSIM-ELAB-HIR-001",
+                    "compiled VHDL block port '" + port->name
+                        + "' has no materialized signal",
+                    compiled_source_span(
+                        *compiled_, block_view_actuals[index]->second));
+                return false;
+            }
+            auto routes = compiled_vhdl_view_subelement_routes(
+                materialization.specialization, *port, view_port->second,
+                block_view_actuals[index]->first, *parent_signals);
+            // A part that is not a whole signal of the part's layout keeps
+            // the port unconnected, as before.
+            if (routes) {
+                materialization.block_view_routes.insert(
+                    materialization.block_view_routes.end(),
+                    routes->begin(), routes->end());
+            }
+            continue;
+        }
         if (block_output_drivers[index]) {
             const auto source = materialization.signals.find(port->name);
             if (source == materialization.signals.end()) {
@@ -34693,6 +35024,15 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 *declaration->vhdl)) {
             return false;
         }
+    }
+    // A package instance declared in a block or generate statement has its
+    // own signals and shared variables, exactly as one declared in a design
+    // unit does (IEEE 1076-2008 4.9, 14.4.2.1).
+    if (!materialize_compiled_vhdl_local_package_objects(
+            materialization.specialization, materialization.path,
+            region.declarations, architecture.library,
+            materialization.signals, container_objects)) {
+        return false;
     }
     generated_materializations.push_back(
         std::move(materialization));

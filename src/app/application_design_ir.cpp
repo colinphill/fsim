@@ -3,24 +3,50 @@
 #include "../elaboration/elaborated_design_process_access.hpp"
 
 #include <cstdlib>
+#include <set>
 
 namespace fsim::app::application_detail {
 namespace {
 
 namespace di = semantic::design;
 
-[[nodiscard]] std::string_view leaf_name(const std::string_view path) {
+[[nodiscard]] std::string_view plain_leaf_name(const std::string_view path) {
   const auto separator = path.find_last_of("./");
   return separator == std::string_view::npos
       ? path
       : path.substr(separator + 1U);
 }
 
-[[nodiscard]] std::string parent_path(const std::string_view path) {
+[[nodiscard]] std::string plain_parent_path(const std::string_view path) {
   const auto separator = path.find_last_of("./");
   return separator == std::string_view::npos
       ? std::string{}
       : std::string{path.substr(0, separator)};
+}
+
+// An escaped identifier may contain the hierarchy separator, so a path with
+// one cannot be split at its last period (IEEE 1800-2023 5.6.1, 23.6). The
+// split is the end of the longest enclosing instance path, then the last
+// escaped component, then the plain rule.
+[[nodiscard]] std::size_t escaped_leaf_start(
+    const std::string_view path,
+    const std::set<std::string, std::less<>>& instance_paths) {
+  for (auto end = path.find_last_of('.'); end != std::string_view::npos;
+       end = end == 0U ? std::string_view::npos
+                       : path.find_last_of('.', end - 1U)) {
+    if (instance_paths.contains(path.substr(0U, end))) {
+      return end + 1U;
+    }
+  }
+  const auto escaped = path.rfind(".\\");
+  if (escaped != std::string_view::npos) {
+    return escaped + 1U;
+  }
+  if (path.starts_with('\\')) {
+    return 0U;
+  }
+  const auto separator = path.find_last_of("./");
+  return separator == std::string_view::npos ? 0U : separator + 1U;
 }
 
 [[nodiscard]] bool owns_path(
@@ -355,6 +381,12 @@ class DesignIrBuilder final {
   }
 
   void add_hdl_specializations() {
+    for (const auto& input : elaborated_.specializations()) {
+      instance_path_texts_.insert(input.instance);
+    }
+    for (const auto& input : elaborated_.systemc_instances()) {
+      instance_path_texts_.insert(input.instance);
+    }
     auto& specializations = result_.mutable_specializations();
     auto& instances = result_.mutable_instances();
     const auto& inputs = elaborated_.specializations();
@@ -440,6 +472,26 @@ class DesignIrBuilder final {
           input.native_handle,
           std::nullopt);
     }
+  }
+
+  // The last component of a hierarchy path. A path holding an escaped
+  // identifier is split against the instance paths, which are known before
+  // any object is projected.
+  [[nodiscard]] std::string_view leaf_name(const std::string_view path) const {
+    if (path.find('\\') == std::string_view::npos
+        || path.find('/') != std::string_view::npos) {
+      return plain_leaf_name(path);
+    }
+    return path.substr(escaped_leaf_start(path, instance_path_texts_));
+  }
+
+  [[nodiscard]] std::string parent_path(const std::string_view path) const {
+    if (path.find('\\') == std::string_view::npos
+        || path.find('/') != std::string_view::npos) {
+      return plain_parent_path(path);
+    }
+    const auto start = escaped_leaf_start(path, instance_path_texts_);
+    return start == 0U ? std::string{} : std::string{path.substr(0, start - 1U)};
   }
 
   void link_instance_parents() {
@@ -1430,6 +1482,7 @@ class DesignIrBuilder final {
   semantic::HierarchyPathTable::Builder paths_;
   di::DesignIr result_;
   std::size_t hdl_specialization_count_{};
+  std::set<std::string, std::less<>> instance_path_texts_;
   // Built after all instance occurrences are appended and kept read-only
   // while objects and aliases are projected.
   std::map<semantic::HierarchyPathId, InstancePathPositions>

@@ -117,6 +117,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     materialization.specialization, adapter.expression,
                     adapter.destination, materialization.path,
                     adapter.subtype, architecture)) {
+                append_generated_vhdl_processes(
+                    generated_lowerer, architecture, specialization);
                 continue;
             }
             auto lowered = generated_lowerer.lower_hir_input_actual(
@@ -168,6 +170,51 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             design_.append_process_record(std::move(*lowered));
             append_generated_vhdl_processes(
                 generated_lowerer, architecture, specialization);
+        }
+        // Each scalar part of a mode-view port copies one way: an input
+        // part follows its actual signal, an output part drives it (IEEE
+        // 1076-2019 6.5.2, 6.5.7.1).
+        for (const auto& route : materialization.block_view_routes) {
+            if (route.from >= design_.signals_.size()
+                || route.to >= design_.signals_.size()
+                || route.width == 0U) {
+                report(
+                    "FSIM-ELAB-HIR-001",
+                    "compiled VHDL mode-view block port route names an "
+                    "invalid signal",
+                    compiled_source_span(*compiled_,
+                        materialization.region->source));
+                return false;
+            }
+            Process copy;
+            copy.id = static_cast<ProcessId>(design_.process_count());
+            copy.name = materialization.path + ".port_view_"
+                + std::to_string(copy.id);
+            copy.language_standard = architecture.standard;
+            copy.compatibility_profile = architecture.compatibility_profile;
+            copy.register_count = 2U;
+            copy.register_value_kinds.assign(
+                2U, design_.signals_[route.from].value_kind);
+            const auto source_width = design_.signals_[route.from]
+                                          .initial_value.width();
+            copy.static_sensitivity.push_back(Sensitivity {
+                route.from, EdgeKind::any,
+                route.from_offset == 0U && route.width == source_width
+                    ? 0U : route.from_offset,
+                route.from_offset == 0U && route.width == source_width
+                    ? 0U : route.width });
+            copy.operations.emplace_back(ReadSignal { 0U, route.from });
+            copy.operations.emplace_back(Extract {
+                1U, 0U, route.from_offset, route.width });
+            copy.operations.emplace_back(WriteUpdateSlice {
+                route.to, 1U, route.to_offset });
+            copy.operations.emplace_back(WaitSensitivity { });
+            copy.operations.emplace_back(Jump { 0U });
+            copy.driver_regions.push_back(Process::DriverRegion {
+                route.to, route.to_offset, route.width, false });
+            canonicalize_process_operations(copy);
+            specialization.processes.push_back(copy.id);
+            design_.append_process_record(std::move(copy));
         }
         for (const auto statement_id :
             materialization.region->concurrent_statements) {

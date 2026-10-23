@@ -18,9 +18,11 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <map>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -50,6 +52,8 @@ enum class Tag : std::uint64_t {
     constant = 8,
     range = 9,
     subarray = 10,
+    modpath = 11,
+    pathterm = 12,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -736,6 +740,9 @@ public:
 
     ~LiveService() override
     {
+        if (path_delay_hook_ != 0U) {
+            simulation_.remove_safe_point_hook(path_delay_hook_);
+        }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
         for (const auto& [serial, callback] : callbacks_) {
@@ -914,6 +921,10 @@ public:
             return property(request, result);
         case Routine::GetStringProperty:
             return string_property(request, result);
+        case Routine::GetDelays:
+            return get_delays(request, result);
+        case Routine::PutDelays:
+            return put_delays(request, result);
         case Routine::GetValue:
             return get_value(request, result);
         case Routine::PutValue:
@@ -1042,6 +1053,270 @@ private:
         std::int64_t left { };
         std::int64_t right { };
     };
+
+    // --- module paths (IEEE 1800-2023 37.39, 38.10, 38.32) ---------------
+
+    // One terminal of a module path: its path, direction, and position.
+    struct PathTerm {
+        std::uint32_t path { };
+        bool output { };
+        std::uint32_t index { };
+    };
+
+    [[nodiscard]] std::optional<std::uint32_t> modpath_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::modpath
+            || serial_of(handle) >= simulation_.design().verilog_specify_paths().size()) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(serial_of(handle));
+    }
+
+    [[nodiscard]] static fsim_vpi_handle_v1 pathterm_handle(
+        const PathTerm& term)
+    {
+        return tagged(Tag::pathterm,
+            (static_cast<std::uint64_t>(term.path) << 24U)
+                | (term.output ? std::uint64_t { 1 } << 23U : 0U) | term.index);
+    }
+
+    [[nodiscard]] std::optional<PathTerm> pathterm_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::pathterm) {
+            return std::nullopt;
+        }
+        const auto serial = serial_of(handle);
+        PathTerm term { static_cast<std::uint32_t>(serial >> 24U),
+            ((serial >> 23U) & 1U) != 0U,
+            static_cast<std::uint32_t>(serial & 0x7FFFFFU) };
+        const auto& paths = simulation_.design().verilog_specify_paths();
+        if (term.path >= paths.size()) {
+            return std::nullopt;
+        }
+        const auto& terminals = term.output ? paths[term.path].destinations
+                                            : paths[term.path].sources;
+        if (term.index >= terminals.size()) {
+            return std::nullopt;
+        }
+        return term;
+    }
+
+    // The instance that declares a path; its full name is the path's
+    // `instance`.
+    [[nodiscard]] fsim_vpi_handle_v1 path_instance(
+        const std::uint32_t path) const
+    {
+        const auto found = registry_.find(
+            simulation_.design().verilog_specify_paths()[path].instance);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // The net or variable a path terminal names, as published in the
+    // declaring instance (IEEE 1800-2023 vpiPathTerm vpiExpr).
+    [[nodiscard]] fsim_vpi_handle_v1 pathterm_object(const PathTerm& term) const
+    {
+        const auto& path = simulation_.design().verilog_specify_paths()[term.path];
+        const auto& terminal = term.output ? path.destinations[term.index]
+                                           : path.sources[term.index];
+        const auto instance = path_instance(term.path);
+        fsim_vpi_handle_v1 port { };
+        for (const auto handle :
+            simulation_.vpi_signal_object_handles(terminal.signal)) {
+            const auto object = info(handle);
+            if (!object || instance == 0U || object->parent != instance) {
+                continue;
+            }
+            if (object->kind != SystemVerilogVpiObjectKind::Port) {
+                return handle;
+            }
+            port = handle;
+        }
+        return port;
+    }
+
+    // The path's delays expanded to the twelve-transition form, in the
+    // order 0->1, 1->0, 0->z, z->1, 1->z, z->0, 0->x, x->1, 1->x, x->0,
+    // x->z, z->x (IEEE 1800-2023 30.5.1 Table 30-2, 30.5.2).
+    [[nodiscard]] std::array<runtime::SimulationTick, 12U> expanded_path_delays(
+        const std::vector<runtime::SimulationTick>& table) const
+    {
+        constexpr std::array<std::pair<Logic4, Logic4>, 12U> transitions { {
+            { Logic4::zero, Logic4::one }, { Logic4::one, Logic4::zero },
+            { Logic4::zero, Logic4::z }, { Logic4::z, Logic4::one },
+            { Logic4::one, Logic4::z }, { Logic4::z, Logic4::zero },
+            { Logic4::zero, Logic4::x }, { Logic4::x, Logic4::one },
+            { Logic4::one, Logic4::x }, { Logic4::x, Logic4::zero },
+            { Logic4::x, Logic4::z }, { Logic4::z, Logic4::x },
+        } };
+        std::array<runtime::SimulationTick, 12U> expanded { };
+        for (std::size_t index = 0U; index < expanded.size(); ++index) {
+            expanded[index] = runtime::simir::module_path_transition_delay(
+                transitions[index].first, transitions[index].second, table)
+                                  .value_or(0U);
+        }
+        return expanded;
+    }
+
+    // The delay table a caller sees: a delay queued by vpi_put_delays until
+    // the scheduler reaches a safe point, else the live table.
+    [[nodiscard]] std::vector<runtime::SimulationTick> path_delay_table(
+        const std::uint32_t path) const
+    {
+        const auto queued = queued_path_delays_.find(path);
+        return queued != queued_path_delays_.end()
+            ? queued->second
+            : simulation_.verilog_module_path_delays(path);
+    }
+
+    // A delay in the requested format, scaled to the declaring module's
+    // time unit for vpiScaledRealTime (IEEE 1800-2023 38.10).
+    void write_path_delay(s_vpi_time& out, const runtime::SimulationTick ticks,
+        const PLI_INT32 type, const std::uint32_t path) const
+    {
+        const auto profile = simulation_.systemverilog_vpi_time().profile();
+        const auto quanta = ticks * profile.tick_multiplier;
+        out.type = type;
+        if (type == vpiScaledRealTime) {
+            const auto scale = module_time_scale(path_instance(path));
+            const int unit = scale ? scale->first
+                                   : static_cast<int>(profile.unit_exponent);
+            out.real = static_cast<double>(quanta)
+                * std::pow(10.0, static_cast<int>(profile.precision_exponent) - unit);
+            return;
+        }
+        out.high = static_cast<PLI_UINT32>(quanta >> 32U);
+        out.low = static_cast<PLI_UINT32>(quanta & 0xFFFFFFFFU);
+    }
+
+    // vpi_get_delays on a module path: 1, 2, 3, 6 or 12 delays in the
+    // transition order above, each followed by its reject and error limits
+    // when pulsere_flag is set, and with min, typ and max values when
+    // mtm_flag is set (IEEE 1800-2023 38.10 Table 38-2). The path keeps one
+    // value per delay, so min, typ and max are equal.
+    fsim_vpi_status_v1 get_delays(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        auto* const delays = pointer<s_vpi_delay>(request.user_data);
+        const auto path = modpath_of(resolve(request.handle));
+        if (!path || delays == nullptr || delays->da == nullptr
+            || !valid_path_delay_count(delays->no_of_delays)
+            || (delays->time_type != vpiScaledRealTime
+                && delays->time_type != vpiSimTime)) {
+            error_message_ = "vpi_get_delays: the object or delay request is unsupported";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto& declared = simulation_.design().verilog_specify_paths()[*path];
+        const auto table = path_delay_table(*path);
+        const auto expanded = expanded_path_delays(table);
+        // Absent explicit limits, a path rejects and errors at its delay
+        // (IEEE 1800-2023 30.7.1).
+        const auto limits = [&](const std::vector<runtime::SimulationTick>& limit_table,
+                                const std::optional<runtime::SimulationTick>& limit) {
+            if (!limit_table.empty()) {
+                return expanded_path_delays(limit_table);
+            }
+            auto fallback = expanded;
+            if (limit) {
+                fallback.fill(*limit);
+            }
+            return fallback;
+        };
+        const auto reject = limits(
+            declared.pulse_reject_delays, declared.pulse_reject_limit);
+        const auto error = limits(
+            declared.pulse_error_delays, declared.pulse_error_limit);
+        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
+        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
+        for (std::size_t index = 0U;
+             index < static_cast<std::size_t>(delays->no_of_delays); ++index) {
+            const std::array<runtime::SimulationTick, 3U> ticks {
+                expanded[index], reject[index], error[index]
+            };
+            for (std::size_t kind = 0U; kind < kinds; ++kind) {
+                for (std::size_t value = 0U; value < values; ++value) {
+                    write_path_delay(
+                        delays->da[(index * kinds + kind) * values + value],
+                        ticks[kind], delays->time_type, *path);
+                }
+            }
+        }
+        return succeed(result);
+    }
+
+    [[nodiscard]] static bool valid_path_delay_count(const PLI_INT32 count)
+    {
+        return count == 1 || count == 2 || count == 3 || count == 6
+            || count == 12;
+    }
+
+    // vpi_put_delays on a module path replaces, or with append_flag adds to,
+    // the first no_of_delays transitions; the typical value of each
+    // min:typ:max triple is kept, and the pulse limits retain their values
+    // (IEEE 1800-2023 38.32). The change reaches
+    // the scheduler at its next safe point, so a call made from a system task
+    // still leaves the in-flight path events on the old timing.
+    fsim_vpi_status_v1 put_delays(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto* const delays = pointer<const s_vpi_delay>(request.user_data);
+        const auto path = modpath_of(resolve(request.handle));
+        if (!path || delays == nullptr || delays->da == nullptr
+            || !valid_path_delay_count(delays->no_of_delays)
+            || (delays->time_type != vpiScaledRealTime
+                && delays->time_type != vpiSimTime)) {
+            error_message_ = "vpi_put_delays: the object or delay request is unsupported";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const std::size_t count = static_cast<std::size_t>(delays->no_of_delays);
+        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
+        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
+        const auto previous = expanded_path_delays(path_delay_table(*path));
+        std::vector<runtime::SimulationTick> table;
+        table.reserve(count);
+        for (std::size_t index = 0U; index < count; ++index) {
+            auto element = delays->da[index * kinds * values + values / 2U];
+            element.type = delays->time_type;
+            const auto converted
+                = simulation_.systemverilog_vpi_time().convert_delay(
+                    delay_of(element, path_instance(*path)));
+            if (!converted) {
+                error_message_ = "vpi_put_delays: the delay is not a valid time";
+                error_ = true;
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            table.push_back(delays->append_flag != 0
+                    ? previous[index] + converted.ticks
+                    : converted.ticks);
+        }
+        if (!simulation_.set_verilog_module_path_delays(*path, table)) {
+            queued_path_delays_[*path] = std::move(table);
+            if (path_delay_hook_ == 0U) {
+                path_delay_hook_ = simulation_.add_safe_point_hook(
+                    [this](runtime::Scheduler&, runtime::SchedulerPhase) {
+                        commit_queued_path_delays();
+                    });
+            }
+        } else {
+            queued_path_delays_.erase(*path);
+        }
+        return succeed(result);
+    }
+
+    void commit_queued_path_delays()
+    {
+        auto queued = std::move(queued_path_delays_);
+        queued_path_delays_.clear();
+        for (const auto& [path, table] : queued) {
+            (void)simulation_.set_verilog_module_path_delays(path, table);
+        }
+        // The hook is one-shot: it removes itself once the table is applied.
+        simulation_.remove_safe_point_hook(
+            std::exchange(path_delay_hook_, std::uint64_t { }));
+    }
 
     // --- selects and constants ----------------------------------------------
 
@@ -1941,6 +2216,12 @@ private:
         if (range_of(handle) != nullptr) {
             return vpiRange;
         }
+        if (modpath_of(handle)) {
+            return vpiModPath;
+        }
+        if (pathterm_of(handle)) {
+            return vpiPathTerm;
+        }
         if (owned(handle)) {
             return tag_of(handle) == Tag::iterator ? vpiIterator : vpiUndefined;
         }
@@ -2114,6 +2395,33 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
+        // A module's paths, and a path's input and output terminals.
+        if (type == vpiModPath && reference != 0U && !owned(reference)) {
+            const auto module = info(reference);
+            if (module && module->kind == SystemVerilogVpiObjectKind::Module) {
+                const auto& paths = simulation_.design().verilog_specify_paths();
+                for (std::size_t index = 0U; index < paths.size(); ++index) {
+                    if (paths[index].instance == module->full_name) {
+                        objects.push_back(tagged(Tag::modpath, index));
+                    }
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        if (const auto path = modpath_of(reference)) {
+            if (type == vpiModPathIn || type == vpiModPathOut) {
+                const auto& info_path
+                    = simulation_.design().verilog_specify_paths()[*path];
+                const bool output = type == vpiModPathOut;
+                const auto size = output ? info_path.destinations.size()
+                                         : info_path.sources.size();
+                for (std::size_t index = 0U; index < size; ++index) {
+                    objects.push_back(pathterm_handle(
+                        { *path, output, static_cast<std::uint32_t>(index) }));
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
         // Only design roots iterate from a NULL reference (IEEE 1800-2023
         // 37.10).
         if (reference == 0U && type != vpiModule && type != vpiInstance
@@ -2205,8 +2513,7 @@ private:
         }
         auto scope = handle;
         if (const auto* site = call_of(handle)) {
-            const auto found = registry_.find(site->scope);
-            scope = found && found.value ? found.value->handle : 0U;
+            scope = find_hierarchy_path(site->scope);
         } else {
             const auto reference = resolve(handle);
             const auto* select = select_of(reference);
@@ -2230,9 +2537,7 @@ private:
         }
         if (const auto* site = call_of(request.handle)) {
             if (type == vpiScope || type == vpiModule) {
-                const auto scope = registry_.find(site->scope);
-                const auto handle
-                    = scope && scope.value ? scope.value->handle : 0U;
+                const auto handle = find_hierarchy_path(site->scope);
                 return succeed(result,
                     type == vpiModule ? enclosing_module(handle) : handle);
             }
@@ -2254,6 +2559,18 @@ private:
             default:
                 return succeed(result);
             }
+        }
+        if (const auto term = pathterm_of(reference)) {
+            return succeed(result,
+                type == vpiExpr ? pathterm_object(*term)
+                : type == vpiModPath ? tagged(Tag::modpath, term->path)
+                                     : 0U);
+        }
+        if (const auto path = modpath_of(reference)) {
+            return succeed(result,
+                type == vpiModule || type == vpiScope || type == vpiParent
+                    ? path_instance(*path)
+                    : 0U);
         }
         if (const auto* subarray = subarray_of(reference)) {
             const auto copy = *subarray;
@@ -2332,13 +2649,120 @@ private:
         }
     }
 
+    // A hierarchical name as the registry spells it: an escaped identifier
+    // is followed by white space before its separating period, and a
+    // simple identifier is the same name with or without the escape
+    // (IEEE 1800-2023 5.6.1, 23.6).
+    [[nodiscard]] static std::string hierarchical_name(const std::string_view name)
+    {
+        if (name.find('\\') == std::string_view::npos) {
+            return std::string { name };
+        }
+        std::string out;
+        std::size_t index { };
+        while (index < name.size()) {
+            if (name[index] != '\\') {
+                const auto end = std::min(name.find('.', index), name.size());
+                out.append(name.substr(index, end - index));
+                index = end;
+                if (index < name.size()) {
+                    out.push_back('.');
+                    ++index;
+                }
+                continue;
+            }
+            auto end = index + 1U;
+            while (end < name.size()
+                && std::isspace(static_cast<unsigned char>(name[end])) == 0) {
+                ++end;
+            }
+            const auto body = name.substr(index + 1U, end - index - 1U);
+            const bool simple = !body.empty()
+                && (std::isalpha(static_cast<unsigned char>(body.front())) != 0
+                    || body.front() == '_')
+                && std::ranges::all_of(body, [](const char character) {
+                       return std::isalnum(static_cast<unsigned char>(character)) != 0
+                           || character == '_' || character == '$';
+                   });
+            if (simple) {
+                out.append(body);
+            } else {
+                out.push_back('\\');
+                out.append(body);
+                out.push_back(' ');
+            }
+            index = end;
+            while (index < name.size()
+                && std::isspace(static_cast<unsigned char>(name[index])) != 0) {
+                ++index;
+            }
+            if (index < name.size() && name[index] == '.') {
+                out.push_back('.');
+                ++index;
+            }
+        }
+        return out;
+    }
+
+    // The object a hierarchy path names, where the path joins escaped
+    // identifiers (which may hold periods) with plain periods and so splits
+    // only against the registry's own names.
+    [[nodiscard]] fsim_vpi_handle_v1 find_hierarchy_path(
+        const std::string& path) const
+    {
+        if (const auto direct = registry_.find(path); direct && direct.value) {
+            return direct.value->handle;
+        }
+        if (path.find('\\') == std::string::npos) {
+            return 0U;
+        }
+        return find_escaped_path(path, std::string { });
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 find_escaped_path(
+        const std::string_view rest, const std::string& parent) const
+    {
+        for (std::size_t from = 0U;;) {
+            const auto period = rest.find('.', from);
+            const auto end = period == std::string_view::npos ? rest.size() : period;
+            const auto component = rest.substr(0U, end);
+            const bool escaped = component.starts_with('\\');
+            auto full = parent.empty() ? std::string { } : parent + ".";
+            full.append(component);
+            if (escaped) {
+                full.push_back(' ');
+            }
+            if (const auto found = registry_.find(full); found && found.value) {
+                if (end == rest.size()) {
+                    return found.value->handle;
+                }
+                if (const auto deeper
+                    = find_escaped_path(rest.substr(end + 1U), full)) {
+                    return deeper;
+                }
+            }
+            if (!escaped || period == std::string_view::npos) {
+                return 0U;
+            }
+            from = period + 1U;
+        }
+    }
+
+    // A name without the backslash that spells an escaped identifier
+    // (IEEE 1800-2023 5.6.1).
+    [[nodiscard]] static std::string_view unescaped(const std::string_view name)
+    {
+        return name.starts_with('\\') ? name.substr(1U) : name;
+    }
+
     fsim_vpi_status_v1 handle_by_name(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
         if (request.text == nullptr) {
             return succeed(result);
         }
-        const std::string name { request.text, request.text_size };
+        const std::string name
+            = hierarchical_name({ request.text, request.text_size });
         if (request.handle == 0U) {
             const auto found = registry_.find(name);
             return succeed(result, found && found.value ? found.value->handle : 0U);
@@ -2762,13 +3186,14 @@ private:
             // (IEEE 1800-2023 37.19).
             if (object->name.starts_with('[')) {
                 if (const auto parent = info(object->parent)) {
-                    return text(parent->name + object->name);
+                    return text(std::string { unescaped(parent->name) }
+                        + object->name);
                 }
             }
             if (object->kind == SystemVerilogVpiObjectKind::Package) {
                 return text(package_name(object->name));
             }
-            return text(object->name);
+            return text(std::string { unescaped(object->name) });
         case vpiFullName:
             return text(presented_full_name(*object));
         case vpiFile:
@@ -3674,6 +4099,10 @@ private:
     std::vector<Constant> constants_;
     std::vector<Range> ranges_;
     std::vector<SubArray> subarrays_;
+    // vpi_put_delays tables awaiting the next scheduler safe point, and the
+    // safe-point hook that applies them.
+    std::map<std::uint32_t, std::vector<runtime::SimulationTick>> queued_path_delays_;
+    std::uint64_t path_delay_hook_ { };
     std::size_t string_cursor_ { };
     std::array<std::vector<s_vpi_vecval>, 16> vectors_;
     std::size_t vector_cursor_ { };

@@ -2425,21 +2425,65 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 }
                 expect(TokenKind::Semicolon, "';' after assignment",
                     "FSIM-SV-PARSE-022");
-                // The clocking block is the drive target's prefix.
-                std::string clocking;
-                for (const auto& token : target_tokens) {
-                    if (token.kind == TokenKind::LeftBrace) {
-                        continue;
+                // The clocking block is the drive target's prefix up to its
+                // last member selection, which may select an element of an
+                // interface or virtual interface array (`vifs[0].cb.w`,
+                // IEEE 1800-2023 14.16).
+                std::vector<Token> clocking_tokens;
+                if (!target_tokens.empty()
+                    && target_tokens.front().kind != TokenKind::LeftBrace) {
+                    std::size_t depth { };
+                    std::size_t last_member { target_tokens.size() };
+                    bool simple_path = true;
+                    for (std::size_t index { }; index < target_tokens.size();
+                        ++index) {
+                        const auto kind = target_tokens[index].kind;
+                        if (kind == TokenKind::LeftBracket) {
+                            ++depth;
+                        } else if (kind == TokenKind::RightBracket) {
+                            if (depth == 0U) {
+                                simple_path = false;
+                                break;
+                            }
+                            --depth;
+                        } else if (depth == 0U) {
+                            if (kind == TokenKind::Dot) {
+                                last_member = index;
+                            } else if (kind != TokenKind::Identifier) {
+                                simple_path = false;
+                                break;
+                            }
+                        }
                     }
-                    if (token.kind != TokenKind::Identifier
-                        && token.kind != TokenKind::Dot) {
-                        break;
+                    if (simple_path && depth == 0U
+                        && last_member < target_tokens.size()) {
+                        clocking_tokens.assign(target_tokens.begin(),
+                            target_tokens.begin()
+                                + static_cast<std::ptrdiff_t>(last_member));
                     }
-                    clocking += token.text;
                 }
-                if (const auto dot = clocking.rfind('.');
-                    dot != std::string::npos) {
-                    clocking.resize(dot);
+                if (clocking_tokens.empty()) {
+                    // A concatenation of clockvars names the first one's
+                    // block; a bare name keeps its own spelling.
+                    std::string clocking;
+                    for (const auto& token : target_tokens) {
+                        if (token.kind == TokenKind::LeftBrace) {
+                            continue;
+                        }
+                        if (token.kind != TokenKind::Identifier
+                            && token.kind != TokenKind::Dot) {
+                            break;
+                        }
+                        clocking += token.text;
+                    }
+                    if (const auto dot = clocking.rfind('.');
+                        dot != std::string::npos) {
+                        clocking.resize(dot);
+                    }
+                    if (!clocking.empty()) {
+                        clocking_tokens
+                            = synthetic_tokens(clocking, start.span);
+                    }
                 }
                 const bool immediate = cycle_tokens.size() == 1U
                     && cycle_tokens.front().text == "0";
@@ -2451,24 +2495,26 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 const auto append = [&](const std::vector<Token>& tokens) {
                     out.insert(out.end(), tokens.begin(), tokens.end());
                 };
-                if (immediate || clocking.empty()) {
+                if (immediate || clocking_tokens.empty()) {
                     emit("begin");
                 } else {
                     emit("begin fork begin repeat (");
                     append(cycle_tokens);
-                    emit(") @(" + clocking + ");");
+                    emit(") @(");
+                    append(clocking_tokens);
+                    emit(");");
                 }
                 append(target_tokens);
                 emit("<=");
                 append(value_tokens);
                 emit(";");
-                emit(immediate || clocking.empty()
+                emit(immediate || clocking_tokens.empty()
                         ? "end" : "end join_none end");
                 auto generated = parse_generated_statement(
                     std::move(out), span_from(start, previous()));
                 // The drive's fork is a pending update, not a subprocess
                 // (IEEE 1800-2017 9.6.1, 9.6.3).
-                if (generated && !immediate && !clocking.empty()) {
+                if (generated && !immediate && !clocking_tokens.empty()) {
                     for (auto& item : generated->statements) {
                         if (item.kind == StatementKind::Fork) {
                             item.fork_detached = true;

@@ -439,7 +439,11 @@ private:
         std::optional<std::string_view> omitted_type_alias,
         semantic::ScopeId scope,
         semantic::OriginId parent,
-        std::vector<semantic::DeclarationId>& declarations);
+        std::vector<semantic::DeclarationId>& declarations,
+        std::span<const frontend::GenericSubprogramInstantiation>
+            function_instances = { },
+        std::span<const frontend::GenericSubprogramInstantiation>
+            procedure_instances = { });
 
     void add_generate_body(
         const frontend::GenerateBody& input,

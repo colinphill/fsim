@@ -1203,7 +1203,8 @@ void test_simir_postponed_process_ordering()
                 "coverage sample boundary must preserve exact wide metadata");
             ++coverage_samples;
         });
-    coverage_runtime.set_coverage_query_hook([&](const auto kind) {
+    coverage_runtime.set_coverage_query_hook([&](
+        const auto kind, const std::string&) {
         ++coverage_queries;
         return kind == CoverageQueryKind::overall_instance
             ? instance_coverage_query_payload.value

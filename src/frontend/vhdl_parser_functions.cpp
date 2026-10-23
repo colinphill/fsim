@@ -161,6 +161,48 @@ VhdlParser::parse_vhdl_subprogram_instantiation(
   return result;
 }
 
+std::string VhdlParser::parse_vhdl_call_generic_map(
+    const Token& name,
+    std::string canonical,
+    const bool procedure) {
+  if (vhdl_standard_ < VhdlStandard::Vhdl2019 || !keyword("generic", 0, true)
+      || !keyword("map", 1, true)) {
+    return canonical;
+  }
+  const auto generic = advance();
+  // The call stands for a call of an implicit instance of the template
+  // (IEEE 1076-2019 9.3.4).
+  GenericSubprogramInstantiation instance;
+  instance.name = "gm_" + std::to_string(vhdl_call_instance_count_++) + "_"
+      + canonical;
+  instance.template_name = canonical;
+  parse_vhdl_subprogram_generic_map(
+      instance.generic_map, instance.generic_map_box, generic);
+  instance.span = span_from(name, previous());
+  if (vhdl_call_instance_anchor_
+      && vhdl_call_instance_anchor_->source_name == instance.span.source_name
+      && vhdl_call_instance_anchor_->begin.offset
+          < instance.span.begin.offset) {
+    instance.span.begin = vhdl_call_instance_anchor_->begin;
+  }
+  auto result = instance.name;
+  (procedure ? pending_call_procedure_instances_
+             : pending_call_function_instances_)
+      .push_back(std::move(instance));
+  return result;
+}
+
+void VhdlParser::flush_pending_call_instances(DesignUnit& unit) {
+  for (auto& instance : pending_call_function_instances_) {
+    unit.generic_function_instances.push_back(std::move(instance));
+  }
+  for (auto& instance : pending_call_procedure_instances_) {
+    unit.generic_procedure_instances.push_back(std::move(instance));
+  }
+  pending_call_function_instances_.clear();
+  pending_call_procedure_instances_.clear();
+}
+
 void VhdlParser::parse_vhdl_function_item(
     DesignUnit& unit,
     const Token& start,
@@ -824,6 +866,20 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   }
   const auto result_start = current();
   function.return_type = parse_vhdl_type(true, true);
+  // `return p'subtype` of a formal `p` denotes the subtype of that formal
+  // (IEEE 1076-2019 16.2.2); a call fixes any index ranges, so the
+  // formal's own subtype indication stands for it in the profile.
+  if (!function.return_type.vhdl_object_subtype.empty()
+      && function.return_type.vhdl_predefined_subtype_attribute
+          == VhdlPredefinedSubtypeAttribute::None) {
+    const auto formal = std::ranges::find(
+        function.arguments, function.return_type.vhdl_object_subtype,
+        &FunctionArgument::name);
+    if (formal != function.arguments.end()
+        && formal->type.vhdl_object_subtype.empty()) {
+      function.return_type = formal->type;
+    }
+  }
   if (result_identifier) {
     auto result_subtype = function.return_type;
     result_subtype.vhdl_type_declaration =

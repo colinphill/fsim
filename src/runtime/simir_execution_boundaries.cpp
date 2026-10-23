@@ -751,8 +751,9 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* query
         = fsim::runtime::simir::operation_get_if<CoverageQuery>(&operation)) {
-        if (query->kind != CoverageQueryKind::overall_type
-            && query->kind != CoverageQueryKind::overall_instance) {
+        if (query->kind > CoverageQueryKind::covergroup_instance
+            || (query->kind >= CoverageQueryKind::covergroup_type
+                && query->identity.empty())) {
             process.pc = instruction;
             fail(process, "coverage query kind is invalid");
         }
@@ -764,7 +765,7 @@ void Interpreter::Impl::handle_boundary(
             process.pc = instruction;
             fail(process, "coverage query boundary requires an executor");
         }
-        auto value = coverage_query_hook(query->kind);
+        auto value = coverage_query_hook(query->kind, query->identity);
         if (value.width() != 64U || value.is_logic9()) {
             process.pc = instruction;
             fail(process, "coverage query service returned an invalid real payload");

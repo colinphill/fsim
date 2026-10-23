@@ -1164,6 +1164,26 @@ predefined_subtype_attribute(
                 && (result.unconstrained || compiler_owned_standard_array)) {
                 dimensions = 1U;
             }
+            // An object of a generic array type (`type A is array (type is
+            // (<>)) of type is private`, IEEE 1076-2019 6.5.3) takes one
+            // index range per index of the generic type; the instance binds
+            // the type and these ranges then follow the actual.
+            if (dimensions == 0U && object_array == nullptr
+                && result.type_mark.target.valid()) {
+                for (const auto& candidate : hir_.declarations()) {
+                    if (candidate.form == vh::DeclarationForm::generic_type
+                        && candidate.declared_type
+                        && *candidate.declared_type
+                            == result.type_mark.target
+                        && candidate.subtype
+                        && candidate.subtype->unspecified_class
+                            == vh::UnspecifiedTypeClass::array) {
+                        dimensions
+                            = candidate.subtype->unspecified_array_index_count;
+                        break;
+                    }
+                }
+            }
             if (!has_index_constraint && dimensions != 0U) {
                 const auto span = type.named_type_span.source_name.empty()
                     ? fallback

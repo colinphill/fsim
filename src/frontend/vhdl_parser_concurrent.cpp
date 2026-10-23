@@ -1601,6 +1601,15 @@ Process VhdlParser::parse_process(
   process.kind = ProcessKind::VhdlProcess;
   process.vhdl_postponed = postponed;
   process.name = label ? vhdl_name(label->text) : std::string{};
+  // Implicit instances made by calls inside this process belong to it
+  // (IEEE 1076-2019 9.3.4).
+  auto enclosing_function_instances =
+      std::move(pending_call_function_instances_);
+  auto enclosing_procedure_instances =
+      std::move(pending_call_procedure_instances_);
+  pending_call_function_instances_.clear();
+  pending_call_procedure_instances_.clear();
+  const auto enclosing_call_instance_anchor = vhdl_call_instance_anchor_;
 
   if (match(TokenKind::LeftParen)) {
     if (at(TokenKind::RightParen)) {
@@ -1649,6 +1658,7 @@ Process VhdlParser::parse_process(
   }
   match_keyword("is", true);
   while (!at_end() && !keyword("begin", 0, true)) {
+    vhdl_call_instance_anchor_ = current().span;
     if (match_keyword("file", true)) {
       parse_vhdl_file_declaration(
           process.variables, previous());
@@ -1660,6 +1670,20 @@ Process VhdlParser::parse_process(
       if (auto item = parse_context_item()) {
         deferred_context_items_.push_back(std::move(*item));
       }
+      continue;
+    }
+    // A subprogram instantiation declaration in a process declarative part
+    // (IEEE 1076-2008 4.4, 11.3) is kept with the process like the implicit
+    // instances of call generic maps.
+    if ((keyword("function", 0, true) || keyword("procedure", 0, true))
+        && (at(TokenKind::Identifier, 1) || at(TokenKind::StringLiteral, 1))
+        && keyword("is", 2, true) && keyword("new", 3, true)) {
+      const bool procedure = keyword("procedure", 0, true);
+      const auto subprogram = advance();
+      (procedure ? pending_call_procedure_instances_
+                 : pending_call_function_instances_)
+          .push_back(parse_vhdl_subprogram_instantiation(
+              subprogram, procedure ? "procedure" : "function"));
       continue;
     }
     if (parse_vhdl_local_nonobject_declaration(
@@ -1723,6 +1747,7 @@ Process VhdlParser::parse_process(
       process.functions,
       process.procedures);
   expect_keyword("begin", true, "FSIM-VHDL-PARSE-021");
+  vhdl_call_instance_anchor_ = previous().span;
   sequential_loop_labels_seen_.clear();
   process.statements = parse_statement_list({"end"});
   sequential_loop_labels_seen_.clear();
@@ -1763,6 +1788,14 @@ Process VhdlParser::parse_process(
          "FSIM-VHDL-PARSE-023");
   process.span = label ? span_from(*label, previous())
                        : span_from(start, previous());
+  process.generic_function_instances =
+      std::move(pending_call_function_instances_);
+  process.generic_procedure_instances =
+      std::move(pending_call_procedure_instances_);
+  pending_call_function_instances_ = std::move(enclosing_function_instances);
+  pending_call_procedure_instances_ =
+      std::move(enclosing_procedure_instances);
+  vhdl_call_instance_anchor_ = enclosing_call_instance_anchor;
   infer_process_edge(process);
   return process;
 }

@@ -201,7 +201,8 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
             unit.systemverilog_covergroups,
             parse_covergroup_declaration(
                 declaration,
-                SystemVerilogCovergroupOwnerKind::DesignUnit),
+                SystemVerilogCovergroupOwnerKind::DesignUnit,
+                &unit),
             declaration);
     } else if (match_keyword("function")) {
         module_has_non_time_item_ = true;

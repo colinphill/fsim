@@ -2432,7 +2432,8 @@ public:
         std::span<const std::uint8_t>,
         std::span<const frontend::SystemVerilogScalarKind>,
         CoverageSampleTrigger)>;
-    using CoverageQueryHook = std::function<PackedLogic4(CoverageQueryKind)>;
+    using CoverageQueryHook = std::function<PackedLogic4(
+        CoverageQueryKind, const std::string&)>;
     using VhdlPslApiHook = std::function<bool(
         VhdlPslApiKind, std::optional<bool>)>;
     using CoverageControlHook
@@ -2548,6 +2549,15 @@ public:
     void reannotate_module_timing(
         std::span<const ModulePath> paths,
         std::span<const ModuleTimingCheck> checks);
+
+    /// Live delay table of one module path (IEEE 1800-2023 38.11).
+    [[nodiscard]] std::vector<SimulationTick> module_path_delays(
+        std::uint32_t path) const;
+    /// Replace one module path's 1/2/3/6/12-value delay table, as
+    /// vpi_put_delays does (IEEE 1800-2023 38.34). Returns false, changing
+    /// nothing, when the scheduler is started and not at a safe point.
+    [[nodiscard]] bool set_module_path_delays(
+        std::uint32_t path, std::span<const SimulationTick> delays);
 
     struct VitalTimingReannotation {
         ProcessId process { };

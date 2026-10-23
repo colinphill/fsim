@@ -2007,10 +2007,17 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         && initializer
         && initializer->kind == ExpressionKind::Call
         && initializer->text == "@sv-new";
+    // A covergroup variable is a handle like a class variable, constructed
+    // by `new` in its declaration or in a procedure (IEEE 1800-2023 19.4).
+    const bool covergroup_handle = !declaration_type.named_type.empty()
+        && std::ranges::any_of(unit.systemverilog_covergroups,
+            [&](const SystemVerilogCovergroupDeclaration& covergroup) {
+              return covergroup.name == declaration_type.named_type;
+            });
     if (package_variable
         || declaration_type.domain == ValueDomain::String
         || declaration_type.systemverilog_container
-        || named_construction) {
+        || named_construction || covergroup_handle) {
       if (spec.direction != PortDirection::Unknown) {
         SignalDeclaration declaration{
             name.text,

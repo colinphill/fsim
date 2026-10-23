@@ -4,6 +4,8 @@
 #include "fsim/frontend/coverage_limits.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <optional>
@@ -724,12 +726,101 @@ namespace {
             : SystemVerilogScalarKind::None;
     }
 
+    [[nodiscard]] bool is_new_expression(const Expression& expression)
+    {
+        return expression.kind == ExpressionKind::Call
+            && (expression.text == "@sv-new"
+                || expression.text.starts_with("@sv-new:"));
+    }
+
+    // The variable a covergroup handle expression names: the last component
+    // of a simple or hierarchical identifier, as for `x.sample()`.
+    [[nodiscard]] std::string_view covergroup_handle_name(
+        const Expression& expression)
+    {
+        if (expression.kind != ExpressionKind::Identifier)
+            return { };
+        const std::string_view text = expression.text;
+        const auto dot = text.rfind('.');
+        return dot == std::string_view::npos ? text : text.substr(dot + 1U);
+    }
+
+    // The constructor call of the first procedural `name = new(...)` in
+    // `statements` (IEEE 1800-2023 19.4). A covergroup variable names one
+    // instance for the whole design, so that call supplies the instance's
+    // constructor actuals when the declaration has no initializer.
+    [[nodiscard]] const Expression* find_procedural_construction(
+        const std::vector<Statement>& statements,
+        const std::string_view name)
+    {
+        for (const auto& statement : statements) {
+            if (statement.kind == StatementKind::Assignment
+                && is_new_expression(statement.value)
+                && covergroup_handle_name(statement.target) == name) {
+                return &statement.value;
+            }
+            if (const auto* found = find_procedural_construction(
+                    statement.statements, name)) {
+                return found;
+            }
+            if (const auto* found = find_procedural_construction(
+                    statement.else_statements, name)) {
+                return found;
+            }
+            for (const auto& alternative : statement.case_alternatives) {
+                if (const auto* found = find_procedural_construction(
+                        alternative.statements, name)) {
+                    return found;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const Expression* find_procedural_construction(
+        const DesignUnit& unit, const std::string_view name)
+    {
+        for (const auto& process : unit.processes) {
+            if (const auto* found
+                = find_procedural_construction(process.statements, name)) {
+                return found;
+            }
+        }
+        for (const auto& function : unit.functions) {
+            if (const auto* found
+                = find_procedural_construction(function.statements, name)) {
+                return found;
+            }
+        }
+        for (const auto& task : unit.tasks) {
+            if (const auto* found
+                = find_procedural_construction(task.statements, name)) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] const Expression* find_procedural_construction(
+        const SystemVerilogClassDeclaration& declaration,
+        const std::string_view name)
+    {
+        for (const auto& method : declaration.methods) {
+            if (const auto* found
+                = find_procedural_construction(method.statements, name)) {
+                return found;
+            }
+        }
+        return nullptr;
+    }
+
     void add_instance(
         ParsedDesign& design,
         const std::string& owner,
         const VariableDeclaration& variable,
         CovergroupEntry& entry,
-        std::vector<Diagnostic>& diagnostics)
+        std::vector<Diagnostic>& diagnostics,
+        const Expression* procedural_construction = nullptr)
     {
         SystemVerilogCovergroupInstance instance;
         SystemVerilogCovergroupInstanceSyntax syntax;
@@ -739,13 +830,13 @@ namespace {
         instance.initial_option_state = entry.declaration->option_assignments;
         instance.span = variable.span;
         std::string actual_identity;
-        if (variable.initializer
-            && variable.initializer->kind == ExpressionKind::Call
-            && (variable.initializer->text == "@sv-new"
-                || variable.initializer->text.starts_with("@sv-new:"))) {
-            validate_actuals(*entry.declaration, *variable.initializer, diagnostics);
-            syntax.constructor_actuals = variable.initializer->operands;
-            actual_identity = expression_identity(*variable.initializer);
+        const Expression* construction = procedural_construction;
+        if (variable.initializer && is_new_expression(*variable.initializer))
+            construction = &*variable.initializer;
+        if (construction != nullptr) {
+            validate_actuals(*entry.declaration, *construction, diagnostics);
+            syntax.constructor_actuals = construction->operands;
+            actual_identity = expression_identity(*construction);
         } else if (!entry.declaration->formals.empty()) {
             const auto missing_required = std::ranges::any_of(
                 entry.declaration->formals,
@@ -768,6 +859,12 @@ namespace {
         syntax.runtime_identity = instance.runtime_identity;
         if (!initialize_systemverilog_cross_inventory(
                 instance, *entry.declaration, diagnostics)) {
+            if (std::getenv("FSIM_SV_COVERAGE_TRACE") != nullptr) {
+                std::fprintf(stderr,
+                    "[fsim-sv-coverage] instance %s rejected by its cross "
+                    "inventory\n",
+                    instance.name.c_str());
+            }
             return;
         }
         design.systemverilog_covergroup_instances.push_back(
@@ -1118,7 +1215,9 @@ namespace {
                     owner,
                     property.declaration,
                     *candidates.front(),
-                    diagnostics);
+                    diagnostics,
+                    find_procedural_construction(
+                        declaration, property.declaration.name));
             } else if (candidates.size() > 1U) {
                 diagnose(
                     diagnostics,
@@ -1138,6 +1237,78 @@ namespace {
         }
     }
 
+    [[nodiscard]] const SystemVerilogCovergroupInstance*
+    find_covergroup_instance(
+        const ParsedDesign& design,
+        const std::string& owner,
+        const std::string_view name)
+    {
+        const auto found = std::ranges::find_if(
+            design.systemverilog_covergroup_instances,
+            [&](const SystemVerilogCovergroupInstance& candidate) {
+                return candidate.owner_identity == owner
+                    && candidate.name == name;
+            });
+        return found == design.systemverilog_covergroup_instances.end()
+            ? nullptr
+            : &*found;
+    }
+
+    // `v.get_inst_coverage()` and `v.get_coverage()` of a covergroup
+    // variable are the coverage of its instance and of its covergroup type
+    // (IEEE 1800-2023 19.8), a real percentage like `$get_inst_coverage`.
+    void bind_coverage_methods(
+        const ParsedDesign& design,
+        const std::string& owner,
+        Expression& expression)
+    {
+        for (auto& operand : expression.operands)
+            bind_coverage_methods(design, owner, operand);
+        const auto instance_query = expression.text == ".get_inst_coverage";
+        if (expression.kind != ExpressionKind::Call
+            || (!instance_query && expression.text != ".get_coverage")
+            || expression.operands.size() != 1U) {
+            return;
+        }
+        const auto* instance = find_covergroup_instance(
+            design, owner, covergroup_handle_name(expression.operands.front()));
+        if (instance == nullptr)
+            return;
+        Expression query { ExpressionKind::Call,
+            std::string { instance_query ? coverage_instance_query_prefix
+                                         : coverage_type_query_prefix }
+                + (instance_query ? instance->runtime_identity
+                                  : instance->declaration_identity),
+            { }, expression.span };
+        query.systemverilog_source_order = expression.systemverilog_source_order;
+        query.call_result_width = 64;
+        query.call_result_domain = ValueDomain::Bit2;
+        query.call_result_signed = false;
+        query.systemverilog_scalar_kind = SystemVerilogScalarKind::Real;
+        expression = std::move(query);
+    }
+
+    void bind_coverage_methods(
+        const ParsedDesign& design,
+        const std::string& owner,
+        Statement& statement)
+    {
+        bind_coverage_methods(design, owner, statement.target);
+        bind_coverage_methods(design, owner, statement.value);
+        bind_coverage_methods(design, owner, statement.condition);
+        bind_coverage_methods(design, owner, statement.loop_initial);
+        bind_coverage_methods(design, owner, statement.loop_limit);
+        bind_coverage_methods(design, owner, statement.loop_update_target);
+        for (auto& argument : statement.task_arguments)
+            bind_coverage_methods(design, owner, argument);
+        for (auto& output : statement.output_values)
+            bind_coverage_methods(design, owner, output.value);
+        for (auto& alternative : statement.case_alternatives) {
+            for (auto& choice : alternative.choices)
+                bind_coverage_methods(design, owner, choice);
+        }
+    }
+
     void collect_sample_calls(
         ParsedDesign& design,
         const std::string& owner,
@@ -1146,6 +1317,32 @@ namespace {
         std::vector<Diagnostic>& diagnostics)
     {
         for (auto& statement : statements) {
+            if (statement.kind == StatementKind::Assignment
+                && is_new_expression(statement.value)
+                && std::getenv("FSIM_SV_COVERAGE_TRACE") != nullptr) {
+                const auto name = covergroup_handle_name(statement.target);
+                std::fprintf(stderr,
+                    "[fsim-sv-coverage] new owner=%s target=%.*s found=%d\n",
+                    owner.c_str(), static_cast<int>(name.size()), name.data(),
+                    static_cast<int>(
+                        find_covergroup_instance(design, owner, name)
+                        != nullptr));
+            }
+            // `v = new(...)` of a covergroup variable constructs the
+            // instance its declaration already names (IEEE 1800-2023 19.4);
+            // its actuals were taken when the instance was resolved.
+            if (statement.kind == StatementKind::Assignment
+                && is_new_expression(statement.value)
+                && find_covergroup_instance(
+                       design, owner, covergroup_handle_name(statement.target))
+                    != nullptr) {
+                Statement construction;
+                construction.kind = StatementKind::Null;
+                construction.span = statement.span;
+                statement = std::move(construction);
+                continue;
+            }
+            bind_coverage_methods(design, owner, statement);
             const auto sample_call = statement.task_name.ends_with(".sample");
             const auto start_call = statement.task_name.ends_with(".start");
             const auto stop_call = statement.task_name.ends_with(".stop");
@@ -1302,13 +1499,21 @@ bool resolve_systemverilog_covergroups(
         for (const auto& variable : unit.variables) {
             auto candidates = find_covergroups(
                 entries, variable.type.named_type, owner);
+            if (std::getenv("FSIM_SV_COVERAGE_TRACE") != nullptr) {
+                std::fprintf(stderr,
+                    "[fsim-sv-coverage] variable owner=%s name=%s type=%s "
+                    "candidates=%zu\n",
+                    owner.c_str(), variable.name.c_str(),
+                    variable.type.named_type.c_str(), candidates.size());
+            }
             if (candidates.size() == 1U) {
                 add_instance(
                     design,
                     owner,
                     variable,
                     *candidates.front(),
-                    diagnostics);
+                    diagnostics,
+                    find_procedural_construction(unit, variable.name));
             } else if (candidates.size() > 1U) {
                 diagnose(
                     diagnostics,

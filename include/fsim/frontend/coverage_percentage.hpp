@@ -3,6 +3,7 @@
 
 #include "fsim/frontend/design.hpp"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -17,6 +18,19 @@ struct SystemVerilogCoveragePercentage {
     std::uint32_t goal { 100U };
     bool empty { true };
     bool goal_reached { };
+    // The unrounded goal-scaled percentage in [0, 100], the real value the
+    // coverage methods return (IEEE 1800-2023 19.8, 19.11), kept as its
+    // IEEE 754 bits so the artifact stores it exactly.
+    std::uint64_t percent_bits { };
+
+    [[nodiscard]] double percent() const noexcept
+    {
+        return std::bit_cast<double>(percent_bits);
+    }
+    void set_percent(const double value) noexcept
+    {
+        percent_bits = std::bit_cast<std::uint64_t>(value);
+    }
 };
 
 struct SystemVerilogCoverageDeclarationPercentage {

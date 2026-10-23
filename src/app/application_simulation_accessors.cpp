@@ -26,6 +26,37 @@ const semantic::design::DesignIr& Simulation::design_ir() const noexcept
     return impl_->built.design_ir;
 }
 
+std::vector<fsim_vpi_handle_v1> Simulation::vpi_signal_object_handles(
+    const SignalId signal) const
+{
+    const auto found = impl_->vpi_signal_handles.find(signal);
+    return found == impl_->vpi_signal_handles.end()
+        ? std::vector<fsim_vpi_handle_v1> { }
+        : found->second;
+}
+
+std::vector<runtime::SimulationTick> Simulation::verilog_module_path_delays(
+    const std::uint32_t path) const
+{
+    const auto& paths = impl_->built.design.verilog_specify_paths();
+    if (path >= paths.size()) {
+        throw std::out_of_range("Verilog module path does not exist");
+    }
+    // The interpreter holds the live table; the elaborated design keeps the
+    // table the path was built with.
+    try {
+        return impl_->interpreter->module_path_delays(path);
+    } catch (const std::out_of_range&) {
+        return paths[path].delays;
+    }
+}
+
+bool Simulation::set_verilog_module_path_delays(const std::uint32_t path,
+    const std::span<const runtime::SimulationTick> delays)
+{
+    return impl_->interpreter->set_module_path_delays(path, delays);
+}
+
 std::optional<std::pair<int, int>>
 Simulation::systemverilog_instance_time_scale(const std::string_view path) const
 {

@@ -2011,7 +2011,7 @@ void check_region_kernel_capability_route(
         }
         if (install_coverage_hook || install_all_coverage_hooks) {
             interpreter.set_coverage_query_hook(
-                [&coverage_hook_calls](CoverageQueryKind) {
+                [&coverage_hook_calls](CoverageQueryKind, const std::string&) {
                     ++coverage_hook_calls;
                     return PackedLogic4(1U, Logic4::zero);
                 });

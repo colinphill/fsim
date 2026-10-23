@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
@@ -6623,6 +6624,19 @@ Lowerer::hir_virtual_interface_candidates(HirVirtualInterfaceMember result,
             paths.push_back(path);
         }
     }
+    // A specialization named by the virtual interface type designates only
+    // its own instances (IEEE 1800-2023 25.9).
+    if (!virtual_type.interface_parameter_actuals.empty()) {
+        std::vector<std::string> specialized;
+        std::ranges::copy_if(paths, std::back_inserter(specialized),
+            [&](const std::string& path) {
+                return hir_virtual_interface_instance_matches(
+                    virtual_type, path);
+            });
+        if (!specialized.empty()) {
+            paths = std::move(specialized);
+        }
+    }
     std::ranges::sort(paths);
     // A member, or a packed structure field of one (`vif.data.x`).
     const auto member_place = [&](const std::string& path)
@@ -6819,10 +6833,70 @@ bool Lowerer::hir_interface_path_has_lexical_root_binding(
     // A dotted packed-aggregate name resolves to its root declaration. If
     // that declaration has storage in this lowering scope, it shadows an
     // enclosing interface instance with the same spelling.
-    const auto declaration = hir_referenced_declaration(expression_id);
-    return declaration
-        && hir_runtime_binding(
-            *declaration, hir_process_scope_, false).has_value();
+    auto declaration = hir_referenced_declaration(expression_id);
+    // A dotted name through a virtual interface handle (`bus.value`) is not
+    // a packed aggregate name, so it retains no referenced declaration:
+    // resolve its first segment lexically from the use scope, innermost
+    // outward (IEEE 1800-2023 23.9, 25.9).
+    const auto root_name = record->systemverilog->text.substr(
+        0U, record->systemverilog->text.find('.'));
+    if (hir_virtual_interface_root(
+            record->systemverilog->text, record->systemverilog->scope)) {
+        return true;
+    }
+    if (!declaration && !root_name.empty()) {
+        if (const auto root = hir_resolver()
+                .resolve_systemverilog(
+                    root_name, record->systemverilog->scope, { }, true)
+                .unique()) {
+            const auto root_record = specialized_hir_unit_->find_declaration(
+                *root);
+            if (root_record && root_record->systemverilog != nullptr
+                && hir_systemverilog_virtual_interface_type(
+                    *root_record->systemverilog)) {
+                return true;
+            }
+            // A local or formal without a signal also hides the instance.
+            const auto binding = hir_runtime_binding(
+                *root, hir_process_scope_, false);
+            return binding && binding->local && !binding->signal;
+        }
+    }
+    if (!declaration) {
+        return false;
+    }
+    // A virtual interface handle (a method formal, a local, a property) is
+    // never an instance path, whatever instance shares its spelling
+    // (IEEE 1800-2023 23.9, 25.9).
+    if (const auto root = specialized_hir_unit_->find_declaration(
+            *declaration);
+        root && root->systemverilog != nullptr
+        && hir_systemverilog_virtual_interface_type(*root->systemverilog)) {
+        return true;
+    }
+    return hir_runtime_binding(
+        *declaration, hir_process_scope_, false).has_value();
+}
+
+bool Lowerer::hir_virtual_interface_root(
+    const std::string_view name, const semantic::ScopeId scope) const
+{
+    // The handle is found the way a virtual interface member resolves it
+    // (`hir_virtual_interface_member`).
+    const auto root = name.substr(0U, name.find_first_of(".["));
+    return specialized_hir_unit_ != nullptr && !root.empty()
+        && hir_resolver()
+               .resolve_systemverilog(
+                   root,
+                   scope,
+                   [&](const semantic::CompiledDeclarationView& candidate) {
+                       return candidate.systemverilog != nullptr
+                           && hir_systemverilog_virtual_interface_type(
+                               *candidate.systemverilog);
+                   },
+                   false)
+               .unique()
+               .has_value();
 }
 
 std::optional<SignalId> Lowerer::hir_direct_signal(
@@ -7103,6 +7177,13 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
     }
     const auto& name = expression->systemverilog->text;
     if (hir_genvar_hides_signal(name, expression->systemverilog->scope)) {
+        return std::nullopt;
+    }
+    // A member through a virtual interface handle (`bus.value` with a
+    // formal `bus`) is never the same-named instance's signal (IEEE
+    // 1800-2023 23.9, 25.9).
+    if (name.find('.') != std::string::npos
+        && hir_virtual_interface_root(name, expression->systemverilog->scope)) {
         return std::nullopt;
     }
     if (const auto found = signals_.find(name);
@@ -7635,6 +7716,11 @@ Lowerer::hir_systemverilog_interface_handle(
     };
     std::string occurrence;
     if (source.kind == semantic::sv::ExpressionKind::name) {
+        // A virtual interface formal or local named like an instance is
+        // that handle, not the instance (IEEE 1800-2023 23.9, 25.9).
+        if (hir_virtual_interface_root(source.text, source.scope)) {
+            return std::nullopt;
+        }
         occurrence = source.text;
     } else if (source.kind == semantic::sv::ExpressionKind::call
         && source.text.starts_with("@sv-select:")) {
@@ -7693,6 +7779,144 @@ Lowerer::hir_systemverilog_interface_handle(
         }
     }
     return handle;
+}
+
+std::optional<std::vector<std::uint64_t>>
+Lowerer::hir_systemverilog_interface_array_handles(
+    const semantic::ExpressionId expression_id) const
+{
+    // An interface instance array named without a selection (`bus_array`)
+    // denotes the handles of its elements, which an unpacked array of
+    // virtual interfaces takes element by element (IEEE 1800-2023 25.4,
+    // 25.9).
+    if (specialized_hir_unit_ == nullptr
+        || systemverilog_interface_handles_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name
+        || expression->systemverilog->text.empty()) {
+        return std::nullopt;
+    }
+    const auto& name = expression->systemverilog->text;
+    // The innermost enclosing hierarchy scope that has the array.
+    std::string scope = hierarchy_;
+    for (;;) {
+        const auto prefix = (scope.empty() ? name : scope + "." + name) + "[";
+        std::vector<std::uint64_t> handles;
+        for (const auto& [path, handle] : *systemverilog_interface_handles_) {
+            if (path.size() <= prefix.size() + 1U
+                || !path.starts_with(prefix) || !path.ends_with(']')) {
+                continue;
+            }
+            const auto index = std::string_view { path }.substr(
+                prefix.size(), path.size() - prefix.size() - 1U);
+            if (std::ranges::all_of(index, [](const char digit) {
+                    return digit >= '0' && digit <= '9';
+                })) {
+                handles.push_back(handle);
+            }
+        }
+        if (!handles.empty()) {
+            // The elements are elaborated from the array's left bound.
+            std::ranges::sort(handles);
+            return handles;
+        }
+        if (scope.empty()) {
+            return std::nullopt;
+        }
+        const auto dot = scope.rfind('.');
+        scope = dot == std::string::npos ? std::string { }
+                                         : scope.substr(0U, dot);
+    }
+}
+
+bool Lowerer::hir_virtual_interface_instance_matches(
+    const semantic::sv::TypeReference& virtual_type,
+    const std::string_view instance_path) const
+{
+    // `virtual Bus #(7)` designates only instances of Bus whose parameters
+    // are the ones it names; the others are another specialization of the
+    // interface (IEEE 1800-2023 25.9). A value that cannot be evaluated
+    // does not exclude an instance.
+    if (specialized_hir_unit_ == nullptr || virtual_type.interface_type.empty()
+        || virtual_type.interface_parameter_actuals.empty()) {
+        return true;
+    }
+    const auto specialization = std::ranges::find(
+        design_.specializations_, instance_path,
+        &SpecializationInfo::instance);
+    if (specialization == design_.specializations_.end()) {
+        return true;
+    }
+    const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
+    const auto unit = std::ranges::find_if(hir.units(),
+        [&](const semantic::sv::Unit& candidate) {
+            return candidate.kind == semantic::sv::UnitKind::interface
+                && candidate.name == virtual_type.interface_type;
+        });
+    if (unit == hir.units().end()) {
+        return true;
+    }
+    std::size_t ordinal { };
+    for (const auto declaration_id : unit->declarations) {
+        const auto* declaration = hir.find_declaration(declaration_id);
+        if (declaration == nullptr
+            || declaration->form != semantic::sv::DeclarationForm::parameter) {
+            continue;
+        }
+        // The actual of this parameter: by name, or by position.
+        const semantic::sv::ActualAssociation* actual = nullptr;
+        const auto& actuals = virtual_type.interface_parameter_actuals;
+        for (std::size_t index { }; index < actuals.size(); ++index) {
+            const auto& candidate = actuals[index];
+            if (candidate.formal && !candidate.formal->empty()
+                ? *candidate.formal == declaration->name
+                : index == ordinal) {
+                actual = &candidate;
+            }
+        }
+        ++ordinal;
+        const auto expression = actual != nullptr
+                && actual->kind == semantic::sv::ActualKind::expression
+                && actual->expression
+            ? actual->expression
+            : declaration->initializer;
+        if (!expression) {
+            continue;
+        }
+        const auto required
+            = specialized_hir_unit_->evaluate_integral_expression(*expression);
+        const auto elaborated = std::ranges::find(
+            specialization->parameter_identity_values, declaration->name,
+            [](const auto& entry) -> const std::string& {
+                return entry.first;
+            });
+        if (!required
+            || elaborated == specialization->parameter_identity_values.end()) {
+            continue;
+        }
+        const auto constant
+            = decode_hir_systemverilog_constant(elaborated->second);
+        if (!constant || constant->packed.width() == 0U) {
+            continue;
+        }
+        const auto value = constant->packed.known_unsigned_value();
+        if (!value) {
+            continue;
+        }
+        const auto width = constant->packed.width();
+        const auto mask = width >= 64U
+            ? ~std::uint64_t { }
+            : (std::uint64_t { 1 } << width) - 1U;
+        if (*value != (static_cast<std::uint64_t>(*required) & mask)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<std::vector<semantic::sv::Sensitivity>>
@@ -19602,6 +19826,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             && is_hir_systemverilog_file_call(expression_id)) {
             return 32U;
         }
+        // The coverage queries return a real percentage (IEEE 1800-2023
+        // 19.8, 20.14).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == "$get_coverage"
+                || source.text == "$get_inst_coverage"
+                || frontend::is_coverage_query_call(source.text))) {
+            return 64U;
+        }
         if (const auto function = hir_systemverilog_math_function(
                 expression_id)) {
             using Function = runtime::SystemVerilogMathFunction;
@@ -21291,8 +21523,15 @@ Lowerer::hir_vhdl_conversion_profile(
         if (!width || *width == 0U) {
             return std::nullopt;
         }
+        // A conversion to NUMERIC_BIT/NUMERIC_STD SIGNED yields a two's
+        // complement value, so TO_INTEGER and RESIZE of it extend and
+        // interpret the sign bit (IEEE 1076-2008 9.3.6, G.2).
+        const auto converted_name = simple_name_of(canonical);
+        const bool signed_array = converted_name == "signed"
+            || converted_name == "unresolved_signed"
+            || converted_name == "u_signed";
         return HirVhdlConversionProfile {
-            *width, *predefined_array_domain, false, std::nullopt
+            *width, *predefined_array_domain, signed_array, std::nullopt
         };
     }
     // A type mark that denotes a generic type of a package instance
@@ -27252,6 +27491,12 @@ bool Lowerer::can_lower_hir_expression(
                 break;
             }
             if (hir_direct_signal(expression_id)) {
+                supported = true;
+                break;
+            }
+            // An interface instance array is the array of its elements'
+            // handles (IEEE 1800-2023 25.9).
+            if (hir_systemverilog_interface_array_handles(expression_id)) {
                 supported = true;
                 break;
             }

@@ -284,9 +284,10 @@ void validate_prefix_operation(
                 } else if constexpr (
                     std::is_same_v<OperationType, CoverageQuery>) {
                     if (operation.kind
-                            != CoverageQueryKind::overall_type
-                        && operation.kind
-                            != CoverageQueryKind::overall_instance) {
+                            > CoverageQueryKind::covergroup_instance
+                        || (operation.kind
+                                >= CoverageQueryKind::covergroup_type
+                            && operation.identity.empty())) {
                         reject(
                             process, index,
                             "CoverageQuery kind is invalid");

@@ -832,7 +832,11 @@ void VhdlHirBuilder::queue_vhdl_local_declarations(
     const std::optional<std::string_view> omitted_type_alias,
     const semantic::ScopeId scope,
     const semantic::OriginId parent,
-    std::vector<semantic::DeclarationId>& declarations)
+    std::vector<semantic::DeclarationId>& declarations,
+    const std::span<const frontend::GenericSubprogramInstantiation>
+        function_instances,
+    const std::span<const frontend::GenericSubprogramInstantiation>
+        procedure_instances)
 {
     // VHDL elaborates local declarations in source order. The parser retains
     // them in category-specific vectors, so merge those vectors before the
@@ -875,6 +879,9 @@ void VhdlHirBuilder::queue_vhdl_local_declarations(
     queue(variables, 6, &VhdlHirBuilder::add_variable);
     queue(attributes, 7, &VhdlHirBuilder::add_attribute);
     queue(groups, 8, &VhdlHirBuilder::add_group);
+    queue(function_instances, 9, &VhdlHirBuilder::add_generic_function_instance);
+    queue(procedure_instances, 10,
+        &VhdlHirBuilder::add_generic_procedure_instance);
     std::stable_sort(pending.begin(), pending.end(), [](const auto& left, const auto& right) {
         return std::tuple {
             left.physical_source, left.offset, left.category, left.index
@@ -957,7 +964,9 @@ void VhdlHirBuilder::add_generate_body(
         std::nullopt,
         process_scope,
         process_origin,
-        output.declarations);
+        output.declarations,
+        span(input.generic_function_instances),
+        span(input.generic_procedure_instances));
     add_statement_regions(
         input.statements, process_scope, process_origin);
     hir_.mutable_processes().push_back(std::move(output));

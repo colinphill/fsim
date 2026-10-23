@@ -3765,11 +3765,13 @@ CompiledDesignResolver::vhdl_enumeration_literal_ordinal(
                 != vhdl::ExpressionKind::boolean_literal)) {
         return std::nullopt;
     }
+    // A selected name (`pkg.literal`) denotes the literal by its simple
+    // name.
     const auto spelling = std::string_view { candidate->vhdl->text };
     const auto matches = [&](const std::string_view literal) {
         return spelling.starts_with('\'')
             ? spelling == literal
-            : same_vhdl_identifier(spelling, literal);
+            : same_vhdl_identifier(simple_vhdl_name(spelling), literal);
     };
     std::set<TypeId> visiting;
     const auto resolve = [&](const auto& self, const TypeId type_id)
@@ -5015,7 +5017,18 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     }
                 }
             } else if (definition == nullptr && dimension == 1
-                && !builtin_element.empty()) {
+                && (!builtin_element.empty()
+                    || effective.builtin_type
+                        == vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_logic_vector
+                    || effective.builtin_type
+                        == vhdl::BuiltinTypeIdentity::
+                            ieee_std_logic_1164_std_ulogic_vector
+                    || same_vhdl_identifier(builtin_array, "std_logic_vector")
+                    || same_vhdl_identifier(
+                        builtin_array, "std_ulogic_vector"))) {
+                // STD_ULOGIC_VECTOR and its subtype STD_LOGIC_VECTOR are
+                // indexed by NATURAL (IEEE 1076-2008 16.7).
                 selected = named(same_vhdl_identifier(builtin_array, "string")
                         ? "positive" : "natural");
             }
@@ -5043,7 +5056,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (!selected) {
             return std::nullopt;
         }
-        return resolve(*selected, definition_scope, active_frames);
+        auto resolved = resolve(*selected, definition_scope, active_frames);
+        // The subtype of an index named by the array type's declaration (a
+        // predefined `natural`) is visible at the use as well, where a
+        // compiled library's scope may not resolve it (IEEE 1076-2019
+        // 16.2.3).
+        if (!resolved && definition_scope != scope) {
+            resolved = resolve(*selected, scope, active_frames);
+        }
+        return resolved;
     };
     // Whether a subtype (or the subtype its mark names) has a bound that
     // only a generic environment can fold.
@@ -6994,7 +7015,35 @@ CompiledDesignResolver::bind_vhdl_generics(
                     }
                 }
             }
+            // `obj'subtype` as the actual denotes the subtype of the
+            // object (IEEE 1076-2019 16.2.2), the form a call's generic map
+            // uses for its argument's type (9.3.4).
             if (expression && expression->vhdl != nullptr
+                && expression->vhdl->kind == vhdl::ExpressionKind::call
+                && expression->vhdl->text == "'subtype"
+                && expression->vhdl->operands.size() == 1U) {
+                const auto prefix = find_expression(*design_, effective_,
+                    expression->vhdl->operands.front());
+                const auto* name = prefix && prefix->vhdl != nullptr
+                        && prefix->vhdl->referenced_name
+                    ? &*prefix->vhdl->referenced_name
+                    : nullptr;
+                const auto selected = name == nullptr ? std::nullopt
+                    : name->selected                  ? name->selected
+                    : name->overloads.size() == 1U
+                    ? std::optional { name->overloads.front() }
+                    : std::nullopt;
+                const auto object = selected
+                    ? find_declaration(*design_, effective_, *selected)
+                    : std::nullopt;
+                if (object && object->vhdl != nullptr
+                    && object->vhdl->subtype
+                    && !object->vhdl->subtype->has_unspecified_parts()) {
+                    binding.vhdl_type = *object->vhdl->subtype;
+                }
+            }
+            if (!binding.vhdl_type && expression
+                && expression->vhdl != nullptr
                 && (expression->vhdl->kind == vhdl::ExpressionKind::name
                     || !actual_constraints.empty())) {
                 vhdl::SubtypeIndication subtype;
@@ -7215,6 +7264,52 @@ CompiledDesignResolver::vhdl_package_instance_binding(
         }
     }
     return std::nullopt;
+}
+
+const vhdl::Unit* CompiledDesignResolver::vhdl_library_package_actual(
+    const ExpressionId actual) const
+{
+    if (design_ == nullptr) {
+        return nullptr;
+    }
+    const auto expression = find_expression(*design_, effective_, actual);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != vhdl::ExpressionKind::name) {
+        return nullptr;
+    }
+    const auto& source = *expression->vhdl;
+    const auto parts = vhdl_name_parts(source.referenced_name
+            ? source.referenced_name->text()
+            : std::string_view { source.text });
+    if (parts.size() != 2U) {
+        return nullptr;
+    }
+    const auto lookup_units = vhdl_lookup_units(
+        *design_, selected_unit_, source.scope);
+    if (lookup_units.empty()) {
+        return nullptr;
+    }
+    const auto library = effective_vhdl_library(
+        parts.front(), lookup_units.front()->library);
+    for (const auto& package : design_->vhdl_units()) {
+        if (package.kind != vhdl::UnitKind::package
+            || !package.primary_name.empty()
+            || !same_vhdl_identifier(package.name, parts.back())
+            || !same_vhdl_identifier(
+                normalized_library(package.library), library)) {
+            continue;
+        }
+        // A generic package is a template, not an instance.
+        const bool generic = std::ranges::any_of(package.declarations,
+            [&](const DeclarationId id) {
+                const auto declaration
+                    = find_declaration(*design_, effective_, id);
+                return declaration && declaration->vhdl != nullptr
+                    && vhdl::is_generic_formal(declaration->vhdl->form);
+            });
+        return generic ? nullptr : &package;
+    }
+    return nullptr;
 }
 
 CompiledVhdlPackageResolution
@@ -7488,6 +7583,22 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 bound_declaration = actual_declaration(binding.formal);
             }
             if (!bound_declaration) {
+                // A library-level instance bound to the interface package
+                // contributes its own members (IEEE 1076-2008 6.5.7.2).
+                const auto formal = find_declaration(
+                    *design_, effective_, binding.formal);
+                const auto* package = binding.expression && formal
+                        && formal->vhdl != nullptr
+                        && formal->vhdl->form
+                            == vhdl::DeclarationForm::generic_package
+                        && same_vhdl_identifier(
+                            formal->vhdl->name, parts.front())
+                    ? vhdl_library_package_actual(*binding.expression)
+                    : nullptr;
+                if (package != nullptr) {
+                    append_template(normalized_library(package->library),
+                        package->name, parts.back(), std::nullopt, nullptr);
+                }
                 return;
             }
             const auto formal = find_declaration(
@@ -7638,10 +7749,15 @@ CompiledDesignResolver::resolve_vhdl_package_members(
     }
 
     // `use p.all` where `p` is a package generic: the members of the
-    // package instance bound to it (IEEE 1076-2008 6.5.5, 12.4).
+    // package instance bound to it (IEEE 1076-2008 6.5.5, 12.4). The actual
+    // is a package instance declaration or a library-level instance.
+    struct BoundPackage {
+        std::optional<DeclarationId> instance;
+        const vhdl::Unit* library_package { };
+    };
     const auto bound_package_instance = [&](const std::string_view formal_name)
-        -> std::optional<DeclarationId> {
-        std::optional<DeclarationId> found;
+        -> BoundPackage {
+        BoundPackage found;
         const auto consider = [&](const CompiledActualBinding& binding) {
             const auto formal = find_declaration(
                 *design_, effective_, binding.formal);
@@ -7666,7 +7782,10 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 bound = actual_declaration(binding.formal);
             }
             if (bound) {
-                found = actual_declaration(*bound).value_or(*bound);
+                found.instance = actual_declaration(*bound).value_or(*bound);
+            } else if (binding.expression) {
+                found.library_package
+                    = vhdl_library_package_actual(*binding.expression);
             }
         };
         for (const auto& frame : binding_frames_) {
@@ -7674,7 +7793,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 consider(binding);
             }
         }
-        if (!found && effective_ != nullptr) {
+        if (!found.instance && found.library_package == nullptr
+            && effective_ != nullptr) {
             for (const auto& actual :
                 effective_->specialization().actual_identities) {
                 CompiledActualBinding binding;
@@ -7865,9 +7985,18 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                         candidates.erase(removed, candidates.end());
                     };
                     if (selected_parts.size() == 2U) {
-                        if (const auto instance = bound_package_instance(
-                                selected_parts.front())) {
-                            append_instance(*instance, parts.back());
+                        const auto bound = bound_package_instance(
+                            selected_parts.front());
+                        if (bound.instance) {
+                            append_instance(*bound.instance, parts.back());
+                            keep_type_operators();
+                            continue;
+                        }
+                        if (bound.library_package != nullptr) {
+                            append_template(normalized_library(
+                                                bound.library_package->library),
+                                bound.library_package->name, parts.back(),
+                                std::nullopt, nullptr);
                             keep_type_operators();
                             continue;
                         }

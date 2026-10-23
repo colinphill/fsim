@@ -4,6 +4,7 @@
 #include "fsim/support/vhdl_tool_identity.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/output_format.hpp"
 
@@ -2679,18 +2680,34 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         = attribute->kind == HirVhdlAttributeKind::successor;
     const auto predecessor
         = attribute->kind == HirVhdlAttributeKind::predecessor;
-    if ((!successor && !predecessor)
-        || *attribute->lower_bound == *attribute->upper_bound) {
+    if (!successor && !predecessor) {
         return std::nullopt;
     }
-    process_.operations.emplace_back(IntegerCheck {
-        ordinal,
-        successor ? *attribute->lower_bound
-                  : *attribute->lower_bound + 1,
-        successor ? *attribute->upper_bound - 1
-                  : *attribute->upper_bound,
-    });
     const auto ordinal_width = register_width(ordinal);
+    if (*attribute->lower_bound == *attribute->upper_bound) {
+        // A subtype of one value has neither successor nor predecessor, so
+        // evaluating 'SUCC or 'PRED of it is always an error (IEEE
+        // 1076-2019 16.2.2). The check range cannot be empty, so check a
+        // value just outside the single permitted one.
+        const auto outside = *attribute->upper_bound
+                < std::numeric_limits<std::int64_t>::max()
+            ? *attribute->upper_bound + 1
+            : *attribute->lower_bound - 1;
+        process_.operations.emplace_back(IntegerCheck {
+            load_integer(outside, ordinal_width,
+                frontend::ValueDomain::Integer),
+            *attribute->lower_bound,
+            *attribute->upper_bound,
+        });
+    } else {
+        process_.operations.emplace_back(IntegerCheck {
+            ordinal,
+            successor ? *attribute->lower_bound
+                      : *attribute->lower_bound + 1,
+            successor ? *attribute->upper_bound - 1
+                      : *attribute->upper_bound,
+        });
+    }
     const auto one
         = load_integer(1, ordinal_width, frontend::ValueDomain::Integer);
     const auto adjusted = allocate_register(
@@ -4741,10 +4758,25 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             spelling = predefined_context.type_mark.spelling;
             type_id = predefined_context.type_mark.target;
         }
-        const auto standard_identity
+        auto standard_identity
             = hir_vhdl_standard_array_builtin_type(
                 *specialized_hir_unit_, predefined_context,
                 aggregate.scope, hir_generic_binding_frames_);
+        // A contextual subtype of a generic array type names the formal;
+        // its effective subtype names the actual (IEEE 1076-2008 6.5.3).
+        if (standard_identity == semantic::vhdl::BuiltinTypeIdentity::none
+            && contextual_subtype != nullptr) {
+            const auto actual_identity
+                = hir_vhdl_standard_array_builtin_type(
+                    *specialized_hir_unit_, *effective, aggregate.scope,
+                    hir_generic_binding_frames_);
+            if (actual_identity
+                != semantic::vhdl::BuiltinTypeIdentity::none) {
+                standard_identity = actual_identity;
+                predefined_context = *effective;
+                spelling = predefined_context.type_mark.spelling;
+            }
+        }
         // A projected standard-package result (for example a NUMERIC_STD
         // function result) carries its package-qualified type mark.
         auto simple_spelling = spelling;
@@ -5863,14 +5895,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 return std::nullopt;
             }
             const auto& value = *expression->vhdl;
+            // The context-typed resolution may select the literal when the
+            // name itself carries no selection (IEEE 1076-2008 12.5).
             const auto selected = value.referenced_name
+                    && value.referenced_name->selected
                 ? value.referenced_name->selected
-                : std::nullopt;
+                : value.resolved_declaration;
             constexpr auto qualified_prefix
                 = semantic::vhdl::qualified_expression_prefix;
             if (value.kind == semantic::vhdl::ExpressionKind::call
                 && value.text.starts_with(qualified_prefix)
                 && value.operands.size() == 1U && selected
+                && value.referenced_name
                 && (value.referenced_name->overloads.empty()
                     || (value.referenced_name->overloads.size() == 1U
                         && value.referenced_name->overloads.front()
@@ -5964,10 +6000,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 leave_expression();
                 return result;
             }
+            // A name that analysis left unselected (an enumeration literal
+            // declared in the enclosing package, named in a package body)
+            // denotes a literal of the expected index type by its
+            // spelling (IEEE 1076-2008 9.3.3.3, 12.5).
+            const bool unselected_name
+                = value.kind == semantic::vhdl::ExpressionKind::name
+                && (!value.referenced_name
+                    || value.referenced_name->overloads.empty());
             const bool direct_literal
                 = value.kind == semantic::vhdl::ExpressionKind::logic_literal
                 || (value.kind == semantic::vhdl::ExpressionKind::name
-                    && value.text.starts_with('\''));
+                    && (value.text.starts_with('\'') || unselected_name));
             if (direct_literal && value.nominal_type.empty()) {
                 // The expected enum root is the contextual type proof for an
                 // unselected character literal; resolve its spelling only
@@ -8311,6 +8355,7 @@ bool Lowerer::is_hir_systemverilog_coverage_call(
     const auto& name = expression->systemverilog->text;
     return name == "$get_coverage"
         || name == "$get_inst_coverage"
+        || frontend::is_coverage_query_call(name)
         || name == "$coverage_control"
         || name == "$coverage_get"
         || name == "$coverage_get_max"
@@ -8345,6 +8390,34 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_coverage_call(
     const auto named = std::ranges::any_of(
         source.argument_names,
         [](const std::string& name) { return !name.empty(); });
+    // `v.get_inst_coverage()` and `v.get_coverage()` of a covergroup
+    // variable (IEEE 1800-2023 19.8), bound to their instance or type by
+    // the frontend.
+    if (frontend::is_coverage_query_call(source.text)) {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || named || !source.operands.empty()) {
+            return invalid(
+                "FSIM-ELAB-SVCOV-001",
+                "a covergroup coverage method requires SystemVerilog and "
+                "no arguments");
+        }
+        const auto instance = source.text.starts_with(
+            frontend::coverage_instance_query_prefix);
+        const auto prefix = instance
+            ? frontend::coverage_instance_query_prefix
+            : frontend::coverage_type_query_prefix;
+        const auto destination = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(CoverageQuery {
+            destination,
+            instance ? CoverageQueryKind::covergroup_instance
+                     : CoverageQueryKind::covergroup_type,
+            source.text.substr(prefix.size()),
+        });
+        return expected_width != 0U && expected_width != 64U
+            ? resize_register(destination, expected_width, false)
+            : destination;
+    }
     if (source.text == "$get_coverage"
         || source.text == "$get_inst_coverage") {
         if (language_ != frontend::Language::SystemVerilog2017
@@ -12847,6 +12920,11 @@ Lowerer::hir_hierarchical_signal_member(
                     expression_id)) {
                 return std::nullopt;
             }
+        } else if (hir_interface_path_has_lexical_root_binding(
+                       expression_id)) {
+            // A virtual interface handle named like an instance is the
+            // handle, not the instance (IEEE 1800-2023 23.9, 25.9).
+            return std::nullopt;
         }
     }
     for (auto dot = name.find_last_of('.');
@@ -13023,9 +13101,56 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && inertial->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && inertial->vhdl->text == "@vhdl-inertial"
         && inertial->vhdl->operands.size() == 1U) {
-        return lower_hir_expression(
-            inertial->vhdl->operands.front(), expected_width, scalar_context,
-            vhdl_array_context);
+        const auto operand = inertial->vhdl->operands.front();
+        if (!hir_delay_inertial_actual_parts_) {
+            return lower_hir_expression(
+                operand, expected_width, scalar_context, vhdl_array_context);
+        }
+        // An inertial part of a port conversion program is an implicit
+        // signal that follows the signal named by its expression one delta
+        // later (IEEE 1076-2008 6.5.7.1, 14.7.3.3), unlike the parts that
+        // follow their actuals in the same cycle: the program reads
+        // S'DELAYED(0) in place of S.
+        const auto first_operation = process_.operations.size();
+        const auto value = lower_hir_expression(
+            operand, expected_width, scalar_context, vhdl_array_context);
+        if (!value) {
+            return value;
+        }
+        std::optional<SignalId> source;
+        bool one_signal { true };
+        for (auto index = first_operation;
+             index < process_.operations.size(); ++index) {
+            const auto* read
+                = operation_get_if<ReadSignal>(&process_.operations[index]);
+            if (read == nullptr) {
+                continue;
+            }
+            if (read->kind != SignalReadKind::current
+                || (source && *source != read->signal)) {
+                one_signal = false;
+                break;
+            }
+            source = read->signal;
+        }
+        if (!source || !one_signal) {
+            return value;
+        }
+        const auto delayed = vhdl_implicit_signal_attribute(*source, "delayed",
+            0U, hir_source_span(inertial->vhdl->source));
+        if (!delayed) {
+            return std::nullopt;
+        }
+        for (auto index = first_operation;
+             index < process_.operations.size(); ++index) {
+            if (const auto* read
+                = operation_get_if<ReadSignal>(&process_.operations[index])) {
+                auto replacement = *read;
+                replacement.signal = *delayed;
+                process_.operations[index] = std::move(replacement);
+            }
+        }
+        return value;
     }
     // A null array has no elements to load, so a relation with one is a
     // constant: under the predefined operators a null array equals only a

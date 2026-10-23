@@ -295,6 +295,24 @@ bool vhdl_conversion_actual(
                     && value->vhdl->text == "@vhdl-formal-subelements") {
                     return self(self, *value->vhdl, depth + 1U);
                 }
+                // An inertial part (`r.y => inertial t`) is an implicit
+                // signal updated a delta after its signal (IEEE 1076-2008
+                // 6.5.7.1, 14.7.3.3); the program reads that implicit signal
+                // while the other parts follow their actuals in the same
+                // cycle.
+                if (kind == semantic::vhdl::ExpressionKind::call
+                    && value->vhdl->text == "@vhdl-inertial"
+                    && value->vhdl->operands.size() == 1U) {
+                    const auto operand = specialization.find_expression(
+                        value->vhdl->operands.front());
+                    // Only a whole signal is delayed: a part of one keeps
+                    // its adapter.
+                    return operand && operand->vhdl != nullptr
+                        && operand->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::name
+                        && operand->vhdl->text.find_first_of(".(")
+                            == std::string::npos;
+                }
                 // A type conversion or conversion function of a signal name
                 // (`p(3 downto 2) => std_ulogic_vector(s)`).
                 if (kind == semantic::vhdl::ExpressionKind::call

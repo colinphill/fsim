@@ -827,6 +827,18 @@ public:
     /// instance at `path` (IEEE 1800-2023 3.14.2), if it is one.
     [[nodiscard]] std::optional<std::pair<int, int>>
     systemverilog_instance_time_scale(std::string_view path) const;
+    /// Registry handles that publish `signal` (a net, port, or alias of it).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> vpi_signal_object_handles(
+        runtime::simir::SignalId signal) const;
+    /// Live delay table of the elaborated Verilog module path `path`, in
+    /// scheduler ticks (IEEE 1800-2023 38.11).
+    [[nodiscard]] std::vector<runtime::SimulationTick>
+    verilog_module_path_delays(std::uint32_t path) const;
+    /// Replace that table (IEEE 1800-2023 38.34). Returns false, changing
+    /// nothing, when the scheduler is running outside a safe point; the
+    /// caller retries from `add_safe_point_hook`.
+    [[nodiscard]] bool set_verilog_module_path_delays(
+        std::uint32_t path, std::span<const runtime::SimulationTick> delays);
     [[nodiscard]] runtime::SystemVerilogVpiTimeService&
     systemverilog_vpi_time() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiTimeService&

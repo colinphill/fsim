@@ -489,18 +489,6 @@ struct GenericProcedureTemplate {
     SourceSpan span;
 };
 
-/// A declarative VHDL-2008 generic subprogram instantiation.
-///
-/// Function and procedure instances use separate DesignUnit collections so
-/// their kind remains explicit even before template lookup succeeds.
-struct GenericSubprogramInstantiation {
-    std::string name;
-    std::string template_name;
-    std::vector<ParameterOverride> generic_map;
-    bool generic_map_box { };
-    SourceSpan span;
-};
-
 enum class GenerateKind {
     StaticBlock,
     Conditional,

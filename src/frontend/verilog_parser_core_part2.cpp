@@ -1382,7 +1382,8 @@ DesignUnit VerilogParser::parse_module(
                 unit.systemverilog_covergroups,
                 parse_covergroup_declaration(
                     declaration_start,
-                    SystemVerilogCovergroupOwnerKind::DesignUnit),
+                    SystemVerilogCovergroupOwnerKind::DesignUnit,
+                    &unit),
                 declaration_start);
         } else if (
             at(TokenKind::Identifier)

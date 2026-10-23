@@ -395,7 +395,8 @@ endmodule
     assert(reference.vcd == cold.vcd);
     assert(cold.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 7);
+    // Each bus_if instance adds its clocking block event process.
+    assert(cold.compiled_processes == 9);
     assert(cold.cache.misses > 0);
     assert(warm.cache.hits > 0);
 #else

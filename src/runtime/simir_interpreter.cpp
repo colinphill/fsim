@@ -2523,6 +2523,32 @@ void Interpreter::reannotate_module_timing(
     impl_->module_timing_checks.swap(replacement_checks);
 }
 
+std::vector<SimulationTick> Interpreter::module_path_delays(
+    const std::uint32_t path) const
+{
+    if (path >= impl_->module_paths.size()) {
+        throw std::out_of_range("SimIR module path does not exist");
+    }
+    return impl_->module_paths[path].delays;
+}
+
+bool Interpreter::set_module_path_delays(
+    const std::uint32_t path, const std::span<const SimulationTick> delays)
+{
+    if (path >= impl_->module_paths.size()) {
+        throw std::out_of_range("SimIR module path does not exist");
+    }
+    if (impl_->started && !impl_->scheduler.at_safe_point()) {
+        return false;
+    }
+    // The replacement keeps the topology, so the reannotation validation
+    // checks the new table's length and the pulse limits against it.
+    std::vector<ModulePath> replacement = impl_->module_paths;
+    replacement[path].delays.assign(delays.begin(), delays.end());
+    reannotate_module_timing(replacement, impl_->module_timing_checks);
+    return true;
+}
+
 void Interpreter::reannotate_vital_timing(
     const std::span<const VitalTimingReannotation> annotations,
     const bool reset_timing_state)

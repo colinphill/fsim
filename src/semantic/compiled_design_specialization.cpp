@@ -15981,6 +15981,65 @@ std::optional<InferredVhdlTypeActual> infer_vhdl_type_actual(
         return inferred;
     }
 
+    // `obj'subtype` names the subtype of an object (IEEE 1076-2019
+    // 16.2.2); a call's generic map may use it as the actual of a generic
+    // type (9.3.4).
+    if (record.kind == vhdl::ExpressionKind::call
+        && record.text == "'subtype" && record.operands.size() == 1U) {
+        const auto prefix = design.find_expression(record.operands.front());
+        if (!prefix || prefix->vhdl == nullptr
+            || !prefix->vhdl->referenced_name) {
+            if (vhdl_generic_trace_enabled) {
+                std::fprintf(stderr,
+                    "[fsim-vhdl-generic] 'subtype actual prefix has no "
+                    "referenced name\n");
+            }
+            return std::nullopt;
+        }
+        const auto& reference = *prefix->vhdl->referenced_name;
+        auto selected = reference.selected;
+        if (!selected && reference.overloads.size() == 1U) {
+            selected = reference.overloads.front();
+        }
+        const auto object = selected ? design.find_declaration(*selected)
+                                     : std::nullopt;
+        if (!object || object->vhdl == nullptr || !object->vhdl->subtype
+            || object->vhdl->subtype->has_unspecified_parts()) {
+            if (vhdl_generic_trace_enabled) {
+                std::fprintf(stderr,
+                    "[fsim-vhdl-generic] 'subtype actual %s selected=%d "
+                    "overloads=%zu object=%d subtype=%d\n",
+                    prefix->vhdl->text.c_str(),
+                    static_cast<int>(selected.has_value()),
+                    reference.overloads.size(),
+                    static_cast<int>(object && object->vhdl != nullptr),
+                    static_cast<int>(object && object->vhdl != nullptr
+                        && object->vhdl->subtype.has_value()));
+            }
+            return std::nullopt;
+        }
+        InferredVhdlTypeActual result;
+        result.subtype = *object->vhdl->subtype;
+        // The instance's formals take their index ranges from each call's
+        // actuals (the template's `x'subtype` re-derives them from the
+        // formal), so the generic type stands for the object's type mark
+        // and its scalar constraint.
+        if (std::erase_if(result.subtype->constraints,
+                [](const vhdl::RangeConstraint& constraint) {
+                    return constraint.kind == vhdl::RangeKind::array_index;
+                })
+            != 0U) {
+            result.subtype->unconstrained = true;
+            result.subtype->executable_width.reset();
+        }
+        result.identity = "vhdl-object-subtype-v1;";
+        append_identity_component(result.identity,
+            vhdl_type_identity(design, *result.subtype, parent));
+        result.type_class = vhdl_subtype_class(design, *result.subtype);
+        result.expression = expression_id;
+        return result;
+    }
+
     const auto append_constraint = [&](std::string& identity,
                                        const vhdl::Expression& constraint)
         -> bool {

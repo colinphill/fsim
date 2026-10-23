@@ -3188,6 +3188,37 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
             design.semantics.scopes()[expression.scope.value()].unit,
             expression.class_identity, expression.source);
     }
+    // A package or generic subprogram instance depends on its template's
+    // package (IEEE 1076-2008 4.4, 4.9, 8.3); a simple subprogram template
+    // name is visible without one.
+    const auto add_instance_template_reference
+        = [&](const auto owner, const auto& library,
+              const vhdl::Declaration& declaration) {
+              if (!declaration.package) {
+                  return;
+              }
+              if (declaration.form
+                      == vhdl::DeclarationForm::generic_function_instance
+                  || declaration.form
+                      == vhdl::DeclarationForm::generic_procedure_instance) {
+                  auto template_name = declaration.package->template_name;
+                  const auto spelling
+                      = std::string { template_name.text() };
+                  const auto separator = spelling.rfind('.');
+                  if (separator == std::string::npos) {
+                      return;
+                  }
+                  template_name.spelling = spelling.substr(0U, separator);
+                  template_name.canonical
+                      = support::ascii_lower(template_name.spelling);
+                  add_reference(references, CompiledReferenceKind::package,
+                      owner, library, template_name, declaration.source);
+                  return;
+              }
+              add_reference(references, CompiledReferenceKind::package,
+                  owner, library, declaration.package->template_name,
+                  declaration.source);
+          };
     for (const auto& unit : design.vhdl_hir.units()) {
         add_source_dependency(design, dependencies, unit.id, unit.source);
         if (unit.kind == vhdl::UnitKind::architecture
@@ -3227,37 +3258,11 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
             }
         }
         for (const auto declaration_id : unit.declarations) {
-            const auto* declaration
-                = design.vhdl_hir.find_declaration(declaration_id);
-            if (declaration == nullptr
-                || !declaration->package) {
-                continue;
+            if (const auto* declaration
+                = design.vhdl_hir.find_declaration(declaration_id)) {
+                add_instance_template_reference(
+                    unit.id, unit.library, *declaration);
             }
-            // A generic subprogram instance names its template, whose
-            // expanded name's prefix is the package (IEEE 1076-2008 4.4,
-            // 8.3); a simple template name is visible without one.
-            if (declaration->form
-                    == vhdl::DeclarationForm::generic_function_instance
-                || declaration->form
-                    == vhdl::DeclarationForm::generic_procedure_instance) {
-                auto template_name = declaration->package->template_name;
-                const auto spelling = std::string { template_name.text() };
-                const auto separator = spelling.rfind('.');
-                if (separator == std::string::npos) {
-                    continue;
-                }
-                template_name.spelling = spelling.substr(0U, separator);
-                template_name.canonical
-                    = support::ascii_lower(template_name.spelling);
-                add_reference(references, CompiledReferenceKind::package,
-                    unit.id, unit.library, template_name,
-                    declaration->source);
-                continue;
-            }
-            add_reference(references, CompiledReferenceKind::package,
-                unit.id, unit.library,
-                declaration->package->template_name,
-                declaration->source);
         }
         add_vhdl_component_references(design, references, unit.id,
             unit.library, unit.component_configurations);
@@ -3278,6 +3283,17 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         }
         return &design.units()[unit.value()];
     };
+    // Instances declared in a block, generate or process declarative part
+    // belong to no unit's declaration list.
+    for (const auto& declaration : design.vhdl_hir.declarations()) {
+        const auto* owner = declaration.package
+            ? instance_owner(declaration.scope)
+            : nullptr;
+        if (owner != nullptr && owner->language == Language::vhdl) {
+            add_instance_template_reference(
+                owner->id, owner->library, declaration);
+        }
+    }
     for (const auto& expression : design.vhdl_hir.expressions()) {
         const auto* owner = instance_owner(expression.scope);
         if (owner == nullptr || owner->language != Language::vhdl) {

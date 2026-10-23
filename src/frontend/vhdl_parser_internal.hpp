@@ -46,6 +46,19 @@ private:
   // Use clauses of process declarative parts, joined to the enclosing
   // unit's context clause when the unit ends.
   std::vector<VhdlContextItem> deferred_context_items_;
+  // Implicit instances of generic subprograms named by the generic maps of
+  // calls (IEEE 1076-2019 9.3.4), joined to the enclosing process or unit
+  // when it ends. `vhdl_call_instance_anchor_` is where the declarative item
+  // or statement part being parsed begins, so an instance precedes the use.
+  std::vector<GenericSubprogramInstantiation> pending_call_function_instances_;
+  std::vector<GenericSubprogramInstantiation> pending_call_procedure_instances_;
+  std::optional<SourceSpan> vhdl_call_instance_anchor_;
+  std::size_t vhdl_call_instance_count_ { };
+  /// After the name of a call, `generic map (...)` makes an implicit instance
+  /// of the template and returns the instance's name; otherwise the name.
+  std::string parse_vhdl_call_generic_map(
+      const Token& name, std::string canonical, bool procedure);
+  void flush_pending_call_instances(DesignUnit& unit);
   // Type mark of each attribute declared so far, by attribute name;
   // STANDARD declares FOREIGN (IEEE 1076-2008 16.3).
   std::unordered_map<std::string, std::string> vhdl_declared_attributes_ {

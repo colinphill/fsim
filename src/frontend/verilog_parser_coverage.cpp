@@ -16,6 +16,22 @@ namespace fsim::frontend {
 
 namespace coverage_parser_detail {
 
+    namespace {
+        const CoverageConstantFolder* active_constant_folder { };
+    }
+
+    CoverageConstantScope::CoverageConstantScope(
+        const CoverageConstantFolder* folder) noexcept
+        : previous_(active_constant_folder)
+    {
+        active_constant_folder = folder;
+    }
+
+    CoverageConstantScope::~CoverageConstantScope()
+    {
+        active_constant_folder = previous_;
+    }
+
     [[nodiscard]] bool unsupported_coverage_type(
         const std::span<const Token> tokens,
         const bool allow_real)
@@ -258,9 +274,44 @@ namespace coverage_parser_detail {
         return static_cast<std::int64_t>(value);
     }
 
+    // A constant expression that is not itself a literal, replaced by the
+    // literal of its value: a decimal number, signed by a leading minus.
+    [[nodiscard]] std::optional<std::vector<Token>> fold_coverage_constant_tokens(
+        const std::span<const Token> tokens)
+    {
+        if (active_constant_folder == nullptr || tokens.empty()
+            || (tokens.size() == 1U && tokens.front().kind == TokenKind::Number)
+            || (tokens.size() == 2U && tokens.front().kind == TokenKind::Minus
+                && tokens.back().kind == TokenKind::Number)) {
+            return std::nullopt;
+        }
+        const auto value = (*active_constant_folder)(tokens);
+        if (!value)
+            return std::nullopt;
+        const auto magnitude = *value < 0
+            ? std::uint64_t { 0 } - static_cast<std::uint64_t>(*value)
+            : static_cast<std::uint64_t>(*value);
+        Token number = tokens.front();
+        number.kind = TokenKind::Number;
+        number.text = std::to_string(magnitude);
+        number.span.end = tokens.back().span.end;
+        std::vector<Token> result;
+        if (*value < 0) {
+            Token minus = tokens.front();
+            minus.kind = TokenKind::Minus;
+            minus.text = "-";
+            result.push_back(std::move(minus));
+        }
+        result.push_back(std::move(number));
+        return result;
+    }
+
     [[nodiscard]] std::optional<CoverageLiteral> coverage_literal(
         std::span<const Token> tokens)
     {
+        if (const auto folded = fold_coverage_constant_tokens(tokens)) {
+            return coverage_literal(*folded);
+        }
         bool negative { };
         if (tokens.size() == 2U && tokens.front().kind == TokenKind::Minus) {
             negative = true;
@@ -488,6 +539,154 @@ namespace coverage_parser_detail {
         result.unknown_bits = std::move(unknown_bits);
         result.mask_bits = std::move(mask_bits);
         return result;
+    }
+
+    // `base ** exponent` on integers (IEEE 1800-2017 11.4.3): a negative
+    // exponent gives 0 unless the base is 1 or -1, and 0 ** negative is
+    // undefined.
+    [[nodiscard]] std::optional<std::int64_t> coverage_power(
+        const std::int64_t base,
+        const std::int64_t exponent)
+    {
+        if (base == 1)
+            return 1;
+        if (base == -1)
+            return exponent % 2 == 0 ? 1 : -1;
+        if (exponent < 0)
+            return base == 0 ? std::nullopt : std::optional<std::int64_t> { 0 };
+        if (base == 0)
+            return exponent == 0 ? 1 : 0;
+        std::int64_t result { 1 };
+        for (std::int64_t step = 0; step < exponent; ++step) {
+            if (__builtin_mul_overflow(result, base, &result))
+                return std::nullopt;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> fold_coverage_constant_expression(
+        const Expression& expression,
+        const std::unordered_map<std::string, std::int64_t>& parameters)
+    {
+        const auto fold = [&](const Expression& operand) {
+            return fold_coverage_constant_expression(operand, parameters);
+        };
+        if (expression.kind == ExpressionKind::IntegerLiteral
+            || expression.kind == ExpressionKind::LogicLiteral) {
+            Token number;
+            number.kind = TokenKind::Number;
+            number.text = expression.text;
+            number.span = expression.span;
+            const auto literal
+                = coverage_literal(std::span<const Token> { &number, 1U });
+            if (!literal || literal->wildcard || literal->real_bits)
+                return std::nullopt;
+            return literal->exact;
+        }
+        if (expression.kind == ExpressionKind::Identifier) {
+            const auto found = parameters.find(expression.text);
+            return found == parameters.end()
+                ? std::nullopt
+                : std::optional<std::int64_t> { found->second };
+        }
+        if (expression.kind == ExpressionKind::Unary
+            && expression.operands.size() == 1U) {
+            const auto value = fold(expression.operands.front());
+            if (!value)
+                return std::nullopt;
+            if (expression.text == "+")
+                return value;
+            if (expression.text == "-") {
+                std::int64_t negated { };
+                if (__builtin_sub_overflow(std::int64_t { 0 }, *value, &negated))
+                    return std::nullopt;
+                return negated;
+            }
+            if (expression.text == "~")
+                return ~*value;
+            if (expression.text == "!")
+                return *value == 0 ? 1 : 0;
+            return std::nullopt;
+        }
+        if (expression.kind == ExpressionKind::Call && expression.text == "?:"
+            && expression.operands.size() == 3U) {
+            const auto condition = fold(expression.operands[0]);
+            if (!condition)
+                return std::nullopt;
+            return fold(expression.operands[*condition != 0 ? 1U : 2U]);
+        }
+        if (expression.kind != ExpressionKind::Binary
+            || expression.operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto left = fold(expression.operands[0]);
+        const auto right = fold(expression.operands[1]);
+        if (!left || !right)
+            return std::nullopt;
+        const auto& operation = expression.text;
+        const auto lhs = *left;
+        const auto rhs = *right;
+        std::int64_t result { };
+        if (operation == "+")
+            return __builtin_add_overflow(lhs, rhs, &result)
+                ? std::nullopt
+                : std::optional<std::int64_t> { result };
+        if (operation == "-")
+            return __builtin_sub_overflow(lhs, rhs, &result)
+                ? std::nullopt
+                : std::optional<std::int64_t> { result };
+        if (operation == "*")
+            return __builtin_mul_overflow(lhs, rhs, &result)
+                ? std::nullopt
+                : std::optional<std::int64_t> { result };
+        if (operation == "/" || operation == "%") {
+            if (rhs == 0
+                || (lhs == std::numeric_limits<std::int64_t>::min()
+                    && rhs == -1)) {
+                return std::nullopt;
+            }
+            return operation == "/" ? lhs / rhs : lhs % rhs;
+        }
+        if (operation == "**")
+            return coverage_power(lhs, rhs);
+        if (operation == "<<" || operation == "<<<") {
+            if (rhs < 0)
+                return std::nullopt;
+            return rhs >= 64
+                ? std::int64_t { 0 }
+                : static_cast<std::int64_t>(
+                      static_cast<std::uint64_t>(lhs) << rhs);
+        }
+        if (operation == ">>" || operation == ">>>") {
+            if (rhs < 0 || (operation == ">>" && lhs < 0))
+                return std::nullopt;
+            return rhs >= 64 ? (lhs < 0 ? std::int64_t { -1 } : 0) : lhs >> rhs;
+        }
+        if (operation == "&")
+            return lhs & rhs;
+        if (operation == "|")
+            return lhs | rhs;
+        if (operation == "^")
+            return lhs ^ rhs;
+        if (operation == "^~" || operation == "~^")
+            return ~(lhs ^ rhs);
+        if (operation == "==" || operation == "===")
+            return lhs == rhs ? 1 : 0;
+        if (operation == "!=" || operation == "!==")
+            return lhs != rhs ? 1 : 0;
+        if (operation == "<")
+            return lhs < rhs ? 1 : 0;
+        if (operation == "<=")
+            return lhs <= rhs ? 1 : 0;
+        if (operation == ">")
+            return lhs > rhs ? 1 : 0;
+        if (operation == ">=")
+            return lhs >= rhs ? 1 : 0;
+        if (operation == "&&")
+            return lhs != 0 && rhs != 0 ? 1 : 0;
+        if (operation == "||")
+            return lhs != 0 || rhs != 0 ? 1 : 0;
+        return std::nullopt;
     }
 
     [[nodiscard]] std::optional<SystemVerilogCoverageBinValue> coverage_bin_value(
@@ -896,7 +1095,8 @@ using namespace coverage_parser_detail;
 SystemVerilogCovergroupDeclaration
 VerilogParser::parse_covergroup_declaration(
     const Token& start,
-    const SystemVerilogCovergroupOwnerKind owner_kind)
+    const SystemVerilogCovergroupOwnerKind owner_kind,
+    const DesignUnit* const parameter_unit)
 {
     SystemVerilogCovergroupDeclaration declaration;
     declaration.owner_kind = owner_kind;
@@ -999,7 +1199,49 @@ VerilogParser::parse_covergroup_declaration(
             declaration.body_tokens.back());
     }
     structure_covergroup_options(declaration);
-    structure_covergroup_declarations(declaration);
+    {
+        // Bin values, ranges, transition items and repetition counts are
+        // constant expressions (IEEE 1800-2017 19.5, 19.5.1). They fold over
+        // the value parameters declared so far in the enclosing unit, taken
+        // at their declared values.
+        std::unordered_map<std::string, std::int64_t> parameters;
+        if (parameter_unit != nullptr) {
+            for (const auto& parameter : parameter_unit->parameters) {
+                if (parameter.kind != ParameterKind::Value)
+                    continue;
+                if (const auto value = coverage_parser_detail::
+                        fold_coverage_constant_expression(
+                            parameter.default_value, parameters)) {
+                    parameters.emplace(parameter.name, *value);
+                }
+            }
+        }
+        const coverage_parser_detail::CoverageConstantFolder folder
+            = [this, &parameters](const std::span<const Token> tokens)
+            -> std::optional<std::int64_t> {
+            auto saved_tokens = std::move(tokens_);
+            const auto saved_index = index_;
+            const auto saved_diagnostics = diagnostics_.size();
+            tokens_.assign(tokens.begin(), tokens.end());
+            Token end;
+            end.kind = TokenKind::EndOfFile;
+            end.span = tokens.back().span;
+            tokens_.push_back(std::move(end));
+            index_ = 0;
+            const auto expression = parse_expression();
+            const bool whole
+                = at_end() && diagnostics_.size() == saved_diagnostics;
+            diagnostics_.resize(saved_diagnostics);
+            tokens_ = std::move(saved_tokens);
+            index_ = saved_index;
+            return whole
+                ? coverage_parser_detail::fold_coverage_constant_expression(
+                    expression, parameters)
+                : std::nullopt;
+        };
+        const coverage_parser_detail::CoverageConstantScope scope { &folder };
+        structure_covergroup_declarations(declaration);
+    }
     expect_keyword("endgroup", false, "FSIM-SV-PARSE-311");
     if (match(TokenKind::Colon)) {
         if (!at(TokenKind::Identifier)

@@ -777,14 +777,22 @@ struct CoverageSample {
 enum class CoverageQueryKind : std::uint8_t {
     overall_type,
     overall_instance,
+    // `get_coverage()` of a covergroup variable: the coverage of the
+    // covergroup type named by `identity` (IEEE 1800-2023 19.8).
+    covergroup_type,
+    // `get_inst_coverage()` of a covergroup variable: the coverage of the
+    // instance whose runtime identity is `identity` (IEEE 1800-2023 19.8).
+    covergroup_instance,
 };
 
-/// Query the simulation-owned aggregate functional coverage. The destination
+/// Query the simulation-owned functional coverage. The destination
 /// receives the exact 64-bit SystemVerilog real payload for a percentage in
-/// the inclusive range 0 through 100.
+/// the inclusive range 0 through 100. The covergroup kinds name their
+/// subject by `identity`; the overall kinds leave it empty.
 struct CoverageQuery {
     RegisterId destination { };
     CoverageQueryKind kind { CoverageQueryKind::overall_type };
+    std::string identity { };
 };
 
 /// One VHDL-2019 STD.ENV PSL query or control request. Queries own a

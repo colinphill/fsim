@@ -2140,6 +2140,34 @@ Lowerer::lower_hir_static_container_actual(
                 frontend::ValueDomain::Bit2));
         return fixed;
     }
+    // An interface instance array is the array of its elements' handles: an
+    // unpacked array of virtual interfaces of the same size takes them
+    // element by element from its left bound (IEEE 1800-2023 7.6, 25.4,
+    // 25.9).
+    if (formal_type.fixed && !formal_type.associative && !formal_type.queue
+        && formal_type.element_kind == ContainerElementKind::Packed
+        && formal_type.element_width == 64U
+        && formal_type.dimensions.size() <= 1U
+        && !hir_container_object_binding(expression_id)) {
+        if (const auto handles
+            = hir_systemverilog_interface_array_handles(expression_id);
+            handles && handles->size() == hir_static_element_count(formal_type)) {
+            const auto destination = allocate_container_register(formal_type);
+            for (std::size_t position { }; position < handles->size();
+                ++position) {
+                const auto value = load_constant(
+                    unsigned_value((*handles)[position], 64U),
+                    formal_type.two_state ? frontend::ValueDomain::Bit2
+                                         : frontend::ValueDomain::Logic4);
+                const auto index = load_constant(
+                    unsigned_value(position, 32U),
+                    frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ContainerWrite {
+                    destination, index, value, false, true, false });
+            }
+            return destination;
+        }
+    }
     const auto diagnostics_before = diagnostics_.size();
     const auto source = lower_hir_static_container_value(expression_id);
     if (!source) {
@@ -3192,6 +3220,27 @@ std::optional<SignalId> Lowerer::hir_named_signal(
             // 23.8).
             if (binding) {
                 return binding->signal;
+            }
+        }
+    }
+    // The root of a dotted name hides a module name the same way: a
+    // virtual interface handle or a local without a signal (`bus.value`
+    // with a formal `bus`) is not the instance member `bus.value`.
+    if (specialized_hir_unit_ != nullptr
+        && language_ != frontend::Language::Vhdl2008) {
+        if (const auto dot = name.find('.'); dot != std::string::npos
+            && dot != 0U) {
+            if (hir_virtual_interface_root(name, scope)) {
+                return std::nullopt;
+            }
+            if (const auto root = hir_resolver()
+                    .resolve_systemverilog(
+                        name.substr(0U, dot), scope, { }, true)
+                    .unique()) {
+                const auto binding = hir_runtime_binding(*root, scope, false);
+                if (binding && binding->local && !binding->signal) {
+                    return std::nullopt;
+                }
             }
         }
     }
@@ -7724,16 +7773,29 @@ Lowerer::hir_virtual_interface_instances(const std::string_view receiver,
     }
     const auto& interface_type = virtual_type->interface_type;
     std::vector<std::pair<std::uint64_t, std::string>> instances;
-    std::set<std::uint64_t> seen;
-    for (const auto& [path, type] : *systemverilog_interface_types_) {
-        const auto handle = systemverilog_interface_handles_->find(path);
-        if (type == interface_type
-            && handle != systemverilog_interface_handles_->end()
-            && (steps.empty()
-                || systemverilog_interface_handles_->contains(path + steps))
-            && seen.insert(handle->second).second) {
-            instances.emplace_back(handle->second, path + steps);
+    // A specialization named by the virtual interface type designates only
+    // its own instances (IEEE 1800-2023 25.9); with none of them elaborated
+    // every instance of the interface stays a candidate.
+    const auto collect = [&](const bool specialized) {
+        std::set<std::uint64_t> seen;
+        for (const auto& [path, type] : *systemverilog_interface_types_) {
+            const auto handle = systemverilog_interface_handles_->find(path);
+            if (type == interface_type
+                && handle != systemverilog_interface_handles_->end()
+                && (steps.empty()
+                    || systemverilog_interface_handles_->contains(
+                        path + steps))
+                && (!specialized
+                    || hir_virtual_interface_instance_matches(
+                        *virtual_type, path))
+                && seen.insert(handle->second).second) {
+                instances.emplace_back(handle->second, path + steps);
+            }
         }
+    };
+    collect(!virtual_type->interface_parameter_actuals.empty());
+    if (instances.empty()) {
+        collect(false);
     }
     if (instances.empty()) {
         return std::nullopt;

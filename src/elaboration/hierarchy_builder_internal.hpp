@@ -323,6 +323,18 @@ private:
             semantic::SourceSpanId source;
         };
 
+        // A scalar part of a mode-view block port copies between the port
+        // and the part of the actual signal associated with it (IEEE
+        // 1076-2019 6.5.2, 6.5.7.1): input parts follow the actual, output
+        // parts drive it.
+        struct BlockViewRoute {
+            SignalId from { };
+            std::uint32_t from_offset { };
+            SignalId to { };
+            std::uint32_t to_offset { };
+            std::uint32_t width { };
+        };
+
         const semantic::vhdl::GenerateRegion* region { };
         semantic::SpecializedHirUnit specialization;
         std::string path;
@@ -335,6 +347,7 @@ private:
         // Declaration identities from all enclosing generated regions and
         // this region, retained so descendant processes can bind local reads.
         std::vector<semantic::DeclarationId> signal_declarations;
+        std::vector<BlockViewRoute> block_view_routes;
     };
 
     struct VhdlGeneratedBlockMaterializationContext {
@@ -761,13 +774,30 @@ private:
     // A package instance declared in a design unit has its own signals and
     // shared variables (IEEE 1076-2008 4.9, 14.4.2.1): each is materialized
     // under the instance's path with the instance's generics and bound as
-    // vhdl_package_object_key(instance, name).
+    // vhdl_package_object_key(instance, name). `declarations` are those of
+    // one declarative region: a design unit or a block or generate
+    // statement (IEEE 1076-2008 11.2, 11.8, 4.9); `library` is the library
+    // of the design unit that contains the region.
     bool materialize_compiled_vhdl_local_package_objects(
         const semantic::SpecializedHirUnit& specialization,
         const std::string& path,
-        const semantic::vhdl::Unit& unit,
+        std::span<const semantic::DeclarationId> declarations,
+        std::string_view library,
         SignalMap& signals,
         ContainerMap& container_objects);
+
+    // The routes of a mode-view port `formal` (signal `formal_signal`)
+    // associated part by part with whole signals, `actual` being the
+    // combined `@vhdl-formal-subelements` association (IEEE 1076-2019 6.5.2,
+    // 6.5.7.1); nullopt when a part is not a whole signal of the part's
+    // layout.
+    std::optional<std::vector<VhdlHirMaterialization::BlockViewRoute>>
+    compiled_vhdl_view_subelement_routes(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& formal,
+        SignalId formal_signal,
+        semantic::ExpressionId actual,
+        const SignalMap& actual_signals);
 
     // Expression and path inputs borrow from the active binding worklist and
     // compiled HIR. They are consumed synchronously; returned metadata owns
@@ -1834,7 +1864,9 @@ private:
         const semantic::SpecializedHirUnit& specialization,
         const std::string& path,
         SignalMap& signals,
-        std::vector<Process>& clocking_processes);
+        std::vector<Process>& clocking_processes,
+        const std::function<std::optional<SignalId>(
+            semantic::DeclarationId)>& package_signal = { });
 
     void add_systemverilog_alias_connections(
         const SystemVerilogAliasPlan& plan,

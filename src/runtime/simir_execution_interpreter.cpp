@@ -2290,15 +2290,15 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.trigger);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, CoverageQuery>) {
-                    if (op.kind != CoverageQueryKind::overall_type
-                        && op.kind
-                            != CoverageQueryKind::overall_instance) {
+                    if (op.kind > CoverageQueryKind::covergroup_instance
+                        || (op.kind >= CoverageQueryKind::covergroup_type
+                            && op.identity.empty())) {
                         fail(process, "coverage query kind is invalid");
                     }
                     if (!coverage_query_hook) {
                         fail(process, "coverage query service is unavailable");
                     }
-                    auto value = coverage_query_hook(op.kind);
+                    auto value = coverage_query_hook(op.kind, op.identity);
                     if (value.width() != 64U || value.is_logic9()) {
                         fail(process, "coverage query service returned an invalid real payload");
                     }

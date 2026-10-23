@@ -598,6 +598,7 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
     } else {
         parse_vhdl_end("package");
     }
+    flush_pending_call_instances(unit);
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));
     }
@@ -822,6 +823,7 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
     }
 
     parse_vhdl_end("entity");
+    flush_pending_call_instances(unit);
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));
     }
@@ -2039,6 +2041,7 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
     }
     block_configuration_specifications_.clear();
     parse_vhdl_end("architecture", unit.name);
+    flush_pending_call_instances(unit);
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));
     }
