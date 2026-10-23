@@ -326,7 +326,16 @@ Left for Batch 91, all in `triage/b90`:
 - local package declarations (gentype7);
 - protected method aliases (protected12).
 
-The full run (`b90w1`) is in progress.
+The full run (`b90w1`, frozen `b90x`) confirms all 121 and loses none.
+
+| Suite | Batch89 passes / in scope | Batch90 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2630 / 2635 | 2631 / 2635 | 276 |
+| sv-tests | 1382 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2042 / 2068 | 2044 / 2067 | 348 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1215 / 1264 | 1220 / 1263 | 219 |
+| vhdl-compliance | 58 / 65 | 59 / 65 | 7 |
 
 ### Batch 89: class formals and constraints, unit scopes, gate arrays, modport exports, VHDL generic shapes
 
