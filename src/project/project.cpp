@@ -1629,6 +1629,12 @@ class Parser {
   }
 
   static std::string default_top_alias(const std::string_view target) {
+    // A Verilog escaped identifier (`lib.\\esc.mod`) keeps its dots
+    // (IEEE 1800-2023 5.6.1); only a library prefix precedes it.
+    if (const auto escape = target.find('\\');
+        escape != std::string_view::npos) {
+      return std::string{target.substr(escape)};
+    }
     auto spelling = target;
     if (const auto colon = spelling.find(':');
         colon != std::string_view::npos) {
@@ -1646,6 +1652,12 @@ class Parser {
   }
 
   static bool valid_top_alias(const std::string_view alias_name) {
+    // An escaped identifier is its own alias (IEEE 1800-2023 5.6.1).
+    if (alias_name.size() > 1U && alias_name.front() == '\\') {
+      return std::ranges::all_of(alias_name, [](const unsigned char character) {
+        return std::isgraph(character) != 0;
+      });
+    }
     if (alias_name.empty()
         || (std::isalpha(static_cast<unsigned char>(alias_name.front())) == 0
             && alias_name.front() != '_')) {

@@ -397,8 +397,10 @@ std::optional<std::string> validate_string_method_metadata(
     const auto kind = operation.operation;
     if (!string_register(operation.source))
         return "StringMethod source string register is out of range";
-    if (kind > StringMethodOperator::format_string_dynamic_field)
+    if (kind > StringMethodOperator::vhdl_character_element)
         return "StringMethod kind is invalid";
+    const bool element = kind == StringMethodOperator::vhdl_composite_element
+        || kind == StringMethodOperator::vhdl_character_element;
     const bool packed_format = kind == StringMethodOperator::format_packed
         || kind == StringMethodOperator::format_packed_dynamic_field;
     const bool string_format = kind == StringMethodOperator::format_string
@@ -412,7 +414,7 @@ std::optional<std::string> validate_string_method_metadata(
         return "StringMethod scalar metadata is unexpected";
     const bool string_result = kind == StringMethodOperator::toupper
         || kind == StringMethodOperator::tolower
-        || kind == StringMethodOperator::substr;
+        || kind == StringMethodOperator::substr || element;
     const bool integer_result = kind == StringMethodOperator::getc
         || kind == StringMethodOperator::compare
         || kind == StringMethodOperator::icompare
@@ -449,8 +451,10 @@ std::optional<std::string> validate_string_method_metadata(
         if (!string_register(operation.argument))
             return "StringMethod argument string register is out of range";
     }
+    if (element)
+        registers.push_back({ operation.first, 32U, false });
     if (kind == StringMethodOperator::putc || kind == StringMethodOperator::substr
-        || packed_format)
+        || packed_format || element)
         registers.push_back({ operation.second,
             kind == StringMethodOperator::format_packed_dynamic_field
                 ? 64U

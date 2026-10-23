@@ -49,6 +49,7 @@ enum class Tag : std::uint64_t {
     select = 7,
     constant = 8,
     range = 9,
+    subarray = 10,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -1006,6 +1007,9 @@ private:
     };
     // A bit-select or part-select of a vector (IEEE 1800-2023 37.18):
     // `width` bits of the parent starting `offset` bits above its LSB.
+    // An element of a multidimensional packed vector is itself a vector
+    // of the parent's type, with the remaining packed dimensions; its
+    // name keeps every index (IEEE 1800-2023 7.4.5, 37.17).
     struct Select {
         fsim_vpi_handle_v1 parent { };
         std::uint32_t offset { };
@@ -1013,6 +1017,18 @@ private:
         std::int64_t left { };
         std::int64_t right { };
         bool bit { };
+        bool element { };
+        std::string suffix;
+        std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
+    };
+    // A subarray of a multidimensional unpacked array, after `depth`
+    // indexes: an array of the remaining dimensions (IEEE 1800-2023 7.4.5,
+    // 37.17).
+    struct SubArray {
+        fsim_vpi_handle_v1 memory { };
+        std::size_t depth { };
+        std::string name;
+        std::string full_name;
     };
     // A constant the object model reaches through a relation, such as a
     // range bound or an index.
@@ -1143,11 +1159,12 @@ private:
             return 0U;
         }
         Select select { parent, static_cast<std::uint32_t>(*low),
-            static_cast<std::uint32_t>(*high - *low + 1), left, right, bit };
+            static_cast<std::uint32_t>(*high - *low + 1), left, right, bit, false, { }, { } };
         for (std::size_t index = 0U; index < selects_.size(); ++index) {
             const auto& known = selects_[index];
             if (known.parent == parent && known.offset == select.offset
-                && known.width == select.width && known.bit == bit) {
+                && known.width == select.width && known.bit == bit
+                && !known.element && known.suffix.empty()) {
                 return tagged(Tag::select, index);
             }
         }
@@ -1162,6 +1179,123 @@ private:
             return nullptr;
         }
         return &selects_[serial_of(handle)];
+    }
+
+    [[nodiscard]] static std::uint64_t extent(
+        const std::pair<std::int64_t, std::int64_t>& range)
+    {
+        return static_cast<std::uint64_t>(range.first >= range.second
+                   ? range.first - range.second
+                   : range.second - range.first)
+            + 1U;
+    }
+
+    // The position of `index` in `range`, counted from its right bound.
+    [[nodiscard]] static std::optional<std::uint64_t> position(
+        const std::pair<std::int64_t, std::int64_t>& range,
+        const std::int64_t index)
+    {
+        const auto [left, right] = range;
+        if (left >= right) {
+            return index < right || index > left
+                ? std::nullopt
+                : std::optional { static_cast<std::uint64_t>(index - right) };
+        }
+        return index < left || index > right
+            ? std::nullopt
+            : std::optional { static_cast<std::uint64_t>(right - index) };
+    }
+
+    // The element at `index` of the leftmost of `dimensions`, packed
+    // `offset` bits above the LSB of `parent`: a bit when one dimension
+    // remains, else a vector of the others (IEEE 1800-2023 7.4.5).
+    [[nodiscard]] fsim_vpi_handle_v1 make_element(
+        const fsim_vpi_handle_v1 parent, const std::uint64_t offset,
+        const std::vector<std::pair<std::int64_t, std::int64_t>>& dimensions,
+        const std::string& suffix, const std::int64_t index)
+    {
+        if (dimensions.empty()) {
+            return 0U;
+        }
+        const auto at = position(dimensions.front(), index);
+        if (!at) {
+            return 0U;
+        }
+        Select select;
+        select.parent = parent;
+        select.suffix = suffix + "[" + std::to_string(index) + "]";
+        select.dimensions.assign(dimensions.begin() + 1, dimensions.end());
+        std::uint64_t width = 1U;
+        for (const auto& range : select.dimensions) {
+            width *= extent(range);
+        }
+        const auto element_offset = offset + *at * width;
+        if (element_offset + width > std::numeric_limits<std::uint32_t>::max()) {
+            return 0U;
+        }
+        select.offset = static_cast<std::uint32_t>(element_offset);
+        select.width = static_cast<std::uint32_t>(width);
+        select.bit = select.dimensions.empty();
+        select.element = !select.bit;
+        select.left = select.bit ? index : select.dimensions.front().first;
+        select.right = select.bit ? index : select.dimensions.front().second;
+        for (std::size_t known = 0U; known < selects_.size(); ++known) {
+            if (selects_[known].parent == parent
+                && selects_[known].suffix == select.suffix) {
+                return tagged(Tag::select, known);
+            }
+        }
+        selects_.push_back(std::move(select));
+        return tagged(Tag::select, selects_.size() - 1U);
+    }
+
+    [[nodiscard]] const SubArray* subarray_of(const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::subarray
+            || serial_of(handle) >= subarrays_.size()) {
+            return nullptr;
+        }
+        return &subarrays_[serial_of(handle)];
+    }
+
+    // The unpacked dimensions a subarray has left.
+    [[nodiscard]] std::vector<std::pair<std::int64_t, std::int64_t>>
+    subarray_dimensions(const SubArray& subarray) const
+    {
+        auto dimensions = dimension_ranges(subarray.memory);
+        dimensions.erase(dimensions.begin(),
+            dimensions.begin()
+                + static_cast<std::ptrdiff_t>(
+                    std::min(subarray.depth, dimensions.size())));
+        return dimensions;
+    }
+
+    // Indexes the array `memory` after `depth` indexes named `name` and
+    // `full_name`: a word once every unpacked dimension has an index,
+    // else a subarray.
+    [[nodiscard]] fsim_vpi_handle_v1 index_array(
+        const fsim_vpi_handle_v1 memory, const std::size_t depth,
+        const std::string& name, const std::string& full_name,
+        const std::int64_t index)
+    {
+        const auto dimensions = dimension_ranges(memory);
+        if (depth >= dimensions.size()
+            || !position(dimensions[depth], index)) {
+            return 0U;
+        }
+        const auto selected = "[" + std::to_string(index) + "]";
+        if (depth + 1U == dimensions.size()) {
+            const auto found = registry_.find(full_name + selected);
+            return found && found.value ? found.value->handle : 0U;
+        }
+        for (std::size_t known = 0U; known < subarrays_.size(); ++known) {
+            if (subarrays_[known].full_name == full_name + selected) {
+                return tagged(Tag::subarray, known);
+            }
+        }
+        subarrays_.push_back(
+            { memory, depth + 1U, name + selected, full_name + selected });
+        return tagged(Tag::subarray, subarrays_.size() - 1U);
     }
 
     [[nodiscard]] fsim_vpi_handle_v1 make_constant(const std::int64_t value)
@@ -1784,7 +1918,15 @@ private:
             return named->expression && !literal(named->text) ? vpiOperation
                                                               : vpiConstant;
         }
+        if (const auto* subarray = subarray_of(handle)) {
+            const auto memory = info(subarray->memory);
+            return memory ? object_type(*memory) : vpiUndefined;
+        }
         if (const auto* select = select_of(handle)) {
+            if (select->element) {
+                const auto parent = info(select->parent);
+                return parent ? object_type(*parent) : vpiUndefined;
+            }
             if (!select->bit) {
                 return vpiPartSelect;
             }
@@ -1943,6 +2085,26 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
+        // A subarray holds the words under its indexes, and its own
+        // dimensions (IEEE 1800-2023 37.17).
+        if (const auto* subarray = subarray_of(reference)) {
+            const auto copy = *subarray;
+            if (type == vpiRange) {
+                for (const auto& [left, right] : subarray_dimensions(copy)) {
+                    objects.push_back(make_range(reference, left, right));
+                }
+            } else if (subarray_dimensions(copy).size() == 1U) {
+                for (const auto handle :
+                    drain(registry_.iterate_children(copy.memory))) {
+                    const auto object = info(handle);
+                    if (object && object->full_name.starts_with(copy.full_name + "[")
+                        && matches(type, *object)) {
+                        objects.push_back(handle);
+                    }
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
         // The dimensions of an array or vector (IEEE 1800-2023 37.17).
         if (type == vpiRange) {
             if (reference != 0U && !owned(reference)) {
@@ -2093,6 +2255,29 @@ private:
                 return succeed(result);
             }
         }
+        if (const auto* subarray = subarray_of(reference)) {
+            const auto copy = *subarray;
+            const auto dimensions = subarray_dimensions(copy);
+            switch (type) {
+            case vpiParent:
+                return succeed(result, copy.memory);
+            case vpiLeftRange:
+            case vpiRightRange:
+                return succeed(result, dimensions.empty() ? 0U
+                        : make_constant(type == vpiLeftRange
+                                  ? dimensions.front().first
+                                  : dimensions.front().second));
+            case vpiScope:
+            case vpiModule: {
+                const auto memory = info(copy.memory);
+                return succeed(result, !memory ? 0U
+                        : type == vpiModule ? enclosing_module(memory->parent)
+                                            : memory->parent);
+            }
+            default:
+                return succeed(result);
+            }
+        }
         if (const auto* select = select_of(reference)) {
             switch (type) {
             case vpiParent:
@@ -2173,19 +2358,43 @@ private:
     fsim_vpi_status_v1 handle_by_index(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
-        const auto object = info(resolve(request.handle));
+        const auto reference = resolve(request.handle);
+        const auto index = static_cast<PLI_INT32>(request.argument);
+        if (const auto* subarray = subarray_of(reference)) {
+            const auto copy = *subarray;
+            return succeed(result, index_array(copy.memory, copy.depth,
+                copy.name, copy.full_name, index));
+        }
+        if (const auto* select = select_of(reference)) {
+            if (!select->element) {
+                return succeed(result);
+            }
+            const auto copy = *select;
+            return succeed(result, make_element(copy.parent, copy.offset,
+                copy.dimensions, copy.suffix, index));
+        }
+        const auto object = info(reference);
         if (!object) {
             return succeed(result);
         }
-        const auto index = static_cast<PLI_INT32>(request.argument);
         const auto found = registry_.find(
             object->full_name + "[" + std::to_string(index) + "]");
         if (found && found.value) {
             return succeed(result, found.value->handle);
         }
+        if (object->kind == SystemVerilogVpiObjectKind::Memory) {
+            return succeed(result, index_array(reference, 0U, object->name,
+                object->full_name, index));
+        }
+        // An index of a vector with several packed dimensions selects an
+        // element of the leftmost one (IEEE 1800-2023 7.4.5).
+        if (const auto dimensions = dimension_ranges(reference);
+            dimensions.size() > 1U) {
+            return succeed(result,
+                make_element(reference, 0U, dimensions, "", index));
+        }
         // A vector's index names a bit-select (IEEE 1800-2023 37.18).
-        return succeed(result,
-            make_select(resolve(request.handle), index, index, true));
+        return succeed(result, make_select(reference, index, index, true));
     }
 
     // The element of a multidimensional array at one index per unpacked
@@ -2279,6 +2488,21 @@ private:
                 return integer(vpiDecConst);
             case vpiSigned:
                 return integer(named->value.is_signed ? 1 : 0);
+            default:
+                return succeed(result, 0U, undefined);
+            }
+        }
+        if (const auto* subarray = subarray_of(resolve(request.handle))) {
+            switch (property) {
+            case vpiSize: {
+                std::uint64_t size = 1U;
+                for (const auto& range : subarray_dimensions(*subarray)) {
+                    size *= extent(range);
+                }
+                return integer(static_cast<std::int64_t>(size));
+            }
+            case vpiArray:
+                return integer(1);
             default:
                 return succeed(result, 0U, undefined);
             }
@@ -2502,12 +2726,20 @@ private:
             }
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
+        if (const auto* subarray = subarray_of(resolve(request.handle))) {
+            if (property != vpiName && property != vpiFullName) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return text(property == vpiName ? subarray->name
+                                            : subarray->full_name);
+        }
         if (const auto* select = select_of(resolve(request.handle))) {
             const auto parent = info(select->parent);
             if (!parent || (property != vpiName && property != vpiFullName)) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
-            const auto suffix = select->bit
+            const auto suffix = !select->suffix.empty() ? select->suffix
+                : select->bit
                 ? "[" + std::to_string(select->left) + "]"
                 : "[" + std::to_string(select->left) + ":"
                     + std::to_string(select->right) + "]";
@@ -3441,6 +3673,7 @@ private:
     std::vector<Select> selects_;
     std::vector<Constant> constants_;
     std::vector<Range> ranges_;
+    std::vector<SubArray> subarrays_;
     std::size_t string_cursor_ { };
     std::array<std::vector<s_vpi_vecval>, 16> vectors_;
     std::size_t vector_cursor_ { };

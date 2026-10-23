@@ -569,6 +569,12 @@ Type VerilogParser::packed_array_of_type(
     if (outer.packed_range_expression) {
         dimensions.push_back(*outer.packed_range_expression);
     }
+    // The innermost new dimension selects elements of the named type, which
+    // keeps its own signedness although the array is unsigned (IEEE
+    // 1800-2023 7.4.1); the flattened dimension list retains it.
+    if (!dimensions.empty()) {
+        dimensions.back().element_signed = element.is_signed;
+    }
     if (!element.systemverilog_packed_dimensions.empty()) {
         dimensions.insert(dimensions.end(),
             element.systemverilog_packed_dimensions.begin(),

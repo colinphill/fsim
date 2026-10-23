@@ -143,6 +143,32 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             append_generated_vhdl_processes(
                 generated_lowerer, architecture, specialization);
         }
+        for (const auto& adapter :
+            materialization.block_output_adapters) {
+            record_lowering_census(vhdl_port_output_actual_occurrences_);
+            auto lowered = generated_lowerer.lower_hir_output_actual(
+                adapter.port,
+                adapter.expression,
+                frontend::Language::Vhdl2008,
+                materialization.path,
+                concurrent_order++);
+            if (!lowered) {
+                report(
+                    "FSIM-ELAB-HIR-001",
+                    "compiled VHDL block output port actual could not be "
+                    "lowered from HIR",
+                    compiled_source_span(*compiled_, adapter.source));
+                return false;
+            }
+            lowered->language_standard = architecture.standard;
+            lowered->compatibility_profile
+                = architecture.compatibility_profile;
+            canonicalize_process_operations(*lowered);
+            specialization.processes.push_back(lowered->id);
+            design_.append_process_record(std::move(*lowered));
+            append_generated_vhdl_processes(
+                generated_lowerer, architecture, specialization);
+        }
         for (const auto statement_id :
             materialization.region->concurrent_statements) {
             const auto statement

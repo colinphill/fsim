@@ -3465,6 +3465,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::vector<SampledHistoryKey>> sampled_history_keys_by_clock;
     std::vector<std::unique_ptr<PackedLogic4>> forced_values;
     std::vector<std::unique_ptr<PackedLogic4>> forced_masks;
+    // A force on a port-connected net by its own name and one through a
+    // hierarchical reference to the child's side of the port share the
+    // merged net's force mask; the layers keep both so releasing the outer
+    // one reveals the inner (IEEE 1800-2023 10.6.2, 23.3.3). Present only
+    // for signals that were forced through such a reference.
+    struct PortForceLayer {
+        bool port_segment { };
+        std::size_t offset { };
+        PackedLogic4 value;
+    };
+    std::unordered_map<SignalId, std::vector<PortForceLayer>>
+        port_force_layers;
     // Named-event variables carry synchronization-object identities rather
     // than copied packed values. Each event starts with its own stable object.
     std::vector<std::optional<SignalId>> event_identities;
@@ -5066,11 +5078,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // like a blocking assignment's (IEEE 1800-2023 10.6.2, 4.4).
     void force_slice(
         SignalId signal_id, PackedLogic4 value, std::size_t offset,
-        SignalChangeOrigin origin = { });
+        SignalChangeOrigin origin = { }, bool port_segment = false);
 
     void release_slice(
         SignalId signal_id, std::size_t offset, std::size_t width,
-        SignalChangeOrigin origin = { });
+        SignalChangeOrigin origin = { }, bool port_segment = false);
+
+    // Records a force in the port layers; true when a force by the net's own
+    // name hides it, so it takes effect only once that force is released.
+    [[nodiscard]] bool record_port_force_layer(
+        SignalId signal_id, const PackedLogic4& value, std::size_t offset,
+        bool port_segment);
+
+    // Drops a released force from the port layers; true when the release is
+    // fully handled (hidden, or replaced by the remaining inner force).
+    [[nodiscard]] bool release_port_force_layer(
+        SignalId signal_id, std::size_t offset, std::size_t width,
+        bool port_segment, SignalChangeOrigin origin);
 
     [[nodiscard]] PackedLogic4 apply_driver_force(
         SignalId signal_id,
@@ -5093,9 +5117,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // A process's force or release: immediate for SystemVerilog, scheduled
     // for the update phase for VHDL (IEEE 1076-2019 10.5.2.1, 14.7.5.3).
     void force_slice_from_process(ProcessId process, SignalId signal_id,
-        PackedLogic4 value, std::size_t offset, bool driving_value);
+        PackedLogic4 value, std::size_t offset, bool driving_value,
+        bool port_segment = false);
     void release_slice_from_process(ProcessId process, SignalId signal_id,
-        std::size_t offset, std::size_t width, bool driving_value);
+        std::size_t offset, std::size_t width, bool driving_value,
+        bool port_segment = false);
 
     void commit(
         SignalId signal_id,

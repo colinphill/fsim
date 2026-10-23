@@ -233,6 +233,21 @@ Lowerer::hir_vhdl_shaped_profile(
         }
         if (type->vhdl->form == semantic::vhdl::TypeForm::array) {
             array = type->vhdl;
+            // A constrained array type definition bounds its objects
+            // itself (`type t is array (1 to q'length) of bit`, 5.3.2.1).
+            if (profile.constraints.empty() && !open_array
+                && !array->array_dimensions.empty()
+                && std::ranges::all_of(array->array_dimensions,
+                    [](const auto& dimension) {
+                        return !dimension.unconstrained
+                            && dimension.constraint.has_value();
+                    })) {
+                for (const auto& dimension : array->array_dimensions) {
+                    auto constraint = *dimension.constraint;
+                    constraint.kind = semantic::vhdl::RangeKind::array_index;
+                    profile.constraints.push_back(std::move(constraint));
+                }
+            }
             break;
         }
         if (type->vhdl->form != semantic::vhdl::TypeForm::subtype

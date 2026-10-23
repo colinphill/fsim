@@ -1300,6 +1300,71 @@ predefined_subtype_attribute(
                     result.element_constraints.push_back(
                         std::move(constraint));
                 }
+                // Record elements take their unconstrained array elements'
+                // index ranges from `obj'element.e` (IEEE 1076-2008
+                // 5.3.2.2, 5.3.3.1).
+                const vh::TypeDefinition* element_record { };
+                std::unordered_set<std::uint32_t> element_visited;
+                for (auto id = object_array->element_subtype->type_mark.target;
+                    id.valid() && element_visited.insert(id.value()).second;) {
+                    const auto* definition = find_definition(id);
+                    if (definition == nullptr) {
+                        break;
+                    }
+                    if (definition->form == vh::TypeForm::record) {
+                        element_record = definition;
+                        break;
+                    }
+                    id = definition->base.type_mark.target;
+                }
+                const auto span = type.named_type_span.source_name.empty()
+                    ? fallback
+                    : type.named_type_span;
+                for (const auto& member : element_record != nullptr
+                         ? element_record->record_elements
+                         : std::vector<vh::RecordElement> { }) {
+                    const auto name
+                        = support::canonical_vhdl_spelling(member.name);
+                    const auto constrained = [&](const auto& constraints,
+                                                 const bool through_element) {
+                        return std::ranges::any_of(constraints,
+                            [&](const vh::ElementConstraint& existing) {
+                                const auto offset = through_element ? 1U : 0U;
+                                return existing.path.size() > offset
+                                    && (!through_element
+                                        || existing.path.front().empty())
+                                    && support::canonical_vhdl_spelling(
+                                           existing.path[offset])
+                                        == name;
+                            });
+                    };
+                    if (constrained(result.element_constraints, true)
+                        || constrained(object_array->element_subtype
+                                           ->element_constraints,
+                            false)) {
+                        continue;
+                    }
+                    const auto member_dimensions
+                        = open_dimensions(member.subtype);
+                    if (member_dimensions == 0U) {
+                        continue;
+                    }
+                    const frontend::Expression prefix {
+                        frontend::ExpressionKind::Call, "@vhdl-member:" + name,
+                        { frontend::Expression {
+                            frontend::ExpressionKind::Call, "'element",
+                            { frontend::Expression {
+                                frontend::ExpressionKind::Identifier,
+                                type.vhdl_object_subtype, { }, span } },
+                            span } },
+                        span };
+                    vh::ElementConstraint constraint;
+                    constraint.path = { std::string { }, member.name };
+                    constraint.constraints
+                        = range_constraints(prefix, member_dimensions);
+                    result.element_constraints.push_back(
+                        std::move(constraint));
+                }
             }
             const vh::TypeDefinition* record { };
             visited.clear();

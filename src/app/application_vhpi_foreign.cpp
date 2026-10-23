@@ -212,6 +212,12 @@ struct Object final : Handle {
     const vhdl::Unit* entity { };
     std::vector<const vhdl::Declaration*> region_declarations;
     std::vector<Object*> design_units;
+    // Instances: the generic values elaboration gave them.
+    const semantic::design::Specialization* specialization { };
+    // Block and generate statements: the statement, and a for-generate
+    // occurrence's parameter value (none for the statement itself).
+    const vhdl::GenerateRegion* generate { };
+    std::optional<std::int64_t> generate_index;
 
     // Value objects and the names that select their elements: the signal,
     // the bits of this element (offset of the least significant bit), and
@@ -1416,6 +1422,7 @@ private:
         object->path = path;
         object->unit = unit;
         object->entity = entity;
+        object->specialization = &specialization;
         if (parent == nullptr) {
             object->full_name = ":" + object->name;
             object->full_case_name = ":" + object->case_name;
@@ -1486,15 +1493,164 @@ private:
     [[nodiscard]] std::vector<Object*> child_instances(Object& region)
     {
         std::vector<Object*> result;
+        if (region.kind == vhpiPackInstK) {
+            return result;
+        }
         for (const auto& instance : design_.instances()) {
             if (!instance.parent) {
                 continue;
             }
-            const auto& parent = design_.instances().at(instance.parent->value());
-            if (design_.path(parent.path) != region.path) {
+            // An instance in a block or generate statement is in that
+            // statement's region (IEEE 1076-2019 19.4.2).
+            const auto path = design_.path(instance.path);
+            const auto dot = path.rfind('.');
+            if (dot == std::string_view::npos
+                || path.substr(0U, dot) != region.path) {
                 continue;
             }
             result.push_back(instance_object(instance, &region));
+        }
+        return result;
+    }
+
+    // Whether elaboration made any object or instance under `path`.
+    [[nodiscard]] bool elaborated_path(const std::string_view path)
+    {
+        const auto under = [&](const std::string_view name) {
+            return name.size() > path.size() && name.starts_with(path)
+                && name[path.size()] == '.';
+        };
+        return std::ranges::any_of(simulation_.design().signals(),
+                   [&](const auto& info) { return under(info.name); })
+            || std::ranges::any_of(design_.instances(),
+                [&](const auto& instance) {
+                    return under(design_.path(instance.path));
+                });
+    }
+
+    // A block statement, a generate statement occurrence, or (with no
+    // index) a for-generate statement, whose occurrences `indexed`
+    // selects (IEEE 1076-2019 19.4.2, 11.8).
+    [[nodiscard]] Object* generate_object(Object& region,
+        const vhdl::GenerateRegion& generate,
+        const std::optional<std::int64_t> index)
+    {
+        auto name = generate.label;
+        auto path = region.path + "." + lower(generate.label);
+        if (index) {
+            name += "(" + std::to_string(*index) + ")";
+            path += "[" + std::to_string(*index) + "]";
+        }
+        const auto key = "@generate:" + lower(name);
+        if (const auto found = region.children.find(key);
+            found != region.children.end()) {
+            return found->second;
+        }
+        const auto kind = generate.kind == vhdl::GenerateKind::block
+            ? vhpiBlockStmtK
+            : generate.kind == vhdl::GenerateKind::iterative
+            ? vhpiForGenerateK
+            : vhpiIfGenerateK;
+        auto* const object = make_object(kind, name, &region);
+        object->path = std::move(path);
+        object->unit = region.unit;
+        object->generate = &generate;
+        object->generate_index = index;
+        object->full_name = region.full_name + ":" + object->name;
+        object->full_case_name
+            = region.full_case_name + ":" + object->case_name;
+        for (const auto id : generate.declarations) {
+            if (const auto* const declaration = hir_.find_declaration(id)) {
+                object->region_declarations.push_back(declaration);
+            }
+        }
+        // The generate parameter is a constant of the occurrence (IEEE
+        // 1076-2019 11.8, 19.4.2 vhpiParamDecl).
+        if (index && !generate.iterator.empty()) {
+            auto* const parameter
+                = make_object(vhpiConstDeclK, generate.iterator, object);
+            parameter->full_name = object->full_name + ":" + parameter->name;
+            parameter->full_case_name
+                = object->full_case_name + ":" + parameter->case_name;
+            parameter->type = standard_type("integer");
+            const auto width = parameter->type != nullptr
+                    && parameter->type->type_data != nullptr
+                    && parameter->type->type_data->width != 0U
+                ? parameter->type->type_data->width
+                : 32U;
+            parameter->constant = PackedLogic4::from_aval_bval(
+                width, static_cast<std::uint64_t>(*index), 0U);
+            object->children.emplace(lower(generate.iterator), parameter);
+            object->children.emplace("@param", parameter);
+        }
+        region.children.emplace(key, object);
+        return object;
+    }
+
+    // The statements of `generates` that elaboration made, in order; a
+    // for-generate statement's occurrences are the parameter values its
+    // elaborated objects are named by.
+    [[nodiscard]] std::vector<Object*> generate_occurrences(Object& region,
+        const vhdl::GenerateRegion& generate)
+    {
+        std::vector<Object*> result;
+        const auto base = region.path + "." + lower(generate.label);
+        if (generate.kind != vhdl::GenerateKind::iterative) {
+            if (generate.kind == vhdl::GenerateKind::block
+                || elaborated_path(base)) {
+                result.push_back(generate_object(region, generate, std::nullopt));
+            }
+            return result;
+        }
+        std::vector<std::int64_t> indexes;
+        const auto collect = [&](const std::string_view name) {
+            if (!name.starts_with(base) || name.size() <= base.size()
+                || name[base.size()] != '[') {
+                return;
+            }
+            const auto digits = name.substr(base.size() + 1U);
+            std::int64_t index { };
+            const auto [last, failure] = std::from_chars(
+                digits.data(), digits.data() + digits.size(), index);
+            if (failure != std::errc { } || last == digits.data() + digits.size()
+                || *last != ']') {
+                return;
+            }
+            if (std::ranges::find(indexes, index) == indexes.end()) {
+                indexes.push_back(index);
+            }
+        };
+        for (const auto& info : simulation_.design().signals()) {
+            collect(info.name);
+        }
+        for (const auto& instance : design_.instances()) {
+            collect(design_.path(instance.path));
+        }
+        for (const auto index : indexes) {
+            result.push_back(generate_object(region, generate, index));
+        }
+        return result;
+    }
+
+    // The block and generate statements directly in a region.
+    [[nodiscard]] std::vector<Object*> child_statements(Object& region)
+    {
+        std::vector<Object*> result;
+        const std::vector<vhdl::GenerateRegion>* generates = nullptr;
+        if (region.generate != nullptr) {
+            if (region.kind == vhpiForGenerateK && !region.generate_index) {
+                return result;
+            }
+            generates = &region.generate->nested;
+        } else if (region.unit != nullptr && region.kind != vhpiPackInstK) {
+            generates = &region.unit->generates;
+        }
+        if (generates == nullptr) {
+            return result;
+        }
+        for (const auto& generate : *generates) {
+            auto occurrences = generate_occurrences(region, generate);
+            result.insert(result.end(), occurrences.begin(), occurrences.end());
         }
         return result;
     }
@@ -1551,6 +1707,10 @@ private:
                     == vhdl::DeclarationForm::generic_constant)) {
             literal_constant(*object, *declaration.initializer);
         }
+        if (!object->signal && !object->constant
+            && declaration.form == vhdl::DeclarationForm::generic_constant) {
+            elaborated_generic(region, *object);
+        }
         if (object->signal) {
             if (const auto* const info = signal_info(*object->signal)) {
                 object->type = refine(object->type, *info);
@@ -1567,6 +1727,55 @@ private:
         }
         region.children.emplace(key, object);
         return object;
+    }
+
+    // The value elaboration gave a generic of an instance (IEEE 1076-2019
+    // 14.3.2): an integer, or a string shown as its literal.
+    void elaborated_generic(const Object& region, Object& object)
+    {
+        if (region.specialization == nullptr || object.type == nullptr
+            || object.type->type_data == nullptr) {
+            return;
+        }
+        const auto& parameters = region.specialization->parameters;
+        const auto found = std::ranges::find_if(parameters,
+            [&](const auto& parameter) {
+                return same_name(parameter.name, object.case_name);
+            });
+        if (found == parameters.end()) {
+            return;
+        }
+        const std::string_view display = found->value;
+        const auto& data = *object.type->type_data;
+        if (display.size() >= 2U && display.front() == '"'
+            && display.back() == '"') {
+            std::string text;
+            for (std::size_t position = 1U; position + 1U < display.size();
+                 ++position) {
+                text.push_back(display[position]);
+                if (display[position] == '"') {
+                    ++position;
+                }
+            }
+            if (auto value = string_constant(object.type, text)) {
+                object.type = value->first;
+                object.constant = std::move(value->second);
+            }
+            return;
+        }
+        if (data.storage != Storage::integer) {
+            return;
+        }
+        std::int64_t value { };
+        const auto* const end = display.data() + display.size();
+        if (const auto [last, failure]
+            = std::from_chars(display.data(), end, value);
+            failure != std::errc { } || last != end) {
+            return;
+        }
+        object.constant = PackedLogic4::from_aval_bval(
+            data.width != 0U ? data.width : 32U,
+            static_cast<std::uint64_t>(value), 0U);
     }
 
     // The value of a constant whose initializer is a literal (IEEE 1076-2019
@@ -1695,15 +1904,46 @@ private:
             }
             return std::pair { value_type, std::move(bits) };
         }
+        if (data.storage == Storage::real
+            && expression->kind == vhdl::ExpressionKind::real_literal) {
+            std::string digits;
+            for (const auto character : expression->text) {
+                if (character != '_') {
+                    digits.push_back(character);
+                }
+            }
+            double value { };
+            const auto* const end = digits.data() + digits.size();
+            if (const auto [last, failure]
+                = std::from_chars(digits.data(), end, value);
+                failure != std::errc { } || last != end) {
+                return std::nullopt;
+            }
+            return std::pair { type, PackedLogic4::from_aval_bval(64U,
+                std::bit_cast<std::uint64_t>(value), 0U) };
+        }
+        if (expression->kind != vhdl::ExpressionKind::string_literal
+            || !expression->decoded_string) {
+            return std::nullopt;
+        }
+        return string_constant(type, *expression->decoded_string);
+    }
+
+    // The value of a string constant, which also constrains an unconstrained
+    // string type by its length (IEEE 1076-2019 5.3.2.2).
+    [[nodiscard]] std::optional<std::pair<Object*, PackedLogic4>>
+    string_constant(Object* const type, const std::string_view text)
+    {
+        if (type == nullptr || type->type_data == nullptr) {
+            return std::nullopt;
+        }
+        const auto& data = *type->type_data;
         if (data.storage != Storage::array || data.element == nullptr
             || data.element->type_data == nullptr
             || data.element->type_data->literals.size() != 256U
-            || expression->kind != vhdl::ExpressionKind::string_literal
-            || !expression->decoded_string
-            || expression->decoded_string->empty()) {
+            || text.empty()) {
             return std::nullopt;
         }
-        const auto& text = *expression->decoded_string;
         auto* value_type = type;
         if (data.unconstrained || data.dimensions.empty()) {
             const auto* const index = data.index_types.empty()
@@ -1755,9 +1995,31 @@ private:
         if (match != nullptr) {
             return declared(region, *match);
         }
+        if (const auto parameter = region.children.find("@param");
+            parameter != region.children.end()
+            && same_name(parameter->second->case_name, name)) {
+            return parameter->second;
+        }
         for (auto* const child : child_instances(region)) {
             if (same_name(child->case_name, name)) {
                 return child;
+            }
+        }
+        const auto* const generates = region.generate != nullptr
+            ? &region.generate->nested
+            : region.unit != nullptr && region.kind != vhpiPackInstK
+            ? &region.unit->generates
+            : nullptr;
+        if (generates != nullptr) {
+            for (const auto& generate : *generates) {
+                if (!same_name(generate.label, name)) {
+                    continue;
+                }
+                if (generate.kind == vhdl::GenerateKind::iterative) {
+                    return generate_object(region, generate, std::nullopt);
+                }
+                const auto occurrences = generate_occurrences(region, generate);
+                return occurrences.empty() ? nullptr : occurrences.front();
             }
         }
         return nullptr;
@@ -1926,6 +2188,19 @@ private:
     [[nodiscard]] Object* indexed(Object& prefix,
         const std::span<const std::int64_t> indexes)
     {
+        if (prefix.kind == vhpiForGenerateK && !prefix.generate_index
+            && prefix.generate != nullptr && prefix.parent != nullptr) {
+            if (indexes.size() != 1U) {
+                return nullptr;
+            }
+            for (auto* const occurrence :
+                generate_occurrences(*prefix.parent, *prefix.generate)) {
+                if (occurrence->generate_index == indexes.front()) {
+                    return occurrence;
+                }
+            }
+            return nullptr;
+        }
         auto* const type = prefix.type;
         if (type == nullptr || type->type_data == nullptr
             || type->type_data->dimensions.size() != indexes.size()
@@ -2171,11 +2446,36 @@ private:
             auto* const unit = make_object(kind, object->unit->name, nullptr);
             unit->full_name = upper(object->unit->library) + "." + unit->name;
             unit->full_case_name = object->unit->library + "." + unit->case_name;
+            unit->unit = object->unit;
+            unit->entity = object->entity;
             object->children.emplace("@unit", unit);
             return to_handle(unit);
         }
-        case vhpiPrimaryUnit:
-            return nullptr;
+        case vhpiPrimaryUnit: {
+            // The entity declaration an architecture body is of (IEEE
+            // 1076-2019 19.4.5).
+            if (object->kind != vhpiArchBodyK || object->entity == nullptr) {
+                return nullptr;
+            }
+            const auto found = object->children.find("@primary");
+            if (found != object->children.end()) {
+                return to_handle(found->second);
+            }
+            auto* const entity
+                = make_object(vhpiEntityDeclK, object->entity->name, nullptr);
+            entity->full_name
+                = upper(object->entity->library) + "." + entity->name;
+            entity->full_case_name
+                = object->entity->library + "." + entity->case_name;
+            entity->unit = object->entity;
+            object->children.emplace("@primary", entity);
+            return to_handle(entity);
+        }
+        case vhpiParamDecl: {
+            const auto found = object->children.find("@param");
+            return found == object->children.end() ? nullptr
+                                                   : to_handle(found->second);
+        }
         case vhpiParent:
         case vhpiUpperRegion:
             return object->parent == nullptr ? nullptr
@@ -2249,10 +2549,28 @@ private:
                 return d.form == Form::variable;
             });
             break;
-        case vhpiInternalRegions:
         case vhpiCompInstStmts:
             if (object != nullptr && is_region(*object)) {
                 result = child_instances(*object);
+            }
+            break;
+        case vhpiInternalRegions:
+            if (object != nullptr && is_region(*object)) {
+                result = child_instances(*object);
+                const auto statements = child_statements(*object);
+                result.insert(result.end(), statements.begin(),
+                    statements.end());
+            }
+            break;
+        case vhpiBlockStmts:
+        case vhpiGenerateStmts:
+            if (object != nullptr && is_region(*object)) {
+                for (auto* const statement : child_statements(*object)) {
+                    if ((statement->kind == vhpiBlockStmtK)
+                        == (relation == vhpiBlockStmts)) {
+                        result.push_back(statement);
+                    }
+                }
             }
             break;
         case vhpiIndexedNames:
@@ -2977,7 +3295,9 @@ private:
             }
         }
         if (mark == nullptr) {
-            auto spelling = std::string_view { subtype.type_mark.spelling };
+            // A predefined type may be bound without its declaration.
+            auto spelling
+                = vhdl::without_builtin_prefix(subtype.type_mark.spelling);
             if (const auto dot = spelling.rfind('.');
                 dot != std::string_view::npos) {
                 spelling.remove_prefix(dot + 1U);
@@ -3236,6 +3556,24 @@ private:
             break;
         case vhpiIsLocalP:
             return 0;
+        case vhpiIsSeqStmtP:
+            if (is_region(object) && object.kind != vhpiRootInstK
+                && object.kind != vhpiPackInstK) {
+                return 0;
+            }
+            break;
+        case vhpiIsGuardedP:
+            // A guarded block declares the implicit signal GUARD (IEEE
+            // 1076-2019 11.2).
+            if (object.kind == vhpiBlockStmtK) {
+                return simulation_.find_signal(object.path + ".guard") ? 1 : 0;
+            }
+            break;
+        case vhpiGenerateIndexP:
+            if (object.generate_index) {
+                return static_cast<vhpiIntT>(*object.generate_index);
+            }
+            break;
         case vhpiIsNullP:
             if (object.kind == vhpiIntRangeK && object.type_data
                 && object.type_data->range) {
@@ -3318,6 +3656,18 @@ private:
             break;
         case vhpiFullCaseNameP:
             text = &object.full_case_name;
+            break;
+        case vhpiLabelNameP:
+            if (object.kind == vhpiCompInstStmtK
+                || object.kind == vhpiBlockStmtK
+                || object.kind == vhpiForGenerateK
+                || object.kind == vhpiIfGenerateK) {
+                if (object.generate != nullptr) {
+                    scratch = object.generate->label;
+                } else {
+                    text = &object.case_name;
+                }
+            }
             break;
         case vhpiKindStrP:
             scratch = kind_name(object.kind);

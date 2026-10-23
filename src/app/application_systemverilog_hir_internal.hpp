@@ -367,6 +367,12 @@ private:
         const frontend::SystemVerilogClassSpecialization& specialization,
         std::string_view spelling,
         semantic::SourceSpanId binding_source);
+    /// A variable of the unit that declares the class, which a class
+    /// constraint names as a state variable (IEEE 1800-2017 18.5).
+    [[nodiscard]] std::optional<sv::ConstraintBinding> state_variable_binding(
+        const frontend::SystemVerilogClassDeclaration& declaration,
+        const frontend::SystemVerilogClassSpecialization& specialization,
+        std::string_view spelling);
     void collect_unit_parameters(const frontend::ParsedDesign& parsed);
     [[nodiscard]] std::optional<sv::ConstraintBinding> parameter_binding(
         const frontend::SystemVerilogClassDeclaration& declaration,

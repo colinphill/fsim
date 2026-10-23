@@ -604,15 +604,18 @@ void ContainerOperationLowerer::lower(
     const runtime::simir::StringMethod& value)
 {
     using runtime::simir::StringMethodOperator;
+    const bool element = value.operation
+            == StringMethodOperator::vhdl_composite_element
+        || value.operation == StringMethodOperator::vhdl_character_element;
     const auto first = value.operation == StringMethodOperator::getc
             || value.operation == StringMethodOperator::putc
-            || value.operation == StringMethodOperator::substr
+            || value.operation == StringMethodOperator::substr || element
             || (value.operation >= StringMethodOperator::itoa
                 && value.operation <= StringMethodOperator::realtoa)
         ? std::optional { value.first }
         : std::nullopt;
     const auto second = value.operation == StringMethodOperator::putc
-            || value.operation == StringMethodOperator::substr
+            || value.operation == StringMethodOperator::substr || element
         ? std::optional { value.second }
         : std::nullopt;
     const auto destination = value.operation == StringMethodOperator::getc

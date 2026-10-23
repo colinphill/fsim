@@ -268,6 +268,10 @@ struct PackedRangeExpression {
     // VHDL ranges retain their explicit `downto`/`to` direction. Verilog and
     // SystemVerilog leave this empty and derive direction from evaluated bounds.
     std::optional<bool> descending;
+    // The elements this dimension selects are of a signed named type, such as
+    // `named_t [1:0]` with `typedef logic signed [2:0] named_t`; selecting
+    // one keeps that type's signedness (IEEE 1800-2023 7.4.1).
+    bool element_signed { };
 };
 
 /// A concrete scalar constraint for VHDL's bounded integer family.

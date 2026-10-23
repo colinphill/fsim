@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -40,6 +41,13 @@ void string_putc(
     std::int32_t value, unsigned radix);
 [[nodiscard]] std::uint32_t checked_vhdl_textio_field_width(
     const PackedLogic4& value);
+// The element representations in the string representation of a
+// composite value (IEEE 1076-2019 5.7, 16.2.2): the comma-separated items
+// of a parenthesized list, or each character of a character string as a
+// character literal. Surrounding whitespace is ignored; nullopt when the
+// text has no such form.
+[[nodiscard]] std::optional<std::vector<std::string>>
+vhdl_composite_value_elements(std::string_view text, bool character_string);
 [[nodiscard]] StringMethodResult execute_string_method(
     StringMethodOperator operation,
     std::string& source,

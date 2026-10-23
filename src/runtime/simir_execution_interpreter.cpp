@@ -1758,7 +1758,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             : op.offset;
                         force_slice_from_process(process.id, op.signal,
                             get_register(process, op.source), offset,
-                            op.driving_value);
+                            op.driving_value, op.port_segment);
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }
@@ -1769,7 +1769,8 @@ void Interpreter::Impl::execute(ProcessId id)
                             ? selected_offset(*op.selection)
                             : op.offset;
                         release_slice_from_process(process.id, op.signal,
-                            offset, op.width, op.driving_value);
+                            offset, op.width, op.driving_value,
+                            op.port_segment);
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }

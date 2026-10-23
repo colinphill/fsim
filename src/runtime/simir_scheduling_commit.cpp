@@ -721,11 +721,95 @@ void Interpreter::Impl::update_container_alias_force(
     publish_container_alias_family(object, current, { }, updates);
 }
 
+bool Interpreter::Impl::record_port_force_layer(
+    const SignalId signal_id,
+    const PackedLogic4& value,
+    const std::size_t offset,
+    const bool port_segment)
+{
+    auto& layers = port_force_layers[signal_id];
+    const auto width = value.width();
+    const auto end = offset + width;
+    const auto overlaps = [&](const PortForceLayer& layer) {
+        return layer.offset < end && offset < layer.offset + layer.value.width();
+    };
+    if (layers.empty() && port_segment && forced_values[signal_id]) {
+        // A force already on the net came from the net's own name.
+        const auto& mask = *forced_masks[signal_id];
+        bool forced = false;
+        for (auto bit = offset; bit < end && !forced; ++bit) {
+            forced = mask.get(bit) == Logic4::one;
+        }
+        if (forced) {
+            layers.push_back(PortForceLayer { false, offset,
+                forced_values[signal_id]->extract_bits(offset, width) });
+        }
+    }
+    std::erase_if(layers, [&](const PortForceLayer& layer) {
+        return layer.port_segment == port_segment && layer.offset == offset
+            && layer.value.width() == width;
+    });
+    layers.push_back(PortForceLayer { port_segment, offset, value });
+    return port_segment
+        && std::ranges::any_of(layers, [&](const PortForceLayer& layer) {
+               return !layer.port_segment && overlaps(layer);
+           });
+}
+
+bool Interpreter::Impl::release_port_force_layer(
+    const SignalId signal_id,
+    const std::size_t offset,
+    const std::size_t width,
+    const bool port_segment,
+    const SignalChangeOrigin origin)
+{
+    const auto found = port_force_layers.find(signal_id);
+    if (found == port_force_layers.end()) {
+        return false;
+    }
+    auto& layers = found->second;
+    const auto end = offset + width;
+    std::erase_if(layers, [&](const PortForceLayer& layer) {
+        return layer.port_segment == port_segment && layer.offset >= offset
+            && layer.offset + layer.value.width() <= end;
+    });
+    if (port_segment) {
+        // A force by the net's own name stays on top of the released one.
+        const bool hidden = std::ranges::any_of(
+            layers, [&](const PortForceLayer& layer) {
+                return !layer.port_segment && layer.offset < end
+                    && offset < layer.offset + layer.value.width();
+            });
+        if (layers.empty()) {
+            port_force_layers.erase(found);
+        }
+        return hidden;
+    }
+    // Releasing the net's own force leaves the net at the value forced
+    // through the hierarchical reference, if one covers the range.
+    std::optional<PackedLogic4> inner;
+    for (const auto& layer : layers) {
+        if (layer.port_segment && layer.offset <= offset
+            && layer.offset + layer.value.width() >= end) {
+            inner = layer.value.extract_bits(offset - layer.offset, width);
+        }
+    }
+    if (layers.empty()) {
+        port_force_layers.erase(found);
+    }
+    if (!inner) {
+        return false;
+    }
+    force_slice(signal_id, std::move(*inner), offset, origin, true);
+    return true;
+}
+
 void Interpreter::Impl::force_slice(
     const SignalId signal_id,
     PackedLogic4 value,
     const std::size_t offset,
-    const SignalChangeOrigin origin)
+    const SignalChangeOrigin origin,
+    const bool port_segment)
 {
     if (package_static_initialization_active) {
         throw std::logic_error {
@@ -783,6 +867,10 @@ void Interpreter::Impl::force_slice(
         finish_aggregate_signal_batch(signal_id);
         return;
     }
+    if ((port_segment || port_force_layers.contains(signal_id))
+        && record_port_force_layer(signal_id, value, offset, port_segment)) {
+        return;
+    }
     prepare_region_authoritative_write(signal_id);
     if (signal_id < region_authoritative_component_by_signal.size()) {
         demote_region_authoritative_slots(
@@ -817,7 +905,8 @@ void Interpreter::Impl::release_slice(
     const SignalId signal_id,
     const std::size_t offset,
     const std::size_t width,
-    const SignalChangeOrigin origin)
+    const SignalChangeOrigin origin,
+    const bool port_segment)
 {
     if (package_static_initialization_active) {
         throw std::logic_error {
@@ -871,6 +960,11 @@ void Interpreter::Impl::release_slice(
             throw;
         }
         finish_aggregate_signal_batch(signal_id);
+        return;
+    }
+    if ((port_segment || port_force_layers.contains(signal_id))
+        && release_port_force_layer(
+            signal_id, offset, width, port_segment, origin)) {
         return;
     }
     if (!forced_values[signal_id]) {
@@ -1200,7 +1294,7 @@ void Interpreter::Impl::release_driver_slice(
 
 void Interpreter::Impl::force_slice_from_process(const ProcessId process,
     const SignalId signal_id, PackedLogic4 value, const std::size_t offset,
-    const bool driving_value)
+    const bool driving_value, const bool port_segment)
 {
     const auto apply = [this, process, signal_id, driving_value](
                            PackedLogic4 forced, const std::size_t at) {
@@ -1216,7 +1310,7 @@ void Interpreter::Impl::force_slice_from_process(const ProcessId process,
             apply(std::move(value), offset);
         } else {
             force_slice(signal_id, std::move(value), offset,
-                capture_signal_change_origin(process));
+                capture_signal_change_origin(process), port_segment);
         }
         return;
     }
@@ -1234,7 +1328,8 @@ void Interpreter::Impl::force_slice_from_process(const ProcessId process,
 
 void Interpreter::Impl::release_slice_from_process(const ProcessId process,
     const SignalId signal_id, const std::size_t offset,
-    const std::size_t width, const bool driving_value)
+    const std::size_t width, const bool driving_value,
+    const bool port_segment)
 {
     const auto apply = [this, process, signal_id, offset, width,
                            driving_value] {
@@ -1250,7 +1345,7 @@ void Interpreter::Impl::release_slice_from_process(const ProcessId process,
             apply();
         } else {
             release_slice(signal_id, offset, width,
-                capture_signal_change_origin(process));
+                capture_signal_change_origin(process), port_segment);
         }
         return;
     }

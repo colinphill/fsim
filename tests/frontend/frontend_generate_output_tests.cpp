@@ -1369,7 +1369,8 @@ end architecture;
 architecture rtl of unsupported_generated_declaration is
 begin
   selected: if true generate
-    shared variable unsupported_value : integer;
+    package unsupported_pkg is
+    end package unsupported_pkg;
   begin
   end generate selected;
 end architecture;

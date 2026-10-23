@@ -11,13 +11,18 @@ namespace fsim::frontend {
 [[nodiscard]] std::optional<StandardRevision>
 verilog_system_service_standard(std::string_view name);
 
-namespace {
-
 // The spelling of a type actual in a `C#(...)` selection, with a class
 // specialization's own actuals (`R#(P#(T))`), so distinct selections keep
 // distinct spellings.
-[[nodiscard]] std::string class_actual_type_spelling(const Type& type)
+std::string class_actual_type_spelling(const Type& type)
 {
+    // A virtual interface type keeps its keyword (`C#(virtual I.mp)`).
+    if (type.systemverilog_virtual_interface) {
+        return "virtual " + type.systemverilog_interface_type
+            + (type.systemverilog_interface_modport.empty()
+                    ? std::string { }
+                    : "." + type.systemverilog_interface_modport);
+    }
     if (type.named_type.empty()) {
         return type.spelling;
     }
@@ -44,8 +49,6 @@ namespace {
     }
     return spelling + ")";
 }
-
-} // namespace
 
 DelayAlternative VerilogParser::parse_verilog_delay_alternative(
     const bool parenthesized)

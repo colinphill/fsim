@@ -581,6 +581,7 @@ ParseResult VerilogParser::run() {
     }
     deferred_checker_units_.clear();
     link_out_of_block_constraints(design);
+    resolve_generic_interface_types(design);
     // A compilation-unit type names a declared type (IEEE 1800-2017 6.18),
     // and a forward type declaration is completed.
     if (compilation_unit_package_) {

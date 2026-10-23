@@ -2209,6 +2209,11 @@ bool Lowerer::lower_hir_force_release(
     // container's packed signal bridge (IEEE 1800-2017 10.6.2).
     std::optional<HirConstantSelection> hierarchical_element;
     bool placed { };
+    // The target is a port-connected net named through a hierarchical
+    // reference, which the elaborator merged with the net it connects to: a
+    // force on that name acts below a force by the connected net's own name
+    // (IEEE 1800-2023 10.6.2, 23.3.3).
+    bool port_segment { };
     if (target_expression.kind != semantic::sv::ExpressionKind::name
         || target_expression.text.find('.') != std::string::npos) {
         if (const auto image = hir_place_signal_image(target)) {
@@ -2300,6 +2305,9 @@ bool Lowerer::lower_hir_force_release(
                     = design_.signal_info_[*signal].is_signed;
                 hierarchical.signal = signal;
                 binding = hierarchical;
+                const auto& merged = design_.signal_info_[*signal].name;
+                port_segment = merged != path
+                    && !merged.ends_with("." + path);
             } else if (hierarchical_reference_missed_) {
                 return false;
             }
@@ -2553,6 +2561,7 @@ bool Lowerer::lower_hir_force_release(
             static_cast<std::uint32_t>(*width),
             dynamic_selection,
             false,
+            port_segment,
         });
         if (held) {
             process_.operations.emplace_back(
@@ -2617,6 +2626,7 @@ bool Lowerer::lower_hir_force_release(
         dynamic_selection ? 0U : offset,
         dynamic_selection,
         false,
+        port_segment,
     });
     record_readonly_vhdl_output_write(*binding);
     return true;
@@ -4098,6 +4108,167 @@ bool Lowerer::lower_hir_statement_unsuspended(
             *target);
         if (!target_expression) {
             return assignment_rejected(__LINE__);
+        }
+        // A call of a pure function whose body has no assertion, report,
+        // wait or subprogram call has no effect but its value (IEEE
+        // 1076-2008 4.1), whatever that value's length.
+        const auto effect_free_call = [&](const semantic::ExpressionId id) {
+            const auto resolution = resolve_hir_vhdl_function_call(
+                id, hir_process_scope_, 0U);
+            const auto callee = resolution
+                ? specialized_hir_unit_->find_declaration(resolution->body)
+                : std::nullopt;
+            if (!callee || callee->vhdl == nullptr || !callee->vhdl->callable
+                || !callee->vhdl->callable->function
+                || !callee->vhdl->callable->pure
+                || !callee->vhdl->nested_scope) {
+                return false;
+            }
+            const auto body_scope = *callee->vhdl->nested_scope;
+            const auto& design = specialized_hir_unit_->design();
+            const auto within_body = [&](semantic::ScopeId scope) {
+                for (std::size_t depth { }; depth < 64U; ++depth) {
+                    if (scope == body_scope) {
+                        return true;
+                    }
+                    const auto* record = design.find_scope(scope);
+                    if (record == nullptr || !record->parent) {
+                        return false;
+                    }
+                    scope = *record->parent;
+                }
+                return false;
+            };
+            using Kind = semantic::vhdl::StatementKind;
+            const auto quiet = [&](const auto& self,
+                                   const std::vector<semantic::StatementId>&
+                                       statements) -> bool {
+                for (const auto statement_id : statements) {
+                    const auto nested
+                        = specialized_hir_unit_->find_statement(statement_id);
+                    if (!nested || nested->vhdl == nullptr) {
+                        return false;
+                    }
+                    const auto& body = *nested->vhdl;
+                    if (body.kind == Kind::procedure_call
+                        || body.kind == Kind::assertion
+                        || body.kind == Kind::report
+                        || body.kind == Kind::wait_statement
+                        || !self(self, body.statements)
+                        || !self(self, body.else_statements)) {
+                        return false;
+                    }
+                    for (const auto& alternative : body.alternatives) {
+                        if (!self(self, alternative.statements)) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+            if (!quiet(quiet, callee->vhdl->statements)) {
+                return false;
+            }
+            // No expression of the body names a subprogram.
+            for (const auto& stored : design.vhdl_hir.expressions()) {
+                if (!stored.referenced_name || !within_body(stored.scope)) {
+                    continue;
+                }
+                const auto& name = *stored.referenced_name;
+                const auto callable = [&](const semantic::DeclarationId named) {
+                    const auto declaration
+                        = specialized_hir_unit_->find_declaration(named);
+                    return declaration && declaration->vhdl != nullptr
+                        && declaration->vhdl->callable.has_value();
+                };
+                if ((name.selected && callable(*name.selected))
+                    || std::ranges::any_of(name.overloads, callable)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // A value whose evaluation has no effect but the value itself.
+        const auto effect_free_value = [&](const auto& self,
+                                           const semantic::ExpressionId id,
+                                           const std::size_t depth) -> bool {
+            const auto expression = specialized_hir_unit_->find_expression(id);
+            if (!expression || expression->vhdl == nullptr || depth > 32U) {
+                return false;
+            }
+            const auto& source = *expression->vhdl;
+            // A name may denote a function called without parameters
+            // (IEEE 1076-2008 9.3.4).
+            const auto callable = [&](const semantic::DeclarationId named) {
+                const auto declaration
+                    = specialized_hir_unit_->find_declaration(named);
+                return declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->callable.has_value();
+            };
+            const bool names_subprogram = source.referenced_name
+                && ((source.referenced_name->selected
+                        && callable(*source.referenced_name->selected))
+                    || std::ranges::any_of(
+                        source.referenced_name->overloads, callable));
+            if (source.kind == semantic::vhdl::ExpressionKind::call
+                || names_subprogram
+                || (source.kind == semantic::vhdl::ExpressionKind::index
+                    && resolve_hir_vhdl_function_call(
+                        id, hir_process_scope_, 0U))) {
+                if (!effect_free_call(id)) {
+                    return false;
+                }
+            }
+            return std::ranges::all_of(source.operands,
+                [&](const semantic::ExpressionId operand) {
+                    return self(self, operand, depth + 1U);
+                });
+        };
+        // A slice whose bounds this elaboration knows: a null slice names no
+        // element, so assigning to it changes nothing; a non-null slice with
+        // a bound outside its prefix's index range is an error when the
+        // assignment executes (IEEE 1076-2008 8.5).
+        if (statement->vhdl != nullptr && target_expression->vhdl != nullptr
+            && target_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::slice
+            && target_expression->vhdl->operands.size() == 3U
+            && (target_expression->vhdl->text == "to"
+                || target_expression->vhdl->text == "downto")) {
+            const auto& slice = *target_expression->vhdl;
+            const bool descending = slice.text == "downto";
+            const auto left = hir_constant_integer(slice.operands[1]);
+            const auto right = hir_constant_integer(slice.operands[2]);
+            const auto prefix = left && right
+                ? hir_vhdl_shape(slice.operands[0])
+                : std::nullopt;
+            const auto& range = prefix && prefix->ranges.size() == 1U
+                ? prefix->ranges.front()
+                : std::nullopt;
+            if (left && right
+                && (descending ? *left < *right : *left > *right)) {
+                if (effect_free_value(effect_free_value, *value, 0U)) {
+                    return true;
+                }
+            } else if (left && right && range) {
+                const auto low = std::min(range->left, range->right);
+                const auto high = std::max(range->left, range->right);
+                const auto inside = [&](const std::int64_t bound) {
+                    return low <= bound && bound <= high
+                        && (range->descending == (range->left >= range->right)
+                            || range->left == range->right);
+                };
+                if (!inside(*left) || !inside(*right)) {
+                    process_.operations.emplace_back(Report {
+                        "VHDL slice bounds lie outside the index range of "
+                        "its prefix",
+                        runtime::simir::AssertionSeverity::failure,
+                        runtime_source_location(
+                            hir_source_span(statement->vhdl->source)),
+                    });
+                    process_.operations.emplace_back(Halt { false });
+                    return true;
+                }
+            }
         }
         // A call of a `return <identifier> of` function takes the target's
         // subtype (IEEE 1076-2019 4.2.1 a, c).
@@ -11585,7 +11756,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                               && source->vhdl->text == "\"\"")
                        || hir_expression_width(*value, hir_process_scope_)
                               .value_or(1U)
-                           == 0U;
+                           == 0U
+                       || (source && source->vhdl != nullptr
+                           && (source->vhdl->kind
+                                   == semantic::vhdl::ExpressionKind::call
+                               || source->vhdl->kind
+                                   == semantic::vhdl::ExpressionKind::index)
+                           && effect_free_call(*value));
                }()) {
             return true;
         }
@@ -12868,6 +13045,34 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return load_constant(std::move(bits), binding->domain);
         }();
+        // A target of a package instance reads that instance's generics
+        // (IEEE 1076-2008 4.9): the type formals of the target's subtype
+        // denote the instance's actuals while an aggregate value takes its
+        // type from the target.
+        struct InstanceGenericScope {
+            std::vector<semantic::CompiledBindingFrame>& frames;
+            bool active { };
+            ~InstanceGenericScope()
+            {
+                if (active) {
+                    frames.pop_back();
+                }
+            }
+        };
+        InstanceGenericScope instance_generics { hir_generic_binding_frames_ };
+        if (vhdl_aggregate && target_expression->vhdl != nullptr
+            && target_expression->vhdl->referenced_name) {
+            const auto instance_member = hir_resolver()
+                .resolve_vhdl_package_members(
+                    *target_expression->vhdl->referenced_name,
+                    target_expression->vhdl->scope)
+                .unique();
+            if (instance_member && !instance_member->generic_bindings.empty()) {
+                hir_generic_binding_frames_.push_back(
+                    instance_member->generic_bindings);
+                instance_generics.active = true;
+            }
+        }
         auto lowered = disconnected_value
             ? disconnected_value
             : byte_array_string
@@ -16159,6 +16364,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!systemverilog) {
                 return std::nullopt;
             }
+            if (const auto binding = hir_case_pattern_binding(*condition);
+                binding && binding->type) {
+                return binding->type;
+            }
             const auto declaration_id
                 = hir_referenced_declaration(*condition);
             const auto declaration = declaration_id
@@ -16652,6 +16861,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             operand.width,
                             operand.domain,
                             operand.signed_value,
+                            operand.type,
                         } },
                     };
                 }
@@ -16721,7 +16931,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         actual_tag,
                         expected_tag,
                     });
-                    if (pattern.operands.empty()) {
+                    // A wildcard payload matches any value, whatever the
+                    // member's type (IEEE 1800-2023 12.6).
+                    const auto payload = pattern.operands.empty()
+                        ? std::nullopt
+                        : specialized_hir_unit_->find_expression(
+                              pattern.operands.front());
+                    if (pattern.operands.empty()
+                        || (payload && payload->systemverilog != nullptr
+                            && payload->systemverilog->text
+                                == "@match-wildcard")) {
                         return LoweredChoice { tag_matches, { } };
                     }
                     const auto member_index = static_cast<std::size_t>(
@@ -19247,6 +19466,151 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         active, body, end, UnknownBranchPolicy::when_false };
                     process_.operations[more_branch] = Branch {
                         more, store_next, end, UnknownBranchPolicy::when_false };
+                    patch_hir_jumps(control.break_jumps, end);
+                    restore_scope();
+                    return true;
+                }
+            }
+            // `for i in s'range` over a STRING held as a runtime string: an
+            // ascending range from its static left bound, as long as the
+            // string (IEEE 1076-2008 16.2.3, 10.10).
+            if (vhdl_loop_declaration && statement->vhdl->loop_initial
+                && !statement->vhdl->loop_limit) {
+                const auto attribute = specialized_hir_unit_->find_expression(
+                    *statement->vhdl->loop_initial);
+                const bool reverse = attribute && attribute->vhdl != nullptr
+                    && attribute->vhdl->text == "'reverse_range";
+                const auto prefix = attribute && attribute->vhdl != nullptr
+                        && attribute->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::call
+                        && (attribute->vhdl->text == "'range" || reverse)
+                        && attribute->vhdl->operands.size() == 1U
+                        && hir_vhdl_runtime_string_prefix(
+                            attribute->vhdl->operands.front())
+                    ? std::optional { attribute->vhdl->operands.front() }
+                    : std::nullopt;
+                const auto subtype = prefix
+                    ? hir_vhdl_expression_subtype(*prefix)
+                    : std::nullopt;
+                const auto& constraints = subtype
+                    ? subtype->constraints
+                    : std::vector<semantic::vhdl::RangeConstraint> { };
+                const auto static_left = constraints.empty()
+                    ? std::optional<std::int64_t> { 1 }
+                    : constraints.front().descending
+                    ? std::nullopt
+                    : hir_range_left(constraints.front());
+                const auto static_right = constraints.empty()
+                    ? std::nullopt
+                    : hir_range_right(constraints.front());
+                const auto parameter = hir_local_registers_.find(
+                    vhdl_loop_declaration->value());
+                if (prefix && static_left && !static_right
+                    && parameter != hir_local_registers_.end()
+                    && register_domain(parameter->second)
+                        == frontend::ValueDomain::Integer) {
+                    const auto string = lower_hir_string_expression(*prefix);
+                    if (!string) {
+                        restore_scope();
+                        return false;
+                    }
+                    const auto parameter_register = parameter->second;
+                    const auto width = register_width(parameter_register);
+                    const auto length32 = allocate_register(
+                        32U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(
+                        StringLength { length32, *string });
+                    const auto remaining = allocate_register(
+                        64U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(CopyRegister {
+                        remaining,
+                        resize_register(length32, 64U, false) });
+                    const auto left_value = load_integer(
+                        *static_left, width, frontend::ValueDomain::Integer);
+                    const auto step = load_integer(reverse ? -1 : 1, width,
+                        frontend::ValueDomain::Integer);
+                    if (reverse) {
+                        // 'REVERSE_RANGE starts at the right bound.
+                        const auto length = allocate_register(
+                            width, frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(CopyRegister {
+                            length,
+                            resize_register(length32, width, false) });
+                        const auto sum = allocate_register(
+                            width, frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::add_signed, sum, left_value,
+                            length });
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::add_signed, parameter_register,
+                            sum, step });
+                    } else {
+                        process_.operations.emplace_back(CopyRegister {
+                            parameter_register, left_value });
+                    }
+                    const auto zero = load_integer(
+                        0, 64U, frontend::ValueDomain::Integer);
+                    const auto one = load_integer(
+                        1, 64U, frontend::ValueDomain::Integer);
+                    const auto loop_start = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    const auto active = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::greater_signed, active, remaining,
+                        zero });
+                    const auto loop_branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        active, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto body = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    LoopControlContext loop;
+                    loop.label = label;
+                    loop_controls_.push_back(std::move(loop));
+                    if (!lower_hir_statements(statements)) {
+                        loop_controls_.pop_back();
+                        restore_scope();
+                        return false;
+                    }
+                    auto control = std::move(loop_controls_.back());
+                    loop_controls_.pop_back();
+                    const auto advance = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    patch_hir_jumps(control.continue_jumps, advance);
+                    const auto left = allocate_register(
+                        64U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::subtract_signed, left, remaining,
+                        one });
+                    process_.operations.emplace_back(
+                        CopyRegister { remaining, left });
+                    const auto more = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::greater_signed, more, remaining,
+                        zero });
+                    const auto more_branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        more, 0U, 0U, UnknownBranchPolicy::when_false });
+                    const auto store_next = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    const auto next = allocate_register(
+                        width, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::add_signed, next, parameter_register,
+                        step });
+                    process_.operations.emplace_back(
+                        CopyRegister { parameter_register, next });
+                    process_.operations.emplace_back(Jump { loop_start });
+                    const auto end = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations[loop_branch] = Branch {
+                        active, body, end, UnknownBranchPolicy::when_false };
+                    process_.operations[more_branch] = Branch {
+                        more, store_next, end,
+                        UnknownBranchPolicy::when_false };
                     patch_hir_jumps(control.break_jumps, end);
                     restore_scope();
                     return true;
@@ -26469,6 +26833,9 @@ std::optional<bool> Lowerer::lower_hir_vhdl_string_element_write(
     const auto prefix_declaration
         = specialized_hir_unit_->find_declaration(*declaration);
     std::int64_t prefix_left = 1;
+    // A left bound known only at run time (`string(s'range)` of a runtime
+    // string `s`).
+    std::optional<RegisterId> runtime_left;
     bool prefix_descending { };
     if (prefix_declaration && prefix_declaration->vhdl != nullptr
         && prefix_declaration->vhdl->subtype) {
@@ -26481,6 +26848,16 @@ std::optional<bool> Lowerer::lower_hir_vhdl_string_element_write(
                 continue;
             }
             const auto left = hir_range_left(constraint);
+            if (!left && constraint.left_expression
+                && hir_vhdl_runtime_string_bound(
+                    *constraint.left_expression)) {
+                runtime_left = lower_hir_expression(
+                    *constraint.left_expression, 32U);
+                if (!runtime_left) {
+                    return false;
+                }
+                break;
+            }
             if (!left) {
                 return false;
             }
@@ -26501,8 +26878,11 @@ std::optional<bool> Lowerer::lower_hir_vhdl_string_element_write(
     if (register_width(*index) != 32U) {
         index = resize_register(*index, 32U, true);
     }
-    const auto base = load_integer(
-        prefix_left, 32U, frontend::ValueDomain::Integer);
+    const auto base = runtime_left
+        ? (register_width(*runtime_left) == 32U
+                  ? *runtime_left
+                  : resize_register(*runtime_left, 32U, true))
+        : load_integer(prefix_left, 32U, frontend::ValueDomain::Integer);
     const auto offset = allocate_register(32U, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(IntegerBinary {
         IntegerBinaryOperator::subtract,

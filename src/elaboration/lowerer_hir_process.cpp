@@ -601,8 +601,10 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
             }
             if (member->handle_signal) {
                 dependencies.push_back(*member->handle_signal);
-            } else if (const auto binding = hir_runtime_binding(
-                           member->receiver, process_scope, false);
+            } else if (const auto binding = member->handle_expression
+                    ? std::nullopt
+                    : hir_runtime_binding(
+                          member->receiver, process_scope, false);
                 binding && binding->signal) {
                 dependencies.push_back(*binding->signal);
             }
@@ -3308,6 +3310,34 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     return lower_hir_process_body(description, language, hierarchy);
 }
 
+std::optional<Process> Lowerer::lower_hir_elaboration_string(
+    const semantic::ExpressionId expression,
+    const StringObjectId object,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    if (specialized_hir_unit_ == nullptr
+        || object >= design_.string_objects_.size()) {
+        return std::nullopt;
+    }
+    const auto source = specialized_hir_unit_->find_expression(expression);
+    if (!source || source->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = source->vhdl->source;
+    description.name = "$elaboration_string";
+    description.input_actual = expression;
+    description.input_actual_string_object = object;
+    description.kind = frontend::ProcessKind::VhdlProcess;
+    description.initial = true;
+    description.require_wildcard_dependency = false;
+    return lower_hir_process_body(
+        description, frontend::Language::Vhdl2008, hierarchy);
+}
+
 std::optional<Process> Lowerer::lower_hir_package_initializer(
     const semantic::DeclarationId declaration_id,
     const SignalId destination,
@@ -4367,7 +4397,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_.operations.size());
     }
     const auto input_adapter = description.input_actual.has_value()
-        || description.input_actual_destination.has_value();
+        || description.input_actual_destination.has_value()
+        || description.input_actual_string_object.has_value();
     const auto output_adapter = description.output_actual_source.has_value()
         || description.output_actual.has_value();
     const auto procedural_driver
@@ -4375,7 +4406,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         || description.procedural_assignment_target.has_value()
         || description.procedural_assignment_value.has_value();
     if (description.input_actual.has_value()
-            != description.input_actual_destination.has_value()
+            != (description.input_actual_destination.has_value()
+                || description.input_actual_string_object.has_value())
+        || (description.input_actual_destination
+            && description.input_actual_string_object)
         || (description.input_actual_assignment_context
             && (!description.input_actual
                 || !description.input_actual_assignment_type
@@ -4613,6 +4647,15 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 CopyRegister { output, *resolved });
             hir_vhdl_resolver_registers_ = std::pair { input, output };
         }
+    } else if (description.input_actual_string_object) {
+        const auto text = lower_hir_string_expression(
+            *description.input_actual);
+        if (!text) {
+            process_ = { };
+            return std::nullopt;
+        }
+        process_.operations.emplace_back(WriteStringObject {
+            *description.input_actual_string_object, *text });
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
         const auto& signal = design_.signal_info_[destination];

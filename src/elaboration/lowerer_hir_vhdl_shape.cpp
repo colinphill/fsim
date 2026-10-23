@@ -871,7 +871,12 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
     if (function_result
         && (function_result->width != 0U || function_result->null_range)) {
         HirVhdlShape called;
-        called.ranges.push_back(function_result->range);
+        if (function_result->ranges.empty()) {
+            called.ranges.push_back(function_result->range);
+        } else {
+            called.ranges.assign(function_result->ranges.begin(),
+                function_result->ranges.end());
+        }
         called.element_constraints = function_result->element_constraints;
         result = std::move(called);
     } else if (record_result && record_result->record) {
@@ -887,10 +892,27 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
             = hir_referenced_declaration(expression_id)) {
             const auto dimensions = result ? result->ranges.size() : 1U;
             facts = hir_vhdl_object_facts(*declaration, dimensions);
-            // `obj.m1.m2`: the members of a record object, selected by name
-            // (IEEE 1076-2008 8.3).
             const auto declared = specialized_hir_unit_->find_declaration(
                 *declaration);
+            // A composite generic constant of a package instance, or one
+            // left to its default, has the shape of that actual (IEEE
+            // 1076-2008 6.5.6.2, 4.9).
+            if ((!facts || !facts->complete() || facts->ranges.empty())
+                && declared
+                && declared->vhdl != nullptr
+                && declared->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant
+                && declared->vhdl->subtype) {
+                if (const auto actual = hir_generic_actual(expression_id)) {
+                    if (auto shape = hir_vhdl_contextual_shape(*actual,
+                            *declared->vhdl->subtype, declared->vhdl->scope);
+                        shape && shape->complete()) {
+                        facts = std::move(shape);
+                    }
+                }
+            }
+            // `obj.m1.m2`: the members of a record object, selected by name
+            // (IEEE 1076-2008 8.3).
             if (source.text.find('.') != std::string::npos && declared
                 && declared->vhdl != nullptr && declared->vhdl->subtype) {
                 std::vector<std::string_view> segments;
@@ -942,7 +964,12 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
                         member = std::move(element);
                     }
                 }
-                facts = std::move(member);
+                // A selected name ending at the object itself (`pkg.obj`)
+                // keeps the object's facts.
+                if (root == segments.end()
+                    || std::next(root) != segments.end()) {
+                    facts = std::move(member);
+                }
             }
         }
     } else if (const auto range_index = source.kind == Kind::index
@@ -1311,7 +1338,7 @@ Lowerer::hir_vhdl_initialized_object_subtype(
     apply_hir_vhdl_shape(subtype, *shape, scope);
     const auto completed = hir_vhdl_subtype_shape(subtype, scope);
     if (!completed || !completed->complete()
-        || !vhdl_subtype_width(subtype)) {
+        || (!vhdl_subtype_width(subtype) && !completed->null())) {
         return std::nullopt;
     }
     return subtype;
@@ -1332,6 +1359,16 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_contextual_shape(
     const auto value = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // A qualified expression whose type mark leaves the bounds open has its
+    // operand's (IEEE 1076-2008 9.3.5).
+    if (value && value->vhdl != nullptr
+        && value->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && value->vhdl->text.starts_with("@vhdl-qualified:")
+        && value->vhdl->operands.size() == 1U) {
+        auto operand = hir_vhdl_contextual_shape(
+            value->vhdl->operands.front(), context, scope);
+        return operand && operand->complete() ? operand : shape;
+    }
     if (!value || value->vhdl == nullptr
         || (value->vhdl->kind != semantic::vhdl::ExpressionKind::aggregate
             && value->vhdl->kind

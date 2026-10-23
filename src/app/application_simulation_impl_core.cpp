@@ -298,6 +298,160 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     return class_execution.component_root(allocation_scope);
 }
 
+[[nodiscard]] const std::vector<Simulation::Impl::ConstraintStateVariable>&
+Simulation::Impl::constraint_state_variables(
+    const semantic::sv::ClassSpecialization& specialization)
+{
+    const auto [cached, inserted] = class_constraint_state_variables.try_emplace(
+        specialization.declaration_identity);
+    if (!inserted) {
+        return cached->second;
+    }
+    auto& states = cached->second;
+    const auto& classes = built.systemverilog_hir.classes();
+    const auto declaration = std::ranges::find(
+        classes, specialization.declaration_identity,
+        &semantic::sv::ClassDeclaration::canonical_identity);
+    if (declaration == classes.end()) {
+        return states;
+    }
+    const auto collect = [&](auto&& self,
+                             const semantic::sv::ConstraintExpression&
+                                 expression) -> void {
+        for (const auto& binding : expression.bindings) {
+            if (binding.kind != semantic::sv::ConstraintReferenceKind::state
+                || !binding.declaration
+                || std::ranges::find(
+                       states, binding.canonical_identity,
+                       &ConstraintStateVariable::identity)
+                    != states.end()) {
+                continue;
+            }
+            states.push_back({ binding.canonical_identity,
+                *binding.declaration, binding });
+        }
+        for (const auto& operand : expression.operands) {
+            self(self, operand);
+        }
+    };
+    for (const auto& composed : declaration->composed_constraints) {
+        for (const auto& owner : classes) {
+            const auto constraint = std::ranges::find(
+                owner.constraints, composed.selected_identity,
+                &semantic::sv::ClassConstraint::canonical_identity);
+            if (constraint == owner.constraints.end()) {
+                continue;
+            }
+            for (const auto& expression : constraint->expressions) {
+                collect(collect, expression);
+            }
+            break;
+        }
+    }
+    return states;
+}
+
+void Simulation::Impl::add_constraint_state_variables(
+    runtime::SystemVerilogConstraintSolver& solver,
+    runtime::SystemVerilogClassRandomizeVariables& variables,
+    const semantic::sv::ClassSpecialization& specialization)
+{
+    for (const auto& state : constraint_state_variables(specialization)) {
+        if (variables.contains(state.identity)) {
+            continue;
+        }
+        const auto* declaration
+            = built.systemverilog_hir.find_declaration(state.declaration);
+        if (declaration == nullptr || !declaration->declared_value) {
+            continue;
+        }
+        // The declaration's runtime storage; a declaration with several
+        // instances has no single current value.
+        const auto storage = [&](const semantic::design::ObjectKind kind)
+            -> std::optional<std::uint64_t> {
+            const auto unique = [&](const auto& matches)
+                -> std::optional<std::optional<std::uint64_t>> {
+                std::optional<std::uint64_t> index;
+                for (const auto& object : built.design_ir.objects()) {
+                    if (object.kind != kind || !matches(object)) {
+                        continue;
+                    }
+                    if (index && *index != object.runtime_index) {
+                        return std::optional<std::uint64_t> { };
+                    }
+                    index = object.runtime_index;
+                }
+                if (!index) {
+                    return std::nullopt;
+                }
+                return index;
+            };
+            if (const auto by_value = unique([&](const auto& object) {
+                    return object.declaration_value
+                        == declaration->declared_value;
+                })) {
+                return *by_value;
+            }
+            // Storage materialized under its hierarchical name only (an
+            // unpacked or queue variable) is the one object of that name in
+            // the declaring unit (`$state::unit::name`).
+            constexpr std::string_view state_prefix { "$state::" };
+            std::string_view unit { state.identity };
+            unit.remove_prefix(std::min(unit.size(), state_prefix.size()));
+            unit = unit.substr(0U, unit.find("::"));
+            const auto& specializations = built.design_ir.specializations();
+            return unique([&](const auto& object) {
+                return object.name == declaration->name
+                    && object.specialization.valid()
+                    && object.specialization.value() < specializations.size()
+                    && specializations[object.specialization.value()].name
+                        == unit;
+            }).value_or(std::nullopt);
+        };
+        if (const auto signal = storage(semantic::design::ObjectKind::signal);
+            signal
+            && *signal <= std::numeric_limits<runtime::simir::SignalId>::max()) {
+            auto value = interpreter->signal_value_snapshot(
+                static_cast<runtime::simir::SignalId>(*signal));
+            if (value.is_logic9()) {
+                continue;
+            }
+            auto profile
+                = application_detail::systemverilog_constraint_profile(
+                    state.binding);
+            profile.width = value.width();
+            runtime::SystemVerilogConstraintVariable variable;
+            variable.canonical_identity = state.identity;
+            variable.profile = std::move(profile);
+            variable.domain.push_back(std::move(value));
+            variables.emplace(
+                state.identity, solver.add_variable(std::move(variable)));
+            continue;
+        }
+        // A container is visible to a constraint through its size (IEEE
+        // 1800-2017 7.12.3, 18.5.8).
+        if (const auto container
+            = storage(semantic::design::ObjectKind::container);
+            container
+            && *container
+                <= std::numeric_limits<runtime::simir::ContainerObjectId>::max()) {
+            const auto size = runtime::simir::container_value_size(
+                interpreter->container_object_value_snapshot(
+                    static_cast<runtime::simir::ContainerObjectId>(
+                        *container)));
+            runtime::SystemVerilogConstraintVariable variable;
+            variable.canonical_identity = state.identity + ".size()";
+            variable.profile = { runtime::SystemVerilogConstraintDomainKind::Integer,
+                32, true, "int", false };
+            variable.domain.push_back(runtime::PackedLogic4::from_aval_bval(
+                32, static_cast<std::uint64_t>(size), 0U));
+            auto identity = variable.canonical_identity;
+            variables.emplace(
+                std::move(identity), solver.add_variable(std::move(variable)));
+        }
+    }
+}
+
 [[nodiscard]] runtime::PackedLogic4 Simulation::Impl::invoke_source_randomize(
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const std::string> names,
@@ -511,8 +665,15 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
             [this, target, specialization = std::move(specialization),
                 path = std::move(path)](
                 auto& solver, const auto& variables) {
+                // Unit-scope variables the constraints read join the solve
+                // as fixed variables holding their current values (IEEE
+                // 1800-2017 18.5).
+                auto solved_variables = variables;
+                add_constraint_state_variables(
+                    solver, solved_variables,
+                    class_specialization(specialization));
                 application_detail::configure_systemverilog_class_constraints(
-                    solver, variables, built.systemverilog_hir,
+                    solver, solved_variables, built.systemverilog_hir,
                     class_specialization(specialization),
                     [this, target](const auto identity) {
                         if (const auto shared

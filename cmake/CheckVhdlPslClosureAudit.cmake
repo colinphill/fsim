@@ -103,7 +103,7 @@ foreach(FSIM_EXPECTED IN ITEMS
     "artifact_provenance=checksum+identity"
     "platform_process_limit=POSIX+Windows"
     "installed_public_alias=fsim-vhdl"
-    "diagnostic_catalog=2975"
+    "diagnostic_catalog=2976"
     "vhdl_psl_diagnostics=19"
     "bounded_authored_sources=1149"
     "authored_test_controls=436"
@@ -154,7 +154,7 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "33 rows split 29 supported, 0 unresolved, 4 deferred"
-    "diagnostic catalog covers 2971 production codes"
+    "diagnostic catalog covers 2972 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:")
   string(FIND "${FSIM_COMPOSED_OUTPUT}" "${FSIM_TOKEN}" FSIM_TOKEN_INDEX)

@@ -315,6 +315,14 @@ private:
             semantic::SourceSpanId source;
         };
 
+        // An out or buffer block port of its own signal drives its actual
+        // `expression` (IEEE 1076-2019 14.7.3.2).
+        struct BlockOutputAdapter {
+            SignalId port { };
+            semantic::ExpressionId expression;
+            semantic::SourceSpanId source;
+        };
+
         const semantic::vhdl::GenerateRegion* region { };
         semantic::SpecializedHirUnit specialization;
         std::string path;
@@ -322,6 +330,7 @@ private:
         ReadOnlySignalSet read_only_signals;
         std::unordered_set<std::string> declared_signal_names;
         std::vector<BlockInputAdapter> block_input_adapters;
+        std::vector<BlockOutputAdapter> block_output_adapters;
         std::string generate_relative_discriminator;
         // Declaration identities from all enclosing generated regions and
         // this region, retained so descendant processes can bind local reads.
@@ -638,6 +647,9 @@ private:
     // the initial value of `destination`; nullopt when it cannot run.
     // `generic_bindings` binds the generics of a package instance whose
     // member the expression belongs to.
+    // Keeps the shared-variable state an elaboration-time evaluation left.
+    void keep_compiled_vhdl_elaboration_state(
+        const runtime::simir::Interpreter& interpreter);
     std::optional<PackedLogic4> evaluate_compiled_vhdl_value(
         const semantic::SpecializedHirUnit& specialization,
         semantic::ExpressionId expression,
@@ -711,6 +723,15 @@ private:
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication& subtype,
         semantic::ScopeId scope,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
+    // A STRING expression evaluated when its region is elaborated (IEEE
+    // 1076-2008 14.4.2.1), such as a function-call generic actual.
+    std::optional<std::string> evaluate_compiled_vhdl_string(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression,
         const std::string& path,
         SignalMap& signals,
         ReadOnlySignalSet& read_only_signals,
@@ -822,8 +843,16 @@ private:
         const semantic::vhdl::Unit& owner);
     // An unresolved actual written only by output-port adapters takes the
     // formals' values in the same simulation cycle (IEEE 1076-2008
-    // 14.7.3.2): its adapters become one composing conversion program.
+    // 14.7.3.2): its adapters become one composing conversion program. An
+    // adapter that copies its formals over the whole of a resolved actual
+    // becomes a conversion driver, one source of that actual.
     void compose_vhdl_output_routes();
+    // Whether an out or buffer port is read in its design entity (IEEE
+    // 1076-2019 14.7.3.3 e): its effective value is its driving value, so it
+    // cannot share a resolved actual's signal.
+    [[nodiscard]] bool vhdl_output_port_read(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::DeclarationId port);
 
     // The architecture's processes and concurrent statements that name
     // objects of its child instances through external names (IEEE
@@ -2055,6 +2084,8 @@ private:
     std::unordered_map<std::uint32_t, PackageObjectBindings>
         vhdl_package_object_bindings_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    // The out and buffer ports some expression reads, found on first use.
+    std::optional<std::unordered_set<std::uint32_t>> vhdl_read_output_ports_;
     // An out or inout port associated with a resolved VHDL actual: the
     // instance it belongs to and its default, which is the initial value of
     // the port's drivers (IEEE 1076-2008 6.5.2, 14.7.3.2).

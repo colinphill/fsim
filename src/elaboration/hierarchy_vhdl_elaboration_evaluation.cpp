@@ -97,11 +97,35 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
         static_cast<void>(interpreter.run());
         auto value = interpreter.signal_value_snapshot(destination);
         diagnostics_.resize(diagnostics_before);
+        keep_compiled_vhdl_elaboration_state(interpreter);
         return value;
     } catch (const std::exception& error) {
         trace_evaluation("run", error.what());
         diagnostics_.resize(diagnostics_before);
         return std::nullopt;
+    }
+}
+
+void HierarchyBuilder::keep_compiled_vhdl_elaboration_state(
+    const runtime::simir::Interpreter& interpreter)
+{
+    // Elaboration calls a function once for each evaluation; the state an
+    // impure function leaves in a shared variable is seen by later
+    // elaboration and by simulation (IEEE 1076-2008 14.4.2.1, 14.4.2.3).
+    for (const auto& object : design_.vhdl_protected_object_info_) {
+        for (const auto& member : object.members) {
+            if (member.storage < design_.container_objects_.size()) {
+                design_.container_objects_[member.storage].initial_value
+                    = interpreter.container_object_value_snapshot(
+                        member.storage);
+            }
+        }
+    }
+    for (const auto signal : vhdl_unprotected_shared_signals_) {
+        if (signal < design_.signals_.size()) {
+            design_.signals_[signal].initial_value
+                = interpreter.signal_value_snapshot(signal);
+        }
     }
 }
 
@@ -170,6 +194,86 @@ std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
         trace_evaluation("run", "integer value has unknown bits");
     }
     return result;
+}
+
+std::optional<std::string> HierarchyBuilder::evaluate_compiled_vhdl_string(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression,
+    const std::string& path,
+    SignalMap& signals,
+    ReadOnlySignalSet& read_only_signals,
+    ContainerMap& container_objects)
+{
+    const auto diagnostics_before = diagnostics_.size();
+    const auto processes_before = design_.process_count();
+    // The value runs into a scratch string object that is removed again.
+    const auto scratch = static_cast<StringObjectId>(
+        design_.string_objects_.size());
+    design_.string_objects_.push_back(
+        StringObject { path + ".@elaboration-string", std::string { } });
+    const auto remove_scratch = [&] {
+        if (design_.string_objects_.size() != scratch + 1U) {
+            throw std::logic_error(
+                "VHDL elaboration-time evaluation created string objects");
+        }
+        design_.string_objects_.pop_back();
+    };
+    StringMap strings;
+    ReadOnlyStringSet read_only_strings;
+    ReadOnlyContainerSet read_only_containers;
+    Lowerer lowerer {
+        design_,
+        signals,
+        read_only_signals,
+        strings,
+        read_only_strings,
+        container_objects,
+        read_only_containers,
+        diagnostics_,
+    };
+    lowerer.set_specialized_hir_unit(&specialization);
+    lowerer.set_package_constant_signal(
+        [&](const semantic::DeclarationId constant) {
+            return compiled_vhdl_package_constant_signal(
+                specialization, constant);
+        });
+    auto process = lowerer.lower_hir_elaboration_string(
+        expression, scratch, path);
+    if (!process || lowerer.has_generated_processes()
+        || design_.process_count() != processes_before) {
+        for (auto index = diagnostics_before; index < diagnostics_.size();
+             ++index) {
+            trace_evaluation("string lowering", diagnostics_[index].message);
+        }
+        diagnostics_.resize(diagnostics_before);
+        remove_scratch();
+        return std::nullopt;
+    }
+    std::optional<std::string> value;
+    try {
+        runtime::simir::Interpreter interpreter;
+        for (const auto& signal : design_.signals_) {
+            static_cast<void>(interpreter.add_signal(signal));
+        }
+        for (const auto& object : design_.string_objects_) {
+            static_cast<void>(interpreter.add_string_object(object));
+        }
+        for (const auto& object : design_.container_objects_) {
+            static_cast<void>(interpreter.add_container_object(object));
+        }
+        process->id = 0U;
+        process->initialize = true;
+        static_cast<void>(interpreter.add_process(std::move(*process)));
+        interpreter.start();
+        static_cast<void>(interpreter.run());
+        value = interpreter.string_object_value(scratch);
+        keep_compiled_vhdl_elaboration_state(interpreter);
+    } catch (const std::exception& error) {
+        trace_evaluation("string run", error.what());
+    }
+    diagnostics_.resize(diagnostics_before);
+    remove_scratch();
+    return value;
 }
 
 std::optional<semantic::vhdl::SubtypeIndication>

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
+#include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1109,7 +1110,22 @@ std::optional<Type> Resolver::class_type_parameter_actual(
             || (actual.name.empty() && index != position)) {
           continue;
         }
-        return from_actual(actual.type_actual, actual.value);
+        if (auto type = from_actual(actual.type_actual, actual.value)) {
+          return type;
+        }
+        // `extends B #(T)` passes the derived class's own type parameter,
+        // bound by the receiver's specialization (8.25).
+        if (!actual.type_actual
+            && actual.value.kind == ExpressionKind::Identifier
+            && std::ranges::any_of(current->parameters,
+                [&](const ParameterDeclaration& parameter) {
+                  return parameter.kind == ParameterKind::Type
+                      && parameter.name == actual.value.text;
+                })) {
+          return class_type_parameter_actual(
+              actual.value.text, *current, receiver, scope);
+        }
+        return std::nullopt;
       }
       return std::nullopt;
     }
@@ -1183,6 +1199,25 @@ std::optional<Type> Resolver::packed_member_type(
   const auto spelling = trim_type_spelling(source);
   if (spelling == "string") {
     return Type{ValueDomain::String, "string", std::nullopt, false};
+  }
+  // `virtual [interface] I[.mp]`: a virtual interface type (25.9).
+  if (spelling.starts_with("virtual ")) {
+    auto name = trim_type_spelling(spelling.substr(8U));
+    if (name.starts_with("interface ")) {
+      name = trim_type_spelling(name.substr(10U));
+    }
+    const auto dot = name.find('.');
+    Type type;
+    type.domain = ValueDomain::Bit2;
+    type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+    type.systemverilog_virtual_interface = true;
+    type.named_type = std::string{name.substr(0U, dot)};
+    type.systemverilog_interface_type = type.named_type;
+    if (dot != std::string_view::npos) {
+      type.systemverilog_interface_modport = std::string{name.substr(dot + 1U)};
+    }
+    type.spelling = "virtual interface " + std::string{name};
+    return type;
   }
   if (spelling == "int" || spelling == "integer") {
     return Type{
@@ -2193,8 +2228,11 @@ void Resolver::normalize_selection_actuals(
           selected_type_actual(actual.value.text, scope));
     } else if (actual.type_actual) {
       auto resolved = *actual.type_actual;
+      // A virtual interface type (`C#(virtual I)`) names the interface,
+      // not a type (25.9).
       if (resolved.systemverilog_class_declaration.empty()
-          && !resolved.named_type.empty()) {
+          && !resolved.named_type.empty()
+          && !resolved.systemverilog_virtual_interface) {
         resolved = selected_type_actual(actual.type_actual->named_type, scope);
       } else if (parsed && resolved.named_type.empty()
           && !resolved.packed_range_expression
@@ -2426,13 +2464,28 @@ void Resolver::anchor_alias_actuals(
       && type_identity.starts_with("class:")) {
     return "@uvm-registry-create:" + type_identity.substr(6U);
   }
+  // Only the UVM library's own methods, `set(cntxt, inst_name,
+  // field_name, value)` and its siblings; a user class of the same name
+  // keeps its declared methods.
+  const auto uvm_profile = std::ranges::any_of(
+      selection.declaration->methods,
+      [&](const SystemVerilogClassMethod& candidate) {
+        return candidate.name == method && candidate.arguments.size() >= 3U;
+      });
   if (selection.declaration->name == "uvm_config_db"
       && (method == "set" || method == "get" || method == "exists")
-      && !type_identity.empty()) {
+      && uvm_profile && !type_identity.empty()) {
     return "@uvm-config-db-" + std::string{method}
         + ":" + type_identity;
   }
   return {};
+}
+bool Resolver::uvm_library_method(const std::string_view identity) const {
+  return support::is_uvm_library_identity(identity)
+      && std::ranges::any_of(classes_, [](const auto& entry) {
+           return support::is_uvm_library_identity(entry.first)
+               && entry.first.ends_with("uvm_pkg::uvm_object");
+         });
 }
 [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
 Resolver::resolve_class_name(
@@ -3037,6 +3090,15 @@ void Resolver::retain_result_type(
           return type;
         }
       }
+      // `C#(virtual I)::vif.m`: a member of the interface a static class
+      // property designates (8.9, 25.9), selected from the read handle.
+      if (receiver.kind == ExpressionKind::Call
+          && receiver.text.starts_with("@sv-static-property:")) {
+        expression.kind = ExpressionKind::Call;
+        expression.text = "@sv-select:" + member;
+        expression.operands = {std::move(receiver)};
+        return std::nullopt;
+      }
     }
     // A member of a packed structure class property (`c.p.a`, 7.2, 8.5).
     if (receiver_type && !class_identity(*receiver_type)
@@ -3333,20 +3395,30 @@ void Resolver::retain_result_type(
       const auto match = find_property(
           owners.front()->canonical_identity, member);
       if (match.property && match.property->is_static) {
-        const auto type = resolve_alias_type(
+        auto type = resolve_alias_type(
             match.property->declaration.type,
             match.owner->canonical_identity);
+        // The selected specialization owns the storage (IEEE 1800-2017
+        // 8.25.1).
+        const auto selection = resolve_class_selection(owner_name, scope,
+            expression.systemverilog_class_selection.get());
+        // A property typed by a type parameter has the specialization's
+        // type actual (8.25).
+        if (const auto& named = match.property->declaration.type.named_type;
+            selection && !named.empty()
+            && !match.property->declaration.type.systemverilog_container) {
+          if (auto actual = class_type_parameter_actual(
+                  named, *match.owner, selection->type, scope)) {
+            type = std::move(*actual);
+          }
+        }
         expression.kind = ExpressionKind::Call;
         expression.text =
             (type.systemverilog_container
                  ? "@sv-static-container-property:"
                  : "@sv-static-property:")
             + match.owner->canonical_identity + "::" + member;
-        // The selected specialization owns the storage (IEEE 1800-2017
-        // 8.25.1).
-        if (const auto selection = resolve_class_selection(owner_name, scope,
-                expression.systemverilog_class_selection.get());
-            selection
+        if (selection
             && !selection->type.systemverilog_class_parameter_actuals.empty()) {
           expression.systemverilog_class_owner =
               std::make_shared<const Type>(selection->type);

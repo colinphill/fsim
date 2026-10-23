@@ -1634,8 +1634,25 @@ std::optional<Type> Resolver::resolve_typed_expression(
       // property (8.4).
       const auto root = std::string_view { expression.text }.substr(
           0, expression.text.find('.'));
-      if (expression.text.find('.') != std::string::npos
-          && scope.objects.contains(root)) {
+      // So is a static property of a class (`C#(virtual I)::vif`, 8.9,
+      // 8.25.1).
+      const auto selected = root.rfind("::");
+      if ((expression.text.find('.') != std::string::npos
+              && scope.objects.contains(root))
+          || (selected != std::string_view::npos
+              && !resolve_class_name(root.substr(0, selected), scope)
+                      .empty())) {
+        (void)resolve_expression(expression, scope);
+      }
+    } else if (expression.kind == ExpressionKind::Call) {
+      // A handle a static class method returns (`C#(virtual I)::get()`,
+      // 8.10, 8.25.1).
+      const auto selected = expression.text.rfind("::");
+      if (selected != std::string::npos
+          && !resolve_class_name(
+                  std::string_view { expression.text }.substr(0, selected),
+                  scope)
+                  .empty()) {
         (void)resolve_expression(expression, scope);
       }
     }
@@ -2000,8 +2017,7 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             && kind == SystemVerilogClassMethodKind::Function
             && scope.class_owner == nullptr
             && selected_uvm_intrinsic(*owner, name).empty()
-            && !support::is_uvm_library_identity(
-                match->method->canonical_identity)) {
+            && !uvm_library_method(match->method->canonical_identity)) {
           // A static function called as a statement discards its result
           // (IEEE 1800-2017 13.4.1) and lowers as an expression statement;
           // native UVM methods keep their task form.

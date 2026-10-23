@@ -206,7 +206,14 @@ enum class StringMethodOperator : std::uint8_t {
     // T'VALUE of a physical type: the physical literal in the source string
     // as a count of primary units, using the newline-separated
     // `name=scale` units of `argument` (IEEE 1076-2008 16.2.2, 5.2.4).
-    vhdl_physical_value
+    vhdl_physical_value,
+    // T'VALUE of a composite type: the representation of element `first`
+    // of the `second` elements in the source string, a parenthesized list
+    // or, for an array of a character type, a character string whose
+    // elements are returned as character literals (IEEE 1076-2019 5.7,
+    // 16.2.2).
+    vhdl_composite_element,
+    vhdl_character_element
 };
 struct StringMethod {
     StringMethodOperator operation { };
@@ -1276,6 +1283,10 @@ struct ForceSignalSlice {
     std::uint32_t offset { };
     std::optional<DynamicIndex> selection;
     bool driving_value { };
+    // The target names a port-connected net through a hierarchical reference
+    // (`force sub.q`), so it forces that net's segment inside the child rather
+    // than the net by its own name (IEEE 1800-2023 10.6.2, 23.3.3).
+    bool port_segment { };
 };
 
 /// Release a static packed force region and reveal current driven bits.
@@ -1285,6 +1296,8 @@ struct ReleaseSignalSlice {
     std::uint32_t width { };
     std::optional<DynamicIndex> selection;
     bool driving_value { };
+    // See ForceSignalSlice::port_segment.
+    bool port_segment { };
 };
 struct WriteInertialDynamicSlice {
     SignalId signal { };

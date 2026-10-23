@@ -339,6 +339,12 @@ public:
             vhdl_context = std::nullopt,
         std::optional<std::pair<std::uint32_t, std::uint32_t>>
             actual_slice = std::nullopt);
+    /// Lower a STRING expression into a one-shot program that writes its
+    /// value to `object`, for evaluation when its region is elaborated.
+    [[nodiscard]] std::optional<Process> lower_hir_elaboration_string(
+        semantic::ExpressionId expression,
+        StringObjectId object,
+        std::string_view hierarchy);
     /// Lower one exact package variable declaration initializer as a
     /// synchronous, one-shot SystemVerilog initial process. The declaration
     /// supplies both the retained initializer expression and its lexical
@@ -524,6 +530,12 @@ private:
     void clear_hir_pure_integral_attempt_cache() const noexcept;
 
     mutable std::size_t hir_effective_vhdl_subtype_cache_depth_ { };
+    // hir_resolver's fold of call-dependent bounds, and the number of
+    // bounds it folded, so results that used it are not cached.
+    mutable semantic::CompiledDesignResolver::BoundaryFallback
+        hir_boundary_fallback_;
+    mutable bool hir_boundary_fallback_active_ { };
+    mutable std::size_t hir_boundary_fallback_folds_ { };
     mutable std::size_t hir_effective_vhdl_subtype_cache_bytes_ { };
     mutable std::vector<HirEffectiveVhdlSubtypeCacheEntry>
         hir_effective_vhdl_subtype_cache_;
@@ -563,6 +575,8 @@ private:
         bool event_expression_scalar_edge { };
         std::optional<semantic::ExpressionId> input_actual;
         std::optional<SignalId> input_actual_destination;
+        // A STRING input actual written to this object instead.
+        std::optional<StringObjectId> input_actual_string_object;
         bool input_actual_assignment_context { };
         // The input actual is a conversion program: its value goes to the
         // resolver output register instead of an update of the destination.
@@ -676,6 +690,11 @@ private:
     void append_vhdl_element_constraint_key(std::string& key,
         const std::vector<semantic::vhdl::ElementConstraint>& constraints)
         const;
+    // The value of a STRING generic whose actual was evaluated when the
+    // parent region was elaborated (IEEE 1076-2008 14.4.2.1).
+    [[nodiscard]] std::optional<std::string>
+    hir_vhdl_elaborated_string_generic(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_constant_initializer(
         semantic::DeclarationId declaration) const;
@@ -694,6 +713,10 @@ private:
         bool null_range { };
         // A record result: `element_constraints` is its whole shape.
         bool record { };
+        // Every index range of a multidimensional result, `range` first
+        // (empty for a one-dimensional result); `element_width` is then
+        // the width of one `range` position.
+        std::vector<HirPackedRange> ranges { };
     };
     struct HirVhdlArrayIndex {
         semantic::ExpressionId expression;
@@ -737,6 +760,21 @@ private:
     // operands of one type yields (IEEE 1076-2008 9.2.5), or nullopt.
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_concatenation_subtype(semantic::ExpressionId expression) const;
+    // The index range of a one-dimensional value of the unconstrained array
+    // `subtype` with `literal_length` elements, or `range_width` bits: from
+    // the index subtype's 'LEFT in its direction (IEEE 1076-2008 9.3.3.3,
+    // 9.2.5), with the array type and element width.
+    struct HirVhdlOpenArrayRange {
+        HirPackedRange range;
+        const semantic::vhdl::TypeDefinition* array { };
+        std::size_t element_width { };
+        std::size_t count { };
+    };
+    [[nodiscard]] std::optional<HirVhdlOpenArrayRange>
+    hir_vhdl_open_array_range(const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId type_scope, semantic::ScopeId process_scope,
+        std::optional<std::size_t> literal_length,
+        std::size_t range_width) const;
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_unconstrained_constant_range(
         const semantic::vhdl::Declaration& declaration, std::size_t width,
@@ -1199,6 +1237,9 @@ private:
         // An element of an array of handles (`vifs[i].m`): the selection,
         // whose element binding holds the handle.
         std::optional<semantic::ExpressionId> element;
+        // A class property access whose value is the handle
+        // (`C#(virtual I)::vif.m`).
+        std::optional<semantic::ExpressionId> handle_expression;
         std::vector<std::pair<std::uint64_t, SignalId>> candidates;
         // A parameter of the interface (`vif.P`): each instance's value.
         std::vector<std::pair<std::uint64_t, PackedLogic4>> parameters;
@@ -1229,6 +1270,12 @@ private:
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(
         std::string_view name, semantic::ScopeId scope) const;
+    // The instances of `virtual_type`'s interface whose `member` the
+    // handle `result` names may designate.
+    [[nodiscard]] std::optional<HirVirtualInterfaceMember>
+    hir_virtual_interface_candidates(HirVirtualInterfaceMember result,
+        const semantic::sv::TypeReference& virtual_type,
+        const std::string& member) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_read(
         const HirVirtualInterfaceMember& member);
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
@@ -1548,6 +1595,11 @@ private:
         const semantic::vhdl::Declaration& variable);
     [[nodiscard]] std::string hir_vhdl_local_protected_key(
         semantic::DeclarationId declaration) const;
+    // The active frames a callable's generic bindings depend on: those
+    // binding a generic of an enclosing instance that an actual names.
+    [[nodiscard]] std::vector<semantic::CompiledBindingFrame>
+    hir_vhdl_generic_environment(
+        const semantic::CompiledBindingFrame& bindings) const;
     void load_hir_vhdl_protected_caches(
         std::span<const HirVhdlProtectedMember> members);
     void flush_hir_vhdl_protected_caches();
@@ -1560,9 +1612,30 @@ private:
     // of the instance being lowered.
     [[nodiscard]] semantic::CompiledDesignResolver hir_resolver() const
     {
-        return semantic::CompiledDesignResolver {
+        semantic::CompiledDesignResolver resolver {
             *specialized_hir_unit_, hir_generic_binding_frames_
         };
+        // In a callable body a bound may depend on its formals' actuals
+        // (IEEE 1076-2008 5.3.2.2), which the lowerer's frame knows.
+        if (active_hir_callable_ && !hir_boundary_fallback_active_) {
+            if (!hir_boundary_fallback_) {
+                hir_boundary_fallback_
+                    = [this](const semantic::ExpressionId expression) {
+                          struct ActiveGuard {
+                              bool& active;
+                              ~ActiveGuard() { active = false; }
+                          } guard { hir_boundary_fallback_active_ };
+                          hir_boundary_fallback_active_ = true;
+                          const auto value = hir_constant_integer(expression);
+                          if (value) {
+                              ++hir_boundary_fallback_folds_;
+                          }
+                          return value;
+                      };
+            }
+            resolver.set_boundary_fallback(&hir_boundary_fallback_);
+        }
+        return resolver;
     }
     // The type a VHDL type mark spelling denotes when looked up from
     // `scope`, for type marks the HIR left unresolved.
@@ -1919,6 +1992,9 @@ private:
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
+        // The matched member's type, which a later pattern on the
+        // identifier matches against (IEEE 1800-2023 12.6.3).
+        std::optional<semantic::sv::TypeReference> type;
     };
     [[nodiscard]] std::optional<HirCasePatternBinding>
     hir_case_pattern_binding(
@@ -1979,6 +2055,17 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_min_max(
         semantic::ExpressionId expression, std::size_t expected_width);
+    // A call of an interface function whose actual is a predefined
+    // operation: a relational operator (`cmp_fn => "="`, IEEE 1076-2019
+    // 6.5.7.1, 9.2.3) or STD_LOGIC_1164 RISING_EDGE/FALLING_EDGE.
+    [[nodiscard]] std::optional<std::string>
+    hir_vhdl_predefined_interface_operation(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_predefined_interface_call(semantic::ExpressionId expression);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_edge_predicate(
+        semantic::ExpressionId operand, bool rising,
+        const frontend::SourceSpan& span);
     enum class HirVhdlAttributeKind : std::uint8_t {
         length,
         position,
@@ -2275,10 +2362,12 @@ private:
         semantic::ExpressionId expression,
         const semantic::sv::TypeReference& type, std::size_t expected_width);
     [[nodiscard]] std::optional<RegisterId>
+    // `unpacked_image` lays an unpacked structure out as packed, as a
+    // tagged union's payload is (IEEE 1800-2023 7.3.2).
     lower_hir_systemverilog_packed_pattern(
         semantic::ExpressionId expression,
         const semantic::sv::TypeReference& type,
-        std::size_t expected_width);
+        std::size_t expected_width, bool unpacked_image = false);
     [[nodiscard]] bool lower_hir_systemverilog_file_statement(
         semantic::StatementId statement);
     [[nodiscard]] bool is_hir_vhdl_file_call(
@@ -2429,6 +2518,10 @@ private:
     [[nodiscard]] bool is_hir_vhdl_reflection_boolean_expression(
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool is_hir_vhdl_reflection_string_expression(
+        semantic::ExpressionId expression) const;
+    // A mirror method returning INTEGER, INDEX, NATURAL or DIMENSION
+    // (false) or REAL (true).
+    [[nodiscard]] std::optional<bool> hir_vhdl_reflection_numeric_result(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_reflection_expression(
@@ -3820,6 +3913,39 @@ private:
         RegisterId value, const semantic::vhdl::SubtypeIndication& subtype,
         runtime::simir::OutputFormat vector_format, bool image_quotes,
         const frontend::SourceSpan& span);
+    // T'VALUE (IEEE 1076-2019 16.2.2): the prefix of a `T'VALUE(string)`
+    // call, the representation form of a composite T, and the value of T
+    // whose string representation is in `text`, `width` bits wide (zero:
+    // the natural width of a scalar or constrained composite).
+    struct HirVhdlCompositeValueForm {
+        semantic::vhdl::SubtypeIndication effective;
+        // The record or array type; null for a predefined array type.
+        const semantic::vhdl::TypeDefinition* definition { };
+        bool record { };
+        std::size_t dimensions { };
+        std::optional<semantic::vhdl::SubtypeIndication> element;
+        bool character_string { };
+    };
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_value_attribute_prefix(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirVhdlCompositeValueForm>
+    hir_vhdl_composite_value_form(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The newline-separated literals of an enumeration T for T'VALUE.
+    [[nodiscard]] std::optional<std::string>
+    hir_vhdl_value_enumeration_literals(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The width of a value of a scalar or constrained representable
+    // composite subtype.
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_value_natural_width(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_string_value(
+        StringRegisterId text, const semantic::vhdl::SubtypeIndication& subtype,
+        std::size_t width, const frontend::SourceSpan& span);
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_composite_string_value(StringRegisterId text,
+        const HirVhdlCompositeValueForm& form, std::size_t width,
+        const frontend::SourceSpan& span);
     // The image of a composite value that has no scalar subelements.
     [[nodiscard]] std::optional<std::string> hir_vhdl_null_composite_image(
         const semantic::vhdl::SubtypeIndication& subtype, bool image_quotes,
@@ -4395,6 +4521,9 @@ private:
         std::vector<bool> argument_is_container;
         std::vector<frontend::PortDirection> directions;
         std::vector<HirGenericBinding> generic_bindings;
+        // The frames binding the enclosing instance generics that
+        // generic_bindings name (`t => t` in a generic package body).
+        std::vector<semantic::CompiledBindingFrame> generic_environment;
         std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
             static_integer_bindings;
         // Type parameters this frame binds to class handles (8.25), by

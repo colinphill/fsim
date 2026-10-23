@@ -629,6 +629,10 @@ template <typename OperationType, typename ExactSignalWidth,
             result.uses_write_after_slice = true;
         }
     } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
+        if (operation.port_segment) {
+            reject_unsupported(process, index,
+                "ForceSignalSlice through a port-connected net layer");
+        }
         record_use(operation.source, index);
         const auto target_width = exact_signal_width(operation.signal, index);
         if (operation.selection) {
@@ -644,6 +648,10 @@ template <typename OperationType, typename ExactSignalWidth,
             result.uses_force_signal_slice = true;
         }
     } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
+        if (operation.port_segment) {
+            reject_unsupported(process, index,
+                "ReleaseSignalSlice through a port-connected net layer");
+        }
         const auto target_width = exact_signal_width(operation.signal, index);
         if (operation.width == 0) {
             reject(

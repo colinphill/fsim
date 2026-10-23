@@ -1270,6 +1270,9 @@ VERILATOR_NONSTANDARD = {
     "t_vpi_escape": "expects Verilator's vpiFullName spelling "
         "'TOP.escaped_normal' and a 'top.' root for other simulators; IEEE "
         "1800-2023 37.3.1 gives vpiFullName as the full hierarchical name",
+    "t_vpi_multidim": "expects vpi_get_value(vpiStringVal) to render a "
+        "zero byte as a space; IEEE 1800-2023 38.15 maps each 8-bit group "
+        "to an ASCII character and leaves NUL unspecified",
     "t_dpi_lib": "reads 40-bit part-selects with svGetPartselBit and "
         "svGetPartselLogic, which IEEE 1800-2023 H.10.1.2 limits to w <= 32",
     "t_dpi_import": "declares pure void functions with output formals; only "

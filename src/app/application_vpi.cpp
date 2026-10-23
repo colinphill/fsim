@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
@@ -895,6 +896,81 @@ namespace {
             = std::make_shared<runtime::SystemVerilogVpiTypeDescriptor>(
                 container_element_descriptor(type));
         return result;
+    }
+
+    // A word of an array of a multidimensional packed type keeps its
+    // packed dimensions, leftmost first (IEEE 1800-2023 7.4.5, 37.17).
+    void apply_packed_word_dimensions(runtime::SystemVerilogVpiTypeInfo& word,
+        const semantic::sv::Hir& hir, const semantic::sv::Unit& unit, const std::string_view name)
+    {
+        const semantic::sv::Declaration* found { };
+        for (const auto id : unit.declarations) {
+            const auto* declaration = hir.find_declaration(id);
+            if (declaration == nullptr || declaration->name != name) {
+                continue;
+            }
+            if (found != nullptr) {
+                return;
+            }
+            found = declaration;
+        }
+        if (found == nullptr || !found->type
+            || found->type->packed_dimensions.size() < 2U || !word.descriptor
+            || word.descriptor->kind
+                != runtime::SystemVerilogVpiDescriptorKind::Scalar) {
+            return;
+        }
+        runtime::SystemVerilogVpiTypeDescriptor array;
+        array.kind = runtime::SystemVerilogVpiDescriptorKind::PackedArray;
+        array.category = runtime::SystemVerilogVpiValueCategory::None;
+        array.width = 0U;
+        // A bound is its folded value or an integer literal; other bounds
+        // keep the word's flat range.
+        const auto bound = [&](const std::optional<std::int64_t> value,
+                               const std::optional<semantic::ExpressionId> source)
+            -> std::optional<std::int64_t> {
+            if (value) {
+                return value;
+            }
+            const auto* expression = source ? hir.find_expression(*source)
+                                            : nullptr;
+            if (expression == nullptr
+                || expression->kind != semantic::sv::ExpressionKind::integer_literal) {
+                return std::nullopt;
+            }
+            if (const auto based
+                = semantic::sv::systemverilog_based_literal_bits(expression->text)) {
+                return static_cast<std::int64_t>(*based);
+            }
+            std::int64_t parsed { };
+            const auto& text = expression->text;
+            const auto result
+                = std::from_chars(text.data(), text.data() + text.size(), parsed);
+            return result.ec == std::errc { }
+                    && result.ptr == text.data() + text.size()
+                ? std::optional { parsed }
+                : std::nullopt;
+        };
+        std::uint64_t product = 1U;
+        for (const auto& range : found->type->packed_dimensions) {
+            const auto left = bound(range.left, range.left_expression);
+            const auto right = bound(range.right, range.right_expression);
+            if (!left || !right) {
+                return;
+            }
+            product *= support::index_distance(*left, *right) + 1U;
+            array.ranges.push_back({ *left, *right });
+        }
+        if (product != word.width) {
+            return;
+        }
+        auto element = *word.descriptor;
+        element.width = 1U;
+        element.is_signed = false;
+        array.children.push_back(std::move(element));
+        word.descriptor
+            = std::make_shared<runtime::SystemVerilogVpiTypeDescriptor>(
+                std::move(array));
     }
 
     [[nodiscard]] runtime::SystemVerilogVpiTypeInfo memory_type(
@@ -2120,6 +2196,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             word.name = word_name;
             word.type = container_word_type(
                 specialization.language, type);
+            if (const auto unit = std::ranges::find(
+                    project.systemverilog_hir.units(), specialization.unit,
+                    &semantic::sv::Unit::id);
+                specialization.language
+                    == semantic::Language::system_verilog
+                && unit != project.systemverilog_hir.units().end()) {
+                apply_packed_word_dimensions(*word.type,
+                    project.systemverilog_hir, *unit, object.name);
+            }
             word.type->language
                 = vpi_profile_language(project, specialization);
             apply_vpi_specialization_provenance(

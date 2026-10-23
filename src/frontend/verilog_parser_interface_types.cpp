@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -357,7 +360,15 @@ std::optional<Type> VerilogParser::import_interface_type(DesignUnit& unit) {
     return std::nullopt;
   }
   const auto first = current().text;
-  if (interface_path_unit(unit, first, {}, 0U, nullptr) == nullptr) {
+  // A generic interface port names no interface of its own: the connection
+  // chooses it (IEEE 1800-2017 25.5), so its types are imported once the
+  // instantiating units are parsed.
+  const bool generic = std::ranges::any_of(
+      unit.ports, [&](const SignalDeclaration& port) {
+        return port.name == first && port.interface_type.empty()
+            && port.type.spelling == "interface";
+      });
+  if (!generic && interface_path_unit(unit, first, {}, 0U, nullptr) == nullptr) {
     return std::nullopt;
   }
   std::vector<std::string> path;
@@ -390,6 +401,22 @@ std::optional<Type> VerilogParser::import_interface_type(DesignUnit& unit) {
   if (path.empty()) {
     return std::nullopt;
   }
+  if (generic) {
+    // The typedef import_interface_member declares later is named
+    // `<prefix>__<member>`, the prefix being the port and the nested
+    // instances (see make_context there).
+    auto hidden = "__fsim_ifp_" + first;
+    for (std::size_t segment = 0; segment + 1U < path.size(); ++segment) {
+      hidden += "_" + path[segment];
+    }
+    hidden += "__" + path.back();
+    pending_generic_interface_types_.push_back(
+        {unit.name, first, path, anchor, unit.type_aliases.size()});
+    Type type{ValueDomain::Unknown, hidden, std::nullopt, false};
+    type.named_type = hidden;
+    type.named_type_span = anchor.span;
+    return type;
+  }
   std::size_t failed = path.size();
   const auto* target = interface_path_unit(
       unit, first, path, path.size() - 1U, &failed);
@@ -419,6 +446,145 @@ std::optional<Type> VerilogParser::import_interface_type(DesignUnit& unit) {
   type.named_type = *hidden;
   type.named_type_span = anchor.span;
   return type;
+}
+
+// Imports the types that units named through a generic interface port
+// (`interface.mp p; typedef p.t t;`, IEEE 1800-2017 25.5, 25.10, 6.18). The
+// port's interface is the one its instances connect, found among the
+// instantiating units of the design; the typedef is then imported as
+// import_interface_type imports it for a typed port. The port keeps no
+// interface type: only the import sees one.
+void VerilogParser::resolve_generic_interface_types(ParsedDesign& design) {
+  if (pending_generic_interface_types_.empty()) return;
+  auto pending = std::move(pending_generic_interface_types_);
+  pending_generic_interface_types_.clear();
+  const auto find_interface = [&](const std::string_view name)
+      -> const DesignUnit* {
+    const auto found = std::ranges::find_if(
+        design.units, [&](const DesignUnit& candidate) {
+          return candidate.kind == UnitKind::SystemVerilogInterface
+              && candidate.name == name;
+        });
+    return found == design.units.end() ? nullptr : &*found;
+  };
+  // The name an actual connection starts from: `ifc`, `ifc.mp`, `ifc[1]`,
+  // or `ifc[i].mp`.
+  const auto actual_head = [](const Expression& value) -> std::string {
+    const Expression* node = &value;
+    while (!node->operands.empty()
+        && (node->kind == ExpressionKind::Index
+            || node->kind == ExpressionKind::Slice
+            || (node->kind == ExpressionKind::Call
+                && node->text.starts_with("@sv-select:")))) {
+      node = &node->operands.front();
+    }
+    if (node->kind != ExpressionKind::Identifier) return {};
+    return node->text.substr(0, node->text.find_first_of(".["));
+  };
+  // The interfaces the instances of `unit_name` connect to `port`.
+  std::function<void(const std::string&, const std::string&, int,
+                     std::vector<const DesignUnit*>&)> connected;
+  connected = [&](const std::string& unit_name, const std::string& port,
+                  const int depth, std::vector<const DesignUnit*>& found) {
+    const auto owner = std::ranges::find(design.units, unit_name,
+        &DesignUnit::name);
+    if (owner == design.units.end()) return;
+    const auto port_index = static_cast<std::size_t>(std::ranges::find(
+        owner->ports, port, &SignalDeclaration::name) - owner->ports.begin());
+    for (const auto& scope : design.units) {
+      for (const auto& instance : scope.instances) {
+        if (instance.unit_name != unit_name) continue;
+        std::string head;
+        std::size_t position{};
+        for (const auto& connection : instance.connections) {
+          const bool positional = !connection.port;
+          const auto slot = position;
+          if (positional) ++position;
+          if (connection.kind != PortActualKind::Expression) continue;
+          if (positional ? slot == port_index : *connection.port == port) {
+            head = actual_head(connection.value);
+          } else if (connection.port && *connection.port == "*"
+              && head.empty()) {
+            // `.*` connects the interface instance of the same name.
+            head = port;
+          }
+        }
+        if (head.empty()) continue;
+        if (const auto nested = std::ranges::find(
+                scope.instances, head, &Instance::name);
+            nested != scope.instances.end()) {
+          if (const auto* interface = find_interface(nested->unit_name)) {
+            found.push_back(interface);
+          }
+        } else if (const auto declared = std::ranges::find(
+                       scope.ports, head, &SignalDeclaration::name);
+                   declared != scope.ports.end()
+                   && declared->type.spelling == "interface") {
+          if (!declared->interface_type.empty()) {
+            if (const auto* interface =
+                    find_interface(declared->interface_type)) {
+              found.push_back(interface);
+            }
+          } else if (depth > 0) {
+            // A generic port forwarded from the instantiating unit.
+            connected(scope.name, head, depth - 1, found);
+          }
+        }
+      }
+    }
+  };
+  std::ranges::stable_sort(pending, {},
+      &PendingGenericInterfaceType::position);
+  // Aliases inserted so far, per unit, shift the later positions.
+  std::map<std::string, std::size_t, std::less<>> inserted;
+  for (const auto& request : pending) {
+    const auto owner = std::ranges::find(design.units, request.unit,
+        &DesignUnit::name);
+    if (owner == design.units.end()) continue;
+    std::vector<const DesignUnit*> interfaces;
+    connected(request.unit, request.port, 8, interfaces);
+    std::ranges::sort(interfaces, {}, &DesignUnit::name);
+    interfaces.erase(std::ranges::unique(interfaces, {},
+                         &DesignUnit::name).begin(),
+        interfaces.end());
+    if (interfaces.size() != 1U) {
+      error(request.anchor, "FSIM-SV-UNSUPPORTED-024",
+          interfaces.empty()
+              ? "generic interface port '" + request.port + "' of '"
+                  + request.unit + "' is not connected to an interface "
+                  "instance of this design, so its type '"
+                  + request.path.back() + "' is unknown"
+              : "generic interface port '" + request.port + "' of '"
+                  + request.unit + "' is connected to different "
+                  "interfaces, so its type '" + request.path.back()
+                  + "' is ambiguous");
+      continue;
+    }
+    auto port = std::ranges::find(owner->ports, request.port,
+        &SignalDeclaration::name);
+    if (port == owner->ports.end()) continue;
+    const auto saved = std::exchange(port->interface_type,
+        interfaces.front()->name);
+    const auto before = owner->type_aliases.size();
+    const auto hidden = import_interface_member(*owner, request.port,
+        request.path, request.anchor.span, InterfaceMemberKind::type);
+    port->interface_type = saved;
+    if (!hidden) {
+      error(request.anchor, "FSIM-SV-SEM-405",
+          "'" + request.path.back() + "' is not a type declared in interface '"
+              + interfaces.front()->name + "'");
+      continue;
+    }
+    // The imported typedefs precede the typedef that names them.
+    auto& shift = inserted[request.unit];
+    const auto count = owner->type_aliases.size() - before;
+    const auto target = std::min(request.position + shift, before);
+    std::rotate(owner->type_aliases.begin()
+            + static_cast<std::ptrdiff_t>(target),
+        owner->type_aliases.begin() + static_cast<std::ptrdiff_t>(before),
+        owner->type_aliases.end());
+    shift += count;
+  }
 }
 
 // Names of interface parameters and objects in elaboration-time constants

@@ -298,6 +298,9 @@ class Resolver final {
   [[nodiscard]] static std::string selected_uvm_intrinsic(
       const ClassSelection& selection,
       std::string_view method);
+  // A method of the UVM library: a `uvm_pkg` that declares uvm_object.
+  // A user package of that name is ordinary code.
+  [[nodiscard]] bool uvm_library_method(std::string_view identity) const;
   [[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
   resolve_class_name(std::string_view spelling, const Scope& scope) const;
   // `receiver` is the handle type the lookup starts from: a base named by a

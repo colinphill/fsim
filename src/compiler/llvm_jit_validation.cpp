@@ -1583,6 +1583,20 @@ using namespace runtime::simir;
             process, result.register_widths, signal_widths)) {
         reject(process, error->instruction, error->message);
     }
+    // A null array value (IEEE 1076-2008 5.3.2.1) has no bits: a process
+    // passing one holds zero-width registers and runs in the interpreter.
+    for (std::size_t index = 0; index < process.operations.size(); ++index) {
+        const auto zero_width = [&](const RegisterId id) {
+            return result.register_widths[id] == 0;
+        };
+        if (fsim::runtime::simir::operation_get_if<runtime::simir::CopyRegister>(
+                &process.operations[index])
+            && std::ranges::any_of(instruction_definitions[index], zero_width)
+            && std::ranges::all_of(instruction_uses[index], zero_width)) {
+            reject_unsupported(process, index,
+                "zero-width (null array) registers are interpreter-only");
+        }
+    }
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
         for (const auto definition : instruction_definitions[index]) {
             if (result.register_widths[definition] == 0) {

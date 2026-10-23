@@ -563,6 +563,8 @@ bool VhdlParser::parse_vhdl_generate_declarations(
     }
   };
   bool parsed = false;
+  // Package templates declared in this region, by declared name.
+  std::unordered_map<std::string, std::string> local_package_templates;
   for (;;) {
     if (match_keyword("signal", true)) {
       parsed = true;
@@ -687,6 +689,51 @@ bool VhdlParser::parse_vhdl_generate_declarations(
       const auto package_start = advance();
       parse_local_vhdl_package_instantiation(
           body.package_instances, package_start);
+      // An instance of a package template declared in this region names
+      // the template's library-level copy.
+      if (!body.package_instances.empty()) {
+        auto& instance = body.package_instances.back();
+        if (const auto local = local_package_templates.find(
+                instance.template_name);
+            local != local_package_templates.end()) {
+          instance.template_name = "work." + local->second;
+        }
+      }
+      continue;
+    }
+    if (keyword("package", 0, true)
+        && at(TokenKind::Identifier, 1)
+        && keyword("is", 2, true)) {
+      // A package declaration in a block or generate declarative part
+      // (IEEE 1076-2008 3.3.2, 11.2, 11.8). A generic package is a template
+      // with no state of its own, so it is hoisted to a library-level unit
+      // under a name unique to this declaration; instances in this region
+      // are redirected to it above.
+      parsed = true;
+      const auto package_start = advance();
+      (void)require_vhdl_standard(
+          package_start,
+          VhdlStandard::Vhdl2008,
+          "a package declaration in a block or generate statement",
+          "select VHDL-2008 or declare the package in a design unit");
+      auto saved_types = vhdl_named_types_;
+      auto saved_kinds = vhdl_named_type_kinds_;
+      auto nested = parse_package(package_start);
+      vhdl_named_types_ = std::move(saved_types);
+      vhdl_named_type_kinds_ = std::move(saved_kinds);
+      if (nested.parameters.empty()) {
+        error(
+            package_start,
+            "FSIM-VHDL-UNSUPPORTED-053",
+            "unsupported generated declarative item 'package' without a "
+            "generic clause");
+        continue;
+      }
+      const auto local_name = nested.name;
+      nested.name = local_name + "__o"
+          + std::to_string(package_start.span.begin.offset);
+      local_package_templates.insert_or_assign(local_name, nested.name);
+      nested_package_units_.push_back(std::move(nested));
       continue;
     }
     if (match_keyword("component", true)) {
@@ -744,8 +791,21 @@ bool VhdlParser::parse_vhdl_generate_declarations(
       }
       continue;
     }
+    if (match_keyword("shared", true)) {
+      // A shared variable of a block or generate declarative part (IEEE
+      // 1076-2008 3.3.2, 11.2, 11.8).
+      parsed = true;
+      DesignUnit declarations;
+      declarations.variables = std::move(body.variables);
+      declarations.signals = std::move(body.signals);
+      declarations.parameters = std::move(body.constants);
+      parse_vhdl_shared_variable(declarations, previous());
+      body.variables = std::move(declarations.variables);
+      body.signals = std::move(declarations.signals);
+      body.constants = std::move(declarations.parameters);
+      continue;
+    }
     if (keyword("variable", 0, true)
-        || keyword("shared", 0, true)
         || keyword("package", 0, true)) {
       parsed = true;
       const auto unsupported = advance();

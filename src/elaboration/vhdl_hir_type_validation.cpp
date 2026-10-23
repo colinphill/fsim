@@ -420,8 +420,17 @@ private:
 
     SubtypeIndication specialized_subtype(SubtypeIndication subtype) const
     {
+        return specialized_subtype(std::move(subtype), specialization_.scope());
+    }
+
+    // A subtype written in a nested region (a block's `p'subtype`) names
+    // that region's declarations (IEEE 1076-2008 12.1).
+    SubtypeIndication specialized_subtype(SubtypeIndication subtype,
+        const semantic::ScopeId scope) const
+    {
         return semantic::CompiledDesignResolver { specialization_ }
-            .effective_vhdl_subtype(subtype, specialization_.scope())
+            .effective_vhdl_subtype(subtype,
+                scope.valid() ? scope : specialization_.scope())
             .value_or(std::move(subtype));
     }
 
@@ -3077,8 +3086,8 @@ private:
                                        : std::nullopt;
             return type ? array_root(*type) : std::nullopt;
         }
-        const auto type = subtype_type(
-            specialized_subtype(*declaration->vhdl->subtype));
+        const auto type = subtype_type(specialized_subtype(
+            *declaration->vhdl->subtype, declaration->vhdl->scope));
         return type ? array_root(*type) : std::nullopt;
     }
 
@@ -6763,9 +6772,14 @@ private:
         if (name_exempt(expression.text)) {
             return;
         }
+        // A member of a compiler-provided standard package (an
+        // IEEE.STD_LOGIC_1164 function named as a subprogram actual) has no
+        // HIR declaration.
         if (!resolver.resolve_vhdl(reference, expression.scope).candidates.empty()
             || !resolver.resolve_vhdl_callables(reference, expression.scope)
-                    .candidates.empty()) {
+                    .candidates.empty()
+            || resolver.vhdl_standard_package_member_visible(
+                reference, expression.scope)) {
             return;
         }
         report("FSIM-ELAB-VHNAME-002",

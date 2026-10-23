@@ -473,6 +473,60 @@ const semantic::vhdl::TypeDefinition* protected_body_of(
     return find_protected_body(unit, *type);
 }
 
+// The protected type declaration a protected body completes (the type
+// itself when it is one).
+const semantic::vhdl::TypeDefinition* protected_declaration_of(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::vhdl::TypeDefinition* type)
+{
+    if (type == nullptr
+        || type->form == semantic::vhdl::TypeForm::protected_type) {
+        return type;
+    }
+    const semantic::vhdl::TypeDefinition* selected = nullptr;
+    for (const auto& stored : unit.design().vhdl_hir.types()) {
+        const auto candidate = unit.find_type(stored.id);
+        if (!candidate || candidate->vhdl == nullptr
+            || candidate->vhdl->form
+                != semantic::vhdl::TypeForm::protected_type
+            || !equal_ignoring_ascii_case(candidate->vhdl->name, type->name)) {
+            continue;
+        }
+        if (selected != nullptr && selected->id != candidate->vhdl->id) {
+            return nullptr;
+        }
+        selected = candidate->vhdl;
+    }
+    return selected;
+}
+
+// A method alias declared in a protected type (`alias inc1 is
+// c1.increment []`, IEEE 1076-2019 5.6.2) names that method of the
+// object's private variable when selected from the object (`sv.inc1`).
+std::optional<ProtectedMethodAlias> find_protected_member_alias(
+    const semantic::SpecializedHirUnit& unit,
+    const semantic::vhdl::TypeDefinition* type, const std::string_view name)
+{
+    const auto* declared = protected_declaration_of(unit, type);
+    if (declared == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto member_id : declared->protected_members) {
+        const auto* member = find_vhdl_declaration(unit, member_id);
+        if (member == nullptr
+            || member->form != semantic::vhdl::DeclarationForm::alias
+            || !member->alias_signature || !member->alias_target
+            || !equal_ignoring_ascii_case(member->name, name)) {
+            continue;
+        }
+        if (const auto target
+            = selected_vhdl_name(member->alias_target->text())) {
+            return ProtectedMethodAlias { member, *target };
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<ContainerObjectId> find_protected_storage(
     const ContainerObjectBindings& objects,
     const std::string_view object,
@@ -556,9 +610,34 @@ Lowerer::hir_vhdl_protected_instance(
         || !declaration->vhdl->subtype) {
         return std::nullopt;
     }
+    // An object named through a package instance (`inst.obj`) is that
+    // instance's copy, so its generic actuals type the protected type's
+    // items whichever other instances of the template exist (IEEE
+    // 1076-2008 4.9, 6.5.7.2).
+    std::optional<semantic::CompiledVhdlPackageMember> named;
+    if (object.find('.') != std::string_view::npos) {
+        semantic::vhdl::Name object_name;
+        object_name.spelling = std::string { object };
+        object_name.canonical = object_name.spelling;
+        const auto owners = hir_resolver().resolve_vhdl_package_members(
+            object_name, scope);
+        if (owners.candidates.size() == 1U
+            && owners.candidates.front().package_instance) {
+            named = owners.candidates.front();
+        }
+    }
     semantic::vhdl::Name type_name;
     type_name.spelling = declaration->vhdl->subtype->type_mark.spelling;
-    const auto members = hir_resolver().resolve_vhdl_package_members(
+    // The type mark may name a package instance of the template (`pt.t`)
+    // whose generic map names the enclosing instance's generics.
+    auto frames = hir_generic_binding_frames_;
+    if (named) {
+        frames.push_back(named->generic_bindings);
+    }
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, frames
+    };
+    const auto members = resolver.resolve_vhdl_package_members(
         type_name, declaration->vhdl->scope);
     std::optional<semantic::CompiledVhdlPackageMember> instance;
     for (const auto& candidate : members.candidates) {
@@ -566,9 +645,17 @@ Lowerer::hir_vhdl_protected_instance(
             continue;
         }
         if (instance && !(*instance == candidate)) {
-            return std::nullopt;
+            return named;
         }
         instance = candidate;
+    }
+    if (!instance) {
+        return named;
+    }
+    // The type's instance is bound within the object's: both frames apply.
+    if (named && named->package_instance != instance->package_instance) {
+        instance->generic_bindings.insert(instance->generic_bindings.begin(),
+            named->generic_bindings.begin(), named->generic_bindings.end());
     }
     return instance;
 }
@@ -585,7 +672,9 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     auto selected = selected_vhdl_name(name.text());
     auto object_scope = scope;
     const auto method_alias = selected
-        ? std::nullopt
+        ? find_protected_member_alias(*specialized_hir_unit_,
+              hir_vhdl_protected_type(scope, selected->object),
+              selected->member)
         : find_protected_method_alias(
               *specialized_hir_unit_, scope, name.text());
     if (method_alias) {
@@ -764,6 +853,11 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
             object_scope = method_alias->alias->scope;
         }
     }
+    const auto member_alias = selected
+        ? find_protected_member_alias(*specialized_hir_unit_,
+              hir_vhdl_protected_type(object_scope, selected->object),
+              selected->member)
+        : std::nullopt;
     const auto* body = selected
         ? protected_body_of(*specialized_hir_unit_,
               hir_vhdl_protected_type(object_scope, selected->object))
@@ -831,7 +925,25 @@ Lowerer::hir_vhdl_protected_call_members(const std::string_view call_name,
     if (instance) {
         lowerer->hir_generic_binding_frames_.pop_back();
     }
-    return storage;
+    if (!member_alias || !storage) {
+        return storage;
+    }
+    // The alias's method runs on the private variable it names.
+    const auto& target = member_alias->target;
+    const auto nested_scope = member_alias->alias->scope;
+    const auto nested_id = find_vhdl_object(
+        *specialized_hir_unit_, nested_scope, target.object);
+    const auto* nested_body = protected_body_of(*specialized_hir_unit_,
+        hir_vhdl_protected_type(nested_scope, target.object));
+    const auto nested = nested_id
+        ? std::ranges::find(*storage, *nested_id,
+              &HirVhdlProtectedMember::declaration)
+        : storage->end();
+    if (nested_body == nullptr || nested == storage->end()) {
+        return std::nullopt;
+    }
+    return lowerer->hir_vhdl_protected_object_storage(
+        nested->storage, *nested_body);
 }
 
 std::string Lowerer::hir_vhdl_local_protected_key(
@@ -1286,16 +1398,27 @@ Lowerer::hir_vhdl_protected_object_storage(const ContainerObjectId anchor,
         return std::nullopt;
     }
     std::vector<semantic::DeclarationId> member_ids;
-    for (const auto member_id : body.protected_members) {
-        const auto* member = find_vhdl_declaration(
-            *specialized_hir_unit_, member_id);
-        // Private variables and files are the object's state.
-        if (member != nullptr
-            && (member->form == semantic::vhdl::DeclarationForm::variable
-                || member->form == semantic::vhdl::DeclarationForm::file)) {
-            member_ids.push_back(member_id);
+    // Private variables and files are the object's state, including the
+    // private variables of the protected type declaration (IEEE 1076-2019
+    // 5.6.2).
+    const auto collect = [&](const semantic::vhdl::TypeDefinition& type) {
+        for (const auto member_id : type.protected_members) {
+            const auto* member = find_vhdl_declaration(
+                *specialized_hir_unit_, member_id);
+            if (member != nullptr
+                && (member->form == semantic::vhdl::DeclarationForm::variable
+                    || member->form
+                        == semantic::vhdl::DeclarationForm::file)) {
+                member_ids.push_back(member_id);
+            }
         }
+    };
+    if (const auto* declared
+        = protected_declaration_of(*specialized_hir_unit_, &body);
+        declared != nullptr && declared != &body) {
+        collect(*declared);
     }
+    collect(body);
     // Member storage is created the first time the object is used. A
     // private variable of protected type is an object of its own.
     if (object->members.size() == 1U) {
@@ -1507,6 +1630,17 @@ void Lowerer::load_hir_vhdl_protected_caches(
         const auto& info = design_.container_object_info_[member.storage];
         const auto* declaration = find_vhdl_declaration(
             *specialized_hir_unit_, member.declaration);
+        // The member's subtype and initial value name what is visible in
+        // the protected body, which may be a generic package's (IEEE
+        // 1076-2008 5.6.3).
+        struct ScopeRestore {
+            semantic::ScopeId& scope;
+            semantic::ScopeId saved;
+            ~ScopeRestore() { scope = saved; }
+        } restore_scope { hir_process_scope_, hir_process_scope_ };
+        if (declaration != nullptr) {
+            hir_process_scope_ = declaration->scope;
+        }
         const auto subtype = declaration != nullptr && declaration->subtype
             ? hir_effective_vhdl_subtype(*declaration->subtype)
             : std::nullopt;
@@ -3666,6 +3800,68 @@ bool Lowerer::is_hir_vhdl_reflection_boolean_expression(
             || equal_ignoring_ascii_case(selected->member, "is_null"));
 }
 
+std::optional<bool> Lowerer::hir_vhdl_reflection_numeric_result(
+    const semantic::ExpressionId expression_id) const
+{
+    if (!is_hir_vhdl_reflection_expression(expression_id)) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    const auto selected = selected_vhdl_name(expression->vhdl->text);
+    if (!selected) {
+        return std::nullopt;
+    }
+    const auto object_id = find_vhdl_object(
+        *specialized_hir_unit_, expression->vhdl->scope, selected->object);
+    const auto object = object_id
+        ? specialized_hir_unit_->find_declaration(*object_id)
+        : std::nullopt;
+    const auto declared_subtype = object && object->vhdl != nullptr
+        ? object->vhdl->subtype
+        : std::nullopt;
+    const auto effective = declared_subtype
+        ? hir_effective_vhdl_subtype(*declared_subtype)
+        : std::nullopt;
+    const auto receiver_is = [&](const std::string_view prefix) {
+        const auto matches = [&](const std::string_view name) {
+            return name.size() >= prefix.size()
+                && equal_ignoring_ascii_case(
+                    name.substr(0U, prefix.size()), prefix);
+        };
+        return (declared_subtype
+                   && matches(simple_name_of(
+                       declared_subtype->type_mark.spelling)))
+            || (effective
+                && matches(simple_name_of(effective->type_mark.spelling)));
+    };
+    const auto& member = selected->member;
+    // IEEE 1076-2019 16.12: FLOATING_VALUE_MIRROR.VALUE is REAL; the
+    // other VALUE, POS, UNIT_INDEX, LENGTH, UNITS_LENGTH, SCALE,
+    // DIMENSIONS and ELEMENT_INDEX are INTEGER subtypes, as are the
+    // array subtype mirror's LEFT, RIGHT, LOW and HIGH.
+    if (equal_ignoring_ascii_case(member, "value")) {
+        return receiver_is("floating_");
+    }
+    if (equal_ignoring_ascii_case(member, "pos")
+        || equal_ignoring_ascii_case(member, "unit_index")
+        || equal_ignoring_ascii_case(member, "length")
+        || equal_ignoring_ascii_case(member, "units_length")
+        || equal_ignoring_ascii_case(member, "scale")
+        || equal_ignoring_ascii_case(member, "dimensions")
+        || equal_ignoring_ascii_case(member, "element_index")) {
+        return false;
+    }
+    if ((equal_ignoring_ascii_case(member, "left")
+            || equal_ignoring_ascii_case(member, "right")
+            || equal_ignoring_ascii_case(member, "low")
+            || equal_ignoring_ascii_case(member, "high"))
+        && receiver_is("array_")) {
+        return false;
+    }
+    return std::nullopt;
+}
+
 bool Lowerer::is_hir_vhdl_reflection_string_expression(
     const semantic::ExpressionId expression_id) const
 {
@@ -3816,6 +4012,44 @@ Lowerer::lower_hir_vhdl_reflection_expression(
                 result.simple_name = type_name;
                 result.signed_value = current.signed_value;
                 result.lsb_offset = offset;
+                // A predefined array type (INTEGER_VECTOR, STRING, ...)
+                // mirrors as an array of its element type (IEEE 1076-2019
+                // 16.12).
+                if (const auto element
+                    = hir_vhdl_predefined_array_element(type_name)) {
+                    const auto width = vhdl_subtype_width(current);
+                    auto child = self(self, *element, 0U);
+                    if (!width || *width == 0U
+                        || *width > std::numeric_limits<std::uint32_t>::max()
+                        || !child) {
+                        return std::nullopt;
+                    }
+                    result.type_class = VhdlReflectionClass::array;
+                    result.packed_width = static_cast<std::uint32_t>(*width);
+                    for (const auto& constraint : current.constraints) {
+                        if (constraint.kind
+                            != semantic::vhdl::RangeKind::array_index) {
+                            continue;
+                        }
+                        const auto left = constraint.left_expression
+                            ? specialized_hir_unit_
+                                  ->evaluate_integral_expression(
+                                      *constraint.left_expression)
+                            : constraint.left;
+                        const auto right = constraint.right_expression
+                            ? specialized_hir_unit_
+                                  ->evaluate_integral_expression(
+                                      *constraint.right_expression)
+                            : constraint.right;
+                        if (!left || !right) {
+                            return std::nullopt;
+                        }
+                        result.ranges.push_back(VhdlReflectionRange {
+                            *left, *right, !constraint.descending });
+                    }
+                    result.children.push_back(std::move(*child));
+                    return result;
+                }
                 result.packed_width = static_cast<std::uint32_t>(
                     vhdl_subtype_width(current).value_or(
                         equal_ignoring_ascii_case(type_name, "real")

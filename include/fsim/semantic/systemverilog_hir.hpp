@@ -572,8 +572,19 @@ struct PackedRange {
     std::optional<ExpressionId> right_expression;
     bool descending { };
     SourceSpanId source;
+    // The elements this dimension selects are of a signed named type; a
+    // select of one is signed (IEEE 1800-2023 7.4.1). It records how the
+    // type was spelled, so it is not part of a range's identity.
+    bool element_signed { };
 
-    friend bool operator==(const PackedRange&, const PackedRange&) = default;
+    friend bool operator==(const PackedRange& lhs, const PackedRange& rhs)
+    {
+        return lhs.left == rhs.left && lhs.right == rhs.right
+            && lhs.left_expression == rhs.left_expression
+            && lhs.right_expression == rhs.right_expression
+            && lhs.descending == rhs.descending
+            && lhs.source == rhs.source;
+    }
 };
 
 struct ActualAssociation;
@@ -802,6 +813,11 @@ enum class ConstraintReferenceKind : std::uint8_t {
     parameter,
     local_variable,
     method,
+    // A variable declared in the enclosing module, interface, program,
+    // package or compilation unit. A constraint reads it as a state variable
+    // whose value at the randomize call is fixed during the solve (IEEE
+    // 1800-2017 18.5, 18.4).
+    state,
 };
 
 struct ConstraintBinding {
@@ -810,6 +826,8 @@ struct ConstraintBinding {
     std::string canonical_identity;
     TypeReference type;
     std::string constant_value;
+    // The unit-scope declaration a `state` binding reads.
+    std::optional<DeclarationId> declaration;
 };
 
 struct ConstraintExpression {

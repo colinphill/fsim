@@ -270,6 +270,8 @@ private:
   void parse_signal_declaration(
       std::vector<SignalDeclaration> &signals,
       const std::vector<ParameterDeclaration> *constants = nullptr);
+  // A subprogram alias signature after its '[' (IEEE 1076-2008 4.5.3).
+  std::optional<VhdlAliasSignature> parse_vhdl_alias_signature();
   void parse_vhdl_object_alias(
       std::vector<TypeAliasDeclaration> &type_aliases,
       std::vector<SignalAliasDeclaration> &aliases,
@@ -424,6 +426,10 @@ private:
   // on first use.
   std::optional<std::unordered_set<std::string>> vhdl_source_type_names_;
   bool vhdl_source_declares_type(const std::string &name);
+  std::optional<bool> vhdl_source_uses_reflection_;
+  // The source names STD.REFLECTION (`use std.reflection.all` on a unit or
+  // its package declaration).
+  bool vhdl_source_uses_reflection();
   std::unordered_map<std::string, TypeDeclarationKind> vhdl_named_type_kinds_;
   // Package declarations and bodies declared in a package declarative region
   // (IEEE 1076-2008 4.7, 4.8), emitted as units after their enclosing unit.

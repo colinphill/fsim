@@ -126,7 +126,8 @@ namespace {
         expression(range.left, scope, parent),
         expression(range.right, scope, parent),
         range.descending.value_or(true),
-        source(range.span)
+        source(range.span),
+        range.element_signed
     };
 }
 
@@ -193,6 +194,12 @@ namespace {
         if (input.packed_range) {
             output.packed_range = packed_range(
                 *input.packed_range, source(fallback));
+            // A single dimension keeps its element's signedness in the
+            // expression form of the same range.
+            if (input.packed_range_expression) {
+                output.packed_range->element_signed
+                    = input.packed_range_expression->element_signed;
+            }
         } else if (input.packed_range_expression) {
             output.packed_range = packed_range(
                 *input.packed_range_expression, scope, parent);

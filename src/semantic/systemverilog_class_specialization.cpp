@@ -1263,6 +1263,11 @@ private:
     std::optional<std::size_t> storage_width(const TypeReference& type,
         std::set<TypeId>& active) const
     {
+        // A virtual interface holds an instance handle (IEEE 1800-2017
+        // 25.9).
+        if (type.virtual_interface && !type.container_form) {
+            return 64U;
+        }
         if (type.value_form == TypeForm::class_handle
             || type.value_form == TypeForm::string || type.container_form
             || type.value_form == TypeForm::unpacked_structure

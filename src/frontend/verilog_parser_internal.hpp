@@ -899,6 +899,22 @@ class VerilogParser final : private detail::ParserBase {
       const std::vector<std::string>& path, const SourceSpan& anchor,
       InterfaceMemberKind kind);
   void import_interface_member_references(DesignUnit& unit);
+  // A type named through a generic interface port (`interface.mp p;
+  // typedef p.t t;`) depends on the interface the port is connected to
+  // (IEEE 1800-2017 25.5, 25.10), which only the instantiating unit
+  // supplies. The reference is parsed as the hidden typedef that
+  // import_interface_member will declare, and imported once the whole
+  // design is parsed.
+  struct PendingGenericInterfaceType {
+    std::string unit;
+    std::string port;
+    std::vector<std::string> path;
+    Token anchor;
+    // Where the hidden typedef belongs in the unit's type aliases.
+    std::size_t position{};
+  };
+  std::vector<PendingGenericInterfaceType> pending_generic_interface_types_;
+  void resolve_generic_interface_types(ParsedDesign& design);
   // The design being parsed; earlier units are visible to later ones.
   ParsedDesign* parsed_design_{};
   [[gnu::noinline]] void prepend_hoisted_statements(
@@ -1186,5 +1202,9 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<std::size_t>
       pending_systemverilog_fsm_pragma_target_position_;
 };
+
+// The spelling of a type actual in a `C#(...)` selection
+// (verilog_parser_expressions.cpp).
+[[nodiscard]] std::string class_actual_type_spelling(const Type& type);
 
 }  // namespace fsim::frontend

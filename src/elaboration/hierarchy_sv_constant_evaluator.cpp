@@ -4015,6 +4015,34 @@ private:
         const auto cast_value
             = semantic::sv::systemverilog_cast_value_operand(record);
         if (cast_value) {
+            // An assignment pattern cast to an unpacked structure or array
+            // type (`foo_t'{4, '{1, 2}}`) takes the type's layout: each item
+            // converts to its member or element type, as the pattern of a
+            // declaration initializer does (IEEE 1800-2017 6.24.1, 10.9.1,
+            // 10.9.2). Evaluated on its own, the pattern would concatenate
+            // the items at their self-determined widths.
+            if (!semantic::sv::systemverilog_cast_size_operand(record)) {
+                const auto operand = specialization_.find_expression(
+                    *cast_value);
+                const auto name = std::string_view { record.text }.substr(
+                    std::string_view { "@sv-cast:" }.size());
+                if (operand && operand->systemverilog != nullptr
+                    && operand->systemverilog->kind
+                        == ExpressionKind::assignment_pattern
+                    && !name.empty()
+                    && frontend::systemverilog_scalar_kind(name)
+                        == ScalarKind::None
+                    && !parse_integer<std::uint32_t>(name)) {
+                    if (const auto pattern_type = named_cast_type(record, name);
+                        pattern_type && unpacked_aggregate(*pattern_type)) {
+                        if (auto image = evaluate_for_type(
+                                *cast_value, *pattern_type)) {
+                            return image;
+                        }
+                        error_.clear();
+                    }
+                }
+            }
             auto result = evaluate(*cast_value);
             if (!result) {
                 return std::nullopt;

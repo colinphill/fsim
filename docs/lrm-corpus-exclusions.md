@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 293 |
+| verilator | 63 | 294 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
 | nvc | 219 | 0 |
@@ -370,6 +370,7 @@ Exclusions never count as closures.
 | `t_vpi_forceable_var` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
 | `t_vpi_module` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_module_dpi` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
+| `t_vpi_multidim` | out of scope | expects vpi_get_value(vpiStringVal) to render a zero byte as a space; IEEE 1800-2023 38.15 maps each 8-bit group to an ASCII character and leaves NUL unspecified |
 | `t_vpi_package` | out of scope | looks up '$unit::' names with vpi_handle_by_name, which shall not reach objects of a compilation unit (IEEE 1800-2023 37.10 detail 6) |
 | `t_vpi_param` | out of scope | expects vpi_get(vpiLocalParam) on a parameter to raise an error; IEEE 1800-2023 37.28 defines vpiLocalParam for parameters |
 | `t_vpi_public_depth` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |

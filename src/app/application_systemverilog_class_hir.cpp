@@ -863,6 +863,53 @@ SystemVerilogHirBuilder::unit_parameter_binding(
     return binding;
 }
 
+std::optional<sv::ConstraintBinding>
+SystemVerilogHirBuilder::state_variable_binding(
+    const frontend::SystemVerilogClassDeclaration& declaration,
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    const std::string_view spelling)
+{
+    // Only a simple name; a hierarchical or scoped name is not a variable
+    // of the declaring unit.
+    if (spelling.empty()
+        || spelling.find_first_of(".:") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const sv::Declaration* selected = nullptr;
+    std::string owner;
+    std::size_t candidates { };
+    for (const auto& unit : hir_.units()) {
+        if (declaration.canonical_identity.find("::" + unit.name + "::")
+            == std::string::npos) {
+            continue;
+        }
+        for (const auto id : unit.declarations) {
+            const auto* candidate = hir_.find_declaration(id);
+            if (candidate == nullptr || candidate->scope != unit.scope
+                || candidate->name != spelling
+                || (candidate->form != sv::DeclarationForm::variable
+                    && candidate->form != sv::DeclarationForm::net)
+                || !candidate->declared_value || !candidate->type) {
+                continue;
+            }
+            selected = candidate;
+            owner = unit.name;
+            ++candidates;
+        }
+    }
+    if (selected == nullptr || candidates != 1U) {
+        return std::nullopt;
+    }
+    sv::ConstraintBinding binding;
+    binding.kind = sv::ConstraintReferenceKind::state;
+    binding.specialization_identity = specialization.specialization_identity;
+    binding.canonical_identity
+        = "$state::" + owner + "::" + std::string { spelling };
+    binding.type = *selected->type;
+    binding.declaration = selected->id;
+    return binding;
+}
+
 std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::method_binding(
     const frontend::SystemVerilogClassSpecialization& specialization,
     std::string spelling,
@@ -1242,6 +1289,13 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                         binding = std::move(constant);
                         break;
                     }
+                }
+                // A variable of the enclosing unit is a state variable of
+                // the solve (IEEE 1800-2017 18.5); every class-scope
+                // meaning of the name takes precedence.
+                if (!binding) {
+                    binding = state_variable_binding(
+                        declaration, specialization, expression.text);
                 }
             }
         } else if (expression.kind == sv::ConstraintExpressionKind::call) {

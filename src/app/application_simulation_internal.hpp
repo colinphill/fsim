@@ -556,6 +556,25 @@ struct Simulation::Impl {
     std::optional<std::map<std::string, semantic::sv::TypeReference,
         std::less<>>>
         class_constraint_property_types;
+    // A unit-scope variable a class constraint reads as a state variable
+    // (IEEE 1800-2017 18.5): the solver sees its value at the randomize
+    // call as a fixed variable, so the value is read per solve.
+    struct ConstraintStateVariable {
+        std::string identity;
+        semantic::DeclarationId declaration;
+        semantic::sv::ConstraintBinding binding;
+    };
+    // The state variables of a class's composed constraints, by class
+    // declaration identity; built at the first solve of the class.
+    std::map<std::string, std::vector<ConstraintStateVariable>, std::less<>>
+        class_constraint_state_variables;
+    [[nodiscard]] const std::vector<ConstraintStateVariable>&
+    constraint_state_variables(
+        const semantic::sv::ClassSpecialization& specialization);
+    void add_constraint_state_variables(
+        runtime::SystemVerilogConstraintSolver& solver,
+        runtime::SystemVerilogClassRandomizeVariables& variables,
+        const semantic::sv::ClassSpecialization& specialization);
     // A static constraint's mode is shared by every object of its class
     // (IEEE 1800-2017 18.9), by canonical constraint identity.
     std::map<std::string, bool, std::less<>> static_constraint_modes;

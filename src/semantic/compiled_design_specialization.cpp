@@ -5636,6 +5636,15 @@ private:
                               *source.referenced_name->selected)
                         : evaluate_vhdl_callable(source);
                 }
+                // A generic bound by the active frame has its actual's
+                // value (IEEE 1076-2008 6.5.6.2).
+                if (binding_ != nullptr) {
+                    if (const auto actual = (*binding_)(
+                            *source.referenced_name->selected);
+                        actual && *actual != expression_id) {
+                        return evaluate_vhdl_value(*actual);
+                    }
+                }
                 return evaluate_vhdl_declaration(
                     *source.referenced_name->selected);
             }
@@ -11803,6 +11812,91 @@ private:
         return result;
     }
 
+    // The subtype of `obj'element` and `x.m` selected from an object
+    // (IEEE 1076-2008 16.2.3, 8.3): the element subtype under the
+    // prefix's element constraints.
+    [[nodiscard]] std::optional<vhdl::SubtypeIndication>
+    vhdl_selected_element_subtype(const ExpressionId id, const ScopeId scope,
+        const std::size_t depth = 0U) const
+    {
+        const auto source = unit_.find_expression(id);
+        if (!source || source->vhdl == nullptr || depth > 16U) {
+            return std::nullopt;
+        }
+        const CompiledDesignResolver resolver { unit_ };
+        if (source->vhdl->kind == vhdl::ExpressionKind::name) {
+            const auto declaration_id = resolve_vhdl_expression_declaration(id,
+                [](const CompiledDeclarationView& candidate) {
+                    return candidate.vhdl != nullptr
+                        && vhdl::is_value_object_form(candidate.vhdl->form);
+                });
+            const auto declaration = declaration_id
+                ? unit_.find_declaration(*declaration_id)
+                : std::nullopt;
+            if (!declaration || declaration->vhdl == nullptr
+                || !declaration->vhdl->subtype) {
+                return std::nullopt;
+            }
+            return resolver.effective_vhdl_subtype(
+                *declaration->vhdl->subtype, scope);
+        }
+        const bool element = source->vhdl->text == "'element";
+        if (source->vhdl->kind != vhdl::ExpressionKind::call
+            || source->vhdl->operands.size() != 1U
+            || (!element && !source->vhdl->text.starts_with("@vhdl-member:"))) {
+            return std::nullopt;
+        }
+        const auto owner = vhdl_selected_element_subtype(
+            source->vhdl->operands.front(), scope, depth + 1U);
+        if (!owner) {
+            return std::nullopt;
+        }
+        const vhdl::TypeDefinition* composite { };
+        std::set<TypeId> visited;
+        for (auto type_id = owner->type_mark.target;
+             type_id.valid() && visited.insert(type_id).second;) {
+            const auto type = unit_.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                break;
+            }
+            if (type->vhdl->form == vhdl::TypeForm::array
+                || type->vhdl->form == vhdl::TypeForm::record) {
+                composite = type->vhdl;
+                break;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        if (composite == nullptr) {
+            return std::nullopt;
+        }
+        if (element) {
+            if (composite->form != vhdl::TypeForm::array
+                || !composite->element_subtype) {
+                return std::nullopt;
+            }
+            return resolver.effective_vhdl_subtype(
+                vhdl::constrained_element_subtype(
+                    *owner, "", *composite->element_subtype),
+                scope);
+        }
+        const auto name = std::string_view { source->vhdl->text }.substr(
+            std::string_view { "@vhdl-member:" }.size());
+        const auto member = composite->form == vhdl::TypeForm::record
+            ? std::ranges::find_if(composite->record_elements,
+                  [&](const vhdl::RecordElement& candidate) {
+                      return support::equal_ignoring_ascii_case(
+                          candidate.name, name);
+                  })
+            : composite->record_elements.end();
+        if (member == composite->record_elements.end()) {
+            return std::nullopt;
+        }
+        return resolver.effective_vhdl_subtype(
+            vhdl::constrained_element_subtype(
+                *owner, member->name, member->subtype),
+            scope);
+    }
+
     [[nodiscard]] std::optional<std::int64_t> evaluate_vhdl_attribute(
         const vhdl::Expression& expression)
     {
@@ -11829,8 +11923,26 @@ private:
                       && vhdl_attribute_prefix_form(
                           candidate.vhdl->form);
               };
-        const auto declaration_id = resolve_vhdl_expression_declaration(
+        auto declaration_id = resolve_vhdl_expression_declaration(
             expression.operands.front(), attribute_prefix);
+        // `obj.elem'attr`: the object is the longest leading part of the
+        // selected name that denotes one (IEEE 1076-2008 8.3).
+        if (!declaration_id && prefix->vhdl->kind == vhdl::ExpressionKind::name
+            && prefix->vhdl->text.find('.') != std::string::npos) {
+            const CompiledDesignResolver resolver { unit_ };
+            for (auto end = prefix->vhdl->text.rfind('.');
+                 !declaration_id && end != std::string::npos && end != 0U;
+                 end = prefix->vhdl->text.rfind('.', end - 1U)) {
+                vhdl::Name name;
+                name.spelling = prefix->vhdl->text.substr(0U, end);
+                name.canonical = name.spelling;
+                name.source = prefix->vhdl->source;
+                declaration_id = resolver
+                    .resolve_vhdl(name, prefix->vhdl->scope,
+                        attribute_prefix)
+                    .unique();
+            }
+        }
         const auto declaration = declaration_id
             ? unit_.find_declaration(*declaration_id)
             : std::nullopt;
@@ -11886,6 +11998,63 @@ private:
                 .effective_vhdl_subtype(
                     *effective_subtype, expression.scope);
         }
+        // A selected element of a record object (`p.x'range`) has the
+        // element's subtype under the object's element constraints (IEEE
+        // 1076-2008 8.3, 6.5.6.3).
+        if (effective_subtype && declaration && declaration->vhdl != nullptr
+            && !vhdl_type_declaration_form(declaration->vhdl->form)
+            && !declaration->vhdl->callable
+            && prefix->vhdl->kind == vhdl::ExpressionKind::name
+            && prefix->vhdl->text.find('.') != std::string::npos) {
+            std::vector<std::string_view> segments;
+            for (std::string_view rest { prefix->vhdl->text };;) {
+                const auto separator = rest.find('.');
+                segments.push_back(rest.substr(0U, separator));
+                if (separator == std::string_view::npos) {
+                    break;
+                }
+                rest.remove_prefix(separator + 1U);
+            }
+            const auto root = std::ranges::find_if(segments,
+                [&](const std::string_view segment) {
+                    return support::equal_ignoring_ascii_case(
+                        segment, declaration->vhdl->name);
+                });
+            for (auto step = root == segments.end() ? root : std::next(root);
+                 step != segments.end() && effective_subtype; ++step) {
+                const vhdl::TypeDefinition* record { };
+                std::set<TypeId> visited;
+                for (auto id = std::optional {
+                         effective_subtype->type_mark.target };
+                     id && id->valid() && visited.insert(*id).second;) {
+                    const auto type = unit_.find_type(*id);
+                    if (!type || type->vhdl == nullptr) {
+                        break;
+                    }
+                    if (type->vhdl->form == vhdl::TypeForm::record) {
+                        record = type->vhdl;
+                        break;
+                    }
+                    id = type->vhdl->base.type_mark.target;
+                }
+                const auto element = record != nullptr
+                    ? std::ranges::find_if(record->record_elements,
+                          [&](const vhdl::RecordElement& candidate) {
+                              return support::equal_ignoring_ascii_case(
+                                  candidate.name, *step);
+                          })
+                    : std::vector<vhdl::RecordElement>::const_iterator { };
+                if (record == nullptr
+                    || element == record->record_elements.end()) {
+                    return std::nullopt;
+                }
+                effective_subtype = CompiledDesignResolver { unit_ }
+                    .effective_vhdl_subtype(
+                        vhdl::constrained_element_subtype(*effective_subtype,
+                            element->name, element->subtype),
+                        expression.scope);
+            }
+        }
         // An indexed name denotes an element of the named array, so the
         // attribute is the element subtype's (IEEE 1076-2008 8.4, 16.2.3).
         // A slice or a nested selection is left to elaboration.
@@ -11937,6 +12106,16 @@ private:
                     vhdl::constrained_element_subtype(*effective_subtype, "",
                         *array->element_subtype),
                     expression.scope);
+            if (!effective_subtype) {
+                return std::nullopt;
+            }
+        }
+        if (prefix->vhdl->kind == vhdl::ExpressionKind::call
+            && prefix->vhdl->operands.size() == 1U
+            && (prefix->vhdl->text == "'element"
+                || prefix->vhdl->text.starts_with("@vhdl-member:"))) {
+            effective_subtype = vhdl_selected_element_subtype(
+                expression.operands.front(), expression.scope);
             if (!effective_subtype) {
                 return std::nullopt;
             }
@@ -12069,6 +12248,52 @@ private:
                 if (const auto length = vhdl_value_shape_length(
                         *declaration->vhdl->initializer, 0U)) {
                     return length;
+                }
+            }
+            // An unconstrained generic constant has the bounds of the
+            // actual its binding frame associates (IEEE 1076-2008
+            // 6.5.6.2); 'LENGTH, 'HIGH and 'LOW do not depend on the
+            // direction a literal actual takes from its context.
+            if (!range && index == 0U && binding_ != nullptr && declaration_id
+                && (expression.text == "'length" || expression.text == "'high"
+                    || expression.text == "'low")
+                && (definition == nullptr || definition->array_dimensions.empty()
+                    || definition->array_dimensions.front().unconstrained)
+                && declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form
+                    == vhdl::DeclarationForm::generic_constant) {
+                // An unassociated generic takes its default (6.5.6.2).
+                auto actual = (*binding_)(*declaration_id);
+                if (!actual) {
+                    actual = declaration->vhdl->initializer;
+                }
+                const auto value = actual ? evaluate_vhdl_value(*actual)
+                                          : std::nullopt;
+                std::optional<std::pair<std::int64_t, std::int64_t>> bounds;
+                if (value && value->kind == VhdlConstantValue::Kind::array
+                    && !value->array_null) {
+                    bounds = std::pair { value->array_left, value->array_right };
+                } else if (value
+                    && value->kind == VhdlConstantValue::Kind::packed
+                    && !value->packed.bits.empty()) {
+                    // One-bit elements only: the packed bounds then count
+                    // elements.
+                    const auto span = value->packed.left_bound
+                            > value->packed.right_bound
+                        ? value->packed.left_bound - value->packed.right_bound
+                        : value->packed.right_bound - value->packed.left_bound;
+                    if (static_cast<std::uint64_t>(span) + 1U
+                        == value->packed.bits.size()) {
+                        bounds = std::pair { value->packed.left_bound,
+                            value->packed.right_bound };
+                    }
+                }
+                if (bounds) {
+                    const auto low = std::min(bounds->first, bounds->second);
+                    const auto high = std::max(bounds->first, bounds->second);
+                    return expression.text == "'length" ? high - low + 1
+                        : expression.text == "'high"    ? high
+                                                        : low;
                 }
             }
             // A targetless implicit STD.STANDARD.BIT_VECTOR formal is the
@@ -14455,6 +14680,20 @@ std::optional<SpecializedHirUnit> working_specialization(
     auto result = SpecializedHirUnitFactory::make(design,
         std::move(*specialization), std::move(replacement_units),
         validated_lookup_indexes, std::move(memo_context));
+    // An unconstrained formal takes its index ranges from an actual
+    // evaluated at elaboration (IEEE 1076-2008 6.5.6.2, 5.3.2.2).
+    for (const auto& actual : result.specialization().actual_identities) {
+        if (!actual.vhdl_elaborated_subtype) {
+            continue;
+        }
+        const auto declaration = result.find_declaration(actual.declaration);
+        if (!declaration || declaration->vhdl == nullptr) {
+            continue;
+        }
+        auto replacement = *declaration->vhdl;
+        replacement.subtype = *actual.vhdl_elaborated_subtype;
+        static_cast<void>(result.replace(std::move(replacement)));
+    }
     if (selected->systemverilog != nullptr) {
         concretize_type_operator_declarations(
             result, *selected->systemverilog);
@@ -16792,168 +17031,178 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                         *source.referenced_name, source.scope);
                 const bool function
                     = formal_declaration->vhdl->callable->function;
-                std::vector<DeclarationId> same_kind;
-                std::vector<CompiledVhdlCallableResolution>
-                    parameter_matches;
-                std::vector<CompiledVhdlCallableResolution> matches;
-                bool bodyless_match { };
-                for (const auto candidate_id : visible.candidates) {
-                    auto candidate = parent != nullptr
-                            && &parent->design() == &design
-                        ? parent->find_declaration(candidate_id)
-                        : std::optional<CompiledDeclarationView> { };
-                    if (!candidate) {
-                        candidate = design.find_declaration(candidate_id);
-                    }
-                    if (!candidate || candidate->vhdl == nullptr) {
-                        continue;
-                    }
-                    const auto resolved
-                        = resolver.resolve_vhdl_callable(candidate_id);
-                    if (candidate->vhdl->callable) {
-                        if (candidate->vhdl->callable->function
-                            != function) {
-                            continue;
-                        }
-                        same_kind.push_back(candidate_id);
-                        if (resolved.candidates.empty()) {
-                            bodyless_match = bodyless_match
-                                || resolver.vhdl_callable_profile_matches(
-                                    formal.declaration, candidate_id,
-                                    true);
-                            continue;
-                        }
-                    }
-                    for (const auto& resolution : resolved.candidates) {
-                        auto body = parent != nullptr
+                // A member of a compiler-provided standard package
+                // (IEEE.STD_LOGIC_1164 RISING_EDGE) has no declaration: the
+                // formal stays bound to the actual expression, and its calls
+                // are that predefined function (IEEE 1076-2019 6.5.7.1).
+                const bool predefined_actual = visible.candidates.empty()
+                    && function
+                    && resolver.vhdl_standard_package_member_visible(
+                        *source.referenced_name, source.scope);
+                if (!predefined_actual) {
+                    std::vector<DeclarationId> same_kind;
+                    std::vector<CompiledVhdlCallableResolution>
+                        parameter_matches;
+                    std::vector<CompiledVhdlCallableResolution> matches;
+                    bool bodyless_match { };
+                    for (const auto candidate_id : visible.candidates) {
+                        auto candidate = parent != nullptr
                                 && &parent->design() == &design
-                            ? parent->find_declaration(resolution.body)
+                            ? parent->find_declaration(candidate_id)
                             : std::optional<CompiledDeclarationView> { };
-                        if (!body) {
-                            body = design.find_declaration(resolution.body);
+                        if (!candidate) {
+                            candidate = design.find_declaration(candidate_id);
                         }
-                        if (!body || body->vhdl == nullptr
-                            || !body->vhdl->callable
-                            || body->vhdl->callable->function
-                                != function) {
+                        if (!candidate || candidate->vhdl == nullptr) {
                             continue;
                         }
-                        same_kind.push_back(candidate_id);
-                        std::vector<CompiledBindingFrame>
-                            candidate_frames { current_bindings };
-                        if (!resolution.generic_bindings.empty()) {
-                            candidate_frames.push_back(
-                                resolution.generic_bindings);
+                        const auto resolved
+                            = resolver.resolve_vhdl_callable(candidate_id);
+                        if (candidate->vhdl->callable) {
+                            if (candidate->vhdl->callable->function
+                                != function) {
+                                continue;
+                            }
+                            same_kind.push_back(candidate_id);
+                            if (resolved.candidates.empty()) {
+                                bodyless_match = bodyless_match
+                                    || resolver.vhdl_callable_profile_matches(
+                                        formal.declaration, candidate_id,
+                                        true);
+                                continue;
+                            }
                         }
-                        const CompiledDesignResolver profile_resolver {
-                            design, lookup_unit,
-                            parent != nullptr
+                        for (const auto& resolution : resolved.candidates) {
+                            auto body = parent != nullptr
                                     && &parent->design() == &design
-                                ? parent
-                                : nullptr,
-                            candidate_frames
-                        };
-                        const auto profile
-                            = resolution.generic_bindings.empty()
-                                && candidate->vhdl->callable
-                            ? candidate_id
-                            : resolution.body;
-                        if (profile_resolver.vhdl_callable_profile_matches(
-                                formal.declaration, profile,
-                                false)) {
-                            parameter_matches.push_back(resolution);
-                        }
-                        if (profile_resolver.vhdl_callable_profile_matches(
-                                formal.declaration, profile,
-                                true)) {
-                            matches.push_back(resolution);
+                                ? parent->find_declaration(resolution.body)
+                                : std::optional<CompiledDeclarationView> { };
+                            if (!body) {
+                                body = design.find_declaration(resolution.body);
+                            }
+                            if (!body || body->vhdl == nullptr
+                                || !body->vhdl->callable
+                                || body->vhdl->callable->function
+                                    != function) {
+                                continue;
+                            }
+                            same_kind.push_back(candidate_id);
+                            std::vector<CompiledBindingFrame>
+                                candidate_frames { current_bindings };
+                            if (!resolution.generic_bindings.empty()) {
+                                candidate_frames.push_back(
+                                    resolution.generic_bindings);
+                            }
+                            const CompiledDesignResolver profile_resolver {
+                                design, lookup_unit,
+                                parent != nullptr
+                                        && &parent->design() == &design
+                                    ? parent
+                                    : nullptr,
+                                candidate_frames
+                            };
+                            const auto profile
+                                = resolution.generic_bindings.empty()
+                                    && candidate->vhdl->callable
+                                ? candidate_id
+                                : resolution.body;
+                            if (profile_resolver.vhdl_callable_profile_matches(
+                                    formal.declaration, profile,
+                                    false)) {
+                                parameter_matches.push_back(resolution);
+                            }
+                            if (profile_resolver.vhdl_callable_profile_matches(
+                                    formal.declaration, profile,
+                                    true)) {
+                                matches.push_back(resolution);
+                            }
                         }
                     }
-                }
-                normalize_vhdl_callable_resolutions(parameter_matches);
-                normalize_vhdl_callable_resolutions(matches);
-                if (matches.empty()) {
-                    if (function && !parameter_matches.empty()) {
+                    normalize_vhdl_callable_resolutions(parameter_matches);
+                    normalize_vhdl_callable_resolutions(matches);
+                    if (matches.empty()) {
+                        if (function && !parameter_matches.empty()) {
+                            reject(actual,
+                                SpecializedHirAssociationDiagnostic::
+                                    callable_result_profile,
+                                "VHDL generic function actual for '"
+                                    + std::string { formal.name }
+                                    + "' has an incompatible result subtype",
+                                formal.declaration);
+                        }
+                        if (bodyless_match) {
+                            reject(actual,
+                                SpecializedHirAssociationDiagnostic::
+                                    callable_body_missing,
+                                "VHDL interface subprogram actual '"
+                                    + std::string { spelling }
+                                    + "' has no executable body",
+                                formal.declaration);
+                            continue;
+                        }
                         reject(actual,
-                            SpecializedHirAssociationDiagnostic::
-                                callable_result_profile,
-                            "VHDL generic function actual for '"
-                                + std::string { formal.name }
-                                + "' has an incompatible result subtype",
-                            formal.declaration);
-                    }
-                    if (bodyless_match) {
-                        reject(actual,
-                            SpecializedHirAssociationDiagnostic::
-                                callable_body_missing,
+                            same_kind.empty() && !visible.candidates.empty()
+                                ? SpecializedHirAssociationDiagnostic::
+                                      callable_wrong_kind
+                                : SpecializedHirAssociationDiagnostic::
+                                      callable_no_match,
                             "VHDL interface subprogram actual '"
                                 + std::string { spelling }
-                                + "' has no executable body",
+                                + "' is not visible with a conforming profile",
                             formal.declaration);
                         continue;
                     }
-                    reject(actual,
-                        same_kind.empty() && !visible.candidates.empty()
-                            ? SpecializedHirAssociationDiagnostic::
-                                  callable_wrong_kind
-                            : SpecializedHirAssociationDiagnostic::
-                                  callable_no_match,
-                        "VHDL interface subprogram actual '"
-                            + std::string { spelling }
-                            + "' is not visible with a conforming profile",
-                        formal.declaration);
-                    continue;
-                }
-                if (matches.size() != 1U) {
-                    reject(actual,
-                        SpecializedHirAssociationDiagnostic::
-                            callable_ambiguous,
-                        "VHDL interface subprogram actual '"
-                            + std::string { spelling }
-                            + "' is ambiguous among conforming candidates",
-                        formal.declaration);
-                    continue;
-                }
-                auto selected = parent != nullptr
-                        && &parent->design() == &design
-                    ? parent->find_declaration(matches.front().body)
-                    : std::optional<CompiledDeclarationView> { };
-                if (!selected) {
-                    selected = design.find_declaration(
-                        matches.front().body);
-                }
-                if (function && selected
-                    && selected->vhdl != nullptr
-                    && selected->vhdl->callable
-                    && !selected->vhdl->callable->pure) {
-                    reject(actual,
-                        SpecializedHirAssociationDiagnostic::
-                            callable_impure,
-                        "VHDL interface function actual '"
-                            + std::string { spelling }
-                            + "' must be pure",
-                        formal.declaration);
-                    continue;
-                }
-                if (!function
-                    && !resolver.vhdl_procedure_is_time_free(
-                        matches.front().body)) {
-                    reject(actual,
-                        SpecializedHirAssociationDiagnostic::
-                            callable_time_dependent,
-                        "VHDL interface procedure actual '"
-                            + std::string { spelling }
-                            + "' must be time-free and may update only "
-                              "variables and formals",
-                        formal.declaration);
-                    continue;
-                }
-                binding.actual_declaration = matches.front().key;
-                if (parent != nullptr
-                    && &parent->design() == &design) {
-                    binding.actual_declaration
-                        = concrete_actual_declaration(parent,
-                            *binding.actual_declaration);
+                    if (matches.size() != 1U) {
+                        reject(actual,
+                            SpecializedHirAssociationDiagnostic::
+                                callable_ambiguous,
+                            "VHDL interface subprogram actual '"
+                                + std::string { spelling }
+                                + "' is ambiguous among conforming candidates",
+                            formal.declaration);
+                        continue;
+                    }
+                    auto selected = parent != nullptr
+                            && &parent->design() == &design
+                        ? parent->find_declaration(matches.front().body)
+                        : std::optional<CompiledDeclarationView> { };
+                    if (!selected) {
+                        selected = design.find_declaration(
+                            matches.front().body);
+                    }
+                    if (function && selected
+                        && selected->vhdl != nullptr
+                        && selected->vhdl->callable
+                        && !selected->vhdl->callable->pure) {
+                        reject(actual,
+                            SpecializedHirAssociationDiagnostic::
+                                callable_impure,
+                            "VHDL interface function actual '"
+                                + std::string { spelling }
+                                + "' must be pure",
+                            formal.declaration);
+                        continue;
+                    }
+                    if (!function
+                        && !resolver.vhdl_procedure_is_time_free(
+                            matches.front().body)) {
+                        reject(actual,
+                            SpecializedHirAssociationDiagnostic::
+                                callable_time_dependent,
+                            "VHDL interface procedure actual '"
+                                + std::string { spelling }
+                                + "' must be time-free and may update only "
+                                  "variables and formals",
+                            formal.declaration);
+                        continue;
+                    }
+                    binding.actual_declaration = matches.front().key;
+                    if (parent != nullptr
+                        && &parent->design() == &design) {
+                        binding.actual_declaration
+                            = concrete_actual_declaration(parent,
+                                *binding.actual_declaration);
+                    }
                 }
             }
         }
@@ -17877,6 +18126,27 @@ std::optional<std::string>
 SpecializedHirUnit::evaluate_string_declaration(
     const DeclarationId declaration) const
 {
+    // A STRING generic whose actual was evaluated when the parent region
+    // was elaborated (IEEE 1076-2019 14.4.2.1) has that value, MSB first.
+    const auto& actuals = specialization().actual_identities;
+    if (const auto actual = std::ranges::find(actuals, declaration,
+            &SpecializedHirActualIdentity::declaration);
+        actual != actuals.end() && actual->vhdl_elaborated_bits
+        && actual->vhdl_elaborated_subtype
+        && actual->vhdl_elaborated_subtype->domain == vhdl::ValueDomain::string
+        && actual->vhdl_elaborated_bits->size() % 8U == 0U) {
+        const auto& bits = *actual->vhdl_elaborated_bits;
+        std::string text;
+        text.reserve(bits.size() / 8U);
+        for (std::size_t offset { }; offset < bits.size(); offset += 8U) {
+            unsigned value { };
+            for (std::size_t bit { }; bit < 8U; ++bit) {
+                value = (value << 1U) | (bits[offset + bit] == '1' ? 1U : 0U);
+            }
+            text.push_back(static_cast<char>(value));
+        }
+        return text;
+    }
     HirIntegralEvaluator evaluator {
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_

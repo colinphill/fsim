@@ -567,7 +567,7 @@ namespace codec_detail {
             std::same_as<T, runtime::simir::StringMethodOperator>) {
             return value >= runtime::simir::StringMethodOperator::getc
                 && value
-                    <= runtime::simir::StringMethodOperator::vhdl_physical_value;
+                    <= runtime::simir::StringMethodOperator::vhdl_character_element;
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlReflectionClass>) {
             return value >= runtime::simir::VhdlReflectionClass::enumeration

@@ -93,6 +93,17 @@ ParseResult VhdlParser::run()
             std::make_move_iterator(pending_context.end()));
         pending_context.clear();
     };
+    // Package templates declared in a block or generate declarative part
+    // follow the design unit that contains them (IEEE 1076-2008 11.2).
+    const auto append_nested_packages
+        = [&](const std::vector<VhdlContextItem>& context) {
+              for (auto& nested : nested_package_units_) {
+                  nested.vhdl_context.insert(nested.vhdl_context.begin(),
+                      context.begin(), context.end());
+                  design.units.push_back(std::move(nested));
+              }
+              nested_package_units_.clear();
+          };
     while (!at_end()) {
         numeric_bit_context_ = std::ranges::any_of(pending_context, [](const VhdlContextItem& item) {
             return item.kind == VhdlContextItemKind::UseClause && std::ranges::any_of(item.selected_names, [](const std::string_view name) {
@@ -156,13 +167,17 @@ ParseResult VhdlParser::run()
                 pending_context.push_back(std::move(*item));
             }
         } else if (match_keyword("entity", true)) {
+            const auto context = pending_context;
             auto unit = parse_entity(previous());
             attach_context(unit);
             design.units.push_back(std::move(unit));
+            append_nested_packages(context);
         } else if (match_keyword("architecture", true)) {
+            const auto context = pending_context;
             auto unit = parse_architecture(previous());
             attach_context(unit);
             design.units.push_back(std::move(unit));
+            append_nested_packages(context);
         } else if (match_keyword("configuration", true)) {
             auto unit = parse_vhdl_configuration(previous());
             attach_context(unit);
@@ -1551,6 +1566,25 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "integer" || simple_name == "natural" || simple_name == "positive") {
         type = vhdl_predefined_integer_type(vhdl_standard_, simple_name);
+    } else if ((simple_name == "index" || simple_name == "natural_index"
+                   || simple_name == "positive_index"
+                   || simple_name == "dimension")
+        && (spelling.starts_with("std.reflection.")
+            || (spelling.find('.') == std::string::npos
+                && vhdl_source_uses_reflection()
+                && !vhdl_source_declares_type(simple_name)))) {
+        // STD.REFLECTION's INDEX spans INTEGER's range; NATURAL_INDEX,
+        // POSITIVE_INDEX and DIMENSION are its subtypes (IEEE 1076-2019
+        // 16.12).
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the STD.REFLECTION " + simple_name + " type",
+            "select VHDL-2019 or remove the reflection API use");
+        type = vhdl_predefined_integer_type(vhdl_standard_,
+            simple_name == "index" ? "integer"
+                : simple_name == "natural_index" ? "natural"
+                                                 : "positive");
+        type.spelling = simple_name;
     }
     if (type.domain == ValueDomain::Unknown
         && type.nominal_type.empty()) {
@@ -1758,6 +1792,24 @@ bool VhdlParser::vhdl_source_declares_type(const std::string& name)
         }
     }
     return vhdl_source_type_names_->contains(name);
+}
+
+bool VhdlParser::vhdl_source_uses_reflection()
+{
+    if (!vhdl_source_uses_reflection_) {
+        bool uses {};
+        for (std::size_t index = 0; !uses && index + 2U < tokens_.size();
+             ++index) {
+            uses = tokens_[index].kind == TokenKind::Identifier
+                && tokens_[index + 1U].kind == TokenKind::Dot
+                && tokens_[index + 2U].kind == TokenKind::Identifier
+                && detail::ascii_lower(tokens_[index].text) == "std"
+                && detail::ascii_lower(tokens_[index + 2U].text)
+                    == "reflection";
+        }
+        vhdl_source_uses_reflection_ = uses;
+    }
+    return *vhdl_source_uses_reflection_;
 }
 
 std::optional<DiscreteRangeExpression> VhdlParser::parse_vhdl_discrete_range(

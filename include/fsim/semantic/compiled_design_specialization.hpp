@@ -103,6 +103,11 @@ struct SpecializedHirActualIdentity {
     // bits, leftmost first. The target unit reads the generic from a
     // read-only signal that holds them; the bits are also in `identity`.
     std::optional<std::string> vhdl_elaborated_bits { };
+    // The subtype an unconstrained composite formal takes from such an
+    // elaborated actual (IEEE 1076-2008 6.5.6.2, 5.3.2.2): the formal's
+    // type mark with the actual's index ranges. The specialization gives
+    // the formal's declaration this subtype; its bounds are in `identity`.
+    std::optional<vhdl::SubtypeIndication> vhdl_elaborated_subtype { };
     // A parameter of another unit that a type actual's declaration depends
     // on (`.T(d_t)` with `typedef logic [W-1:0] d_t;` in a parameterized
     // parent): the parent's value, so the type's shape evaluates in this

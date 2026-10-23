@@ -320,10 +320,22 @@ VerilogParser::parse_matches_conditional_assignment()
 VerilogParser::parse_if_statement(const Token& start)
 {
     // `if (e matches p [&&& g]) s1 else s2` (IEEE 1800-2017 12.6.2) is the
-    // case statement `case (e) matches p [&&& g]: s1 default: s2`.
+    // case statement `case (e) matches p [&&& g]: s1 default: s2`. A chain
+    // `e1 matches p1 &&& e2 matches p2 &&& g` nests one such case per
+    // `matches` clause, each with the else branch as its default; boolean
+    // clauses guard the clause before them, and pattern identifiers stay
+    // visible to later clauses (IEEE 1800-2023 12.6.3).
     if (language_ == Language::SystemVerilog2017 && at(TokenKind::LeftParen)) {
         std::size_t depth { };
         std::optional<std::size_t> matches_offset;
+        // Each clause is [begin, end) between top-level `&&&` tokens, with
+        // the offset of its top-level `matches`, if any.
+        struct Clause {
+            std::size_t begin { };
+            std::size_t end { };
+            std::optional<std::size_t> matches;
+        };
+        std::vector<Clause> clauses { Clause { 1U, 1U, std::nullopt } };
         std::size_t offset { };
         for (;; ++offset) {
             const auto& token = current(offset);
@@ -337,46 +349,94 @@ VerilogParser::parse_if_statement(const Token& start)
                     break;
                 }
             } else if (depth == 1U && token.kind == TokenKind::Identifier
-                && token.text == "matches" && !matches_offset) {
-                matches_offset = offset;
+                && token.text == "matches") {
+                if (!matches_offset) {
+                    matches_offset = offset;
+                }
+                if (!clauses.back().matches) {
+                    clauses.back().matches = offset;
+                }
+            } else if (depth == 1U && token.kind == TokenKind::AndAndAnd) {
+                clauses.back().end = offset;
+                clauses.push_back(Clause { offset + 1U, offset + 1U,
+                    std::nullopt });
             }
         }
-        if (matches_offset && current(offset).kind == TokenKind::RightParen) {
-            std::vector<Token> tokens = synthetic_tokens("case (", start.span);
-            for (std::size_t index = 1U; index < *matches_offset; ++index) {
-                tokens.push_back(current(index));
-            }
-            for (auto& token : synthetic_tokens(") matches", start.span)) {
-                tokens.push_back(std::move(token));
-            }
-            for (std::size_t index = *matches_offset + 1U; index < offset; ++index) {
-                tokens.push_back(current(index));
-            }
-            for (auto& token : synthetic_tokens(": ; endcase", start.span)) {
-                tokens.push_back(std::move(token));
+        clauses.back().end = offset;
+        if (matches_offset && current(offset).kind == TokenKind::RightParen
+            && clauses.front().matches) {
+            std::vector<Statement> selections;
+            for (std::size_t clause = 0U; clause < clauses.size();) {
+                const auto& head = clauses[clause];
+                std::vector<Token> tokens
+                    = synthetic_tokens("case (", start.span);
+                for (auto index = head.begin; index < *head.matches; ++index) {
+                    tokens.push_back(current(index));
+                }
+                for (auto& token : synthetic_tokens(") matches", start.span)) {
+                    tokens.push_back(std::move(token));
+                }
+                for (auto index = *head.matches + 1U; index < head.end;
+                     ++index) {
+                    tokens.push_back(current(index));
+                }
+                // The boolean clauses after it guard this pattern.
+                bool guarded { };
+                for (++clause;
+                     clause < clauses.size() && !clauses[clause].matches;
+                     ++clause) {
+                    for (auto& token : synthetic_tokens(
+                             guarded ? "&& (" : "&&& (", start.span)) {
+                        tokens.push_back(std::move(token));
+                    }
+                    for (auto index = clauses[clause].begin;
+                         index < clauses[clause].end; ++index) {
+                        tokens.push_back(current(index));
+                    }
+                    for (auto& token : synthetic_tokens(")", start.span)) {
+                        tokens.push_back(std::move(token));
+                    }
+                    guarded = true;
+                }
+                for (auto& token :
+                    synthetic_tokens(": ; endcase", start.span)) {
+                    tokens.push_back(std::move(token));
+                }
+                auto selection
+                    = parse_generated_statement(std::move(tokens), start.span);
+                if (!selection || selection->kind != StatementKind::Case
+                    || selection->case_alternatives.size() != 1U) {
+                    error(start, "FSIM-SV-PARSE-019",
+                        "malformed if-matches statement");
+                    return std::nullopt;
+                }
+                selections.push_back(std::move(*selection));
             }
             index_ += offset + 1U;
-            auto selection = parse_generated_statement(std::move(tokens), start.span);
-            if (selection && selection->kind == StatementKind::Case
-                && selection->case_alternatives.size() == 1U) {
+            std::optional<Statement> true_branch = parse_statement();
+            std::optional<Statement> false_branch;
+            if (match_keyword("else")) {
+                false_branch = parse_statement();
+            }
+            const auto span = span_from(start, previous());
+            for (auto selection = selections.rbegin();
+                 selection != selections.rend(); ++selection) {
                 auto& matched = selection->case_alternatives.front();
                 matched.statements.clear();
-                if (auto true_branch = parse_statement()) {
+                if (true_branch) {
                     matched.statements.push_back(std::move(*true_branch));
                 }
-                if (match_keyword("else")) {
+                if (false_branch) {
                     CaseAlternative otherwise;
                     otherwise.is_default = true;
-                    if (auto false_branch = parse_statement()) {
-                        otherwise.statements.push_back(std::move(*false_branch));
-                    }
-                    selection->case_alternatives.push_back(std::move(otherwise));
+                    otherwise.statements.push_back(*false_branch);
+                    selection->case_alternatives.push_back(
+                        std::move(otherwise));
                 }
-                selection->span = span_from(start, previous());
-                return *selection;
+                selection->span = span;
+                true_branch = std::move(*selection);
             }
-            error(start, "FSIM-SV-PARSE-019", "malformed if-matches statement");
-            return std::nullopt;
+            return true_branch;
         }
     }
     Statement statement;
@@ -2087,9 +2147,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     if (actual.name)
                         name += "." + *actual.name + "(";
                     if (actual.type_value) {
-                        name += actual.type_value->named_type.empty()
-                            ? actual.type_value->spelling
-                            : actual.type_value->named_type;
+                        name += class_actual_type_spelling(
+                            *actual.type_value);
                     } else {
                         name += actual.value.text;
                     }

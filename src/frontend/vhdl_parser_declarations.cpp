@@ -132,18 +132,9 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       const auto alias_name = expect_identifier("protected method alias name");
       expect_keyword("is", true, "FSIM-VHDL-PARSE-277");
       auto target = parse_vhdl_selected_name("protected method alias target");
+      std::optional<VhdlAliasSignature> signature;
       if (match(TokenKind::LeftBracket)) {
-        const auto signature_start = previous();
-        // An empty signature `[]` names a method without parameters or a
-        // result (IEEE 1076-2008 4.5.3).
-        static_cast<void>(signature_start);
-        while (!at_end() && !at(TokenKind::RightBracket) &&
-               !at(TokenKind::Semicolon)) {
-          advance();
-        }
-        expect(TokenKind::RightBracket,
-               "']' after protected method alias signature",
-               "FSIM-VHDL-PARSE-277");
+        signature = parse_vhdl_alias_signature();
       }
       expect(TokenKind::Semicolon, "';' after protected method alias",
              "FSIM-VHDL-PARSE-277");
@@ -156,7 +147,8 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       } else {
         method_aliases.push_back(SignalAliasDeclaration{
             canonical_alias, std::move(target), {}, PortDirection::Unknown,
-            span_from(alias_start, previous()), std::nullopt, std::nullopt});
+            span_from(alias_start, previous()), std::nullopt,
+            std::move(signature)});
       }
       continue;
     }
@@ -1346,6 +1338,35 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   auto value = parse_expression();
   expect(TokenKind::Semicolon, "';' after attribute specification",
          "FSIM-VHDL-PARSE-265");
+  // The value is evaluated in the declarative region of the specification
+  // (IEEE 1076-2008 7.2, 8.6), but an attribute name (`e'attr`) reads it
+  // elsewhere, where the unit's constants are not visible. Replace each
+  // constant of this unit named by the value with its initial expression.
+  const auto bind_declared_constants = [&](auto &&self, Expression &expr,
+                                           const std::size_t depth) -> void {
+    if (depth > 16U) {
+      return;
+    }
+    if (expr.kind == ExpressionKind::Identifier) {
+      const auto constant = std::ranges::find_if(
+          unit.parameters, [&](const ParameterDeclaration &parameter) {
+            return parameter.local
+                && parameter.name == vhdl_name(expr.text)
+                && parameter.default_value.kind != ExpressionKind::Invalid;
+          });
+      if (constant != unit.parameters.end()) {
+        const auto span = expr.span;
+        expr = constant->default_value;
+        expr.span = span;
+        self(self, expr, depth + 1U);
+      }
+      return;
+    }
+    for (auto &operand : expr.operands) {
+      self(self, operand, depth + 1U);
+    }
+  };
+  bind_declared_constants(bind_declared_constants, value, 0U);
   // The attribute may be declared in the unit, its entity, or a package
   // analyzed earlier (IEEE 1076-2008 7.2).
   if (!std::ranges::any_of(unit.vhdl_attributes, [&](const auto &attribute) {
@@ -1776,6 +1797,34 @@ void VhdlParser::parse_signal_declaration(
   }
 }
 
+// A subprogram alias signature (IEEE 1076-2008 4.5.3, 6.6.3); an empty
+// signature `[]` names a subprogram without parameters or a result.
+std::optional<VhdlAliasSignature> VhdlParser::parse_vhdl_alias_signature() {
+  const auto signature_start = previous();
+  require_vhdl_standard(
+      signature_start, VhdlStandard::Vhdl1993, "an alias signature",
+      "select VHDL-1993 or remove the overload-disambiguating signature");
+  VhdlAliasSignature parsed;
+  bool well_formed = true;
+  if (!at(TokenKind::RightBracket) && !keyword("return", 0, true)) {
+    parsed.parameters.push_back(parse_vhdl_type(true, true));
+    while (match(TokenKind::Comma)) {
+      parsed.parameters.push_back(parse_vhdl_type(true, true));
+    }
+  }
+  if (match_keyword("return", true)) {
+    parsed.result = parse_vhdl_type(true, true);
+  }
+  while (!at_end() && !at(TokenKind::RightBracket)
+      && !at(TokenKind::Semicolon)) {
+    well_formed = false;
+    advance();
+  }
+  expect(TokenKind::RightBracket, "']' after alias signature",
+      "FSIM-VHDL-PARSE-236");
+  return well_formed ? std::optional { std::move(parsed) } : std::nullopt;
+}
+
 void VhdlParser::parse_vhdl_object_alias(
     std::vector<TypeAliasDeclaration> &type_aliases,
     std::vector<SignalAliasDeclaration> &aliases, const Token &start) {
@@ -1783,32 +1832,8 @@ void VhdlParser::parse_vhdl_object_alias(
   // designated by an operator symbol or character literal (IEEE 1076-2008
   // 6.6.3). Its target and signature are read here; calls through it are
   // resolved with the overloads of its target.
-  // A subprogram alias signature (IEEE 1076-2008 4.5.3, 6.6.3); an empty
-  // signature `[]` names a subprogram without parameters or a result.
-  const auto parse_alias_signature = [&]() -> std::optional<VhdlAliasSignature> {
-    const auto signature_start = previous();
-    require_vhdl_standard(
-        signature_start, VhdlStandard::Vhdl1993, "an alias signature",
-        "select VHDL-1993 or remove the overload-disambiguating signature");
-    VhdlAliasSignature parsed;
-    bool well_formed = true;
-    if (!at(TokenKind::RightBracket) && !keyword("return", 0, true)) {
-      parsed.parameters.push_back(parse_vhdl_type(true, true));
-      while (match(TokenKind::Comma)) {
-        parsed.parameters.push_back(parse_vhdl_type(true, true));
-      }
-    }
-    if (match_keyword("return", true)) {
-      parsed.result = parse_vhdl_type(true, true);
-    }
-    while (!at_end() && !at(TokenKind::RightBracket)
-        && !at(TokenKind::Semicolon)) {
-      well_formed = false;
-      advance();
-    }
-    expect(TokenKind::RightBracket, "']' after alias signature",
-        "FSIM-VHDL-PARSE-236");
-    return well_formed ? std::optional { std::move(parsed) } : std::nullopt;
+  const auto parse_alias_signature = [&] {
+    return parse_vhdl_alias_signature();
   };
   // An alias designated by an operator symbol denotes the subprogram its
   // target and signature select (`alias "+" is work.p."+" [bit_vector,

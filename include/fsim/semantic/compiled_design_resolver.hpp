@@ -215,6 +215,16 @@ public:
     explicit CompiledDesignResolver(const SpecializedHirUnit&,
         std::span<const CompiledBindingFrame> binding_frames = { });
 
+    // Folds a VHDL bound expression the specialization cannot evaluate,
+    // such as an attribute of a formal whose actual a caller knows.
+    using BoundaryFallback
+        = std::function<std::optional<std::int64_t>(ExpressionId)>;
+    // The fallback is borrowed and must outlive this resolver.
+    void set_boundary_fallback(const BoundaryFallback* fallback) noexcept
+    {
+        boundary_fallback_ = fallback;
+    }
+
     [[nodiscard]] std::optional<DeclarationId>
     actual_declaration(DeclarationId formal) const;
 
@@ -527,6 +537,7 @@ private:
     const SpecializedHirUnit* effective_ { };
     UnitId selected_unit_;
     std::span<const CompiledBindingFrame> binding_frames_;
+    const BoundaryFallback* boundary_fallback_ { };
     mutable std::vector<ExpressionId> resolving_expression_names_;
     mutable std::optional<
         std::unordered_map<std::uint32_t, std::vector<const sv::Statement*>>>

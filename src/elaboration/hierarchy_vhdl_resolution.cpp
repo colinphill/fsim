@@ -552,10 +552,17 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         stub.operations.emplace_back(Halt { });
         design_.rebuild_process_record(index, std::move(stub));
     }
-    for (const auto& [signal, routes] : destinations) {
-        if (rejected.contains(signal)) {
-            continue;
-        }
+    // A program reading each route's formal into its place in `signal`: the
+    // composed value is left in `output`.
+    struct RouteProgram {
+        ProcessId id { };
+        RegisterId input { };
+        RegisterId output { };
+        std::vector<SignalId> sources;
+    };
+    const auto route_program = [&](const SignalId signal,
+                                   const std::vector<Route>& routes,
+                                   const std::string_view role) {
         const auto process_index = design_.process_count();
         Process program;
         program.id = static_cast<ProcessId>(process_index);
@@ -567,16 +574,17 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         program.name = (separator == std::string::npos
                 ? std::string { }
                 : name.substr(0U, separator + 1U))
-            + "composer_" + name.substr(separator + 1U);
+            + std::string { role } + name.substr(separator + 1U);
         const auto kind = design_.signals_[signal].value_kind;
         const auto allocate = [&](const ValueKind value_kind) {
             program.register_value_kinds.push_back(value_kind);
             return static_cast<RegisterId>(program.register_count++);
         };
+        RouteProgram result;
+        result.id = program.id;
         // The resolver input is unused: the program has no drivers.
-        const auto input = allocate(ValueKind::logic4);
+        result.input = allocate(ValueKind::logic4);
         std::unordered_map<SignalId, RegisterId> formals;
-        std::vector<SignalId> sources;
         std::vector<RegisterId> parts;
         for (const auto& route : routes | std::views::reverse) {
             auto [formal, inserted] = formals.try_emplace(route.formal);
@@ -584,7 +592,7 @@ void HierarchyBuilder::compose_vhdl_output_routes()
                 formal->second = allocate(kind);
                 program.operations.emplace_back(
                     ReadSignal { formal->second, route.formal });
-                sources.push_back(route.formal);
+                result.sources.push_back(route.formal);
             }
             if (route.formal_offset == 0U
                 && route.width == signal_width(route.formal)) {
@@ -596,22 +604,192 @@ void HierarchyBuilder::compose_vhdl_output_routes()
                 route.formal_offset, route.width });
             parts.push_back(part);
         }
-        const auto output = allocate(kind);
+        result.output = allocate(kind);
         if (parts.size() == 1U) {
-            program.operations.emplace_back(CopyRegister { output, parts[0] });
+            program.operations.emplace_back(
+                CopyRegister { result.output, parts[0] });
         } else {
-            program.operations.emplace_back(Concatenate { output,
+            program.operations.emplace_back(Concatenate { result.output,
                 std::move(parts),
                 static_cast<std::uint32_t>(signal_width(signal)) });
         }
         program.operations.emplace_back(Halt { });
         program.initialize = false;
         design_.append_process_record(std::move(program));
+        return result;
+    };
+    for (const auto& [signal, routes] : destinations) {
+        if (rejected.contains(signal)) {
+            continue;
+        }
+        auto program = route_program(signal, routes, "composer_");
         VhdlSignalResolver resolver {
-            static_cast<ProcessId>(process_index), input, output, { } };
-        resolver.sources = std::move(sources);
+            program.id, program.input, program.output, { } };
+        resolver.sources = std::move(program.sources);
         design_.signals_[signal].vhdl_resolver = std::move(resolver);
     }
+    // An adapter that only copies its formals over the whole of one resolved
+    // actual is a source of that actual like a formal conversion (IEEE
+    // 1076-2019 14.7.3.2): its driving value follows the formals in the
+    // same simulation cycle.
+    for (auto& [index, routes] : adapters) {
+        const auto destination = routes.front().first;
+        if (!rejected.contains(destination)
+            || std::ranges::any_of(routes, [&](const auto& route) {
+                   return route.first != destination;
+               })) {
+            continue;
+        }
+        const auto adapter = design_.process_view(index);
+        if (std::ranges::any_of(adapter.driver_regions(),
+                [&](const auto& region) {
+                    return region.signal != destination;
+                })) {
+            continue;
+        }
+        const auto& info = design_.signal_info_[destination];
+        const auto& runtime_signal = design_.signals_[destination];
+        const bool resolved = runtime_signal.resolution
+                != ResolutionKind::none
+            || resolver_by_signal_.contains(destination)
+            || explicit_resolution(destination)
+                    .value_or(native_resolution(info))
+                != ResolutionKind::none;
+        if (!resolved || runtime_signal.vhdl_resolver
+            || vhdl_guarded_signal_kinds_.contains(destination)
+            || vhdl_unprotected_shared_signals_.contains(destination)
+            || input_targets.contains(destination)
+            || !info.systemverilog_net_type.empty()) {
+            continue;
+        }
+        std::vector<Route> placed;
+        for (const auto& route : routes) {
+            placed.push_back(route.second);
+        }
+        std::ranges::sort(placed, {}, &Route::offset);
+        std::uint64_t covered { };
+        bool eligible = true;
+        for (const auto& route : placed) {
+            const auto& formal = design_.signals_[route.formal];
+            if (route.offset != covered || route.formal == destination
+                || formal.vhdl_resolver || input_targets.contains(route.formal)
+                || formal.value_kind != runtime_signal.value_kind) {
+                eligible = false;
+                break;
+            }
+            covered += route.width;
+        }
+        if (!eligible || covered != signal_width(destination)) {
+            continue;
+        }
+        // The adapter halts and keeps its driver, which the program sets.
+        const auto stub_id = adapter.id();
+        Process stub;
+        stub.id = stub_id;
+        stub.name = adapter.name();
+        stub.language_standard = adapter.language_standard();
+        stub.compatibility_profile = adapter.compatibility_profile();
+        stub.initialize = false;
+        stub.driver_regions.push_back(
+            Process::DriverRegion { destination, 0U, 0U, true });
+        stub.operations.emplace_back(Halt { });
+        design_.rebuild_process_record(index, std::move(stub));
+        auto program = route_program(destination, placed, "port_driver_");
+        design_.signals_[destination].vhdl_conversion_drivers.push_back(
+            VhdlConversionDriver { stub_id, program.id, program.output,
+                std::move(program.sources) });
+    }
+}
+
+bool HierarchyBuilder::vhdl_output_port_read(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId port)
+{
+    namespace vhdl = semantic::vhdl;
+    const auto output = [](const vhdl::Declaration& declaration) {
+        return declaration.form == vhdl::DeclarationForm::port
+            && (declaration.direction == vhdl::Direction::output
+                || declaration.direction == vhdl::Direction::buffer);
+    };
+    if (!vhdl_read_output_ports_) {
+        const auto& hir = specialization.design().vhdl_hir;
+        std::unordered_set<std::uint32_t> outputs;
+        for (const auto& declaration : hir.declarations()) {
+            if (output(declaration)) {
+                outputs.insert(declaration.id.value());
+            }
+        }
+        // The names a value is written through rather than read: assignment
+        // targets and the actuals of out and buffer formals, with the
+        // prefixes they select from (IEEE 1076-2019 10.5.2.1, 6.5.7.1).
+        std::unordered_set<std::uint32_t> written;
+        const auto mark = [&](const auto& self,
+                              const semantic::ExpressionId id,
+                              const std::size_t depth) -> void {
+            const auto expression = specialization.find_expression(id);
+            if (!expression || expression->vhdl == nullptr || depth > 64U) {
+                return;
+            }
+            written.insert(id.value());
+            const auto& source = *expression->vhdl;
+            if ((source.kind == vhdl::ExpressionKind::index
+                    || source.kind == vhdl::ExpressionKind::slice
+                    || (source.kind == vhdl::ExpressionKind::call
+                        && source.text.starts_with("@vhdl-member:")))
+                && !source.operands.empty()) {
+                self(self, source.operands.front(), depth + 1U);
+            } else if (source.kind == vhdl::ExpressionKind::aggregate) {
+                for (const auto& association : source.associations) {
+                    self(self, association.value, depth + 1U);
+                }
+            }
+        };
+        for (const auto& statement : hir.statements()) {
+            if (statement.target) {
+                mark(mark, *statement.target, 0U);
+            }
+        }
+        const auto mark_port_map
+            = [&](const std::vector<vhdl::Association>& port_map) {
+                  for (const auto& association : port_map) {
+                      if (!association.expression || !association.formal
+                          || !association.formal->selected) {
+                          continue;
+                      }
+                      const auto formal = specialization.find_declaration(
+                          *association.formal->selected);
+                      if (formal && formal->vhdl != nullptr
+                          && output(*formal->vhdl)) {
+                          mark(mark, *association.expression, 0U);
+                      }
+                  }
+              };
+        for (const auto& instance : hir.instances()) {
+            mark_port_map(instance.port_map);
+        }
+        const auto blocks = [&](const auto& self,
+                                const std::vector<vhdl::GenerateRegion>&
+                                    generates) -> void {
+            for (const auto& generate : generates) {
+                mark_port_map(generate.port_map);
+                self(self, generate.nested);
+            }
+        };
+        for (const auto& unit : specialization.design().vhdl_units()) {
+            blocks(blocks, unit.generates);
+        }
+        auto& read = vhdl_read_output_ports_.emplace();
+        for (const auto& expression : hir.expressions()) {
+            if (expression.referenced_name
+                && expression.referenced_name->selected
+                && outputs.contains(
+                    expression.referenced_name->selected->value())
+                && !written.contains(expression.id.value())) {
+                read.insert(expression.referenced_name->selected->value());
+            }
+        }
+    }
+    return vhdl_read_output_ports_->contains(port.value());
 }
 
 bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(

@@ -407,6 +407,69 @@ std::uint32_t checked_vhdl_textio_field_width(
     return formatted.text;
 }
 
+std::optional<std::vector<std::string>> vhdl_composite_value_elements(
+    std::string_view text, const bool character_string)
+{
+    // Spaces, nonbreaking spaces and format effectors (IEEE 1076-2019
+    // 15.2, 16.2.2).
+    const auto space = [](const char character) {
+        return character == ' ' || character == '\xa0'
+            || (character >= '\t' && character <= '\r');
+    };
+    const auto trim = [&](std::string_view value) {
+        while (!value.empty() && space(value.front()))
+            value.remove_prefix(1U);
+        while (!value.empty() && space(value.back()))
+            value.remove_suffix(1U);
+        return value;
+    };
+    text = trim(text);
+    std::vector<std::string> elements;
+    if (character_string) {
+        for (const auto character : text)
+            elements.push_back(std::string { '\'', character, '\'' });
+        return elements;
+    }
+    if (text.size() < 2U || text.front() != '(' || text.back() != ')')
+        return std::nullopt;
+    const auto inner = text.substr(1U, text.size() - 2U);
+    if (trim(inner).empty())
+        return elements;
+    // Commas outside nested parentheses, string literals and character
+    // literals delimit the elements.
+    std::size_t depth { };
+    std::size_t start { };
+    for (std::size_t index { }; index <= inner.size(); ++index) {
+        if (index == inner.size() || (depth == 0U && inner[index] == ',')) {
+            const auto element = trim(inner.substr(start, index - start));
+            if (element.empty())
+                return std::nullopt;
+            elements.emplace_back(element);
+            start = index + 1U;
+            continue;
+        }
+        const auto character = inner[index];
+        if (character == '\'' && index + 2U < inner.size()
+            && inner[index + 2U] == '\'') {
+            index += 2U;
+        } else if (character == '"') {
+            const auto close = inner.find('"', index + 1U);
+            if (close == std::string_view::npos)
+                return std::nullopt;
+            index = close;
+        } else if (character == '(') {
+            ++depth;
+        } else if (character == ')') {
+            if (depth == 0U)
+                return std::nullopt;
+            --depth;
+        }
+    }
+    if (depth != 0U)
+        return std::nullopt;
+    return elements;
+}
+
 StringMethodResult execute_string_method(
     const StringMethodOperator operation,
     std::string& source,
@@ -509,6 +572,22 @@ StringMethodResult execute_string_method(
         return { std::nullopt,
             static_cast<std::uint64_t>(vhdl_physical_value(source, argument)),
             std::nullopt };
+    }
+    if (operation == StringMethodOperator::vhdl_composite_element
+        || operation == StringMethodOperator::vhdl_character_element) {
+        const auto elements = vhdl_composite_value_elements(source,
+            operation == StringMethodOperator::vhdl_character_element);
+        const auto count = static_cast<std::size_t>(second.value_or(0));
+        if (!elements || elements->size() != count || !first || *first < 0
+            || static_cast<std::size_t>(*first) >= count) {
+            throw std::invalid_argument {
+                "VHDL 'VALUE: \"" + source
+                + "\" is not a value of the composite subtype with "
+                + std::to_string(count) + " elements"
+            };
+        }
+        return { std::nullopt, std::nullopt,
+            (*elements)[static_cast<std::size_t>(*first)] };
     }
     if (operation == StringMethodOperator::vhdl_integer_value) {
         return { std::nullopt,
@@ -734,13 +813,17 @@ void Interpreter::Impl::execute_string(
         || operation.operation
             == StringMethodOperator::vhdl_enumeration_value
         || operation.operation == StringMethodOperator::vhdl_physical_value;
+    const bool element = operation.operation
+            == StringMethodOperator::vhdl_composite_element
+        || operation.operation == StringMethodOperator::vhdl_character_element;
     const bool has_first = operation.operation == StringMethodOperator::getc
         || operation.operation == StringMethodOperator::putc
         || operation.operation == StringMethodOperator::substr
+        || element
         || (operation.operation >= StringMethodOperator::itoa
             && operation.operation <= StringMethodOperator::realtoa);
     const bool has_second = operation.operation == StringMethodOperator::putc
-        || operation.operation == StringMethodOperator::substr;
+        || operation.operation == StringMethodOperator::substr || element;
     const auto first_word = has_first
         ? std::optional { get_register(process, operation.first).low_word() }
         : std::nullopt;

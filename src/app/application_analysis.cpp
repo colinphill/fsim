@@ -1190,6 +1190,11 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
         parsed && parsed->language == "vhdl") {
       return parsed->unit;
     }
+    // A Verilog escaped identifier keeps its dots (IEEE 1800-2023 5.6.1).
+    if (const auto escape = target.find('\\');
+        escape != std::string_view::npos) {
+      return std::string { target.substr(escape) };
+    }
     auto spelling = target;
     if (const auto colon = spelling.find(':');
         colon != std::string_view::npos) {
