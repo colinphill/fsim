@@ -310,10 +310,7 @@ std::optional<semantic::DeclarationId> find_vhdl_object(
         if (specialized && specialized->vhdl != nullptr) {
             return specialized->vhdl;
         }
-        const auto& declarations = unit.design().vhdl_hir.declarations();
-        const auto stored = std::ranges::find(
-            declarations, id, &semantic::vhdl::Declaration::id);
-        return stored != declarations.end() ? &*stored : nullptr;
+        return semantic::find_by_id(unit.design().vhdl_hir.declarations(), id);
     };
     for (std::size_t depth { }; found && depth < 16U; ++depth) {
         const auto* alias = declaration_of(*found);
@@ -354,11 +351,8 @@ const semantic::vhdl::Declaration* find_vhdl_declaration(
     if (specialized && specialized->vhdl != nullptr) {
         return specialized->vhdl;
     }
-    const auto& declarations = unit.design().vhdl_hir.declarations();
-    const auto stored = std::ranges::find(
-        declarations, declaration_id,
-        &semantic::vhdl::Declaration::id);
-    return stored != declarations.end() ? &*stored : nullptr;
+    return semantic::find_by_id(
+        unit.design().vhdl_hir.declarations(), declaration_id);
 }
 
 // A subprogram alias of a protected method (`alias inc is pt.increment
@@ -422,19 +416,15 @@ const semantic::vhdl::TypeDefinition* find_protected_type(
         }
     }
     const semantic::vhdl::TypeDefinition* selected = nullptr;
-    for (const auto& stored : unit.design().vhdl_hir.types()) {
-        const auto candidate = unit.find_type(stored.id);
-        if (!candidate || candidate->vhdl == nullptr
-            || candidate->vhdl->form
-                != semantic::vhdl::TypeForm::protected_type
-            || !equal_ignoring_ascii_case(
-                candidate->vhdl->name, subtype.type_mark.spelling)) {
+    for (const auto* candidate :
+        unit.vhdl_types_named(subtype.type_mark.spelling)) {
+        if (candidate->form != semantic::vhdl::TypeForm::protected_type) {
             continue;
         }
-        if (selected != nullptr && selected->id != candidate->vhdl->id) {
+        if (selected != nullptr && selected->id != candidate->id) {
             return nullptr;
         }
-        selected = candidate->vhdl;
+        selected = candidate;
     }
     return selected;
 }

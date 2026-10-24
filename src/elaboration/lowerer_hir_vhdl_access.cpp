@@ -61,21 +61,8 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_named_type(
         if (spelling.empty()) {
             return nullptr;
         }
-        const semantic::vhdl::TypeDefinition* selected = nullptr;
-        for (const auto& stored : unit.design().vhdl_hir.types()) {
-            const auto candidate = unit.find_type(stored.id);
-            if (!candidate || candidate->vhdl == nullptr
-                || !equal_ignoring_ascii_case(
-                    candidate->vhdl->name, spelling)) {
-                continue;
-            }
-            if (selected != nullptr
-                && selected->id != candidate->vhdl->id) {
-                return nullptr;
-            }
-            selected = candidate->vhdl;
-        }
-        return selected;
+        const auto named = unit.vhdl_types_named(spelling);
+        return named.size() == 1U ? named.front() : nullptr;
     };
 
     auto type_id = subtype.type_mark.target;
@@ -2725,20 +2712,14 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
         name, source_scope,
         [&](const semantic::CompiledDeclarationView& candidate) {
             return candidate.vhdl != nullptr && std::ranges::any_of(
-                specialized_hir_unit_->design().vhdl_hir.types(),
-                [&](const semantic::vhdl::TypeDefinition& stored) {
-                    const auto type = specialized_hir_unit_->find_type(
-                        stored.id);
-                    return type && type->vhdl != nullptr
-                        && type->vhdl->form
+                specialized_hir_unit_->vhdl_physical_units_declared_by(
+                    candidate.vhdl->id),
+                [&](const semantic::SpecializedHirUnit::VhdlTypeMember& member) {
+                    return member.type->form
                             == semantic::vhdl::TypeForm::physical
-                        && std::ranges::any_of(
-                            type->vhdl->physical_units,
-                            [&](const semantic::vhdl::PhysicalUnit& unit) {
-                                return unit.declaration == candidate.vhdl->id
-                                    && equal_ignoring_ascii_case(
-                                        unit.name, unit_name);
-                            });
+                        && equal_ignoring_ascii_case(
+                            member.type->physical_units[member.position].name,
+                            unit_name);
             });
         });
     const auto selected_unit = selected_resolution.unique();
@@ -2764,33 +2745,23 @@ std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
         return std::nullopt;
     }
     std::optional<semantic::TypeId> selected_type;
-    for (const auto& stored :
-        specialized_hir_unit_->design().vhdl_hir.types()) {
-        const auto type = specialized_hir_unit_->find_type(stored.id);
-        if (!type || type->vhdl == nullptr
-            || type->vhdl->form != semantic::vhdl::TypeForm::physical
-            || std::ranges::none_of(
-                type->vhdl->physical_units,
-                [&](const semantic::vhdl::PhysicalUnit& unit) {
-                    return unit.declaration == *selected_unit;
-                })) {
+    for (const auto& member :
+        specialized_hir_unit_->vhdl_physical_units_declared_by(
+            *selected_unit)) {
+        if (member.type->form != semantic::vhdl::TypeForm::physical) {
             continue;
         }
-        if (selected_type && *selected_type != stored.id) {
+        if (selected_type && *selected_type != member.type->id) {
             return std::nullopt;
         }
-        selected_type = stored.id;
+        selected_type = member.type->id;
     }
     if (!selected_type) {
         return std::nullopt;
     }
     std::optional<HirVhdlPhysicalUnit> result;
-    for (const auto& stored :
-        specialized_hir_unit_->design().vhdl_hir.types()) {
-        if (stored.id != *selected_type) {
-            continue;
-        }
-        const auto type = specialized_hir_unit_->find_type(stored.id);
+    for (const auto stored_id : { *selected_type }) {
+        const auto type = specialized_hir_unit_->find_type(stored_id);
         if (!type || type->vhdl == nullptr
             || type->vhdl->form
                 != semantic::vhdl::TypeForm::physical) {

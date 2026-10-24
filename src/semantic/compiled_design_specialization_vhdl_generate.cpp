@@ -125,12 +125,13 @@ private:
             ? source.referenced_name->selected
             : std::nullopt;
         if (selected) {
-            for (const auto& type : unit_.design().vhdl_hir.types()) {
-                for (const auto& literal : type.enumeration_literals) {
-                    if (literal.declaration == *selected) {
-                        return static_cast<std::int64_t>(literal.ordinal);
-                    }
-                }
+            const auto literals
+                = unit_.vhdl_enumeration_literals_declared_by(*selected);
+            if (!literals.empty()) {
+                return static_cast<std::int64_t>(
+                    literals.front().type->enumeration_literals
+                        [literals.front().position]
+                            .ordinal);
             }
         }
         if (source.kind == vhdl::ExpressionKind::logic_literal

@@ -377,6 +377,29 @@ public:
     [[nodiscard]] std::optional<SpecializedHirVhdlRecordValue>
     evaluate_vhdl_record_expression(ExpressionId expression) const;
 
+    /// An enumeration literal or physical unit of a VHDL type in this
+    /// specialization's view (a replaced type's own copy).
+    struct VhdlTypeMember {
+        const vhdl::TypeDefinition* type { };
+        std::size_t position { };
+    };
+    /// The VHDL types named `name` (ignoring ASCII case), in HIR order.
+    [[nodiscard]] std::vector<const vhdl::TypeDefinition*>
+    vhdl_types_named(std::string_view name) const;
+    /// The enumeration literals declared by `literal`, or spelled `spelling`
+    /// (identifiers ignoring ASCII case, character literals exactly), in HIR
+    /// type order.
+    [[nodiscard]] std::vector<VhdlTypeMember>
+    vhdl_enumeration_literals_declared_by(DeclarationId literal) const;
+    [[nodiscard]] std::vector<VhdlTypeMember>
+    vhdl_enumeration_literals_spelled(std::string_view spelling) const;
+    /// The physical units declared by `unit`, or named `name` ignoring ASCII
+    /// case, in HIR type order.
+    [[nodiscard]] std::vector<VhdlTypeMember>
+    vhdl_physical_units_declared_by(DeclarationId unit) const;
+    [[nodiscard]] std::vector<VhdlTypeMember>
+    vhdl_physical_units_named(std::string_view name) const;
+
     /// The protected type declaration (form protected_type) or body (form
     /// protected_body) that pairs with a protected type: of the types that
     /// share its name, the one declared in the same design unit or package

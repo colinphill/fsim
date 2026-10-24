@@ -875,7 +875,15 @@ std::optional<TypeId> vhdl_protected_type_of_body(
     };
     const auto* body_unit = unit_of(body.declaration);
     std::optional<TypeId> result;
-    for (const auto& candidate : design.vhdl_hir.types()) {
+    const auto& types = design.vhdl_hir.types();
+    const auto positions = design.vhdl_type_positions_named(body.name);
+    const auto count = positions ? positions->size() : types.size();
+    for (std::size_t index { }; index < count; ++index) {
+        const auto position = positions ? (*positions)[index] : index;
+        if (position >= types.size()) {
+            continue;
+        }
+        const auto& candidate = types[position];
         if (candidate.form != vhdl::TypeForm::protected_type
             || !same_vhdl_identifier(candidate.name, body.name)) {
             continue;

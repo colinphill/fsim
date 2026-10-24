@@ -22117,15 +22117,14 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         if (object_type && object_type->vhdl != nullptr
             && object_type->vhdl->form
                 == semantic::vhdl::TypeForm::protected_body) {
-            for (const auto& stored : compiled_->vhdl_hir.types()) {
-                const auto candidate
-                    = working_specialization.find_type(stored.id);
-                if (candidate && candidate->vhdl != nullptr
-                    && candidate->vhdl->form
-                        == semantic::vhdl::TypeForm::protected_type
-                    && compiled_vhdl_name_equal(
-                        candidate->vhdl->name, object_type->vhdl->name)) {
-                    object_type = candidate;
+            for (const auto* candidate :
+                working_specialization.vhdl_types_named(
+                    object_type->vhdl->name)) {
+                if (candidate->form
+                    == semantic::vhdl::TypeForm::protected_type) {
+                    object_type = semantic::CompiledTypeView {
+                        nullptr, candidate
+                    };
                     break;
                 }
             }
@@ -26109,15 +26108,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             ? compiled_vhdl_unit(*compiled_, requested_scope->unit)
             : nullptr;
         const semantic::vhdl::TypeDefinition* result = nullptr;
-        for (const auto& compiled_type :
-            compiled_->vhdl_hir.types()) {
-            const auto* candidate = effective_type(
-                compiled_type.id);
-            if (candidate == nullptr
-                || !compiled_vhdl_name_equal(
-                    candidate->name, spelling)) {
-                continue;
-            }
+        for (const auto* candidate :
+            specialized->vhdl_types_named(spelling)) {
             const auto candidate_scope_id = type_scope(*candidate);
             const auto* candidate_scope = candidate_scope_id
                 ? compiled_semantic_scope(
@@ -31809,11 +31801,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_declaration_visibility(
                     nullptr, &candidate
                 };
             };
-            for (const auto& candidate : specialization.vhdl_types()) {
-                consider_type(candidate);
-            }
-            for (const auto& candidate : compiled_->vhdl_hir.types()) {
-                consider_type(candidate);
+            for (const auto* candidate :
+                specialization.vhdl_types_named(type_mark.spelling)) {
+                consider_type(*candidate);
             }
         }
         const auto type_declaration

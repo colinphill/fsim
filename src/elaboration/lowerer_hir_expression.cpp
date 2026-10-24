@@ -3814,18 +3814,8 @@ std::optional<std::size_t> Lowerer::hir_vhdl_positional_aggregate_width(
         }
         auto spelling = std::string_view { subtype.type_mark.spelling };
         spelling = simple_name_of(spelling);
-        const semantic::vhdl::TypeDefinition* match { };
-        for (const auto& candidate :
-            specialized_hir_unit_->design().vhdl_hir.types()) {
-            if (!same_vhdl_identifier(candidate.name, spelling)) {
-                continue;
-            }
-            if (match != nullptr) {
-                return nullptr;
-            }
-            match = &candidate;
-        }
-        return match;
+        const auto named = specialized_hir_unit_->vhdl_types_named(spelling);
+        return named.size() == 1U ? named.front() : nullptr;
     };
     const auto array_element_subtype = [&](
                                            const semantic::vhdl::SubtypeIndication& subtype)
@@ -4512,15 +4502,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             return nullptr;
         }
         if (!type_id.valid() && !subtype.type_mark.spelling.empty()) {
-            const auto named = std::ranges::find_if(
-                specialized_hir_unit_->design().vhdl_hir.types(),
-                [&](const semantic::vhdl::TypeDefinition& candidate) {
-                    return same_vhdl_identifier(
-                        candidate.name, subtype.type_mark.spelling);
-                });
-            if (named
-                != specialized_hir_unit_->design().vhdl_hir.types().end()) {
-                type_id = named->id;
+            const auto named = specialized_hir_unit_->vhdl_types_named(
+                subtype.type_mark.spelling);
+            if (!named.empty()) {
+                type_id = named.front()->id;
             }
         }
         if (!type_id.valid()) {
@@ -4533,12 +4518,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                       separator + 1U);
             std::vector<semantic::TypeId> matches;
             std::vector<semantic::TypeId> scoped;
-            for (const auto& candidate :
-                specialized_hir_unit_->design().vhdl_hir.types()) {
-                if (simple.empty()
-                    || !same_vhdl_identifier(candidate.name, simple)) {
-                    continue;
-                }
+            for (const auto* named : simple.empty()
+                     ? std::vector<const semantic::vhdl::TypeDefinition*> { }
+                     : specialized_hir_unit_->vhdl_types_named(simple)) {
+                const auto& candidate = *named;
                 matches.push_back(candidate.id);
                 const auto declaration
                     = specialized_hir_unit_->find_declaration(
@@ -14592,11 +14575,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 type_id = type->vhdl->base.type_mark.target;
             }
         }
+        // A reference to any other declaration is not a literal; otherwise
+        // the indexed candidates are the literals it may denote.
+        const auto candidates = exact_literal
+            ? specialized_hir_unit_->vhdl_enumeration_literals_declared_by(
+                  *exact_literal)
+            : referenced
+            ? std::vector<semantic::SpecializedHirUnit::VhdlTypeMember> { }
+            : specialized_hir_unit_->vhdl_enumeration_literals_spelled(
+                  expression->vhdl->text);
         bool relaxed_width { };
-        const auto consider_type = [&](const auto& type) {
-            if (type.enumeration_literals.empty()
-                || (relaxed_width
-                    && !equal_ignoring_ascii_case(type.name, "character"))) {
+        const auto consider_type =
+            [&](const semantic::SpecializedHirUnit::VhdlTypeMember& member) {
+            const auto& type = *member.type;
+            if (relaxed_width
+                && !equal_ignoring_ascii_case(type.name, "character")) {
                 return;
             }
             if (context_enumeration != nullptr
@@ -14608,24 +14601,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     })) {
                 return;
             }
-            const auto literal = std::ranges::find_if(
-                type.enumeration_literals,
-                [&](const auto& candidate) {
-                    if (exact_literal) {
-                        return candidate.declaration == *exact_literal;
-                    }
-                    if (referenced) {
-                        return false;
-                    }
-                    if (expression->vhdl->text.starts_with('\'')) {
-                        return candidate.spelling
-                            == expression->vhdl->text;
-                    }
-                    return equal_ignoring_ascii_case(candidate.spelling, expression->vhdl->text);
-                });
-            if (literal == type.enumeration_literals.end()) {
-                return;
-            }
+            const auto* literal = &type.enumeration_literals[member.position];
             if (!exact_literal) {
                 auto maximum_ordinal
                     = type.enumeration_literals.size() - 1U;
@@ -14648,27 +14624,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return;
             }
             if (selected == nullptr) {
-                selected = &*literal;
+                selected = literal;
             }
         };
-        for (const auto& type : specialized_hir_unit_->vhdl_types()) {
-            consider_type(type);
-        }
-        for (const auto& type :
-            specialized_hir_unit_->design().vhdl_hir.types()) {
-            consider_type(type);
+        for (const auto& member : candidates) {
+            consider_type(member);
         }
         // A CHARACTER literal compared in a wider register (a CHARACTER
         // loop parameter held in 32 bits) keeps its position.
         if (selected == nullptr && !ambiguous && !exact_literal
             && expected_width != 0U) {
             relaxed_width = true;
-            for (const auto& type : specialized_hir_unit_->vhdl_types()) {
-                consider_type(type);
-            }
-            for (const auto& type :
-                specialized_hir_unit_->design().vhdl_hir.types()) {
-                consider_type(type);
+            for (const auto& member : candidates) {
+                consider_type(member);
             }
         }
         if (ambiguous) {
@@ -27110,14 +27078,14 @@ std::optional<std::string> Lowerer::hir_vhdl_path_attribute(
             }
             if (item->form == semantic::vhdl::DeclarationForm::type
                 && std::ranges::any_of(
-                    specialized_hir_unit_->design().vhdl_hir.types(),
-                    [&](const semantic::vhdl::TypeDefinition& body) {
-                        return body.form
+                    specialized_hir_unit_->vhdl_types_named(name),
+                    [&](const semantic::vhdl::TypeDefinition* body) {
+                        return body->form
                                 == semantic::vhdl::TypeForm::protected_body
-                            && lower(body.name) == name
-                            && std::ranges::find(body.protected_members,
+                            && lower(body->name) == name
+                            && std::ranges::find(body->protected_members,
                                    frame.declaration)
-                                != body.protected_members.end();
+                                != body->protected_members.end();
                     })) {
                 return object_text + ":";
             }
@@ -27534,24 +27502,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
         const auto literal = specialized_hir_unit_->find_expression(value_id);
         const auto unit_name = std::string_view { literal->vhdl->text }.substr(
             std::string_view { "@vhdl-physical:" }.size());
-        for (const auto& stored :
-            specialized_hir_unit_->design().vhdl_hir.types()) {
-            const auto type = specialized_hir_unit_->find_type(stored.id);
-            if (type && type->vhdl != nullptr
-                && type->vhdl->form == semantic::vhdl::TypeForm::physical
-                && std::ranges::any_of(type->vhdl->physical_units,
-                    [&](const semantic::vhdl::PhysicalUnit& unit) {
-                        auto left = unit.name;
-                        auto right = std::string { unit_name };
-                        lowercase_ascii(left);
-                        lowercase_ascii(right);
-                        return left == right;
-                    })) {
+        for (const auto& member :
+            specialized_hir_unit_->vhdl_physical_units_named(unit_name)) {
+            if (member.type->form == semantic::vhdl::TypeForm::physical) {
                 if (definition != nullptr) {
                     definition = nullptr;
                     break;
                 }
-                definition = type->vhdl;
+                definition = member.type;
             }
         }
     }

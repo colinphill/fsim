@@ -422,13 +422,11 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
         const auto selected = *source.referenced_name->selected;
         std::optional<std::uint64_t> selected_ordinal;
         bool conflicting_owner { };
-        const auto consider_type = [&](const auto& type) {
-            const auto literal = std::ranges::find(
-                type.enumeration_literals, selected,
-                &semantic::vhdl::EnumerationLiteral::declaration);
-            if (literal == type.enumeration_literals.end()) {
-                return;
-            }
+        for (const auto& member :
+            specialized_hir_unit_->vhdl_enumeration_literals_declared_by(
+                selected)) {
+            const auto& type = *member.type;
+            const auto* literal = &type.enumeration_literals[member.position];
             const auto declaration
                 = specialized_hir_unit_->find_declaration(
                     type.declaration);
@@ -438,21 +436,14 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
                 : std::string_view { };
             if (owner != predefined_type) {
                 conflicting_owner = true;
-                return;
+                continue;
             }
             if (selected_ordinal
                 && *selected_ordinal != literal->ordinal) {
                 conflicting_owner = true;
-                return;
+                continue;
             }
             selected_ordinal = literal->ordinal;
-        };
-        for (const auto& type : specialized_hir_unit_->vhdl_types()) {
-            consider_type(type);
-        }
-        for (const auto& type :
-            specialized_hir_unit_->design().vhdl_hir.types()) {
-            consider_type(type);
         }
         if (conflicting_owner || !selected_ordinal) {
             return std::nullopt;

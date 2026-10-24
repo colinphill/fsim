@@ -46,11 +46,14 @@ private:
 
 /// The record with `id` in a table of records with an `id` member. Tables
 /// are usually dense (record `n` has ID `n`), which is checked first; any
-/// other layout falls back to a linear search.
+/// other layout falls back to a linear search. No record has an invalid ID.
 template <typename Records, typename Tag>
 [[nodiscard]] const typename Records::value_type* find_by_id(
     const Records& records, const Id<Tag> id) noexcept {
-    if (id.valid() && id.value() < records.size()
+    if (!id.valid()) {
+        return nullptr;
+    }
+    if (id.value() < records.size()
         && records[id.value()].id == id) {
         return &records[id.value()];
     }

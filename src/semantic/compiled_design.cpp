@@ -858,8 +858,34 @@ void CompiledDesign::refresh_lookup_indexes()
     }
     const auto& vhdl_types = vhdl_hir.types();
     for (std::size_t position { }; position < vhdl_types.size(); ++position) {
-        rebuilt.vhdl_type_positions_by_name[vhdl_types[position].name]
-            .push_back(static_cast<std::uint32_t>(position));
+        const auto& type = vhdl_types[position];
+        const auto type_position = static_cast<std::uint32_t>(position);
+        rebuilt.vhdl_type_positions_by_name[type.name].push_back(type_position);
+        for (std::size_t member { };
+             member < type.enumeration_literals.size(); ++member) {
+            const auto& literal = type.enumeration_literals[member];
+            const CompiledVhdlTypeMemberIndexEntry entry {
+                type_position, static_cast<std::uint32_t>(member)
+            };
+            if (literal.declaration.valid()) {
+                rebuilt.vhdl_enumeration_literals_by_declaration
+                    [literal.declaration.value()].push_back(entry);
+            }
+            rebuilt.vhdl_enumeration_literals_by_spelling[literal.spelling]
+                .push_back(entry);
+        }
+        for (std::size_t member { }; member < type.physical_units.size();
+             ++member) {
+            const auto& unit = type.physical_units[member];
+            const CompiledVhdlTypeMemberIndexEntry entry {
+                type_position, static_cast<std::uint32_t>(member)
+            };
+            if (unit.declaration.valid()) {
+                rebuilt.vhdl_physical_units_by_declaration
+                    [unit.declaration.value()].push_back(entry);
+            }
+            rebuilt.vhdl_physical_units_by_name[unit.name].push_back(entry);
+        }
     }
     rebuilt.vhdl_imports_by_unit.resize(semantics.units().size());
     std::vector<std::vector<const CompiledReference*>>
@@ -1421,6 +1447,58 @@ CompiledDesign::vhdl_package_members(
     }
     return std::span<const CompiledVhdlPackageMemberIndexEntry> {
         found->second };
+}
+
+namespace {
+
+    template <typename Map, typename Key>
+    std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+    find_type_members(const bool current, const Map& map, const Key& key)
+    {
+        if (!current) {
+            return std::nullopt;
+        }
+        const auto found = map.find(key);
+        return found == map.end()
+            ? std::span<const CompiledVhdlTypeMemberIndexEntry> { }
+            : std::span<const CompiledVhdlTypeMemberIndexEntry> {
+                  found->second };
+    }
+
+} // namespace
+
+std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+CompiledDesign::vhdl_enumeration_literals_declared_by(
+    const DeclarationId declaration) const noexcept
+{
+    return find_type_members(lookup_indexes_current(),
+        lookup_indexes_.vhdl_enumeration_literals_by_declaration,
+        declaration.value());
+}
+
+std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+CompiledDesign::vhdl_enumeration_literals_spelled(
+    const std::string_view name) const noexcept
+{
+    return find_type_members(lookup_indexes_current(),
+        lookup_indexes_.vhdl_enumeration_literals_by_spelling, name);
+}
+
+std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+CompiledDesign::vhdl_physical_units_declared_by(
+    const DeclarationId declaration) const noexcept
+{
+    return find_type_members(lookup_indexes_current(),
+        lookup_indexes_.vhdl_physical_units_by_declaration,
+        declaration.value());
+}
+
+std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+CompiledDesign::vhdl_physical_units_named(
+    const std::string_view name) const noexcept
+{
+    return find_type_members(lookup_indexes_current(),
+        lookup_indexes_.vhdl_physical_units_by_name, name);
 }
 
 bool CompiledDesign::valid() const

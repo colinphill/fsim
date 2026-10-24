@@ -12641,19 +12641,13 @@ private:
             name, expression.scope,
             [&](const CompiledDeclarationView& candidate) {
                 return candidate.vhdl != nullptr && std::ranges::any_of(
-                    unit_.design().vhdl_hir.types(),
-                    [&](const vhdl::TypeDefinition& stored) {
-                        const auto type = unit_.find_type(stored.id);
-                        return type && type->vhdl != nullptr
-                            && type->vhdl->form == vhdl::TypeForm::physical
-                            && std::ranges::any_of(
-                                type->vhdl->physical_units,
-                                [&](const vhdl::PhysicalUnit& physical_unit) {
-                                    return physical_unit.declaration
-                                            == candidate.vhdl->id
-                                        && support::equal_ignoring_ascii_case(
-                                            physical_unit.name, unit_name);
-                                });
+                    unit_.vhdl_physical_units_declared_by(candidate.vhdl->id),
+                    [&](const SpecializedHirUnit::VhdlTypeMember& member) {
+                        return member.type->form == vhdl::TypeForm::physical
+                            && support::equal_ignoring_ascii_case(
+                                member.type->physical_units[member.position]
+                                    .name,
+                                unit_name);
                     });
             });
         const auto selected_unit = selected_resolution.unique();
@@ -12704,32 +12698,23 @@ private:
             return *magnitude * scale;
         }
         std::optional<TypeId> selected_type;
-        for (const auto& stored : unit_.design().vhdl_hir.types()) {
-            const auto type = unit_.find_type(stored.id);
-            if (!type || type->vhdl == nullptr
-                || type->vhdl->form != vhdl::TypeForm::physical
-                || std::ranges::none_of(
-                    type->vhdl->physical_units,
-                    [&](const vhdl::PhysicalUnit& physical_unit) {
-                        return physical_unit.declaration == *selected_unit;
-                    })) {
+        for (const auto& member :
+            unit_.vhdl_physical_units_declared_by(*selected_unit)) {
+            if (member.type->form != vhdl::TypeForm::physical) {
                 continue;
             }
-            if (selected_type && *selected_type != stored.id) {
+            if (selected_type && *selected_type != member.type->id) {
                 return std::nullopt;
             }
-            selected_type = stored.id;
+            selected_type = member.type->id;
         }
         if (!selected_type) {
             return std::nullopt;
         }
         const auto magnitude_expression = unit_.find_expression(
             expression.operands.front());
-        for (const auto& stored : unit_.design().vhdl_hir.types()) {
-            if (stored.id != *selected_type) {
-                continue;
-            }
-            const auto type = unit_.find_type(stored.id);
+        for (const auto stored_id : { *selected_type }) {
+            const auto type = unit_.find_type(stored_id);
             if (!type || type->vhdl == nullptr
                 || type->vhdl->form != vhdl::TypeForm::physical) {
                 continue;
@@ -18141,6 +18126,167 @@ SpecializedHirUnit::evaluate_vhdl_packed_array_expression(
     return evaluator.evaluate_vhdl_packed_array_expression(expression);
 }
 
+namespace {
+
+    // The members of the indexed (or, with stale indexes, every) VHDL type
+    // that `matches` accepts, read through the specialization's view. The
+    // design's indexes describe original types, so replaced types are read
+    // from the overlay itself; the result is in type id order.
+    template <typename Members, typename Matches>
+    std::vector<SpecializedHirUnit::VhdlTypeMember> specialized_vhdl_type_members(
+        const SpecializedHirUnit& unit,
+        const std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+            indexed,
+        const Members members, const Matches matches)
+    {
+        std::vector<SpecializedHirUnit::VhdlTypeMember> result;
+        const auto consider = [&](const vhdl::TypeDefinition& type,
+                                  const std::optional<std::size_t> member) {
+            const auto& list = members(type);
+            const auto check = [&](const std::size_t position) {
+                if (position < list.size() && matches(list[position])) {
+                    result.push_back({ &type, position });
+                }
+            };
+            if (member) {
+                check(*member);
+                return;
+            }
+            for (std::size_t position { }; position < list.size(); ++position) {
+                check(position);
+            }
+        };
+        const auto replaced = unit.vhdl_types();
+        const auto is_replaced = [&](const TypeId id) {
+            const auto found = std::ranges::lower_bound(
+                replaced, id, { }, &vhdl::TypeDefinition::id);
+            return found != replaced.end() && found->id == id;
+        };
+        for (const auto& type : replaced) {
+            consider(type, std::nullopt);
+        }
+        const auto& types = unit.design().vhdl_hir.types();
+        if (indexed) {
+            for (const auto& entry : *indexed) {
+                if (entry.type_position < types.size()
+                    && !is_replaced(types[entry.type_position].id)) {
+                    consider(types[entry.type_position], entry.member_position);
+                }
+            }
+        } else {
+            for (const auto& type : types) {
+                if (!is_replaced(type.id)) {
+                    consider(type, std::nullopt);
+                }
+            }
+        }
+        if (!replaced.empty()) {
+            std::ranges::stable_sort(result, { },
+                [](const SpecializedHirUnit::VhdlTypeMember& member) {
+                    return member.type->id.value();
+                });
+        }
+        return result;
+    }
+
+    const auto enumeration_literals_of = [](const vhdl::TypeDefinition& type)
+        -> const std::vector<vhdl::EnumerationLiteral>& {
+        return type.enumeration_literals;
+    };
+    const auto physical_units_of = [](const vhdl::TypeDefinition& type)
+        -> const std::vector<vhdl::PhysicalUnit>& {
+        return type.physical_units;
+    };
+
+} // namespace
+
+std::vector<const vhdl::TypeDefinition*>
+SpecializedHirUnit::vhdl_types_named(const std::string_view name) const
+{
+    std::vector<const vhdl::TypeDefinition*> result;
+    const auto named = [&](const vhdl::TypeDefinition& type) {
+        return support::equal_ignoring_ascii_case(type.name, name);
+    };
+    // A replacement may be renamed, so the overlay is read directly and the
+    // design's name index only for types it does not replace.
+    for (const auto& type : vhdl_types_) {
+        if (named(type)) {
+            result.push_back(&type);
+        }
+    }
+    const auto& types = design_->vhdl_hir.types();
+    const auto consider = [&](const vhdl::TypeDefinition& type) {
+        if (named(type) && find_replacement(vhdl_types_, type.id) == nullptr) {
+            result.push_back(&type);
+        }
+    };
+    if (const auto positions = design_->vhdl_type_positions_named(name)) {
+        for (const auto position : *positions) {
+            if (position < types.size()) {
+                consider(types[position]);
+            }
+        }
+    } else {
+        for (const auto& type : types) {
+            consider(type);
+        }
+    }
+    if (!vhdl_types_.empty()) {
+        std::ranges::stable_sort(result, { },
+            [](const vhdl::TypeDefinition* type) { return type->id.value(); });
+    }
+    return result;
+}
+
+std::vector<SpecializedHirUnit::VhdlTypeMember>
+SpecializedHirUnit::vhdl_enumeration_literals_declared_by(
+    const DeclarationId literal) const
+{
+    return specialized_vhdl_type_members(*this,
+        design_->vhdl_enumeration_literals_declared_by(literal),
+        enumeration_literals_of,
+        [&](const vhdl::EnumerationLiteral& candidate) {
+            return candidate.declaration == literal;
+        });
+}
+
+std::vector<SpecializedHirUnit::VhdlTypeMember>
+SpecializedHirUnit::vhdl_enumeration_literals_spelled(
+    const std::string_view spelling) const
+{
+    const bool character = spelling.starts_with('\'');
+    return specialized_vhdl_type_members(*this,
+        design_->vhdl_enumeration_literals_spelled(spelling),
+        enumeration_literals_of,
+        [&](const vhdl::EnumerationLiteral& candidate) {
+            return character
+                ? candidate.spelling == spelling
+                : support::same_vhdl_identifier(candidate.spelling, spelling);
+        });
+}
+
+std::vector<SpecializedHirUnit::VhdlTypeMember>
+SpecializedHirUnit::vhdl_physical_units_declared_by(
+    const DeclarationId unit) const
+{
+    return specialized_vhdl_type_members(*this,
+        design_->vhdl_physical_units_declared_by(unit), physical_units_of,
+        [&](const vhdl::PhysicalUnit& candidate) {
+            return candidate.declaration == unit;
+        });
+}
+
+std::vector<SpecializedHirUnit::VhdlTypeMember>
+SpecializedHirUnit::vhdl_physical_units_named(
+    const std::string_view name) const
+{
+    return specialized_vhdl_type_members(*this,
+        design_->vhdl_physical_units_named(name), physical_units_of,
+        [&](const vhdl::PhysicalUnit& candidate) {
+            return support::equal_ignoring_ascii_case(candidate.name, name);
+        });
+}
+
 const vhdl::TypeDefinition* SpecializedHirUnit::vhdl_protected_counterpart(
     const vhdl::TypeDefinition& type, const vhdl::TypeForm form) const
 {
@@ -18163,15 +18309,11 @@ const vhdl::TypeDefinition* SpecializedHirUnit::vhdl_protected_counterpart(
     const auto* own_unit = declaring_unit(type.declaration);
     const vhdl::TypeDefinition* selected = nullptr;
     bool ambiguous { };
-    for (const auto& stored : design_->vhdl_hir.types()) {
-        const auto candidate = find_type(stored.id);
-        if (!candidate || candidate->vhdl == nullptr
-            || candidate->vhdl->form != form
-            || !support::equal_ignoring_ascii_case(
-                candidate->vhdl->name, type.name)) {
+    for (const auto* candidate : vhdl_types_named(type.name)) {
+        if (candidate->form != form) {
             continue;
         }
-        const auto* unit = declaring_unit(candidate->vhdl->declaration);
+        const auto* unit = declaring_unit(candidate->declaration);
         if (own_unit != nullptr && unit != nullptr
             && (unit->id == own_unit->id
                 || (support::equal_ignoring_ascii_case(
@@ -18179,11 +18321,11 @@ const vhdl::TypeDefinition* SpecializedHirUnit::vhdl_protected_counterpart(
                     && support::equal_ignoring_ascii_case(
                         normalized_library(unit->library),
                         normalized_library(own_unit->library))))) {
-            return candidate->vhdl;
+            return candidate;
         }
         ambiguous = ambiguous
-            || (selected != nullptr && selected->id != candidate->vhdl->id);
-        selected = candidate->vhdl;
+            || (selected != nullptr && selected->id != candidate->id);
+        selected = candidate;
     }
     return ambiguous ? nullptr : selected;
 }

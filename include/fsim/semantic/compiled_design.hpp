@@ -121,6 +121,14 @@ struct CompiledVhdlPackageMemberIndexEntry {
     DeclarationId member;
 };
 
+/// One enumeration literal or physical unit of a VHDL type definition in the
+/// non-owning lookup indexes: positions in `vhdl_hir.types()` and in that
+/// type's literal or unit list.
+struct CompiledVhdlTypeMemberIndexEntry {
+    std::uint32_t type_position { };
+    std::uint32_t member_position { };
+};
+
 /// Resolved name metadata for one VHDL expression. This is used by the
 /// linked-expression annotation update, which deliberately excludes every
 /// field consumed by the compiled-design lookup indexes.
@@ -281,6 +289,20 @@ public:
     /// stale.
     [[nodiscard]] std::optional<std::span<const std::uint32_t>>
     vhdl_type_positions_named(std::string_view name) const noexcept;
+    /// The enumeration literals (or physical units) of VHDL type
+    /// definitions whose declaration is `declaration`, or whose spelling
+    /// matches `name` ignoring ASCII case (a caller compares character
+    /// literals exactly); disengaged when the lookup indexes are stale.
+    [[nodiscard]] std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+    vhdl_enumeration_literals_declared_by(
+        DeclarationId declaration) const noexcept;
+    [[nodiscard]] std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+    vhdl_enumeration_literals_spelled(std::string_view name) const noexcept;
+    [[nodiscard]] std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+    vhdl_physical_units_declared_by(
+        DeclarationId declaration) const noexcept;
+    [[nodiscard]] std::optional<std::span<const CompiledVhdlTypeMemberIndexEntry>>
+    vhdl_physical_units_named(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::span<const CompiledVhdlImport>>
     vhdl_linked_imports(UnitId owner) const noexcept;
     [[nodiscard]] std::optional<
@@ -378,6 +400,15 @@ private:
             std::vector<CompiledVhdlPackageMemberIndexEntry>,
             VhdlIdentifierHash, VhdlIdentifierEqual>
             vhdl_package_members;
+        using VhdlTypeMembersByDeclaration = std::unordered_map<std::uint32_t,
+            std::vector<CompiledVhdlTypeMemberIndexEntry>>;
+        using VhdlTypeMembersByName = std::unordered_map<std::string_view,
+            std::vector<CompiledVhdlTypeMemberIndexEntry>,
+            VhdlIdentifierHash, VhdlIdentifierEqual>;
+        VhdlTypeMembersByDeclaration vhdl_enumeration_literals_by_declaration;
+        VhdlTypeMembersByName vhdl_enumeration_literals_by_spelling;
+        VhdlTypeMembersByDeclaration vhdl_physical_units_by_declaration;
+        VhdlTypeMembersByName vhdl_physical_units_by_name;
     };
 
     [[nodiscard]] bool lookup_indexes_current() const noexcept;

@@ -2152,28 +2152,19 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
             std::optional<std::int64_t> ordinal;
             std::optional<semantic::DeclarationId> literal_declaration;
             bool ambiguous { };
-            const auto consider_types = [&](const auto& types) {
-                for (const auto& type : types) {
-                    for (const auto& literal :
-                        type.enumeration_literals) {
-                        if (!same_hir_identifier(
-                                literal.spelling, spelling, true)) {
-                            continue;
-                        }
-                        if (literal_declaration
-                            && *literal_declaration
-                                != literal.declaration) {
-                            ambiguous = true;
-                            continue;
-                        }
-                        literal_declaration = literal.declaration;
-                        ordinal = literal.ordinal;
-                    }
+            for (const auto& member :
+                specialized_hir_unit_->vhdl_enumeration_literals_spelled(
+                    spelling)) {
+                const auto& literal
+                    = member.type->enumeration_literals[member.position];
+                if (literal_declaration
+                    && *literal_declaration != literal.declaration) {
+                    ambiguous = true;
+                    continue;
                 }
-            };
-            consider_types(specialized_hir_unit_->vhdl_types());
-            consider_types(
-                specialized_hir_unit_->design().vhdl_hir.types());
+                literal_declaration = literal.declaration;
+                ordinal = literal.ordinal;
+            }
             if (ordinal && !ambiguous) {
                 return finish(ordinal);
             }
@@ -2217,26 +2208,14 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                 && record->vhdl->form
                     == semantic::vhdl::DeclarationForm::
                         enumeration_literal) {
-                const auto ordinal = [&](const auto& types)
-                    -> std::optional<std::int64_t> {
-                    for (const auto& type : types) {
-                        const auto literal = std::ranges::find(
-                            type.enumeration_literals, *declaration,
-                            &semantic::vhdl::EnumerationLiteral::
-                                declaration);
-                        if (literal != type.enumeration_literals.end()) {
-                            return literal->ordinal;
-                        }
-                    }
-                    return std::nullopt;
-                };
-                if (const auto value = ordinal(
-                        specialized_hir_unit_->vhdl_types())) {
-                    return finish(value);
-                }
-                if (const auto value = ordinal(
-                        specialized_hir_unit_->design().vhdl_hir.types())) {
-                    return finish(value);
+                const auto literals = specialized_hir_unit_
+                                          ->vhdl_enumeration_literals_declared_by(
+                                              *declaration);
+                if (!literals.empty()) {
+                    return finish(static_cast<std::int64_t>(
+                        literals.front().type->enumeration_literals
+                            [literals.front().position]
+                                .ordinal));
                 }
             }
             const auto initializer = hir_constant_initializer(*declaration);
@@ -15123,6 +15102,19 @@ Lowerer::hir_vhdl_attribute_profile(
                   == semantic::vhdl::TypeForm::physical)
         || builtin_time_prefix;
     const auto literal_unit = hir_vhdl_physical_unit_name(value);
+    // The physical type declaring unit `declaration`, in HIR order.
+    const auto physical_type_declaring = [&](
+        const semantic::DeclarationId declaration)
+        -> std::optional<semantic::TypeId> {
+        for (const auto& member :
+            specialized_hir_unit_->vhdl_physical_units_declared_by(
+                declaration)) {
+            if (member.type->form == semantic::vhdl::TypeForm::physical) {
+                return member.type->id;
+            }
+        }
+        return std::nullopt;
+    };
     const auto literal_physical_root = [&]()
         -> std::optional<semantic::TypeId> {
         if (!literal_unit) {
@@ -15139,38 +15131,11 @@ Lowerer::hir_vhdl_attribute_profile(
         const auto declaration = resolver.resolve_vhdl(
             unit_name, literal->vhdl->scope,
             [&](const semantic::CompiledDeclarationView& candidate) {
-                return candidate.vhdl != nullptr && std::ranges::any_of(
-                    specialized_hir_unit_->design().vhdl_hir.types(),
-                    [&](const semantic::vhdl::TypeDefinition& stored) {
-                        const auto type = specialized_hir_unit_->find_type(
-                            stored.id);
-                        return type && type->vhdl != nullptr
-                            && type->vhdl->form
-                                == semantic::vhdl::TypeForm::physical
-                            && std::ranges::any_of(
-                                type->vhdl->physical_units,
-                                [&](const semantic::vhdl::PhysicalUnit& unit) {
-                                    return unit.declaration == candidate.vhdl->id;
-                                });
-                    });
+                return candidate.vhdl != nullptr
+                    && physical_type_declaring(candidate.vhdl->id);
             }).unique();
-        if (!declaration) {
-            return std::nullopt;
-        }
-        for (const auto& stored :
-            specialized_hir_unit_->design().vhdl_hir.types()) {
-            const auto type = specialized_hir_unit_->find_type(stored.id);
-            if (type && type->vhdl != nullptr
-                && type->vhdl->form == semantic::vhdl::TypeForm::physical
-                && std::ranges::any_of(
-                    type->vhdl->physical_units,
-                    [&](const semantic::vhdl::PhysicalUnit& unit) {
-                        return unit.declaration == *declaration;
-                    })) {
-                return stored.id;
-            }
-        }
-        return std::nullopt;
+        return declaration ? physical_type_declaring(*declaration)
+                           : std::nullopt;
     }();
     const auto physical_value_subtype = hir_vhdl_expression_subtype(value);
     StandardTimeIdentity value_time_identity;
@@ -26183,15 +26148,14 @@ Lowerer::hir_vhdl_array_selection(
                 }
             }
             if (!type_id.valid()) {
-                for (const auto& candidate :
-                    specialized_hir_unit_->design().vhdl_hir.types()) {
-                    if (!candidate.enumeration_literals.empty()
-                        && same_hir_identifier(candidate.name, simple, true)) {
+                for (const auto* candidate :
+                    specialized_hir_unit_->vhdl_types_named(simple)) {
+                    if (!candidate->enumeration_literals.empty()) {
                         if (type_id.valid()) {
                             type_id = { };
                             break;
                         }
-                        type_id = candidate.id;
+                        type_id = candidate->id;
                     }
                 }
             }

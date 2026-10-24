@@ -272,14 +272,7 @@ private:
         if (const auto identity
             = semantic::parse_vhdl_declaration_identity(spelling)) {
             const auto& design = specialization_.design();
-            std::vector<const semantic::vhdl::TypeDefinition*> named;
-            for (const auto& stored : design.vhdl_hir.types()) {
-                const auto type = specialization_.find_type(stored.id);
-                if (type && type->vhdl != nullptr
-                    && equal_ignoring_ascii_case(type->vhdl->name, name)) {
-                    named.push_back(type->vhdl);
-                }
-            }
+            const auto named = specialization_.vhdl_types_named(name);
             const auto selection = semantic::select_vhdl_identity_type(
                 design, named, *identity);
             using Status = semantic::VhdlIdentityTypeSelection::Status;
@@ -357,17 +350,11 @@ private:
             return selected;
         }
         std::optional<semantic::TypeId> selected;
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.types()) {
-            const auto type = specialization_.find_type(stored.id);
-            if (!type || type->vhdl == nullptr
-                || !equal_ignoring_ascii_case(type->vhdl->name, name)) {
-                continue;
-            }
-            if (selected && *selected != type->vhdl->id) {
+        for (const auto* type : specialization_.vhdl_types_named(name)) {
+            if (selected && *selected != type->id) {
                 return std::nullopt;
             }
-            selected = type->vhdl->id;
+            selected = type->id;
         }
         return selected;
     }
@@ -2448,14 +2435,14 @@ private:
                     if (implicit_index && !left_literal.empty()
                         && !right_literal.empty()) {
                         std::size_t owners { };
-                        for (const auto& candidate : specialization_.design().vhdl_hir.types()) {
-                            const auto has = [&](const std::string& spelling) {
-                                return std::ranges::any_of(candidate.enumeration_literals,
+                        for (const auto& member :
+                            specialization_.vhdl_enumeration_literals_spelled(left_literal)) {
+                            const auto& candidate = *member.type;
+                            if (std::ranges::any_of(candidate.enumeration_literals,
                                     [&](const auto& entry) {
-                                        return equal_ignoring_ascii_case(entry.spelling, spelling);
-                                    });
-                            };
-                            if (has(left_literal) && has(right_literal)
+                                        return equal_ignoring_ascii_case(
+                                            entry.spelling, right_literal);
+                                    })
                                 && type_visible_from(candidate, type)) {
                                 ++owners;
                             }
@@ -4185,16 +4172,12 @@ private:
                 if (declaration && declaration->vhdl != nullptr
                     && declaration->vhdl->form
                         == semantic::vhdl::DeclarationForm::enumeration_literal) {
-                    for (const auto& type
-                        : specialization_.design().vhdl_hir.types()) {
-                        if (std::ranges::any_of(type.enumeration_literals,
-                                [&](const semantic::vhdl::EnumerationLiteral& literal) {
-                                    return literal.declaration
-                                        == *value.resolved_declaration;
-                                })) {
-                            return { OperandClass::enumeration,
-                                "#" + std::to_string(type.id.value()) };
-                        }
+                    const auto owners = specialization_
+                        .vhdl_enumeration_literals_declared_by(
+                            *value.resolved_declaration);
+                    if (!owners.empty()) {
+                        return { OperandClass::enumeration,
+                            "#" + std::to_string(owners.front().type->id.value()) };
                     }
                 }
             }
@@ -4550,13 +4533,7 @@ private:
             return;
         }
         const auto* target = array_of(*target_id);
-        const TypeDefinition* source { };
-        for (const auto& stored : specialization_.design().vhdl_hir.types()) {
-            if (stored.id.value() == operand_id) {
-                source = array_of(stored.id);
-                break;
-            }
-        }
+        const auto* source = array_of(semantic::TypeId::from_index(operand_id));
         if (target == nullptr || source == nullptr || target == source
             || target->array_dimensions.size() != source->array_dimensions.size()) {
             return;
@@ -4782,13 +4759,12 @@ private:
                 return false;
             };
             std::size_t owners { };
-            for (const auto& type : specialization_.design().vhdl_hir.types()) {
-                const auto declaration = specialization_.find_declaration(type.declaration);
+            for (const auto& member :
+                specialization_.vhdl_enumeration_literals_spelled(operand->vhdl->text)) {
+                const auto declaration
+                    = specialization_.find_declaration(member.type->declaration);
                 if (declaration && declaration->vhdl != nullptr
-                    && visible_here(declaration->vhdl->scope)
-                    && std::ranges::any_of(type.enumeration_literals, [&](const auto& literal) {
-                           return equal_ignoring_ascii_case(literal.spelling, operand->vhdl->text);
-                       })) {
+                    && visible_here(declaration->vhdl->scope)) {
                     ++owners;
                 }
             }
@@ -7447,13 +7423,7 @@ private:
                 return true;
             }
         }
-        return std::ranges::any_of(specialization_.design().vhdl_hir.types(),
-            [&](const TypeDefinition& type) {
-                return std::ranges::any_of(type.physical_units,
-                    [&](const semantic::vhdl::PhysicalUnit& unit) {
-                        return equal_ignoring_ascii_case(unit.name, name);
-                    });
-            });
+        return !specialization_.vhdl_physical_units_named(name).empty();
     }
 
     // IEEE 1076-2008 10.6.2.1: the target of a variable assignment denotes a
@@ -12775,12 +12745,8 @@ private:
                         return true;
                     }
                 }
-                for (const auto& type : specialization_.design().vhdl_hir.types()) {
-                    if (std::ranges::any_of(type.physical_units, [&](const auto& unit) {
-                            return equal_ignoring_ascii_case(unit.name, value.text);
-                        })) {
-                        return true;
-                    }
+                if (!specialization_.vhdl_physical_units_named(value.text).empty()) {
+                    return true;
                 }
             }
             return value.kind == Kind::binary
