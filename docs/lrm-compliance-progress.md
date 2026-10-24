@@ -253,6 +253,62 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 94: SV class and hierarchical array parameters, VHDL-2019 range records, generic package protected objects, expanded names
+
+Batch 94 (4f5ba8e7) closed the three cases it could reach from the 16
+in-scope failures left after Batch 93, so the closure minimum did not apply.
+Against `b93w1`, the live tree gains 3 cases and loses none:
+- nvc 1: genpack8;
+- vhdl-compliance 1: tb_099;
+- verilator 1: t_param_override_pattern.
+
+The full run `b94w1`, made with the frozen `b94z` binary, gains the same 3
+cases on `b93w1`. ivtest pow_reg_signed timed out at 60 seconds in that
+run while a build shared the machine; rerun alone on `b94z` it passes in 40
+seconds (44.6 seconds in `b93w1`), so it is counted as passing. The
+intermediate archives `b94a`, `b94b` and `b94c` are superseded by `b94z`.
+
+| Suite | Batch93 passes / in scope | Batch94 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2634 / 2635 | 2634 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2058 / 2064 | 2059 / 2064 | 351 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1253 / 1261 | 1254 / 1261 | 221 |
+| vhdl-compliance | 64 / 65 | 65 / 65 | 7 |
+
+VHDL:
+- **VHDL-2019 range records.** `P'range'record` subtypes, `'value`
+  aggregates of them, `range_direction`, and `'left`, `'right`,
+  `'ascending` and `'range` of a record prefix (IEEE 1076-2019 5.3.2.4,
+  16.2).
+- **Generic package protected objects.** Elaboration and lowering share one
+  lookup from a protected type declaration to its body and back. It prefers
+  the declaration in the same package, which matters for library-level copies
+  of a package instance. A package body sees its own package's region before
+  the enclosing specialization's generics (12.1, 12.3). The type mark of a
+  protected object resolves in the object's declaration scope.
+- **Expanded names of any length.** `lib.pkg.obj.m` and `pkg.c.e` record
+  their package dependency, pass selected-name validation, and resolve the
+  root object before the member path (8.3).
+- **Aliases.** Overloaded aliases of one predefined subprogram collapse to
+  that subprogram. An element of an alias of a slice can be indexed at run
+  time, with the element's own value domain (6.6.2).
+- **STD.STANDARD enumerations.** One table of the natively provided
+  enumeration types replaces the per-site literal lists.
+
+SystemVerilog:
+- **Parameters of class and hierarchical arrays.** Genvar and size-constant
+  casts (`W'(x)`) fold, typed unpacked arrays keep their identity, struct
+  type keys separate distinct structures, and class unpacked array
+  parameters parse and fold their patterns (IEEE 1800-2023 6.20, 8.25).
+  Hierarchical reads of members of unpacked structure array parameters
+  (`u.ARR[i].m`) resolve (23.6).
+
+Trace variables: `FSIM_HIER_PARAM_TRACE`, `FSIM_SELECTED_NAME_TRACE`,
+`FSIM_VHDL_AGGREGATE_TRACE`. `FSIM_VHDL_PACKAGE_OBJECT_TRACE` now prints
+the actuals.
+
 ### Batch 93: PLI ACC host, nested open-array allocators, class typedef parameters, packed structure array constants
 
 Batch 93 (b935107d) was closed at the owner's target of at least 20 closures.
