@@ -1137,6 +1137,12 @@ private:
     std::unordered_map<runtime::simir::SignalId,
         std::vector<std::pair<std::int64_t, std::int64_t>>>
         signal_unpacked_shape_;
+    // Construction draft: the members of the packed structure elements of
+    // such a signal, laid out within one element, so a member of an element
+    // named hierarchically finds its bits (IEEE 1800-2017 7.2.1, 23.6).
+    std::unordered_map<runtime::simir::SignalId,
+        std::vector<PackedMemberMetadata>>
+        signal_unpacked_element_members_;
     // Construction draft: per process, the writes through a virtual
     // interface handle to each candidate instance member; the instance
     // they reach is known only at run time (IEEE 1800-2017 25.9).

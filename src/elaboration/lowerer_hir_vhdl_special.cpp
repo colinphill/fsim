@@ -402,28 +402,6 @@ std::optional<ProtectedMethodAlias> find_protected_method_alias(
     return ProtectedMethodAlias { declaration, *target };
 }
 
-const semantic::vhdl::TypeDefinition* find_protected_body(
-    const semantic::SpecializedHirUnit& unit,
-    const semantic::vhdl::TypeDefinition& public_type)
-{
-    const semantic::vhdl::TypeDefinition* selected = nullptr;
-    for (const auto& stored : unit.design().vhdl_hir.types()) {
-        const auto candidate = unit.find_type(stored.id);
-        if (!candidate || candidate->vhdl == nullptr
-            || candidate->vhdl->form
-                != semantic::vhdl::TypeForm::protected_body
-            || !equal_ignoring_ascii_case(
-                candidate->vhdl->name, public_type.name)) {
-            continue;
-        }
-        if (selected != nullptr && selected->id != candidate->vhdl->id) {
-            return nullptr;
-        }
-        selected = candidate->vhdl;
-    }
-    return selected;
-}
-
 const semantic::vhdl::TypeDefinition* find_protected_type(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::SubtypeIndication& subtype)
@@ -466,11 +444,9 @@ const semantic::vhdl::TypeDefinition* protected_body_of(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::TypeDefinition* type)
 {
-    if (type == nullptr
-        || type->form == semantic::vhdl::TypeForm::protected_body) {
-        return type;
-    }
-    return find_protected_body(unit, *type);
+    return type == nullptr ? nullptr
+                           : unit.vhdl_protected_counterpart(*type,
+                                 semantic::vhdl::TypeForm::protected_body);
 }
 
 // The protected type declaration a protected body completes (the type
@@ -479,25 +455,9 @@ const semantic::vhdl::TypeDefinition* protected_declaration_of(
     const semantic::SpecializedHirUnit& unit,
     const semantic::vhdl::TypeDefinition* type)
 {
-    if (type == nullptr
-        || type->form == semantic::vhdl::TypeForm::protected_type) {
-        return type;
-    }
-    const semantic::vhdl::TypeDefinition* selected = nullptr;
-    for (const auto& stored : unit.design().vhdl_hir.types()) {
-        const auto candidate = unit.find_type(stored.id);
-        if (!candidate || candidate->vhdl == nullptr
-            || candidate->vhdl->form
-                != semantic::vhdl::TypeForm::protected_type
-            || !equal_ignoring_ascii_case(candidate->vhdl->name, type->name)) {
-            continue;
-        }
-        if (selected != nullptr && selected->id != candidate->vhdl->id) {
-            return nullptr;
-        }
-        selected = candidate->vhdl;
-    }
-    return selected;
+    return type == nullptr ? nullptr
+                           : unit.vhdl_protected_counterpart(*type,
+                                 semantic::vhdl::TypeForm::protected_type);
 }
 
 // A method alias declared in a protected type (`alias inc1 is
@@ -589,10 +549,22 @@ const semantic::vhdl::TypeDefinition* Lowerer::hir_vhdl_protected_type(
     const auto declaration = object_id
         ? specialized_hir_unit_->find_declaration(*object_id)
         : std::nullopt;
-    const auto subtype = declaration && declaration->vhdl != nullptr
-            && declaration->vhdl->subtype
-        ? hir_effective_vhdl_subtype(*declaration->vhdl->subtype)
-        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->subtype) {
+        return nullptr;
+    }
+    // The type mark is visible where the object is declared, not
+    // necessarily where it is used (`ip.var` of type `p.counter`, p a
+    // package instance in the template of ip, IEEE 1076-2008 4.9, 12.3).
+    auto declared = *declaration->vhdl->subtype;
+    if (!declared.type_mark.target.valid()
+        && !declared.type_mark.spelling.empty()) {
+        if (const auto named = hir_resolver().resolve_vhdl_named_type(
+                declared.type_mark.spelling, declaration->vhdl->scope)) {
+            declared.type_mark.target = *named;
+        }
+    }
+    const auto subtype = hir_effective_vhdl_subtype(declared);
     return subtype ? find_protected_type(*specialized_hir_unit_, *subtype)
                    : nullptr;
 }

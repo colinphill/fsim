@@ -1423,6 +1423,28 @@ struct RealMathFunction {
     return result;
 }
 
+/// One element identity of an unpacked array parameter actual: a decimal
+/// integer, a canonical packed constant, or a real-family scalar (6.20.2).
+[[nodiscard]] std::optional<Value> array_element_value(
+    const std::string_view text)
+{
+    std::int64_t integer { };
+    const auto parsed = std::from_chars(
+        text.data(), text.data() + text.size(), integer);
+    if (parsed.ec == std::errc { } && parsed.ptr == text.data() + text.size()) {
+        return make_known(static_cast<std::uint64_t>(integer), 64U, true,
+            false, frontend::ValueDomain::Bit2);
+    }
+    if (auto value = parse_canonical(text)) {
+        return value;
+    }
+    if (const auto scalar = parse_scalar_identity(text);
+        scalar && real_family(scalar->kind)) {
+        return real_value(scalar->real().value_or(0.0), scalar->kind);
+    }
+    return std::nullopt;
+}
+
 /// The real number a value converts to: x and z bits count as zero
 /// (IEEE 1800-2017 6.12.2).
 [[nodiscard]] std::optional<double> real_of(const Value& value)
@@ -2028,6 +2050,36 @@ private:
         }
         if (record.kind == ExpressionKind::index
             && record.operands.size() == 2U) {
+            // An element of a fixed-size unpacked array has the bits of its
+            // element type; a packed bit select is one bit (20.6.2).
+            const auto base = specialization_.find_expression(
+                record.operands.front());
+            const auto selected = base && base->systemverilog != nullptr
+                    && base->systemverilog->kind == ExpressionKind::name
+                    && base->systemverilog->referenced_name
+                ? base->systemverilog->referenced_name->selected
+                : std::nullopt;
+            const auto type = selected ? declaration_type(*selected)
+                                       : std::nullopt;
+            if (type && !type->unpacked_dimensions.empty()
+                && (!type->container_form
+                    || *type->container_form
+                        == semantic::sv::TypeForm::static_array)) {
+                auto element = *type;
+                element.unpacked_dimensions.erase(
+                    element.unpacked_dimensions.begin());
+                if (element.unpacked_dimensions.empty()) {
+                    element.container_form.reset();
+                }
+                std::unordered_set<std::uint32_t> types;
+                const auto width = resolved_type_width(
+                    element, &specialization_, types);
+                return finish(width && *width != 0U
+                            && *width <= maximum_constant_width
+                        ? std::optional {
+                              static_cast<std::uint32_t>(*width) }
+                        : std::nullopt);
+            }
             return finish(1U);
         }
         if (record.kind == ExpressionKind::slice
@@ -3283,7 +3335,7 @@ private:
             *left >= *right ? *left - *right : *right - *left) + 1U;
         // An instance's value for the parameter replaces its default.
         const auto actual = declaration->systemverilog->array_parameter
-            ? specialization_.systemverilog_array_actual(
+            ? specialization_.systemverilog_array_elements(
                   *base_view->systemverilog->referenced_name->selected)
             : std::nullopt;
         if (actual && actual->size() != count) {
@@ -3318,10 +3370,13 @@ private:
         const auto ordinal = static_cast<std::size_t>(
             *integer >= *left ? *integer - *left : *left - *integer);
         if (actual) {
+            auto element = array_element_value((*actual)[ordinal]);
+            if (!element) {
+                error_ = "array parameter element is not a constant value";
+                return std::nullopt;
+            }
             return convert_hir_systemverilog_constant(
-                make_known(static_cast<std::uint64_t>((*actual)[ordinal]),
-                    64U, true, false, frontend::ValueDomain::Bit2),
-                element_type, error_, &specialization_);
+                std::move(*element), element_type, error_, &specialization_);
         }
         auto element = evaluate(
             pattern->systemverilog->associations[ordinal].value);
@@ -4271,6 +4326,36 @@ private:
                 } else {
                     type = named_cast_type(record, cast_name);
                 }
+                // `W'(v)` with W a constant parameter is a size cast
+                // (IEEE 1800-2023 6.24.1).
+                if (!type) {
+                    const auto size_constant
+                        = [](const semantic::CompiledDeclarationView& view) {
+                              return view.systemverilog != nullptr
+                                  && semantic::sv::
+                                      is_size_constant_declaration(
+                                          *view.systemverilog);
+                          };
+                    const auto selected
+                        = semantic::CompiledDesignResolver { specialization_ }
+                              .resolve_systemverilog(cast_name, record.scope,
+                                  size_constant, false)
+                              .unique();
+                    const auto size = selected
+                        ? value_for_declaration(*selected) : std::nullopt;
+                    const auto width = size ? size->integer_value()
+                                            : std::nullopt;
+                    if (width && *width > 0
+                        && static_cast<std::uint64_t>(*width)
+                            <= maximum_constant_width) {
+                        type.emplace();
+                        type->executable_width
+                            = static_cast<std::uint64_t>(*width);
+                        type->four_state = true;
+                        type->signed_value = result->signed_value;
+                        type->target.spelling = std::to_string(*width);
+                    }
+                }
             }
             if (!type) {
                 error_ = cast_name.empty()
@@ -5194,16 +5279,19 @@ private:
             return std::nullopt;
         }
         if (const auto actual = declaration->systemverilog->array_parameter
-                ? specialization_.systemverilog_array_actual(declaration_id)
+                ? specialization_.systemverilog_array_elements(declaration_id)
                 : std::nullopt) {
             if (actual->size() != result->elements.size()) {
                 return std::nullopt;
             }
             for (std::size_t index = 0; index < actual->size(); ++index) {
+                auto value = array_element_value((*actual)[index]);
+                if (!value) {
+                    return std::nullopt;
+                }
                 auto element = convert_hir_systemverilog_constant(
-                    make_known(static_cast<std::uint64_t>((*actual)[index]),
-                        64U, true, false, frontend::ValueDomain::Bit2),
-                    result->element_type, error_, &specialization_);
+                    std::move(*value), result->element_type, error_,
+                    &specialization_);
                 if (!element) {
                     return std::nullopt;
                 }
@@ -6058,6 +6146,8 @@ private:
         PackedLogic4 packed { static_cast<std::size_t>(*width), Logic4::x };
         std::optional<semantic::ExpressionId> default_value;
         std::unordered_set<std::string> assigned;
+        std::vector<std::pair<std::string_view, semantic::ExpressionId>>
+            type_keys;
         const auto place = [&](const semantic::sv::PackedMember& member,
                                const semantic::ExpressionId value_id) -> bool {
             std::unordered_set<std::uint32_t> member_visiting;
@@ -6106,12 +6196,41 @@ private:
             }
             const auto member = std::ranges::find(*members, member_name,
                 &semantic::sv::PackedMember::name);
+            // A type key (`int: v`) sets every member of that type that no
+            // member key names (IEEE 1800-2017 10.9.2).
+            if (member == members->end() && member_name == "@key"
+                && association.choices.size() == 1U) {
+                if (const auto key = specialization_.find_expression(
+                        association.choices.front());
+                    key && key->systemverilog != nullptr) {
+                    member_name = key->systemverilog->text;
+                }
+            }
+            if (member == members->end()
+                && std::ranges::any_of(*members,
+                    [&](const semantic::sv::PackedMember& candidate) {
+                        return candidate.type.target.spelling == member_name;
+                    })) {
+                type_keys.emplace_back(member_name, association.value);
+                continue;
+            }
             if (member == members->end() || !place(*member, association.value)) {
                 error_ = "keyed assignment pattern names an unknown member '"
                     + std::string { member_name } + "'";
                 return std::nullopt;
             }
             assigned.insert(member->name);
+        }
+        for (const auto& [spelling, item] : type_keys) {
+            for (const auto& member : *members) {
+                if (member.type.target.spelling == spelling
+                    && !assigned.contains(member.name)) {
+                    if (!place(member, item)) {
+                        return std::nullopt;
+                    }
+                    assigned.insert(member.name);
+                }
+            }
         }
         if (default_value) {
             for (const auto& member : *members) {
@@ -7205,6 +7324,23 @@ private:
             return false;
         }
         std::vector<std::optional<Value>> bound(owner.parameters.size());
+        // A fixed unpacked array value parameter is kept as a frame array
+        // (10.9.1); its actual's items are evaluated here and take the
+        // element type once the class frame binds the element type's
+        // parameters.
+        const auto array_type = [&](const semantic::sv::ClassParameter&
+                                        parameter)
+            -> std::optional<semantic::sv::TypeReference> {
+            const auto declaration
+                = specialization_.find_declaration(parameter.declaration);
+            return parameter.type && declaration
+                    && declaration->systemverilog != nullptr
+                ? unpacked_array_type(
+                      *parameter.type, declaration->systemverilog->scope)
+                : std::nullopt;
+        };
+        std::vector<std::optional<std::vector<Value>>> bound_items(
+            owner.parameters.size());
         if (selection != nullptr) {
             std::size_t position { };
             for (const auto& actual : selection->interface_parameter_actuals) {
@@ -7225,6 +7361,31 @@ private:
                     || !actual.expression) {
                     continue;
                 }
+                if (array_type(parameter)) {
+                    const auto view
+                        = specialization_.find_expression(*actual.expression);
+                    if (!view || view->systemverilog == nullptr
+                        || view->systemverilog->kind
+                            != ExpressionKind::assignment_pattern) {
+                        error_ = "class array parameter actual is not a "
+                                 "positional pattern";
+                        return false;
+                    }
+                    std::vector<Value> items;
+                    for (const auto& association :
+                        view->systemverilog->associations) {
+                        if (!association.positional()) {
+                            error_ = "class array parameter actual is not a "
+                                     "positional pattern";
+                            return false;
+                        }
+                        auto item = evaluate(association.value);
+                        if (!item) return false;
+                        items.push_back(std::move(*item));
+                    }
+                    bound_items[index] = std::move(items);
+                    continue;
+                }
                 bound[index] = parameter.type
                     ? evaluate_for_type(*actual.expression, *parameter.type)
                     : evaluate(*actual.expression);
@@ -7235,7 +7396,7 @@ private:
         frames_.back().class_owner = &owner;
         for (std::size_t index { }; index < bound.size(); ++index) {
             const auto& parameter = owner.parameters[index];
-            if (parameter.type_parameter) continue;
+            if (parameter.type_parameter || array_type(parameter)) continue;
             auto value = std::move(bound[index]);
             if (!value && parameter.default_value) {
                 value = parameter.type
@@ -7253,6 +7414,47 @@ private:
             }
             frames_.back().values.insert_or_assign(
                 parameter.declaration, std::move(*value));
+        }
+        for (std::size_t index { }; index < bound.size(); ++index) {
+            const auto& parameter = owner.parameters[index];
+            const auto type = parameter.type_parameter
+                ? std::nullopt
+                : array_type(parameter);
+            if (!type) continue;
+            bool assigned { };
+            if (create_local_array(parameter.declaration, *type)) {
+                if (auto& items = bound_items[index]) {
+                    auto& array = frames_.back().arrays.at(
+                        parameter.declaration);
+                    assigned = items->size() == array.elements.size();
+                    if (!assigned) {
+                        error_ = "unpacked array pattern size differs from "
+                                 "the array";
+                    }
+                    for (std::size_t item { };
+                        assigned && item < items->size(); ++item) {
+                        auto element = convert_hir_systemverilog_constant(
+                            std::move((*items)[item]), array.element_type,
+                            error_, &specialization_);
+                        assigned = element.has_value();
+                        if (assigned) {
+                            array.elements[item] = std::move(*element);
+                        }
+                    }
+                } else if (parameter.default_value) {
+                    assigned = assign_local_array(parameter.declaration,
+                                   *parameter.default_value)
+                                   .value_or(false);
+                }
+            }
+            if (!assigned) {
+                if (error_.empty()) {
+                    error_ = "class parameter '" + parameter.name
+                        + "' has no value";
+                }
+                frames_.pop_back();
+                return false;
+            }
         }
         return true;
     }
@@ -7576,11 +7778,19 @@ bool hir_systemverilog_constant_expression(
                 result = true;
                 break;
             case ExpressionKind::name:
-                result = source.referenced_name
-                    && source.referenced_name->selected
-                    && systemverilog_constant_declaration(
-                        specialization,
-                        *source.referenced_name->selected);
+                // A genvar of an enclosing loop generate is a constant of
+                // the occurrence being elaborated (IEEE 1800-2017 27.4).
+                result = (source.referenced_name
+                             && source.referenced_name->selected
+                             && systemverilog_constant_declaration(
+                                 specialization,
+                                 *source.referenced_name->selected))
+                    || std::ranges::any_of(
+                        specialization.specialization().hierarchy_identities,
+                        [&](const semantic::SpecializedHirNamedIdentity&
+                                identity) {
+                            return identity.name == source.text;
+                        });
                 break;
             case ExpressionKind::unary:
             case ExpressionKind::binary:
@@ -7941,6 +8151,37 @@ namespace {
             const auto value = evaluate_hir_systemverilog_constant(
                 unit, expression, error);
             return value ? value->integer_value() : std::nullopt;
+        });
+    return true;
+}();
+
+// An element of an unpacked array parameter actual whose elements are not
+// all 64-bit integers: a string, a real-family value, or a pattern in the
+// formal's element type (IEEE 1800-2017 6.20.2, 10.9).
+[[maybe_unused]] const bool shared_constant_element_registered = [] {
+    semantic::set_systemverilog_constant_element(
+        [](const semantic::SpecializedHirUnit& unit,
+            const semantic::ExpressionId expression,
+            const semantic::sv::TypeReference& element_type)
+            -> std::optional<std::string> {
+            if (element_type.value_form == semantic::sv::TypeForm::string
+                || element_type.target.spelling == "string") {
+                const auto text = unit.evaluate_string_expression(expression);
+                return text ? std::optional {
+                                  semantic::systemverilog_string_identity(
+                                      *text) }
+                            : std::nullopt;
+            }
+            std::string error;
+            const auto view = unit.find_expression(expression);
+            const auto value = view && view->systemverilog != nullptr
+                    && view->systemverilog->kind
+                        == ExpressionKind::assignment_pattern
+                ? evaluate_hir_systemverilog_typed_constant(
+                      unit, expression, element_type, error)
+                : evaluate_hir_systemverilog_value(unit, expression, error);
+            return value ? std::optional { value->canonical() }
+                         : std::nullopt;
         });
     return true;
 }();

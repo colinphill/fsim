@@ -2056,7 +2056,7 @@ scheduler.
 | `FSIM-ELAB-PKG-005` | error | A package constant default cannot be evaluated in declaration order. |
 | `FSIM-ELAB-PKG-006` | error | A package constant value violates its bounded scalar subtype. |
 | `FSIM-ELAB-PKG-007` | error | Project-package use visibility contains a dependency cycle. |
-| `FSIM-ELAB-PKG-008` | error | A selected package constant is not `package.constant` or `library.package.constant`. |
+| `FSIM-ELAB-PKG-008` | error | A selected name of more than three parts denotes neither a visible declaration nor an element or method of a visible object. |
 | `FSIM-ELAB-PKG-009` | error | A package named by a selected constant expression was not found in the requested library. |
 | `FSIM-ELAB-PKG-010` | error | A selected constant does not exist in the resolved package. |
 | `FSIM-ELAB-CTX-001` | error | A bounded context reference is not `library.context`. |

@@ -1201,6 +1201,7 @@ Expression VhdlParser::parse_primary()
         return result;
     }
     if (at(TokenKind::Identifier)) {
+        const auto name_index = index_;
         const auto name = advance();
         std::string canonical = vhdl_name(name.text);
         // `f generic map (...) (args)` calls an implicit instance of the
@@ -1441,6 +1442,94 @@ Expression VhdlParser::parse_primary()
                     selected_spelling = *base;
                     attribute = expect_identifier("attribute designator");
                     designator = vhdl_name(attribute.text);
+                }
+            }
+            // `R'VALUE` of a range attribute R is R's range record: an
+            // aggregate of R's bounds and direction (IEEE 1076-2019 16.2.6).
+            if ((designator == "range" || designator == "reverse_range")
+                && vhdl_standard_ >= VhdlStandard::Vhdl2019) {
+                std::size_t offset { };
+                if (at(TokenKind::LeftParen)) {
+                    std::size_t depth { };
+                    for (; index_ + offset < tokens_.size(); ++offset) {
+                        if (at(TokenKind::LeftParen, offset)) {
+                            ++depth;
+                        } else if (at(TokenKind::RightParen, offset)
+                            && --depth == 0U) {
+                            ++offset;
+                            break;
+                        }
+                    }
+                }
+                if (at(TokenKind::Apostrophe, offset)
+                    && keyword("value", offset + 1U, true)
+                    && !at(TokenKind::LeftParen, offset + 2U)) {
+                    const auto make = [&](const TokenKind kind,
+                                          std::string text) {
+                        Token token;
+                        token.kind = kind;
+                        token.text = std::move(text);
+                        token.span = attribute.span;
+                        return token;
+                    };
+                    const auto prefix_end = index_ - 2U;
+                    const std::vector<Token> prefix(
+                        tokens_.begin()
+                            + static_cast<std::ptrdiff_t>(name_index),
+                        tokens_.begin()
+                            + static_cast<std::ptrdiff_t>(prefix_end));
+                    const std::vector<Token> dimension(
+                        tokens_.begin() + static_cast<std::ptrdiff_t>(index_),
+                        tokens_.begin()
+                            + static_cast<std::ptrdiff_t>(index_ + offset));
+                    const bool reverse = designator == "reverse_range";
+                    std::vector<Token> replacement;
+                    const auto attribute_of = [&](const std::string& which) {
+                        replacement.insert(
+                            replacement.end(), prefix.begin(), prefix.end());
+                        replacement.push_back(make(TokenKind::Apostrophe, "'"));
+                        replacement.push_back(make(TokenKind::Identifier, which));
+                        replacement.insert(replacement.end(),
+                            dimension.begin(), dimension.end());
+                    };
+                    replacement.push_back(make(TokenKind::LeftParen, "("));
+                    replacement.push_back(make(TokenKind::Identifier, "left"));
+                    replacement.push_back(make(TokenKind::Arrow, "=>"));
+                    attribute_of(reverse ? "right" : "left");
+                    replacement.push_back(make(TokenKind::Comma, ","));
+                    replacement.push_back(make(TokenKind::Identifier, "right"));
+                    replacement.push_back(make(TokenKind::Arrow, "=>"));
+                    attribute_of(reverse ? "left" : "right");
+                    replacement.push_back(make(TokenKind::Comma, ","));
+                    replacement.push_back(
+                        make(TokenKind::Identifier, "direction"));
+                    replacement.push_back(make(TokenKind::Arrow, "=>"));
+                    replacement.push_back(
+                        make(TokenKind::Identifier, "range_direction"));
+                    replacement.push_back(make(TokenKind::Apostrophe, "'"));
+                    replacement.push_back(make(TokenKind::Identifier, "val"));
+                    replacement.push_back(make(TokenKind::LeftParen, "("));
+                    replacement.push_back(make(TokenKind::Identifier, "boolean"));
+                    replacement.push_back(make(TokenKind::Apostrophe, "'"));
+                    replacement.push_back(make(TokenKind::Identifier, "pos"));
+                    replacement.push_back(make(TokenKind::LeftParen, "("));
+                    if (!reverse) {
+                        replacement.push_back(make(TokenKind::Identifier, "not"));
+                    }
+                    attribute_of("ascending");
+                    replacement.push_back(make(TokenKind::RightParen, ")"));
+                    replacement.push_back(make(TokenKind::RightParen, ")"));
+                    replacement.push_back(make(TokenKind::RightParen, ")"));
+                    const auto first = tokens_.begin()
+                        + static_cast<std::ptrdiff_t>(name_index);
+                    tokens_.erase(first,
+                        tokens_.begin()
+                            + static_cast<std::ptrdiff_t>(index_ + offset + 2U));
+                    tokens_.insert(tokens_.begin()
+                            + static_cast<std::ptrdiff_t>(name_index),
+                        replacement.begin(), replacement.end());
+                    index_ = name_index;
+                    return parse_primary();
                 }
             }
             static constexpr std::array<std::string_view, 36> supported_attributes {

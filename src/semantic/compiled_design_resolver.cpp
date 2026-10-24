@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 
 #include <algorithm>
@@ -1387,14 +1388,13 @@ bool builtin_standard_discrete_type(const std::string_view name)
     // caller also requires unfiltered scoped lookup to find no declaration,
     // so a same-spelled user type or object keeps its own identity.
     constexpr auto names = std::to_array<std::string_view>({
-        "boolean", "bit", "character", "severity_level",
-        "file_open_kind", "file_open_status", "integer", "natural",
-        "positive",
+        "boolean", "bit", "character", "integer", "natural", "positive",
     });
-    return std::ranges::any_of(names,
-        [&](const std::string_view candidate) {
-            return same_vhdl_identifier(candidate, name);
-        });
+    return support::find_vhdl_standard_enumeration(name) != nullptr
+        || std::ranges::any_of(names,
+            [&](const std::string_view candidate) {
+                return same_vhdl_identifier(candidate, name);
+            });
 }
 
 CompiledVhdlStandardScalarIdentity builtin_standard_scalar_type_identity(
@@ -1448,6 +1448,9 @@ CompiledVhdlStandardScalarIdentity builtin_standard_scalar_type_identity(
     }
     if (same_vhdl_identifier(simple, "file_open_status")) {
         return CompiledVhdlStandardScalarIdentity::file_open_status;
+    }
+    if (same_vhdl_identifier(simple, "range_direction")) {
+        return CompiledVhdlStandardScalarIdentity::range_direction;
     }
     if (same_vhdl_identifier(simple, "integer")
         || same_vhdl_identifier(simple, "natural")
@@ -4033,13 +4036,12 @@ CompiledDesignResolver::effective_vhdl_subtype(
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 3U;
             return true;
-        } else if (same_vhdl_identifier(name, "severity_level")
-            || same_vhdl_identifier(name, "file_open_kind")
-            || same_vhdl_identifier(name, "file_open_status")) {
-            // Predefined STD.STANDARD enumerations of at most four values
-            // (IEEE 1076-2008 16.3).
+        } else if (const auto* enumeration
+                   = support::find_vhdl_standard_enumeration(name)) {
+            // Predefined STD.STANDARD enumerations (IEEE 1076-2019 16.3).
             result.domain = vhdl::ValueDomain::bit2;
-            result.executable_width = 2U;
+            result.executable_width
+                = support::vhdl_standard_enumeration_width(*enumeration);
             return true;
         } else if (same_vhdl_identifier(name, "type_class")
             || same_vhdl_identifier(name, "value_class")) {
@@ -8618,6 +8620,22 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
         scope = *record->parent;
     }
 
+    // A secondary unit's region extends its primary unit's (IEEE 1076-2008
+    // 12.1): a package body sees its own package's generics before the
+    // generics of the instances that enclose its specialization (12.3).
+    if (root != nullptr) {
+        const auto root_unit = design_->find_unit(root->unit);
+        if (root_unit && root_unit->vhdl != nullptr) {
+            if (const auto entity = primary_vhdl_unit(
+                    *design_, *root_unit->vhdl)) {
+                auto tier = in_scope((**entity).scope);
+                if (tier.status != CompiledResolutionStatus::not_found) {
+                    return tier;
+                }
+            }
+        }
+    }
+
     std::vector<DeclarationId> overlay_formals;
     const auto append_formal = [&](const DeclarationId formal) {
         const auto declaration = find_declaration(
@@ -8648,19 +8666,6 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
     auto tier = declaration_result(std::move(overlay_formals));
     if (tier.status != CompiledResolutionStatus::not_found) {
         return tier;
-    }
-
-    if (root != nullptr) {
-        const auto root_unit = design_->find_unit(root->unit);
-        if (root_unit && root_unit->vhdl != nullptr) {
-            if (const auto entity = primary_vhdl_unit(
-                    *design_, *root_unit->vhdl)) {
-                tier = in_scope((**entity).scope);
-                if (tier.status != CompiledResolutionStatus::not_found) {
-                    return tier;
-                }
-            }
-        }
     }
 
     const auto packages = resolve_vhdl_package_members(

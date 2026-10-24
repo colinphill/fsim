@@ -1032,6 +1032,16 @@ private:
     [[nodiscard]] std::optional<bool> hir_vhdl_range_direction(
         const semantic::vhdl::RangeConstraint& range,
         semantic::ScopeId process_scope) const;
+    // The value and subtype of element `element` (LEFT, RIGHT or DIRECTION)
+    // of the constant range record `object` names, the operand of a range
+    // expression (IEEE 1076-2019 5.3.3.2).
+    struct HirVhdlRangeRecordElement {
+        semantic::ExpressionId value;
+        semantic::vhdl::SubtypeIndication subtype;
+    };
+    [[nodiscard]] std::optional<HirVhdlRangeRecordElement>
+    hir_vhdl_range_record_element(semantic::ExpressionId object,
+        std::string_view element) const;
     // `range` with folded bounds, a resolved direction and its null flag.
     [[nodiscard]] std::optional<semantic::vhdl::RangeConstraint>
     hir_vhdl_concrete_range(const semantic::vhdl::RangeConstraint& range,
@@ -2885,6 +2895,8 @@ private:
         semantic::ScopeId use_scope) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_generic_actual(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<std::optional<semantic::ExpressionId>>
+    hir_frame_array_parameter_item(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_effective_vhdl_subtype(
         const semantic::vhdl::SubtypeIndication& subtype) const;

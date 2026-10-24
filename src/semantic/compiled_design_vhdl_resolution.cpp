@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_vhdl_resolution.hpp"
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <algorithm>
 #include <array>
@@ -93,8 +94,6 @@ constexpr std::string_view null_type { "@null" };
         std::string_view { "boolean_vector" },
         std::string_view { "integer_vector" },
         std::string_view { "real_vector" }, std::string_view { "time_vector" },
-        std::string_view { "file_open_kind" },
-        std::string_view { "file_open_status" },
         std::string_view { "std_ulogic" }, std::string_view { "std_logic" },
         std::string_view { "std_ulogic_vector" },
         std::string_view { "std_logic_vector" },
@@ -102,7 +101,8 @@ constexpr std::string_view null_type { "@null" };
         // retain.
         std::string_view { "unsigned" }, std::string_view { "signed" },
     };
-    return std::ranges::find(names, name) != names.end();
+    return std::ranges::find(names, name) != names.end()
+        || support::find_vhdl_standard_enumeration(name) != nullptr;
 }
 
 // IEEE.NUMERIC_BIT's UNSIGNED and SIGNED are array types of BIT, distinct
@@ -159,6 +159,7 @@ constexpr std::string_view null_type { "@null" };
     case Identity::character: return "character";
     case Identity::file_open_kind: return "file_open_kind";
     case Identity::file_open_status: return "file_open_status";
+    case Identity::range_direction: return "range_direction";
     case Identity::integer: return "integer";
     case Identity::real: return "real";
     case Identity::severity_level: return "severity_level";

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1670,11 +1671,11 @@ std::optional<std::string> VhdlParser::vhdl_base_type_mark(
     if (name == "delay_length") {
       return "time";
     }
-    static constexpr std::array<std::string_view, 10> predefined {
-      "integer", "real", "time", "boolean", "bit", "character",
-      "severity_level", "file_open_kind", "file_open_status", "std_ulogic"
+    static constexpr std::array<std::string_view, 7> predefined {
+      "integer", "real", "time", "boolean", "bit", "character", "std_ulogic"
     };
-    if (std::ranges::find(predefined, name) != predefined.end()) {
+    if (std::ranges::find(predefined, name) != predefined.end()
+        || support::find_vhdl_standard_enumeration(name) != nullptr) {
       return name;
     }
     return std::nullopt;
@@ -1684,6 +1685,106 @@ std::optional<std::string> VhdlParser::vhdl_base_type_mark(
 
 void VhdlParser::parse_subtype_declaration(DesignUnit &unit, const Token &start,
                                            const bool nested_scope) {
+  // `R'RECORD` of a range attribute R is the range record of R's type, an
+  // implicit record type with elements LEFT, RIGHT and DIRECTION (IEEE
+  // 1076-2019 5.3.3.2, 16.2.6). Each prefix's range record is declared once
+  // per region as a hidden record type that the subtype then names.
+  if (vhdl_standard_ >= VhdlStandard::Vhdl2019 && at(TokenKind::Identifier)
+      && keyword("is", 1, true) && at(TokenKind::Identifier, 2)) {
+    std::size_t offset = 3U;
+    while (at(TokenKind::Dot, offset) && at(TokenKind::Identifier, offset + 1U)) {
+      offset += 2U;
+    }
+    const auto prefix_end = offset;
+    const bool reverse = keyword("reverse_range", offset + 1U, true);
+    if (at(TokenKind::Apostrophe, offset)
+        && (reverse || keyword("range", offset + 1U, true))) {
+      offset += 2U;
+      std::size_t dimension_begin = offset;
+      if (at(TokenKind::LeftParen, offset)) {
+        std::size_t depth { };
+        for (; index_ + offset < tokens_.size(); ++offset) {
+          if (at(TokenKind::LeftParen, offset)) {
+            ++depth;
+          } else if (at(TokenKind::RightParen, offset) && --depth == 0U) {
+            ++offset;
+            break;
+          }
+        }
+      }
+      const auto dimension_end = offset;
+      if (at(TokenKind::Apostrophe, offset)
+          && keyword("record", offset + 1U, true)
+          && at(TokenKind::Semicolon, offset + 2U)) {
+        const auto make = [&](const TokenKind kind, std::string text) {
+          Token token;
+          token.kind = kind;
+          token.text = std::move(text);
+          token.span = start.span;
+          return token;
+        };
+        std::string prefix_text;
+        std::vector<Token> prefix;
+        for (auto index = 2U; index < prefix_end; ++index) {
+          prefix.push_back(current(index));
+          prefix_text += current(index).kind == TokenKind::Dot
+              ? std::string { "_" }
+              : vhdl_name(current(index).text);
+        }
+        std::vector<Token> dimension;
+        for (auto index = dimension_begin; index < dimension_end; ++index) {
+          dimension.push_back(current(index));
+        }
+        const auto hidden = "\\range_record_of_" + prefix_text + "\\";
+        const auto prefix_simple = vhdl_name(prefix.back().text);
+        // A type mark prefix has its own range record; an array object's
+        // range is of its index subtype (16.2.3).
+        const bool type_prefix = vhdl_base_type_mark(prefix_simple).has_value()
+            || vhdl_source_declares_type(prefix_simple);
+        std::vector<Token> replacement;
+        const bool declared = std::any_of(unit.type_aliases.begin(),
+            unit.type_aliases.end(), [&](const TypeAliasDeclaration &type) {
+              return type.name == vhdl_name(hidden);
+            });
+        if (!declared) {
+          replacement.push_back(make(TokenKind::Identifier, hidden));
+          for (const auto *word : { "is", "record", "left" }) {
+            replacement.push_back(make(TokenKind::Identifier, word));
+          }
+          replacement.push_back(make(TokenKind::Comma, ","));
+          replacement.push_back(make(TokenKind::Identifier, "right"));
+          replacement.push_back(make(TokenKind::Colon, ":"));
+          replacement.insert(replacement.end(), prefix.begin(), prefix.end());
+          if (!type_prefix) {
+            replacement.push_back(make(TokenKind::Apostrophe, "'"));
+            replacement.push_back(make(TokenKind::Identifier, "index"));
+            replacement.insert(
+                replacement.end(), dimension.begin(), dimension.end());
+          }
+          replacement.push_back(make(TokenKind::Semicolon, ";"));
+          replacement.push_back(make(TokenKind::Identifier, "direction"));
+          replacement.push_back(make(TokenKind::Colon, ":"));
+          replacement.push_back(make(TokenKind::Identifier, "range_direction"));
+          replacement.push_back(make(TokenKind::Semicolon, ";"));
+          replacement.push_back(make(TokenKind::Identifier, "end"));
+          replacement.push_back(make(TokenKind::Identifier, "record"));
+          replacement.push_back(make(TokenKind::Semicolon, ";"));
+          replacement.push_back(make(TokenKind::Identifier, "subtype"));
+        }
+        replacement.push_back(current());
+        replacement.push_back(current(1U));
+        replacement.push_back(make(TokenKind::Identifier, hidden));
+        const auto first = tokens_.begin() + static_cast<std::ptrdiff_t>(index_);
+        tokens_.erase(first, first + static_cast<std::ptrdiff_t>(offset + 2U));
+        tokens_.insert(tokens_.begin() + static_cast<std::ptrdiff_t>(index_),
+            replacement.begin(), replacement.end());
+        if (!declared) {
+          parse_type_declaration(unit, start, nested_scope);
+          expect_keyword("subtype", true, "FSIM-VHDL-PARSE-134");
+        }
+      }
+    }
+  }
   const auto name = expect_identifier("subtype name");
   const auto canonical_name = vhdl_name(name.text);
   const bool duplicate =

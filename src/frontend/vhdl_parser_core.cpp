@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 namespace fsim::frontend {
 
@@ -1422,6 +1423,17 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             "the predefined " + simple_name + " type",
             "select VHDL-1993 or later, or replace the file-open profile");
     }
+    // RANGE_DIRECTION is predefined only from VHDL-2019 (16.3); earlier
+    // sources may declare their own type of that name.
+    const bool predefined_range_direction = simple_name == "range_direction"
+        && (spelling.find('.') != std::string::npos
+            || !vhdl_source_declares_type(simple_name));
+    if (predefined_range_direction) {
+        require_vhdl_standard(
+            first, VhdlStandard::Vhdl2019,
+            "the predefined range_direction type",
+            "select VHDL-2019 or declare an explicit enumeration type");
+    }
     // These names are predefined only from VHDL-2008; earlier sources may
     // declare their own types with the same names.
     if ((simple_name == "boolean_vector" || simple_name == "integer_vector"
@@ -1547,19 +1559,19 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.domain = ValueDomain::Bit2;
         type.packed_range = PackedRange { 0, 0, true };
         type.enumeration_literals = { "right", "left" };
-    } else if (simple_name == "severity_level") {
+    } else if (const auto* enumeration
+               = support::find_vhdl_standard_enumeration(simple_name);
+               enumeration != nullptr
+               && (simple_name != "range_direction"
+                   || predefined_range_direction)) {
         type.domain = ValueDomain::Bit2;
-        type.packed_range = PackedRange { 1, 0, true };
-        type.enumeration_literals = { "note", "warning", "error", "failure" };
-    } else if (simple_name == "file_open_kind") {
-        type.domain = ValueDomain::Bit2;
-        type.packed_range = PackedRange { 1, 0, true };
-        type.enumeration_literals = { "read_mode", "write_mode", "append_mode" };
-    } else if (simple_name == "file_open_status") {
-        type.domain = ValueDomain::Bit2;
-        type.packed_range = PackedRange { 1, 0, true };
-        type.enumeration_literals = { "open_ok", "status_error", "name_error",
-            "mode_error" };
+        type.packed_range = PackedRange {
+            static_cast<std::int64_t>(
+                support::vhdl_standard_enumeration_width(*enumeration))
+                - 1,
+            0, true };
+        type.enumeration_literals.assign(
+            enumeration->literals.begin(), enumeration->literals.end());
     } else if (simple_name == "time"
         || (simple_name == "delay_length"
             && vhdl_standard_ >= VhdlStandard::Vhdl1993)) {

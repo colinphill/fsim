@@ -1757,6 +1757,12 @@ void VerilogParser::parse_parameter_group(
       }
       continue;
     }
+    // An unpacked array value parameter of a class (`T A[2]`, IEEE
+    // 1800-2017 8.25, 6.20.2) keeps its dimensions in its type.
+    auto parameter_type = type;
+    if (class_list && !type_parameter && at(TokenKind::LeftBracket)) {
+      (void)parse_optional_container_dimension(parameter_type);
+    }
     Expression value;
     std::optional<Type> default_type;
     if (match(TokenKind::Assign)) {
@@ -1806,7 +1812,7 @@ void VerilogParser::parse_parameter_group(
     }
     // An untyped parameter takes the type of its final value (IEEE
     // 1800-2017 6.20.2); a string literal is an integral value (5.9).
-    auto declared_type = type;
+    auto declared_type = std::move(parameter_type);
     ParameterDeclaration declaration{
         name.text,
         std::move(declared_type),

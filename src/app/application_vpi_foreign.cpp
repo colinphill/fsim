@@ -2308,7 +2308,14 @@ private:
                 || actual == vpiIntVar || actual == vpiByteVar
                 || actual == vpiShortIntVar || actual == vpiLongIntVar
                 || actual == vpiBitVar || actual == vpiStringVar;
+        // The words of an unpacked array iterate as vpiReg whatever their
+        // element type (int, bit, real words included).
         case vpiReg:
+            if (const auto parent = info(object.parent)) {
+                if (parent->kind == SystemVerilogVpiObjectKind::Memory) {
+                    return true;
+                }
+            }
             return actual == vpiReg;
         case vpiNet:
             return actual == vpiNet;

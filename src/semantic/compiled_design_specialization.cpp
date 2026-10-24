@@ -3,6 +3,7 @@
 #include "fsim/semantic/systemverilog_constant_array.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -2584,13 +2585,15 @@ private:
                     || !expression.referenced_name->overloads.empty()))) {
             return std::nullopt;
         }
-        static constexpr std::array<std::pair<std::string_view, int>, 17U>
+        for (const auto& type : support::vhdl_standard_enumerations()) {
+            if (const auto position = support::vhdl_standard_enumeration_position(
+                    type, expression.text)) {
+                return position;
+            }
+        }
+        static constexpr std::array<std::pair<std::string_view, int>, 6U>
             literals {{
-                { "note", 0 }, { "warning", 1 }, { "error", 2 },
-                { "failure", 3 }, { "read_mode", 0 }, { "write_mode", 1 },
-                { "append_mode", 2 }, { "read_write_mode", 3 },
-                { "open_ok", 0 }, { "status_error", 1 },
-                { "name_error", 2 }, { "mode_error", 3 },
+                { "read_write_mode", 3 },
                 { "file_origin_begin", 0 }, { "file_origin_current", 1 },
                 { "file_origin_end", 2 }, { "state_open", 0 },
                 { "state_closed", 1 },
@@ -14799,9 +14802,14 @@ constexpr std::string_view systemverilog_array_identity_prefix {
     "sv-array-v1;"
 };
 
+constexpr std::string_view systemverilog_typed_array_identity_prefix {
+    "sv-array-v2;"
+};
+
 /// The extents of a type's unpacked dimensions, outermost first.
 std::optional<std::vector<std::size_t>> systemverilog_unpacked_extents(
-    const sv::TypeReference& type, const SpecializedHirUnit& context)
+    const sv::TypeReference& type, const SpecializedHirUnit& context,
+    const SpecializedHirIntegralBinding* const binding = nullptr)
 {
     std::vector<std::size_t> extents;
     for (const auto& dimension : type.unpacked_dimensions) {
@@ -14811,9 +14819,17 @@ std::optional<std::vector<std::size_t>> systemverilog_unpacked_extents(
             if (value) {
                 return value;
             }
-            return expression
-                ? context.evaluate_integral_expression(*expression)
-                : std::nullopt;
+            if (!expression) {
+                return std::nullopt;
+            }
+            const auto evaluated = binding != nullptr
+                ? context.evaluate_integral_expression(*expression, *binding)
+                : context.evaluate_integral_expression(*expression);
+            // An element of an array parameter (`A[B[0]]`, 6.20.2) reaches
+            // the shared constant evaluator.
+            return evaluated
+                ? evaluated
+                : shared_constant_integral(context, *expression);
         };
         const auto left = bound(dimension.left, dimension.left_expression);
         // `[n]` has only a size.
@@ -14837,13 +14853,31 @@ std::optional<std::vector<std::size_t>> systemverilog_unpacked_extents(
     return extents;
 }
 
-/// The element values of an unpacked array actual of the given extents: a
-/// positional or `default:` pattern, nested for each dimension, or the
-/// name of an unpacked array constant or parameter of the parent.
+/// An element of an unpacked array actual: the integral fast path, then
+/// the shared constant evaluator (a parameter-sized cast `W'(v)`, IEEE
+/// 1800-2023 6.24.1).
+std::optional<std::int64_t> systemverilog_array_element_value(
+    const SpecializedHirUnit& parent, const ExpressionId expression)
+{
+    if (const auto value = parent.evaluate_integral_expression(expression)) {
+        return value;
+    }
+    return shared_constant_integral(parent, expression);
+}
+
+/// The identity of one element of an unpacked array actual.
+using SystemVerilogArrayLeaf
+    = std::function<std::optional<std::string>(ExpressionId)>;
+
+/// The element identities of an unpacked array actual of the given extents:
+/// a positional or `default:` pattern, nested for each dimension, or the
+/// name of an unpacked array constant or parameter of the parent. A typed
+/// collection reads a parent array parameter's typed elements too.
 bool append_systemverilog_array_values(const CompiledDesign& design,
     const ExpressionId expression, const SpecializedHirUnit& parent,
     const std::span<const std::size_t> extents,
-    std::vector<std::int64_t>& values, const int depth)
+    std::vector<std::string>& values, const int depth,
+    const SystemVerilogArrayLeaf& leaf, const bool typed)
 {
     const auto view = design.find_expression(expression);
     if (depth > 16 || extents.empty() || !view
@@ -14859,8 +14893,7 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             for (const auto extent : extents) {
                 count *= extent;
             }
-            const auto value = parent.evaluate_integral_expression(
-                source.associations.front().value);
+            const auto value = leaf(source.associations.front().value);
             if (!value || count > (std::size_t { 1 } << 16U)) {
                 return false;
             }
@@ -14877,13 +14910,12 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             if (extents.size() > 1U) {
                 if (!append_systemverilog_array_values(design,
                         association.value, parent, extents.subspan(1U),
-                        values, depth + 1)) {
+                        values, depth + 1, leaf, typed)) {
                     return false;
                 }
                 continue;
             }
-            const auto value = parent.evaluate_integral_expression(
-                association.value);
+            const auto value = leaf(association.value);
             if (!value) {
                 return false;
             }
@@ -14937,31 +14969,32 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
             low = std::min(*first, *second);
             high = std::max(*first, *second);
         }
-        std::vector<std::int64_t> all;
+        std::vector<std::string> all;
         const auto count = static_cast<std::size_t>(
             std::abs(*declared_left - *declared_right) + 1);
         const std::array extent { count };
         if (!append_systemverilog_array_values(design, source.operands[0],
-                parent, extent, all, depth + 1)
+                parent, extent, all, depth + 1, leaf, typed)
             || all.size() != count) {
             return false;
         }
         // Elements are stored from the declared left bound.
         const bool ascending = *declared_left <= *declared_right;
-        std::vector<std::int64_t> picked;
+        std::vector<std::string> picked;
         for (std::size_t position { }; position < count; ++position) {
             const auto index = ascending
                 ? *declared_left + static_cast<std::int64_t>(position)
                 : *declared_left - static_cast<std::int64_t>(position);
             if (index >= low && index <= high) {
-                picked.push_back(all[position]);
+                picked.push_back(std::move(all[position]));
             }
         }
         // A slice keeps the direction of the base array (7.4.6).
         if (picked.size() != extents.front()) {
             return false;
         }
-        values.insert(values.end(), picked.begin(), picked.end());
+        values.insert(values.end(), std::make_move_iterator(picked.begin()),
+            std::make_move_iterator(picked.end()));
         return true;
     }
     // A constant function call, or another constant array expression, is
@@ -14979,7 +15012,9 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
         if (!elements || elements->size() != count) {
             return false;
         }
-        values.insert(values.end(), elements->begin(), elements->end());
+        for (const auto element : *elements) {
+            values.push_back(std::to_string(element));
+        }
         return true;
     }
     if (source.kind != sv::ExpressionKind::name || !source.referenced_name
@@ -14987,8 +15022,15 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
         return false;
     }
     const auto selected = *source.referenced_name->selected;
-    if (const auto actual = parent.systemverilog_array_actual(selected)) {
-        values.insert(values.end(), actual->begin(), actual->end());
+    if (typed) {
+        if (const auto actual = parent.systemverilog_array_elements(selected)) {
+            values.insert(values.end(), actual->begin(), actual->end());
+            return true;
+        }
+    } else if (const auto actual = parent.systemverilog_array_actual(selected)) {
+        for (const auto element : *actual) {
+            values.push_back(std::to_string(element));
+        }
         return true;
     }
     const auto declaration = design.find_declaration(selected);
@@ -15002,25 +15044,90 @@ bool append_systemverilog_array_values(const CompiledDesign& design,
     return own && !own->empty()
         && append_systemverilog_array_values(design,
             *declaration->systemverilog->initializer, parent, *own, values,
-            depth + 1);
+            depth + 1, leaf, typed);
 }
 
-/// The identity of an unpacked array parameter actual: its element values.
+std::atomic<SystemVerilogConstantElement> shared_constant_element_ {
+    nullptr
+};
+
+/// The identity of an unpacked array parameter actual: its element values,
+/// as 64-bit integers where every element is one, else as the canonical
+/// constants of the formal's element type (6.20.2).
 std::optional<std::string> systemverilog_array_identity(
     const CompiledDesign& design, const ExpressionId expression,
-    const sv::TypeReference& formal_type, const SpecializedHirUnit& parent)
+    const sv::TypeReference& formal_type, const SpecializedHirUnit& parent,
+    const SpecializedHirIntegralBinding* const siblings = nullptr,
+    const std::span<const SpecializedHirActualIdentity> sibling_actuals = { },
+    const UnitId child = { })
 {
-    const auto extents = systemverilog_unpacked_extents(formal_type, parent);
-    std::vector<std::int64_t> values;
-    if (!extents
-        || !append_systemverilog_array_values(
-            design, expression, parent, *extents, values, 0)
-        || values.empty()) {
+    // The formal's dimensions read the instance's other parameters
+    // (`parameter int N = 2, parameter T A[N]`, 6.20.2), so they evaluate
+    // with the actuals already bound for this instance.
+    const auto extents
+        = systemverilog_unpacked_extents(formal_type, parent, siblings);
+    if (!extents) {
         return std::nullopt;
     }
-    std::string identity { systemverilog_array_identity_prefix };
-    for (const auto value : values) {
-        append_identity_component(identity, std::to_string(value));
+    const SystemVerilogArrayLeaf integral
+        = [&](const ExpressionId element) -> std::optional<std::string> {
+        // A structure or array pattern element takes the element type's
+        // layout (10.9), which only the typed collection applies.
+        const auto view = design.find_expression(element);
+        if (view && view->systemverilog != nullptr
+            && view->systemverilog->kind
+                == sv::ExpressionKind::assignment_pattern) {
+            return std::nullopt;
+        }
+        const auto value = systemverilog_array_element_value(parent, element);
+        return value ? std::optional { std::to_string(*value) }
+                     : std::nullopt;
+    };
+    // Real-family and string elements are never read as integers.
+    const auto& spelling = formal_type.target.spelling;
+    const bool integral_elements
+        = formal_type.value_form != sv::TypeForm::string
+        && spelling != "string" && spelling != "real"
+        && spelling != "shortreal" && spelling != "realtime";
+    std::vector<std::string> values;
+    std::string_view prefix { systemverilog_array_identity_prefix };
+    if (!integral_elements
+        || !append_systemverilog_array_values(design, expression, parent,
+            *extents, values, 0, integral, false)) {
+        values.clear();
+        const auto evaluator
+            = shared_constant_element_.load(std::memory_order_acquire);
+        if (evaluator == nullptr) {
+            return std::nullopt;
+        }
+        auto element_type = formal_type;
+        element_type.unpacked_dimensions.clear();
+        element_type.container_form.reset();
+        // The element type is laid out with the instance's other actuals
+        // (`logic [W-1:0] A[2]`), unless the instance is of the parent's own
+        // unit, whose formals the actual's expressions read.
+        const auto typing = !sibling_actuals.empty() && child.valid()
+                && child != parent.unit()
+            ? std::optional { parent.with_local_actual_identities(
+                  sibling_actuals) }
+            : std::nullopt;
+        const auto& context = typing ? *typing : parent;
+        const SystemVerilogArrayLeaf typed
+            = [&](const ExpressionId element) {
+                  return evaluator(context, element, element_type);
+              };
+        if (!append_systemverilog_array_values(design, expression, parent,
+                *extents, values, 0, typed, true)) {
+            return std::nullopt;
+        }
+        prefix = systemverilog_typed_array_identity_prefix;
+    }
+    if (values.empty()) {
+        return std::nullopt;
+    }
+    std::string identity { prefix };
+    for (const auto& value : values) {
+        append_identity_component(identity, value);
     }
     return identity;
 }
@@ -15706,9 +15813,7 @@ InferredVhdlTypeClass vhdl_builtin_type_class(
     if (support::equal_ignoring_ascii_case(name, "boolean")
         || support::equal_ignoring_ascii_case(name, "bit")
         || support::equal_ignoring_ascii_case(name, "character")
-        || support::equal_ignoring_ascii_case(name, "severity_level")
-        || support::equal_ignoring_ascii_case(name, "file_open_kind")
-        || support::equal_ignoring_ascii_case(name, "file_open_status")
+        || support::find_vhdl_standard_enumeration(name) != nullptr
         || support::equal_ignoring_ascii_case(name, "std_logic")
         || support::equal_ignoring_ascii_case(name, "std_ulogic")) {
         return InferredVhdlTypeClass::discrete;
@@ -17422,11 +17527,37 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                 = formal_declaration
                 && formal_declaration->systemverilog != nullptr
                 && formal_declaration->systemverilog->array_parameter;
+            const SpecializedHirIntegralBinding siblings {
+                [&](const DeclarationId declaration)
+                    -> std::optional<ExpressionId> {
+                    const auto bound = std::ranges::find_if(result.bindings,
+                        [&](const SpecializedHirAssociationBinding& prior) {
+                            return prior.formal == declaration
+                                && prior.kind
+                                    == SpecializedHirAssociationKind::
+                                        expression;
+                        });
+                    return bound == result.bindings.end()
+                        ? std::nullopt
+                        : bound->expression;
+                }
+            };
+            std::vector<SpecializedHirActualIdentity> sibling_actuals;
+            if (systemverilog_array_parameter) {
+                for (const auto& prior : result.bindings) {
+                    if (!prior.identity.empty()) {
+                        sibling_actuals.push_back({ prior.formal,
+                            prior.identity, prior.actual_declaration,
+                            prior.expression, prior.systemverilog_type });
+                    }
+                }
+            }
             const auto array_identity = systemverilog_array_parameter
                     && parent != nullptr
                     && formal_declaration->systemverilog->type
                 ? systemverilog_array_identity(design, *actual.expression,
-                      *formal_declaration->systemverilog->type, *parent)
+                      *formal_declaration->systemverilog->type, *parent,
+                      &siblings, sibling_actuals, target_unit)
                 : std::optional<std::string> { };
             if (systemverilog_array_parameter && !array_identity) {
                 reject(actual,
@@ -18010,6 +18141,53 @@ SpecializedHirUnit::evaluate_vhdl_packed_array_expression(
     return evaluator.evaluate_vhdl_packed_array_expression(expression);
 }
 
+const vhdl::TypeDefinition* SpecializedHirUnit::vhdl_protected_counterpart(
+    const vhdl::TypeDefinition& type, const vhdl::TypeForm form) const
+{
+    if (type.form == form) {
+        return &type;
+    }
+    const auto declaring_unit = [&](const DeclarationId id)
+        -> const vhdl::Unit* {
+        const auto declaration = find_declaration(id);
+        const auto& scopes = design_->semantics.scopes();
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->scope.valid()
+            || declaration->vhdl->scope.value() >= scopes.size()) {
+            return nullptr;
+        }
+        const auto unit = design_->find_unit(
+            scopes[declaration->vhdl->scope.value()].unit);
+        return unit ? unit->vhdl : nullptr;
+    };
+    const auto* own_unit = declaring_unit(type.declaration);
+    const vhdl::TypeDefinition* selected = nullptr;
+    bool ambiguous { };
+    for (const auto& stored : design_->vhdl_hir.types()) {
+        const auto candidate = find_type(stored.id);
+        if (!candidate || candidate->vhdl == nullptr
+            || candidate->vhdl->form != form
+            || !support::equal_ignoring_ascii_case(
+                candidate->vhdl->name, type.name)) {
+            continue;
+        }
+        const auto* unit = declaring_unit(candidate->vhdl->declaration);
+        if (own_unit != nullptr && unit != nullptr
+            && (unit->id == own_unit->id
+                || (support::equal_ignoring_ascii_case(
+                        unit->name, own_unit->name)
+                    && support::equal_ignoring_ascii_case(
+                        normalized_library(unit->library),
+                        normalized_library(own_unit->library))))) {
+            return candidate->vhdl;
+        }
+        ambiguous = ambiguous
+            || (selected != nullptr && selected->id != candidate->vhdl->id);
+        selected = candidate->vhdl;
+    }
+    return ambiguous ? nullptr : selected;
+}
+
 bool SpecializedHirUnit::is_vhdl_boolean_array_subtype(
     const vhdl::SubtypeIndication& subtype, const ScopeId use_scope) const
 {
@@ -18106,6 +18284,12 @@ void set_systemverilog_constant_array(
     shared_constant_array_.store(evaluator, std::memory_order_release);
 }
 
+void set_systemverilog_constant_element(
+    const SystemVerilogConstantElement evaluator) noexcept
+{
+    shared_constant_element_.store(evaluator, std::memory_order_release);
+}
+
 std::optional<std::string>
 SpecializedHirUnit::evaluate_systemverilog_bits_expression(
     const ExpressionId expression) const
@@ -18184,20 +18368,25 @@ SpecializedHirUnit::evaluate_integral_declaration(
     return evaluator.evaluate_declaration(declaration);
 }
 
-std::optional<std::vector<std::int64_t>>
-SpecializedHirUnit::systemverilog_array_actual(
+std::optional<std::vector<std::string>>
+SpecializedHirUnit::systemverilog_array_elements(
     const DeclarationId declaration) const
 {
     const auto& actuals = specialization().actual_identities;
     const auto found = std::ranges::find(
         actuals, declaration, &SpecializedHirActualIdentity::declaration);
-    if (found == actuals.end()
-        || !found->identity.starts_with(systemverilog_array_identity_prefix)) {
+    if (found == actuals.end()) {
         return std::nullopt;
     }
-    std::vector<std::int64_t> values;
-    auto rest = std::string_view { found->identity }.substr(
-        systemverilog_array_identity_prefix.size());
+    auto rest = std::string_view { found->identity };
+    if (rest.starts_with(systemverilog_array_identity_prefix)) {
+        rest.remove_prefix(systemverilog_array_identity_prefix.size());
+    } else if (rest.starts_with(systemverilog_typed_array_identity_prefix)) {
+        rest.remove_prefix(systemverilog_typed_array_identity_prefix.size());
+    } else {
+        return std::nullopt;
+    }
+    std::vector<std::string> values;
     while (!rest.empty()) {
         const auto colon = rest.find(':');
         std::size_t length { };
@@ -18208,14 +18397,31 @@ SpecializedHirUnit::systemverilog_array_actual(
             || rest[colon + 1U + length] != ';') {
             return std::nullopt;
         }
-        const auto text = rest.substr(colon + 1U, length);
+        values.emplace_back(rest.substr(colon + 1U, length));
+        rest.remove_prefix(colon + 2U + length);
+    }
+    return values;
+}
+
+std::optional<std::vector<std::int64_t>>
+SpecializedHirUnit::systemverilog_array_actual(
+    const DeclarationId declaration) const
+{
+    const auto elements = systemverilog_array_elements(declaration);
+    if (!elements) {
+        return std::nullopt;
+    }
+    std::vector<std::int64_t> values;
+    values.reserve(elements->size());
+    for (const auto& text : *elements) {
         std::int64_t value { };
-        if (std::from_chars(text.data(), text.data() + text.size(), value).ec
-            != std::errc { }) {
+        const auto parsed = std::from_chars(
+            text.data(), text.data() + text.size(), value);
+        if (parsed.ec != std::errc { }
+            || parsed.ptr != text.data() + text.size()) {
             return std::nullopt;
         }
         values.push_back(value);
-        rest.remove_prefix(colon + 2U + length);
     }
     return values;
 }

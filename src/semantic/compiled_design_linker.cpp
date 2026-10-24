@@ -2155,48 +2155,56 @@ void add_vhdl_selected_package_reference(const CompiledDesign& design,
             ? std::string_view { expression.referenced_name->canonical }
             : std::string_view { expression.text };
     const auto parts = support::split_vhdl_selected_name(spelling);
-    if (parts.size() != 2U && parts.size() != 3U) {
+    if (parts.size() < 2U) {
         return;
     }
-    const auto qualified = parts.size() == 3U;
-    const auto specified_library = qualified
-        ? parts[0]
-        : normalized_library(owner_library);
-    const auto library = same_vhdl_identifier(specified_library, "work")
-        ? normalized_library(owner_library)
-        : specified_library;
-    const auto package_name = qualified ? parts[1] : parts[0];
-    const auto member_name = qualified ? parts[2] : parts[1];
-    const auto package = std::ranges::find_if(
-        design.vhdl_units(), [&](const vhdl::Unit& candidate) {
-            if (candidate.kind != vhdl::UnitKind::package
-                || !candidate.primary_name.empty()
-                || !vhdl::unit_name_matches(candidate, package_name)
-                || !same_vhdl_identifier(
-                    normalized_library(candidate.library), library)) {
-                return false;
-            }
-            return std::ranges::any_of(candidate.declarations,
-                [&](const DeclarationId declaration_id) {
-                    const auto declaration
-                        = design.find_declaration(declaration_id);
-                    return declaration && declaration->vhdl != nullptr
-                        && same_vhdl_identifier(
-                            declaration->vhdl->name, member_name);
-                });
+    // `lib.pkg.member` or `pkg.member`, either followed by selections within
+    // the member (a protected method or record element of a package object,
+    // IEEE 1076-2008 8.3); the library-qualified reading is tried first.
+    const auto add = [&](const bool qualified) {
+        const auto specified_library = qualified
+            ? parts[0]
+            : normalized_library(owner_library);
+        const auto library = same_vhdl_identifier(specified_library, "work")
+            ? normalized_library(owner_library)
+            : specified_library;
+        const auto package_name = qualified ? parts[1] : parts[0];
+        const auto member_name = qualified ? parts[2] : parts[1];
+        const auto package = std::ranges::find_if(
+            design.vhdl_units(), [&](const vhdl::Unit& candidate) {
+                if (candidate.kind != vhdl::UnitKind::package
+                    || !candidate.primary_name.empty()
+                    || !vhdl::unit_name_matches(candidate, package_name)
+                    || !same_vhdl_identifier(
+                        normalized_library(candidate.library), library)) {
+                    return false;
+                }
+                return std::ranges::any_of(candidate.declarations,
+                    [&](const DeclarationId declaration_id) {
+                        const auto declaration
+                            = design.find_declaration(declaration_id);
+                        return declaration && declaration->vhdl != nullptr
+                            && same_vhdl_identifier(
+                                declaration->vhdl->name, member_name);
+                    });
+            });
+        if (package == design.vhdl_units().end()) {
+            return false;
+        }
+        references.push_back(CompiledReference {
+            CompiledReferenceKind::package,
+            owner,
+            support::ascii_lower(library),
+            vhdl_reference_name(package_name),
+            {},
+            expression.source,
+            std::nullopt,
         });
-    if (package == design.vhdl_units().end()) {
-        return;
+        return true;
+    };
+    if (parts.size() < 3U || !add(true)) {
+        add(false);
     }
-    references.push_back(CompiledReference {
-        CompiledReferenceKind::package,
-        owner,
-        support::ascii_lower(library),
-        vhdl_reference_name(package_name),
-        {},
-        expression.source,
-        std::nullopt,
-    });
 }
 
 // A type mark that is an expanded name `lib.pkg.t` (IEEE 1076-2008 8.3)

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -50,6 +51,95 @@ namespace {
                 element.set(bit, set ? Logic4::one : Logic4::zero);
             }
             value.elements[at] = std::move(element);
+        }
+        return value;
+    }
+
+    // A fixed unpacked array of packed, real-family or string elements
+    // holding an actual's element identities, leftmost element first
+    // (IEEE 1800-2017 6.20.2).
+    [[nodiscard]] std::optional<ContainerValue> typed_array_parameter_container(
+        const ContainerType& type, const std::vector<std::string>& elements)
+    {
+        if (!type.fixed || type.associative || type.aggregate_value) {
+            return std::nullopt;
+        }
+        auto value = default_container_value(type);
+        const auto count = type.element_kind == ContainerElementKind::String
+            ? value.string_elements.size()
+            : value.elements.size();
+        if (count != elements.size()) {
+            return std::nullopt;
+        }
+        // A decimal integer, or a canonical packed constant.
+        const auto integral = [](const std::string& text)
+            -> std::optional<HirSystemVerilogConstant> {
+            std::int64_t integer { };
+            const auto parsed = std::from_chars(
+                text.data(), text.data() + text.size(), integer);
+            if (parsed.ec == std::errc { }
+                && parsed.ptr == text.data() + text.size()) {
+                HirSystemVerilogConstant constant;
+                constant.packed = PackedLogic4::from_aval_bval(
+                    64U, static_cast<std::uint64_t>(integer), 0U);
+                constant.width = 64U;
+                constant.signed_value = true;
+                constant.domain = frontend::ValueDomain::Bit2;
+                return constant;
+            }
+            return decode_hir_systemverilog_constant(text);
+        };
+        std::string error;
+        for (std::size_t at = 0; at < elements.size(); ++at) {
+            const auto& text = elements[at];
+            if (type.element_kind == ContainerElementKind::String) {
+                auto bytes = semantic::parse_systemverilog_string_identity(
+                    text);
+                if (!bytes) {
+                    return std::nullopt;
+                }
+                value.string_elements[at] = std::move(*bytes);
+                continue;
+            }
+            if (type.element_kind == ContainerElementKind::Scalar) {
+                auto scalar = decode_hir_systemverilog_scalar_constant(text);
+                if (!scalar) {
+                    auto constant = integral(text);
+                    if (constant) {
+                        constant = convert_hir_systemverilog_value_kind(
+                            std::move(*constant), type.scalar_kind, error);
+                    }
+                    if (!constant || !constant->scalar) {
+                        return std::nullopt;
+                    }
+                    scalar = constant->scalar;
+                }
+                scalar = frontend::convert_systemverilog_scalar_constant(
+                    *scalar, type.scalar_kind, error);
+                if (!scalar) {
+                    return std::nullopt;
+                }
+                value.elements[at] = PackedLogic4::from_aval_bval(
+                    type.element_width, scalar->bits, 0U);
+                continue;
+            }
+            const auto constant = integral(text);
+            if (type.element_kind != ContainerElementKind::Packed
+                || !constant || constant->unbounded) {
+                return std::nullopt;
+            }
+            const auto sign = constant->packed.width() != 0U
+                    && constant->signed_value
+                ? runtime::to_logic4(constant->packed.get_logic9(
+                      constant->packed.width() - 1U))
+                : Logic4::zero;
+            PackedLogic4 bits(type.element_width, Logic4::zero);
+            for (std::size_t bit = 0; bit < type.element_width; ++bit) {
+                bits.set(bit, bit < constant->packed.width()
+                        ? runtime::to_logic4(constant->packed.get_logic9(bit))
+                        : sign);
+            }
+            value.elements[at] = std::move(bits);
         }
         return value;
     }
@@ -1618,11 +1708,19 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             ? working_specialization.systemverilog_array_actual(
                   declaration_id)
             : std::nullopt;
-        if (array_actual) {
-            initial_container = executable_container_type
+        const auto array_elements = declaration.array_parameter
+            ? working_specialization.systemverilog_array_elements(
+                  declaration_id)
+            : std::nullopt;
+        if (array_elements) {
+            initial_container = executable_container_type && array_actual
                 ? array_parameter_container(
                       *executable_container_type, *array_actual)
                 : std::nullopt;
+            if (!initial_container && executable_container_type) {
+                initial_container = typed_array_parameter_container(
+                    *executable_container_type, *array_elements);
+            }
             if (!initial_container) {
                 report(
                     "FSIM-ELAB-PARAM-001",
@@ -2019,6 +2117,15 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 design_.signal_unpacked_shape_.emplace(signal_id,
                     std::vector<std::pair<std::int64_t, std::int64_t>> {
                         type->dimensions.begin(), type->dimensions.end() });
+                auto element_type = effective_type;
+                element_type.unpacked_dimensions.clear();
+                element_type.container_form.reset();
+                if (const auto element = packed_type_resolver(
+                        working_specialization, element_type);
+                    element && !element->packed_members.empty()) {
+                    design_.signal_unpacked_element_members_.emplace(
+                        signal_id, element->packed_members);
+                }
             }
         }
         if (compiled_port_direction(declaration)

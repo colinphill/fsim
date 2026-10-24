@@ -655,6 +655,38 @@ private:
                 }
             }
         }
+        // An unpacked array or structure pattern (`'{8'd3, 8'd200}`) is
+        // the sequence of its folded items; the items' keys stay part of
+        // its identity (IEEE 1800-2017 8.25, 10.9).
+        if (expression->kind == ExpressionKind::assignment_pattern
+            && !expression->associations.empty()) {
+            std::string items;
+            for (const auto& association : expression->associations) {
+                const auto item = value(association.value, environment,
+                    owner, expression->source, active);
+                if (!item) {
+                    release();
+                    return std::nullopt;
+                }
+                resolved.context.insert(resolved.context.end(),
+                    item->context.begin(), item->context.end());
+                std::string key { association.choice_spelling };
+                if (key == "@key" && association.choices.size() == 1U) {
+                    const auto* choice = record_for(
+                        expressions_, association.choices.front());
+                    key = choice != nullptr ? "@key:" + choice->text
+                                            : std::string { };
+                    if (key.empty()) {
+                        release();
+                        return std::nullopt;
+                    }
+                }
+                items += encoded(key) + '=' + encoded(item->canonical) + ';';
+            }
+            resolved.canonical = "pattern:{" + items + "}";
+            release();
+            return resolved;
+        }
         release();
         report(ClassSpecializationErrorKind::unresolved_constant,
             std::string { owner }, expression->source,

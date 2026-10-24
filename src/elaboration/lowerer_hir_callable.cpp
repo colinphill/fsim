@@ -5,6 +5,7 @@
 #include "fsim/semantic/systemverilog_structure_image.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/uvm_identity.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
@@ -9423,7 +9424,7 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
         if (decode_hir_systemverilog_constant(actual->identity)
             || decode_hir_systemverilog_scalar_constant(
                 actual->identity)
-            || specialized_hir_unit_->systemverilog_array_actual(*selected)
+            || specialized_hir_unit_->systemverilog_array_elements(*selected)
             || specialized_hir_unit_->evaluate_integral_expression(
                 expression_id)
             || specialized_hir_unit_->evaluate_string_expression(
@@ -9560,10 +9561,11 @@ Lowerer::hir_vhdl_type_actual(
         result.executable_width = 8U;
         return result;
     }
-    if (name == "severity_level" || name == "file_open_kind"
-        || name == "file_open_status") {
+    if (const auto* enumeration
+        = support::find_vhdl_standard_enumeration(name)) {
         result.domain = semantic::vhdl::ValueDomain::bit2;
-        result.executable_width = 2U;
+        result.executable_width
+            = support::vhdl_standard_enumeration_width(*enumeration);
         return result;
     }
     return std::nullopt;

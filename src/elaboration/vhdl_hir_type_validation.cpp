@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 
 #include "elaborator_internal.hpp"
 
@@ -1552,11 +1553,9 @@ private:
             std::string_view { "std_ulogic" },
             std::string_view { "real" },
             std::string_view { "time" },
-            std::string_view { "severity_level" },
-            std::string_view { "file_open_kind" },
-            std::string_view { "file_open_status" },
         };
-        if (std::ranges::any_of(scalar_names,
+        if (support::find_vhdl_standard_enumeration(name) != nullptr
+            || std::ranges::any_of(scalar_names,
                 [&](const auto candidate) {
                     return equal_ignoring_ascii_case(name, candidate);
                 })) {
@@ -2247,12 +2246,13 @@ private:
             // STD.STANDARD's scalar types are not retained as declarations.
             for (const std::string_view predefined :
                 { "integer", "natural", "positive", "boolean", "bit", "character", "real",
-                    "time", "severity_level" }) {
+                    "time" }) {
                 if (equal_ignoring_ascii_case(found->vhdl->text, predefined)) {
                     return true;
                 }
             }
-            return false;
+            return support::find_vhdl_standard_enumeration(found->vhdl->text)
+                != nullptr;
         }
         const auto declaration = specialization_.find_declaration(
             *found->vhdl->referenced_name->selected);
@@ -3890,8 +3890,8 @@ private:
         if (any({ "time", "delay_length" })) {
             return OperandClass::physical;
         }
-        if (any({ "boolean", "bit", "character", "severity_level",
-                "file_open_kind", "file_open_status", "std_ulogic",
+        if (support::find_vhdl_standard_enumeration(name) != nullptr
+            || any({ "boolean", "bit", "character", "std_ulogic",
                 "std_logic" })) {
             return OperandClass::enumeration;
         }
@@ -6718,14 +6718,14 @@ private:
         }
         // Literals of STD.STANDARD types the compiler provides natively.
         constexpr std::array predefined_literals {
-            std::string_view { "note" }, std::string_view { "warning" },
-            std::string_view { "error" }, std::string_view { "failure" },
-            std::string_view { "read_mode" }, std::string_view { "write_mode" },
-            std::string_view { "append_mode" }, std::string_view { "open_ok" },
-            std::string_view { "status_error" }, std::string_view { "name_error" },
-            std::string_view { "mode_error" }, std::string_view { "now" },
+            std::string_view { "now" },
             std::string_view { "true" }, std::string_view { "false" },
         };
+        const bool standard_enumeration_literal = std::ranges::any_of(
+            support::vhdl_standard_enumerations(), [&](const auto& type) {
+                return support::vhdl_standard_enumeration_position(
+                    type, expression.text).has_value();
+            });
         const semantic::CompiledDesignResolver resolver { specialization_ };
         // SIDE and its RIGHT/LEFT literals predate VHDL-2008 in STD.TEXTIO.
         // Accept declaration-free literals only when the exact compiler-owned
@@ -6737,7 +6737,8 @@ private:
                     .candidates.empty()
             && resolver.vhdl_builtin_package_member_imported(
                 "std", "textio", expression.text, expression.scope);
-        if (std::ranges::any_of(predefined_literals, [&](const auto literal) {
+        if (standard_enumeration_literal
+            || std::ranges::any_of(predefined_literals, [&](const auto literal) {
                 return equal_ignoring_ascii_case(expression.text, literal);
             })
             || has_textio_side_literal
@@ -11257,6 +11258,46 @@ private:
             return;
         }
         const auto prefix_profile = profile(*prefix);
+        // An object of a range record type is the operand of a range
+        // expression; its elements give the bounds and direction (IEEE
+        // 1076-2019 5.3.3.2), which a discrete range or loop reads as
+        // `R'LEFT`, `R'RIGHT`, `R'ASCENDING` or `R'RANGE`.
+        if (prefix_profile.kind == ProfileKind::record
+            && expression.operands.size() == 1U
+            && (expression.text == "'left" || expression.text == "'right"
+                || expression.text == "'ascending"
+                || expression.text == "'range"
+                || expression.text == "'reverse_range")) {
+            auto current = *prefix;
+            const TypeDefinition* definition = nullptr;
+            for (std::size_t depth { }; depth < 16U; ++depth) {
+                definition = current.type_mark.target.valid()
+                    ? type_definition(current.type_mark.target)
+                    : nullptr;
+                if (definition == nullptr
+                    || (definition->form != TypeForm::subtype
+                        && definition->form != TypeForm::alias)) {
+                    break;
+                }
+                current = definition->base;
+            }
+            constexpr std::array<std::string_view, 3U> range_record {
+                "left", "right", "direction"
+            };
+            if (definition != nullptr && definition->form == TypeForm::record
+                && definition->record_elements.size() == range_record.size()
+                && std::ranges::equal(definition->record_elements, range_record,
+                    [](const semantic::vhdl::RecordElement& element,
+                        const std::string_view name) {
+                        return equal_ignoring_ascii_case(element.name, name);
+                    })
+                && equal_ignoring_ascii_case(
+                    simple_name_of(definition->record_elements.back()
+                                       .subtype.type_mark.spelling),
+                    "range_direction")) {
+                return;
+            }
+        }
         // Only an array attribute takes a dimension argument; 'LEFT, 'RIGHT,
         // 'LOW and 'HIGH of a scalar have none (IEEE 1076-1993 14.1).
         if (expression.operands.size() == 2U

@@ -377,6 +377,15 @@ public:
     [[nodiscard]] std::optional<SpecializedHirVhdlRecordValue>
     evaluate_vhdl_record_expression(ExpressionId expression) const;
 
+    /// The protected type declaration (form protected_type) or body (form
+    /// protected_body) that pairs with a protected type: of the types that
+    /// share its name, the one declared in the same design unit or package
+    /// (a library-level package instance copies its template's types), else
+    /// the only one. Null when none or several unrelated ones exist (IEEE
+    /// 1076-2008 5.6.2, 5.6.3).
+    [[nodiscard]] const vhdl::TypeDefinition* vhdl_protected_counterpart(
+        const vhdl::TypeDefinition& type, vhdl::TypeForm form) const;
+
     /// Whether a subtype is a one-dimensional array of the predefined
     /// BOOLEAN type, proven from retained type identity or an unshadowed
     /// compiler-owned STD.STANDARD spelling.
@@ -469,6 +478,14 @@ public:
     /// dimension; nullopt when the parameter keeps its default.
     [[nodiscard]] std::optional<std::vector<std::int64_t>>
     systemverilog_array_actual(DeclarationId declaration) const;
+
+    /// The element identities of an instance's unpacked array parameter
+    /// actual, leftmost element first: a decimal 64-bit integer, or for a
+    /// typed actual (real, string, wide or structure elements) the
+    /// canonical constant of the element. nullopt when the parameter keeps
+    /// its default.
+    [[nodiscard]] std::optional<std::vector<std::string>>
+    systemverilog_array_elements(DeclarationId declaration) const;
 
     /// Return the deterministic specialization identity for a VHDL callable
     /// or package-instance declaration. Generic subprogram instances retain

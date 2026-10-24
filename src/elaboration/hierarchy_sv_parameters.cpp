@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <ranges>
 #include <set>
@@ -549,16 +551,34 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                         || hir_systemverilog_unpacked_aggregate_type(
                             working_specialization,
                             *formal->systemverilog->type));
+                // The formal's type is laid out with the instance's other
+                // actuals (`typedef struct packed {logic [W-1:0] a;} s_t`,
+                // 6.20.2), unless the instance is of the parent's own unit,
+                // whose formals the actual's expressions read.
+                const auto typing = typed_actual && !result.actuals.empty()
+                        && child.identity->id != working_specialization.unit()
+                    ? std::optional {
+                          working_specialization.with_local_actual_identities(
+                              result.actuals) }
+                    : std::nullopt;
                 auto constant = typed_actual
                     ? evaluate_hir_systemverilog_typed_constant(
-                          working_specialization, *binding.expression,
-                          *formal->systemverilog->type, constant_error)
+                          typing ? *typing : working_specialization,
+                          *binding.expression, *formal->systemverilog->type,
+                          constant_error)
                     : std::nullopt;
                 if (!constant) {
                     constant_error.clear();
                     constant = evaluate_hir_systemverilog_constant(
                         working_specialization, *binding.expression,
                         constant_error);
+                }
+                if (!constant
+                    && std::getenv("FSIM_SV_PARAM_TRACE") != nullptr) {
+                    std::fprintf(stderr, "FSIM_SV_PARAM %s.%s: %s\n",
+                        record.name.c_str(),
+                        formal->systemverilog->name.c_str(),
+                        constant_error.c_str());
                 }
                 if (constant) {
                     identity_value = constant->canonical();
@@ -572,6 +592,14 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                                 std::to_string(*value));
                 }
             }
+        }
+        if (std::getenv("FSIM_SV_PARAM_TRACE") != nullptr) {
+            const auto traced = compiled_->find_declaration(binding.formal);
+            std::fprintf(stderr, "FSIM_SV_PARAM %s.%s = %s (binding %s)\n",
+                record.name.c_str(),
+                traced && traced->systemverilog != nullptr
+                    ? traced->systemverilog->name.c_str() : "?",
+                identity_value.c_str(), binding.identity.c_str());
         }
         result.actuals.push_back({
             binding.formal,

@@ -9,6 +9,7 @@
 #include "hierarchy_sv_parameters_internal.hpp"
 #include "hierarchy_sv_ports_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "vhdl_hir_type_validation.hpp"
 #include "vhdl_callable_legality.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
@@ -2128,11 +2129,11 @@ namespace {
                     64U, frontend::ValueDomain::Integer
                 };
             }
-            if (compiled_vhdl_name_equal(name, "severity_level")
-                || compiled_vhdl_name_equal(name, "file_open_kind")
-                || compiled_vhdl_name_equal(name, "file_open_status")) {
+            if (const auto* enumeration
+                = support::find_vhdl_standard_enumeration(name)) {
                 return CompiledVhdlSignalLayout {
-                    2U, frontend::ValueDomain::Bit2
+                    support::vhdl_standard_enumeration_width(*enumeration),
+                    frontend::ValueDomain::Bit2
                 };
             }
             return std::nullopt;
@@ -12497,6 +12498,34 @@ namespace {
                 const auto size_operand
                     = semantic::sv::systemverilog_cast_size_operand(
                         expression);
+                // A size naming a genvar (`(W + i)'(v)`) is constant in
+                // each generate iteration (IEEE 1800-2023 27.4); the
+                // lowering of that iteration checks it.
+                const auto genvar_size = [&] {
+                    std::vector<semantic::ExpressionId> pending;
+                    if (size_operand) {
+                        pending.push_back(*size_operand);
+                    }
+                    for (std::size_t visited { };
+                         !pending.empty() && visited < 256U; ++visited) {
+                        const auto view = compiled.find_expression(
+                            pending.back());
+                        pending.pop_back();
+                        if (!view || view->systemverilog == nullptr) {
+                            continue;
+                        }
+                        const auto& node = *view->systemverilog;
+                        if (node.kind == ExpressionKind::name
+                            && semantic::systemverilog_genvar_hides(compiled,
+                                node.scope, semantic::ScopeId { },
+                                node.text)) {
+                            return true;
+                        }
+                        pending.insert(pending.end(), node.operands.begin(),
+                            node.operands.end());
+                    }
+                    return false;
+                }();
                 const bool constant_size = unit_specialized != nullptr
                     && size_operand
                     && hir_systemverilog_constant_expression(
@@ -12505,9 +12534,10 @@ namespace {
                     ? unit_specialized->evaluate_integral_expression(
                           *size_operand)
                     : std::nullopt;
-                if (!constant_size || !size || *size <= 0
-                    || static_cast<std::uint64_t>(*size)
-                        > hir_systemverilog_maximum_constant_width) {
+                if (!genvar_size
+                    && (!constant_size || !size || *size <= 0
+                        || static_cast<std::uint64_t>(*size)
+                            > hir_systemverilog_maximum_constant_width)) {
                     append("FSIM-ELAB-SVCAST-003",
                         "a SystemVerilog casting size must be a positive, supported locally constant integral expression",
                         expression.source);
@@ -15183,6 +15213,13 @@ void HierarchyBuilder::materialize_systemverilog_clocking_blocks(
             shape != design_.signal_unpacked_shape_.end()) {
             auto copied = shape->second;
             design_.signal_unpacked_shape_.insert_or_assign(id, std::move(copied));
+        }
+        if (const auto members
+            = design_.signal_unpacked_element_members_.find(model);
+            members != design_.signal_unpacked_element_members_.end()) {
+            auto copied = members->second;
+            design_.signal_unpacked_element_members_.insert_or_assign(
+                id, std::move(copied));
         }
         design_.signal_info_.push_back(std::move(info));
         design_.signals_.push_back(std::move(signal));
@@ -21787,6 +21824,31 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
         if (!static_actuals) {
             continue;
         }
+        const auto trace_actuals = [&](const std::string_view owner,
+                                       const std::span<
+                                           const semantic::
+                                               SpecializedHirActualIdentity>
+                                           bound) {
+            if (!trace) {
+                return;
+            }
+            for (const auto& actual : bound) {
+                std::cerr << "[fsim-vhdl-package-objects] actual " << owner
+                          << " formal=" << actual.declaration.value()
+                          << " identity=" << actual.identity
+                          << " declaration="
+                          << (actual.actual_declaration
+                                  ? static_cast<std::int64_t>(
+                                      actual.actual_declaration->value())
+                                  : -1)
+                          << " type="
+                          << (actual.vhdl_type
+                                  ? actual.vhdl_type->type_mark.spelling
+                                  : std::string { "-" })
+                          << '\n';
+            }
+        };
+        trace_actuals(instance->vhdl->name, actuals);
         // A package instantiated in the template's declarative part is
         // elaborated with this instance's generics (IEEE 1076-2008 4.9,
         // 6.5.7.2): its generic map names them (`t => t`), so its own
@@ -21846,6 +21908,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
                 if (!nested_static) {
                     continue;
                 }
+                trace_actuals(nested->vhdl->name, nested_actuals);
                 working = working.with_local_actual_identities(
                     nested_actuals);
                 self(self, nested_package, depth + 1U);
@@ -22111,50 +22174,9 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             // The body completes the declaration of the same package: each
             // instance of a generic package has its own (IEEE 1076-2008
             // 4.9, 5.6.3).
-            const auto declaring_unit = [&](const semantic::DeclarationId id)
-                -> const semantic::vhdl::Unit* {
-                const auto declaration = working_specialization
-                    .find_declaration(id);
-                const auto& scopes = compiled_->semantics.scopes();
-                if (!declaration || declaration->vhdl == nullptr
-                    || !declaration->vhdl->scope.valid()
-                    || declaration->vhdl->scope.value() >= scopes.size()) {
-                    return nullptr;
-                }
-                return compiled_vhdl_unit(*compiled_,
-                    scopes[declaration->vhdl->scope.value()].unit);
-            };
-            const auto* object_unit
-                = declaring_unit(object_type->vhdl->declaration);
-            const semantic::vhdl::TypeDefinition* protected_body { };
-            for (const auto& stored :
-                compiled_->vhdl_hir.types()) {
-                const auto candidate
-                    = working_specialization.find_type(stored.id);
-                if (!candidate || candidate->vhdl == nullptr
-                    || candidate->vhdl->form
-                        != semantic::vhdl::TypeForm::protected_body
-                    || !compiled_vhdl_name_equal(
-                        candidate->vhdl->name,
-                        object_type->vhdl->name)) {
-                    continue;
-                }
-                const auto* body_unit
-                    = declaring_unit(candidate->vhdl->declaration);
-                const bool same_package = object_unit != nullptr
-                    && body_unit != nullptr
-                    && (body_unit->id == object_unit->id
-                        || (compiled_vhdl_name_equal(
-                                body_unit->name, object_unit->name)
-                            && compiled_vhdl_name_equal(
-                                body_unit->library, object_unit->library)));
-                if (protected_body == nullptr || same_package) {
-                    protected_body = candidate->vhdl;
-                }
-                if (same_package) {
-                    break;
-                }
-            }
+            const auto* protected_body = working_specialization
+                .vhdl_protected_counterpart(*object_type->vhdl,
+                    semantic::vhdl::TypeForm::protected_body);
             if (protected_body == nullptr) {
                 report(
                     "FSIM-ELAB-VHPROTECTED-006",
@@ -22563,8 +22585,11 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             if (compiled_vhdl_name_equal(name, "character")) {
                 return IndexSubtypeBounds { 0, 255 };
             }
-            if (compiled_vhdl_name_equal(name, "severity_level")) {
-                return IndexSubtypeBounds { 0, 3 };
+            if (const auto* enumeration
+                = support::find_vhdl_standard_enumeration(name)) {
+                return IndexSubtypeBounds { 0,
+                    static_cast<std::int64_t>(enumeration->literals.size())
+                        - 1 };
             }
             if (compiled_vhdl_name_equal(name, "std_logic")
                 || compiled_vhdl_name_equal(name, "std_ulogic")) {
@@ -26028,16 +26053,15 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             = compiled_vhdl_name_equal(name, "real")
             || compiled_vhdl_name_equal(name, "line")
             || compiled_vhdl_name_equal(name, "text");
-        if (compiled_vhdl_name_equal(name, "severity_level")
-            || compiled_vhdl_name_equal(name, "file_open_kind")
-            || compiled_vhdl_name_equal(name, "file_open_status")
+        const auto* standard_enumeration
+            = support::find_vhdl_standard_enumeration(name);
+        if (standard_enumeration != nullptr
             || compiled_vhdl_name_equal(name, "side")) {
-            const auto right = compiled_vhdl_name_equal(
-                                   name, "file_open_kind")
-                ? 2
-                : compiled_vhdl_name_equal(name, "side")
-                ? 1
-                : 3;
+            const auto right = standard_enumeration != nullptr
+                ? static_cast<std::int64_t>(
+                      standard_enumeration->literals.size())
+                    - 1
+                : 1;
             return SubtypeProfile {
                 SubtypeClass::enumeration,
                 frontend::IntegerRange { 0, right, false },
@@ -27241,14 +27265,95 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
             || hierarchy_root_name) {
             continue;
         }
-        if (parts.size() != 2U && parts.size() != 3U) {
-            report(
-                "FSIM-ELAB-PKG-008",
-                "a selected package constant must be "
-                "package.constant or library.package.constant",
-                compiled_source_span(
-                    *compiled_, expression.source));
-            valid = false;
+        // A longer expanded name selects within a package object (a
+        // protected method, record element or array of a shared variable,
+        // signal or constant) or names a nested package's member (IEEE
+        // 1076-2008 8.3): the whole name, or its longest prefix naming an
+        // object, must be visible.
+        if (parts.size() > 3U) {
+            const semantic::CompiledDesignResolver resolver {
+                *compiled_, architecture.id, &*specialized
+            };
+            // `lib.pkg.obj...` names an object of a package of a library.
+            const auto library = compiled_vhdl_effective_library(parts.front(),
+                architecture.library.empty()
+                    ? std::string_view { "work" }
+                    : std::string_view { architecture.library });
+            const auto library_package = std::ranges::find_if(
+                compiled_->vhdl_units(),
+                [&](const semantic::vhdl::Unit& candidate) {
+                    return candidate.kind == semantic::vhdl::UnitKind::package
+                        && candidate.primary_name.empty()
+                        && compiled_vhdl_library_equal(
+                            candidate.library, library)
+                        && compiled_vhdl_name_equal(candidate.name, parts[1]);
+                });
+            // FSIM_SELECTED_NAME_TRACE names the package a long selected
+            // name's library prefix was matched against.
+            if (std::getenv("FSIM_SELECTED_NAME_TRACE") != nullptr) {
+                std::cerr << "[fsim-selected-name] " << spelling
+                          << " library=" << library << " architecture-library="
+                          << architecture.library << " package="
+                          << (library_package != compiled_->vhdl_units().end()
+                                     ? library_package->library + "."
+                                         + library_package->name
+                                     : std::string { "-" })
+                          << '\n';
+            }
+            bool denotes = library_package != compiled_->vhdl_units().end()
+                && std::ranges::any_of(library_package->declarations,
+                    [&](const semantic::DeclarationId id) {
+                        const auto declaration
+                            = specialized->find_declaration(id);
+                        return declaration && declaration->vhdl != nullptr
+                            && compiled_vhdl_name_equal(
+                                declaration->vhdl->name, parts[2])
+                            && (semantic::vhdl::is_value_object_form(
+                                    declaration->vhdl->form)
+                                || declaration->vhdl->form
+                                    == semantic::vhdl::DeclarationForm::alias
+                                || declaration->vhdl->form
+                                    == semantic::vhdl::DeclarationForm::
+                                        package_instance);
+                    });
+            for (auto length = parts.size(); !denotes && length >= 2U;
+                 --length) {
+                semantic::vhdl::Name prefix_name;
+                for (std::size_t index { }; index < length; ++index) {
+                    if (index != 0U) {
+                        prefix_name.spelling += '.';
+                    }
+                    prefix_name.spelling += parts[index];
+                }
+                prefix_name.canonical = lowercase_ascii_copy(
+                    prefix_name.spelling);
+                const semantic::CompiledDeclarationPredicate object
+                    = [](const semantic::CompiledDeclarationView& candidate) {
+                          return candidate.vhdl != nullptr
+                              && (semantic::vhdl::is_value_object_form(
+                                      candidate.vhdl->form)
+                                  || candidate.vhdl->form
+                                      == semantic::vhdl::DeclarationForm::
+                                          alias);
+                      };
+                denotes = resolver
+                              .resolve_vhdl(prefix_name, expression.scope,
+                                  length == parts.size()
+                                      ? semantic::CompiledDeclarationPredicate { }
+                                      : object)
+                              .status
+                    != semantic::CompiledResolutionStatus::not_found;
+            }
+            if (!denotes) {
+                report(
+                    "FSIM-ELAB-PKG-008",
+                    "selected name '" + std::string { spelling }
+                        + "' does not denote a visible declaration or an "
+                          "element or method of a visible object",
+                    compiled_source_span(
+                        *compiled_, expression.source));
+                valid = false;
+            }
             continue;
         }
         const auto package_name
@@ -29282,9 +29387,6 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
             std::string_view { "positive" },
             std::string_view { "real" },
             std::string_view { "time" },
-            std::string_view { "severity_level" },
-            std::string_view { "file_open_kind" },
-            std::string_view { "file_open_status" },
             std::string_view { "boolean_vector" },
             std::string_view { "integer_vector" },
             std::string_view { "std_logic" },
@@ -29296,11 +29398,12 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
             std::string_view { "unsigned" },
             std::string_view { "string" },
         };
-        return std::ranges::any_of(
-            builtins, [&](const auto builtin) {
-                return compiled_vhdl_name_equal(
-                    simple, builtin);
-            });
+        return support::find_vhdl_standard_enumeration(simple) != nullptr
+            || std::ranges::any_of(
+                builtins, [&](const auto builtin) {
+                    return compiled_vhdl_name_equal(
+                        simple, builtin);
+                });
     };
     const auto candidate_predefined
         = predefined_type(candidate_subtype.type_mark);

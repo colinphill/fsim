@@ -2,6 +2,7 @@
 #include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "fsim/support/vhdl_tool_identity.hpp"
+#include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/frontend/coverage_resolution.hpp"
@@ -129,22 +130,35 @@ std::optional<std::string> vhdl_builtin_alias_call_name(
                   && candidate.vhdl->alias_target;
           };
     const semantic::CompiledDesignResolver resolver { unit };
-    const auto resolved = resolver
-        .resolve_vhdl(reference, source.scope, alias_predicate).unique();
-    const auto alias = resolved ? unit.find_declaration(*resolved)
-                                : std::nullopt;
-    if (!alias || alias->vhdl == nullptr || !alias->vhdl->alias_target) {
-        return std::nullopt;
+    // Overloaded aliases (`alias s is to_string [integer return string]`
+    // and `[real return string]`) of one predefined subprogram denote that
+    // subprogram's overloads, which the call's actuals select (IEEE
+    // 1076-2008 6.6.3, 4.5.3).
+    std::optional<std::string> builtin;
+    for (const auto candidate : resolver
+             .resolve_vhdl(reference, source.scope, alias_predicate)
+             .candidates) {
+        const auto alias = unit.find_declaration(candidate);
+        if (!alias || alias->vhdl == nullptr || !alias->vhdl->alias_target
+            || alias->vhdl->alias_signature->parameters.size()
+                != source.operands.size()) {
+            continue;
+        }
+        auto target = *alias->vhdl->alias_target;
+        target.selected.reset();
+        target.overloads.clear();
+        // A declared target resolves as an ordinary call.
+        if (!resolver.resolve_vhdl_callable_candidates(
+                target, alias->vhdl->scope).candidates.empty()) {
+            return std::nullopt;
+        }
+        auto name = std::string { target.text() };
+        if (builtin && !same_hir_identifier(*builtin, name, true)) {
+            return std::nullopt;
+        }
+        builtin = std::move(name);
     }
-    auto target = *alias->vhdl->alias_target;
-    target.selected.reset();
-    target.overloads.clear();
-    // A declared target resolves as an ordinary call.
-    if (!resolver.resolve_vhdl_callable_candidates(
-            target, alias->vhdl->scope).candidates.empty()) {
-        return std::nullopt;
-    }
-    return std::string { target.text() };
+    return builtin;
 }
 
 RegisterId Lowerer::widen_enumeration_ordinal(const RegisterId source)
@@ -5295,15 +5309,43 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 || source->vhdl->kind
                     == semantic::vhdl::ExpressionKind::string_literal);
         const auto actual = expression_subtype(value);
+        // FSIM_VHDL_AGGREGATE_TRACE names both subtypes of a rejected
+        // element.
+        const auto trace_mismatch = [&] {
+            if (std::getenv("FSIM_VHDL_AGGREGATE_TRACE") == nullptr) {
+                return;
+            }
+            const auto describe = [](const semantic::vhdl::SubtypeIndication&
+                                         subtype) {
+                return subtype.type_mark.spelling + "/"
+                    + std::to_string(subtype.type_mark.target.value()) + "/"
+                    + std::to_string(static_cast<int>(subtype.domain));
+            };
+            std::cerr << "[fsim-vhdl-aggregate] element " << value.value()
+                      << " expected=" << describe(*expected) << " actual="
+                      << (actual ? describe(*actual) : std::string { "-" })
+                      << '\n';
+        };
+        // Values of the same type conform whatever storage domain each
+        // side's subtype inference recorded (a record's domain is that of
+        // whichever element it was inferred from).
+        const auto same_root = [&] {
+            const auto expected_root = root_type(*expected);
+            const auto actual_root = actual ? root_type(*actual) : std::nullopt;
+            return expected_root && actual_root
+                && *expected_root == *actual_root;
+        };
         const auto nominally_incompatible = !context_dependent_literal
             && actual
             && actual->domain != semantic::vhdl::ValueDomain::unknown
             && expected->domain != semantic::vhdl::ValueDomain::unknown
-            && actual->domain != expected->domain;
+            && actual->domain != expected->domain
+            && !same_root();
         if (const auto expected_root = root_type(*expected);
             !context_dependent_literal && expected_root && actual) {
             const auto actual_root = root_type(*actual);
             if (actual_root && *expected_root != *actual_root) {
+                trace_mismatch();
                 report(
                     std::string { diagnostic_prefix } + "-009",
                     "VHDL aggregate element requires its exact contextual subtype",
@@ -5346,6 +5388,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             }
         }
         if (nominally_incompatible) {
+            trace_mismatch();
             report(
                 std::string { diagnostic_prefix } + "-009",
                 "VHDL aggregate element requires its exact contextual subtype",
@@ -11395,6 +11438,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             return result;
         }
     }
+    // An element of a frame-bound unpacked array value parameter is its
+    // pattern item, taking the element type (IEEE 1800-2017 8.25, 10.9.1).
+    if (const auto item = hir_frame_array_parameter_item(expression_id)) {
+        const auto element_width
+            = hir_expression_width(expression_id, hir_process_scope_);
+        if (!*item || !element_width) {
+            return std::nullopt;
+        }
+        const auto value = lower_hir_expression(**item, *element_width);
+        return value && expected_width != 0U
+                && register_width(*value) != expected_width
+            ? std::optional { resize_register(*value, expected_width,
+                  hir_expression_signed(expression_id)) }
+            : value;
+    }
     // The process class's state constants and status queries inside an
     // expression (IEEE 1800-2017 9.7).
     if (specialized_hir_unit_ != nullptr) {
@@ -11863,12 +11921,32 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
         const auto range = hir_expression_range(prefix, hir_process_scope_);
         const auto width = hir_expression_width(prefix, hir_process_scope_);
         const auto index = hir_constant_integer(element->vhdl->operands[1]);
-        if (range && width && index) {
-            const auto count = index_distance(range->left, range->right) + 1U;
+        const auto count = range
+            ? index_distance(range->left, range->right) + 1U
+            : std::size_t { };
+        if (range && width && count != 0U && *width % count == 0U) {
+            const auto element_width = *width / count;
+            // The element has its own type's domain, not the packed
+            // alias value's (an INTEGER element of an INTEGER_VECTOR).
+            const auto element_subtype = hir_vhdl_expression_subtype(
+                expression_id);
+            const auto element_domain = [&](const RegisterId value) {
+                const auto domain = element_subtype
+                    ? vhdl_value_domain(element_subtype->domain)
+                    : frontend::ValueDomain::Unknown;
+                return domain != frontend::ValueDomain::Unknown
+                    ? domain
+                    : register_domain(value);
+            };
+            const auto finish = [&](const RegisterId selected) {
+                return expected_width == 0U || expected_width == element_width
+                    ? selected
+                    : resize_register(selected, expected_width,
+                          element_subtype && element_subtype->signed_value);
+            };
             const auto low = std::min(range->left, range->right);
             const auto high = std::max(range->left, range->right);
-            if (count != 0U && *width % count == 0U && *index >= low && *index <= high) {
-                const auto element_width = *width / count;
+            if (index && *index >= low && *index <= high) {
                 // Position from the left; the left element is the most
                 // significant.
                 const auto position = index_distance(range->left, *index);
@@ -11876,13 +11954,62 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
                 if (!value) {
                     return std::nullopt;
                 }
-                const auto selected = allocate_register(element_width, register_domain(*value));
+                const auto selected = allocate_register(
+                    element_width, element_domain(*value));
                 process_.operations.emplace_back(Extract { selected, *value,
                     static_cast<std::uint32_t>((count - 1U - position) * element_width),
                     static_cast<std::uint32_t>(element_width) });
-                return expected_width == 0U || expected_width == element_width
-                    ? selected
-                    : resize_register(selected, expected_width, false);
+                return finish(selected);
+            }
+            // A runtime index selects the element at bit offset
+            // (right - i) * element width from the least significant end of
+            // an ascending alias range, (i - right) * element width of a
+            // descending one.
+            if (!index) {
+                // A part-select base is a 32-bit signed bit offset.
+                constexpr std::size_t offset_width = 32U;
+                const auto value = lower_hir_expression(prefix, *width);
+                auto position = lower_hir_expression(
+                    element->vhdl->operands[1], offset_width);
+                if (!value || !position) {
+                    return std::nullopt;
+                }
+                if (register_width(*position) != offset_width) {
+                    position = resize_register(*position, offset_width, true);
+                }
+                const auto right = load_constant(
+                    integer_value(range->right, offset_width),
+                    frontend::ValueDomain::Integer);
+                const auto distance = allocate_register(
+                    offset_width, frontend::ValueDomain::Integer);
+                const bool ascending = range->left <= range->right;
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::subtract_signed, distance,
+                    ascending ? right : *position,
+                    ascending ? *position : right });
+                const auto scale = load_constant(
+                    integer_value(static_cast<std::int64_t>(element_width),
+                        offset_width),
+                    frontend::ValueDomain::Integer);
+                const auto offset = allocate_register(
+                    offset_width, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::multiply_signed, offset, distance, scale });
+                const auto selected = allocate_register(
+                    element_width, element_domain(*value));
+                process_.operations.emplace_back(DynamicPartSelect {
+                    selected,
+                    *value,
+                    offset,
+                    static_cast<std::int64_t>(*width) - 1,
+                    0,
+                    static_cast<std::uint32_t>(element_width),
+                    true,
+                    true,
+                    is_two_state_domain(register_domain(*value)),
+                    0U,
+                });
+                return finish(selected);
             }
         }
     }
@@ -12513,6 +12640,17 @@ Lowerer::hir_hierarchical_parameter(
             }
             if (!whole) {
                 whole = lookup_parameter(member_instance, formal);
+            }
+            if (std::getenv("FSIM_HIER_PARAM_TRACE") != nullptr) {
+                std::cerr << "FSIM_HIER_PARAM " << member_instance
+                          << " formal=" << formal << " path=" << member_path
+                          << " whole=" << (whole ? 1 : 0) << " matched="
+                          << (matched_specialization != nullptr ? 1 : 0)
+                          << " source_unit="
+                          << (matched_specialization != nullptr
+                                     && matched_specialization->source_unit
+                                 ? 1 : 0)
+                          << '\n';
             }
             if (!whole || matched_specialization == nullptr
                 || !matched_specialization->source_unit) {
@@ -13209,18 +13347,38 @@ Lowerer::hir_hierarchical_signal_member(
         // An element of a packed array of structures (`u.arr[1].a`, IEEE
         // 1800-2017 7.4.1) selects that element before its members.
         std::optional<std::int64_t> element_index;
+        // The constant indices of an element of an unpacked array signal
+        // (`u.v[1][2].a`, IEEE 1800-2017 7.4, 23.6), outermost first.
+        std::vector<std::int64_t> element_indices;
         if (!signal && base.ends_with(']')) {
-            const auto open = base.find_last_of('[');
-            std::int64_t index { };
-            const auto digits = open == std::string_view::npos || open == 0U
-                ? std::string_view { }
-                : base.substr(open + 1U, base.size() - open - 2U);
-            const auto parsed = std::from_chars(
-                digits.data(), digits.data() + digits.size(), index);
-            if (!digits.empty() && parsed.ec == std::errc { }
-                && parsed.ptr == digits.data() + digits.size()) {
-                signal = hir_hierarchical_signal(base.substr(0U, open));
-                element_index = index;
+            auto prefix = base;
+            while (prefix.ends_with(']')) {
+                const auto open = prefix.find_last_of('[');
+                std::int64_t index { };
+                const auto digits = open == std::string_view::npos
+                        || open == 0U
+                    ? std::string_view { }
+                    : prefix.substr(open + 1U, prefix.size() - open - 2U);
+                const auto parsed = std::from_chars(
+                    digits.data(), digits.data() + digits.size(), index);
+                if (digits.empty() || parsed.ec != std::errc { }
+                    || parsed.ptr != digits.data() + digits.size()) {
+                    element_indices.clear();
+                    break;
+                }
+                element_indices.insert(element_indices.begin(), index);
+                prefix = prefix.substr(0U, open);
+                if (const auto found = hir_hierarchical_signal(prefix)) {
+                    signal = found;
+                    break;
+                }
+            }
+            if (!signal) {
+                element_indices.clear();
+            } else if (element_indices.size() == 1U
+                && !design_.signal_unpacked_shape_.contains(*signal)) {
+                element_index = element_indices.front();
+                element_indices.clear();
             }
         }
         if (!signal) {
@@ -13231,7 +13389,40 @@ Lowerer::hir_hierarchical_signal_member(
             = &info.packed_members;
         HirHierarchicalSignalMember result { *signal, 0U, info.width,
             info.is_signed };
-        if (element_index) {
+        if (!element_indices.empty()) {
+            // The bridge of a fixed unpacked array holds equally wide
+            // elements, the leftmost in the most significant bits.
+            const auto shape = design_.signal_unpacked_shape_.find(*signal);
+            const auto element_members
+                = design_.signal_unpacked_element_members_.find(*signal);
+            if (shape == design_.signal_unpacked_shape_.end()
+                || shape->second.size() != element_indices.size()
+                || element_members
+                    == design_.signal_unpacked_element_members_.end()) {
+                return std::nullopt;
+            }
+            members = &element_members->second;
+            std::uint64_t count = 1U;
+            std::uint64_t position { };
+            for (std::size_t dimension { }; dimension < shape->second.size();
+                 ++dimension) {
+                const auto [left, right] = shape->second[dimension];
+                const auto index = element_indices[dimension];
+                if (index < std::min(left, right)
+                    || index > std::max(left, right)) {
+                    return std::nullopt;
+                }
+                const auto extent = index_distance(left, right) + 1U;
+                position = position * extent + index_distance(index, right);
+                count *= extent;
+            }
+            if (count == 0U || info.width % count != 0U) {
+                return std::nullopt;
+            }
+            result.width = static_cast<std::size_t>(info.width / count);
+            result.offset = static_cast<std::size_t>(position * result.width);
+            result.signed_value = false;
+        } else if (element_index) {
             // The element range is the declared outer packed dimension;
             // the signal's packed range is its flattened bit range. Its
             // element is the structure when that dimension counts
@@ -28353,9 +28544,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
                 || domain == frontend::ValueDomain::Logic4
                 || domain == frontend::ValueDomain::Bit2)
             && simple_type != "character"
-            && simple_type != "severity_level"
-            && simple_type != "file_open_kind"
-            && simple_type != "file_open_status");
+            && support::find_vhdl_standard_enumeration(simple_type)
+                == nullptr);
     // Each element of an array of character literals images as its
     // character (IEEE 1076-2008 5.7).
     const auto character_elements = array_value && definition != nullptr
@@ -28457,12 +28647,9 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_scalar_image(
     } else if (domain == frontend::ValueDomain::Boolean
         || simple_type == "boolean") {
         images = { "false", "true" };
-    } else if (simple_type == "severity_level") {
-        images = { "note", "warning", "error", "failure" };
-    } else if (simple_type == "file_open_kind") {
-        images = { "read_mode", "write_mode", "append_mode" };
-    } else if (simple_type == "file_open_status") {
-        images = { "open_ok", "status_error", "name_error", "mode_error" };
+    } else if (const auto* standard
+               = support::find_vhdl_standard_enumeration(simple_type)) {
+        images.assign(standard->literals.begin(), standard->literals.end());
     }
     if (!images.empty()) {
         // Select the literal image by ordinal; the last literal is the

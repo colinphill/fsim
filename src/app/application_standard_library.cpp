@@ -73,6 +73,9 @@ namespace {
                     "boolean_vector", "integer_vector", "real_vector",
                     "time_vector" });
         }
+        if (standard >= frontend::VhdlStandard::Vhdl2019) {
+            result.declarations.emplace_back("range_direction");
+        }
         result.operator_profiles = {
             "and(boolean,boolean)->boolean", "or(boolean,boolean)->boolean",
             "nand(boolean,boolean)->boolean", "nor(boolean,boolean)->boolean",
@@ -144,7 +147,7 @@ namespace {
         if (standard >= frontend::VhdlStandard::Vhdl2019) {
             append_strings(
                 result.attributes,
-                std::array<std::string, 2> { "reflect", "converse" });
+                std::array<std::string, 3> { "reflect", "converse", "record" });
         }
         return result;
     }

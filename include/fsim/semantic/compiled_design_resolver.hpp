@@ -84,6 +84,7 @@ enum class CompiledVhdlStandardScalarIdentity : std::uint8_t {
     file_open_kind,
     file_open_status,
     integer,
+    range_direction,
     real,
     severity_level,
     time,
