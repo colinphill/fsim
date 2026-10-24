@@ -253,6 +253,90 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 93: PLI ACC host, nested open-array allocators, class typedef parameters, packed structure array constants
+
+Batch 93 (b935107d) was closed at the owner's target of at least 20 closures.
+Against `b92w1`, the live tree gains 20 cases and loses none:
+- nvc 11: access11, conv13, driver12, ieee7, ieee8, ieee11, ieee13,
+  issue351, issue577, issue963, signal27;
+- vhdl-compliance 2: tb_030, tb_fixed_generic_pkg;
+- verilator 6: t_class_lparam_deferred, t_dpi_open_query,
+  t_interface_array_parameter_aggregate, t_tagged_case, t_tagged_if,
+  t_tagged_union;
+- ivtest 1: vpi_br_gh141.
+
+The full run `b93w1`, made with the frozen `b93z` binary, gains the same 20
+cases on `b92w1` and loses none. The ieee9, range4 and t_sv_cpu exclusions
+are counted in their suites' exclusions. The intermediate archives `b93f-wip`
+and `b93g-wip` are superseded by `b93z`.
+
+| Suite | Batch92 passes / in scope | Batch93 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2633 / 2635 | 2634 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2052 / 2065 | 2058 / 2064 | 351 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1242 / 1263 | 1253 / 1261 | 221 |
+| vhdl-compliance | 62 / 65 | 64 / 65 | 7 |
+
+VHDL:
+- **Inout conversions.** A formal conversion on an inout port reads the
+  port's driving value, separate from its effective value (IEEE 1076-2019
+  6.5.6.3, 14.7.3).
+- **Arrays of open arrays.** A shaped profile flattens an array whose
+  element is itself an unconstrained array. Indexing such an array and
+  allocating `new T'(v)` take the inner bounds from the value (5.3.2.2,
+  9.3.7).
+- **IEEE fixed and float packages.** More `fixed_generic_pkg` operations are
+  lowered, and `to_float` of a non-static operand is lowered as well as the
+  static form.
+- String limits, mailbox-style access heaps, loop shapes and signal
+  attribute cases were also closed.
+
+SystemVerilog:
+- **Class typedef parameters.** A class local parameter that reads a
+  typedef of another specialization in the class body (`typedef A#(y + 1)
+  inner; localparam int v = inner::v;`, IEEE 1800-2023 8.25.1) uses that
+  typedef's actuals, folded with the enclosing specialization's parameters.
+  `inner::p.m` selects a member of a structure constant through the
+  typedef. `$bits` of a class-body typedef uses the specialization's
+  bounds (20.6.2).
+- **Structure class constants.** A class constant whose initializer is an
+  assignment pattern is read through the class and evaluated with its
+  declared type (10.9). It is not substituted as an untyped pattern.
+- **Packed structure arrays in constant expressions.** An index-keyed or
+  `default:` pattern for a packed array of structures (`s_t [1:0]`) assigns
+  each element (10.9.1). `P[i].m`, `C::p.m` and `C::p[i].m[3:1]` select from
+  such constants (7.2.1, 7.4.1). In a class body, a pattern key with the
+  same spelling as a class property names the structure member.
+- **Tagged unions, DPI open-array queries, interface array parameter
+  aggregates.**
+
+PLI and VPI:
+- **ACC host.** `acc_*` handles, values, names and lookups are served over
+  VPI. `tf_asynchon` and `tf_asynchoff` deliver `reason_paramvc` calls to
+  `misctf` for argument changes (IEEE 1364-2005 25, 27).
+
+Exclusions:
+- ieee9 expects a conversion to a constrained `sfixed` subtype to keep the
+  operand's index range. IEEE 1076-2019 9.3.6 gives the result the
+  subtype's bounds.
+- range4 chains relational operators (`ascending > descending = false`).
+  A relation has at most one relational operator (9.1).
+- t_sv_cpu selects `pad[NUMPADS:1]` from an unpacked array declared
+  `[1:NUMPADS]`.
+
+Test expectations updated: `to_01` maps every element to `xmap` when any
+element is not 0, 1, L or H, as the std_logic_1164 body does. A dynamic
+`to_float` operand no longer reports FSIM-ELAB-VHFLT-001.
+
+Open leads:
+- a module-level dotted constant indexed as a structure array
+  (`tb.entries[1]`);
+- a run-time read of a module localparam initialized from `CFG::cfg.tag`;
+- the parser folds `$bits(logic [a-1:0])` to 1;
+- a failed parameter pin evaluation silently uses the child's default.
+
 ### Batch 92: call generic maps, package instance actuals, conversions, covergroups, VPI names and delays, clocking block events, virtual interface shadowing
 
 Batch 92 (b7e2b484) continues the architectural workstreams from the Batch 91
