@@ -2506,17 +2506,29 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 }
             } else if constexpr (std::is_same_v<T, Insert>) {
                 try {
-                    reg(op.destination, pc) = insert_value(
-                        reg(op.target, pc), reg(op.source, pc), op.offset);
+                    // An element write to a register updates it in place.
+                    if (op.destination == op.target) {
+                        reg(op.target, pc).insert_bits(
+                            reg(op.source, pc), op.offset);
+                    } else {
+                        reg(op.destination, pc) = insert_value(
+                            reg(op.target, pc), reg(op.source, pc),
+                            op.offset);
+                    }
                 } catch (const std::invalid_argument& error) {
                     fail(member_index, pc, error.what());
                 }
             } else if constexpr (std::is_same_v<T, DynamicInsert>) {
                 try {
-                    reg(op.destination, pc) = insert_value(reg(op.target, pc),
-                        reg(op.source, pc),
-                        dynamic_index_offset(
-                            reg(op.selection.index, pc), op.selection));
+                    const auto offset = dynamic_index_offset(
+                        reg(op.selection.index, pc), op.selection);
+                    if (op.destination == op.target) {
+                        reg(op.target, pc).insert_bits(
+                            reg(op.source, pc), offset);
+                    } else {
+                        reg(op.destination, pc) = insert_value(
+                            reg(op.target, pc), reg(op.source, pc), offset);
+                    }
                 } catch (const std::invalid_argument& error) {
                     if (op.selection.strict) {
                         fail(member_index, pc, error.what());
@@ -2525,9 +2537,19 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 }
             } else if constexpr (std::is_same_v<T, DynamicPartInsert>) {
                 try {
-                    reg(op.destination, pc) = dynamic_part_insert_value(
-                        reg(op.target, pc), reg(op.source, pc),
-                        reg(op.selection.base, pc), op.selection);
+                    if (op.destination == op.target) {
+                        const auto write = dynamic_part_write_value(
+                            reg(op.source, pc), reg(op.selection.base, pc),
+                            op.selection);
+                        if (write) {
+                            reg(op.target, pc).insert_bits(
+                                write->value, write->offset);
+                        }
+                    } else {
+                        reg(op.destination, pc) = dynamic_part_insert_value(
+                            reg(op.target, pc), reg(op.source, pc),
+                            reg(op.selection.base, pc), op.selection);
+                    }
                 } catch (const std::invalid_argument& error) {
                     fail(member_index, pc, error.what());
                 }

@@ -1214,22 +1214,38 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, Insert>) {
                     try {
-                        get_register(process, op.destination) = insert_value(
-                            get_register(process, op.target),
-                            get_register(process, op.source),
-                            op.offset);
+                        // An element write to a register updates it in
+                        // place; a copy of the whole value would make a
+                        // loop over its elements quadratic.
+                        if (op.destination == op.target) {
+                            get_register(process, op.target).insert_bits(
+                                get_register(process, op.source), op.offset);
+                        } else {
+                            get_register(process, op.destination)
+                                = insert_value(
+                                    get_register(process, op.target),
+                                    get_register(process, op.source),
+                                    op.offset);
+                        }
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, DynamicInsert>) {
                     try {
-                        get_register(process, op.destination) = insert_value(
-                            get_register(process, op.target),
-                            get_register(process, op.source),
-                            dynamic_index_offset(
-                                get_register(process, op.selection.index),
-                                op.selection));
+                        const auto offset = dynamic_index_offset(
+                            get_register(process, op.selection.index),
+                            op.selection);
+                        if (op.destination == op.target) {
+                            get_register(process, op.target).insert_bits(
+                                get_register(process, op.source), offset);
+                        } else {
+                            get_register(process, op.destination)
+                                = insert_value(
+                                    get_register(process, op.target),
+                                    get_register(process, op.source),
+                                    offset);
+                        }
                     } catch (const std::invalid_argument& error) {
                         if (op.selection.strict) {
                             fail(process, error.what());
@@ -1240,12 +1256,24 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, DynamicPartInsert>) {
                     try {
-                        get_register(process, op.destination) = dynamic_part_insert_value(
-                            get_register(process, op.target),
-                            get_register(process, op.source),
-                            get_register(
-                                process, op.selection.base),
-                            op.selection);
+                        if (op.destination == op.target) {
+                            const auto write = dynamic_part_write_value(
+                                get_register(process, op.source),
+                                get_register(process, op.selection.base),
+                                op.selection);
+                            if (write) {
+                                get_register(process, op.target).insert_bits(
+                                    write->value, write->offset);
+                            }
+                        } else {
+                            get_register(process, op.destination)
+                                = dynamic_part_insert_value(
+                                    get_register(process, op.target),
+                                    get_register(process, op.source),
+                                    get_register(
+                                        process, op.selection.base),
+                                    op.selection);
+                        }
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }

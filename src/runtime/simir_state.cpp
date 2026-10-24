@@ -1064,11 +1064,12 @@ Interpreter::Impl::get_container_object(
     const ProcessState& process,
     const RegisterId id)
 {
-    if (process.program().register_value_kinds().empty()) {
+    const auto program = process.program();
+    const auto& kinds = program.register_value_kinds();
+    if (kinds.empty()) {
         return ValueKind::logic4;
     }
-    return process_layout_detail::ProcessLayoutAccess::copy_at(
-        process.program().register_value_kinds(), id);
+    return process_layout_detail::ProcessLayoutAccess::copy_at(kinds, id);
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::coerce_value_kind(
