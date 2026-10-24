@@ -142,6 +142,71 @@ private:
         return std::nullopt;
     }
 
+    // Whether the expression names `name` anywhere within it.
+    [[nodiscard]] bool mentions(
+        const ExpressionId expression_id, const std::string_view name) const
+    {
+        const auto expression = unit_.find_expression(expression_id);
+        if (!expression || expression->vhdl == nullptr) {
+            return true;
+        }
+        const auto& source = *expression->vhdl;
+        return (source.kind == vhdl::ExpressionKind::name
+                   && support::equal_ignoring_ascii_case(source.text, name))
+            || std::ranges::any_of(source.operands,
+                [&](const ExpressionId operand) {
+                    return mentions(operand, name);
+                });
+    }
+
+    // The limit and direction of a loop-generate whose condition compares
+    // the parameter with a bound independent of it and whose iteration
+    // steps the parameter by one, as a `for` generate parameter is built.
+    [[nodiscard]] std::optional<std::pair<std::int64_t, bool>>
+    stepped_range_limit(const vhdl::GenerateRegion& region,
+        const std::span<const SpecializedHirNamedIdentity> identities) const
+    {
+        const auto condition = unit_.find_expression(*region.condition);
+        const auto iteration = unit_.find_expression(*region.iteration);
+        if (!condition || condition->vhdl == nullptr || !iteration
+            || iteration->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& compare = *condition->vhdl;
+        const auto& step = *iteration->vhdl;
+        const bool descending = compare.text == ">=";
+        const auto is_parameter = [&](const ExpressionId operand) {
+            const auto expression = unit_.find_expression(operand);
+            return expression && expression->vhdl != nullptr
+                && expression->vhdl->kind == vhdl::ExpressionKind::name
+                && support::equal_ignoring_ascii_case(
+                    expression->vhdl->text, region.iterator);
+        };
+        const auto is_one = [&](const ExpressionId operand) {
+            const auto expression = unit_.find_expression(operand);
+            return expression && expression->vhdl != nullptr
+                && expression->vhdl->kind
+                    == vhdl::ExpressionKind::integer_literal
+                && expression->vhdl->text == "1";
+        };
+        if (compare.kind != vhdl::ExpressionKind::binary
+            || (compare.text != "<=" && compare.text != ">=")
+            || compare.operands.size() != 2U
+            || !is_parameter(compare.operands[0])
+            || mentions(compare.operands[1], region.iterator)
+            || step.kind != vhdl::ExpressionKind::binary
+            || step.text != (descending ? "-" : "+")
+            || step.operands.size() != 2U || !is_parameter(step.operands[0])
+            || !is_one(step.operands[1])) {
+            return std::nullopt;
+        }
+        const auto limit = evaluate(compare.operands[1], identities);
+        if (!limit) {
+            return std::nullopt;
+        }
+        return std::pair { *limit, descending };
+    }
+
     [[nodiscard]] bool reject(
         std::string code, std::string message, const SourceSpanId source)
     {
@@ -400,6 +465,26 @@ private:
                 "value",
                 region.source);
         }
+        // The range is evaluated once, before the generate is elaborated
+        // (IEEE 1076-2019 11.8), and its values step by one.
+        if (!literal_limit) {
+            if (const auto limit = stepped_range_limit(region, identities)) {
+                literal_limit = limit->first;
+                literal_descending = limit->second;
+            }
+        }
+        const auto [low, high] = literal_descending
+            ? std::pair { literal_limit.value_or(0), *initial }
+            : std::pair { *initial, literal_limit.value_or(0) };
+        if (literal_limit && high > low
+            && static_cast<std::uint64_t>(high)
+                    - static_cast<std::uint64_t>(low)
+                >= maximum_generate_iterations) {
+            return reject("FSIM-ELAB-GEN-004",
+                "compiled VHDL loop-generate exceeds the bounded "
+                "1,000,000-iteration elaboration limit",
+                region.source);
+        }
 
         auto value = *initial;
         std::size_t count { };
@@ -425,7 +510,7 @@ private:
             if (*condition == 0) {
                 return true;
             }
-            if (!visited_values.insert(value).second) {
+            if (!literal_limit && !visited_values.insert(value).second) {
                 return reject("FSIM-ELAB-GEN-014",
                     "compiled VHDL loop-generate revisits genvar value '"
                         + std::to_string(value) + "'",
@@ -445,6 +530,9 @@ private:
             if (!specialize_children(region.nested, relative_path,
                     iteration_identities)) {
                 return false;
+            }
+            if (literal_limit && value == *literal_limit) {
+                return true;
             }
             const auto next = literal_limit
                 ? std::optional<std::int64_t> {

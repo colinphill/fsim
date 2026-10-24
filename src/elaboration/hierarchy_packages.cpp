@@ -25,6 +25,7 @@
 #include <charconv>
 #include <functional>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <tuple>
 #include <unordered_map>
@@ -9666,6 +9667,9 @@ namespace {
             semantic::SourceSpanId source;
         };
         std::vector<ReferencedName> referenced_names;
+        std::set<std::tuple<std::string, std::uint32_t, std::uint64_t>,
+            std::less<>>
+            remembered_names;
         const auto remember_name = [&](const std::string_view spelling,
                                         const semantic::ScopeId scope,
                                         const std::uint64_t source_order,
@@ -9674,12 +9678,10 @@ namespace {
                 || spelling.find("::") != std::string_view::npos) {
                 return;
             }
-            if (std::ranges::none_of(referenced_names,
-                    [&](const ReferencedName& existing) {
-                        return existing.spelling == spelling
-                            && existing.scope == scope
-                            && existing.source_order == source_order;
-                    })) {
+            if (remembered_names
+                    .emplace(std::string { spelling }, scope.value(),
+                        source_order)
+                    .second) {
                 referenced_names.push_back({
                     std::string { spelling }, scope, source_order, source });
             }
