@@ -12739,9 +12739,8 @@ private:
             if (depth == 0U && value.kind == Kind::name
                 && value.text.find('.') == std::string::npos
                 && (!value.referenced_name || !value.referenced_name->selected)) {
-                for (const std::string_view unit :
-                    { "fs", "ps", "ns", "us", "ms", "sec", "min", "hr" }) {
-                    if (equal_ignoring_ascii_case(unit, value.text)) {
+                for (const auto& unit : elaboration_detail::vhdl_time_units) {
+                    if (equal_ignoring_ascii_case(unit.first, value.text)) {
                         return true;
                     }
                 }

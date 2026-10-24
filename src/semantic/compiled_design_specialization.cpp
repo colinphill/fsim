@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/systemverilog_constant_array.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
@@ -535,10 +536,7 @@ std::optional<std::string> parse_systemverilog_string_identity(
 
 namespace {
 
-std::string_view normalized_library(const std::string_view library)
-{
-    return library.empty() ? std::string_view { "work" } : library;
-}
+using support::normalized_library;
 
 bool vhdl_is_predefined_standard_string(
     const SpecializedHirUnit& unit,

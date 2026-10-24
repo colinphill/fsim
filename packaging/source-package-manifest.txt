@@ -585,7 +585,9 @@ include/fsim/support/allocation_hooks.hpp
 include/fsim/support/atomic_shared_ptr.hpp
 include/fsim/support/bounded_bytes.hpp
 include/fsim/support/ctype_whitespace.hpp
+include/fsim/support/design_library.hpp
 include/fsim/support/environment.hpp
+include/fsim/support/glob_match.hpp
 include/fsim/support/identity128.hpp
 include/fsim/support/index_distance.hpp
 include/fsim/support/native_filesystem.hpp

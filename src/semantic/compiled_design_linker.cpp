@@ -4,6 +4,7 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/ctype_whitespace.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include "compiled_design_linker_classes.hpp"
@@ -33,10 +34,7 @@ namespace {
 
 using support::same_vhdl_identifier;
 
-std::string_view normalized_library(const std::string_view library)
-{
-    return library.empty() ? std::string_view { "work" } : library;
-}
+using support::normalized_library;
 
 struct Relocation {
     std::uint32_t source_file { };

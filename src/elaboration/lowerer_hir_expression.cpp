@@ -27036,9 +27036,8 @@ std::optional<std::string> Lowerer::hir_vhdl_path_attribute(
         || prefix->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
         return std::nullopt;
     }
-    const auto lower = [](std::string text) {
-        lowercase_ascii(text);
-        return text;
+    const auto lower = [](const std::string_view text) {
+        return lowercase_ascii_copy(text);
     };
     auto name = lower(std::string { prefix->vhdl->text });
     if (const auto dot = name.find_last_of('.'); dot != std::string::npos) {
@@ -27101,9 +27100,8 @@ std::optional<std::string> Lowerer::hir_vhdl_path_text(
     const std::optional<std::string_view> prefix_text,
     const semantic::ScopeId prefix_scope) const
 {
-    const auto lower = [](std::string text) {
-        lowercase_ascii(text);
-        return text;
+    const auto lower = [](const std::string_view text) {
+        return lowercase_ascii_copy(text);
     };
     const auto& design = specialized_hir_unit_->design();
     const auto& scopes = design.semantics.scopes();

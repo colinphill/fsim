@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design.hpp"
 
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -16,10 +17,7 @@ namespace {
 
 using support::same_vhdl_identifier;
 
-std::string_view normalized_library(const std::string_view library)
-{
-    return library.empty() ? std::string_view { "work" } : library;
-}
+using support::normalized_library;
 
 std::optional<vhdl::UnitKind> primary_vhdl_kind(
     const vhdl::Unit& secondary)

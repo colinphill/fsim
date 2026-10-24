@@ -8,6 +8,7 @@
 #include "simir_internal.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/vhdl_time.hpp"
 
 #include "simir_signal_attributes.hpp"
 #include <bit>
@@ -144,16 +145,11 @@ namespace {
         const std::string_view precision)
     {
         using boost::multiprecision::cpp_int;
-        std::uint64_t unit = 1U;
-        std::string_view suffix = precision;
-        if (precision == "ps") unit = 1'000U;
-        else if (precision == "ns") unit = 1'000'000U;
-        else if (precision == "us") unit = 1'000'000'000U;
-        else if (precision == "ms") unit = 1'000'000'000'000U;
-        else if (precision == "sec") unit = 1'000'000'000'000'000U;
-        else if (precision == "min") unit = 60'000'000'000'000'000U;
-        else if (precision == "hr") unit = 3'600'000'000'000'000'000U;
-        else if (precision.empty()) suffix = "fs";
+        std::string_view suffix = precision.empty()
+            ? std::string_view { "fs" }
+            : precision;
+        const std::uint64_t unit
+            = support::vhdl_time_unit_femtoseconds(precision).value_or(1U);
         const cpp_int femtoseconds = cpp_int { tick }
             * resolution_femtoseconds;
         cpp_int rounded = femtoseconds / unit;

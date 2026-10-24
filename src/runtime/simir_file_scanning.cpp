@@ -2,6 +2,7 @@
 #include "fsim/runtime/file_scanning.hpp"
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/support/vhdl_time.hpp"
 
 #include <algorithm>
 #include <array>
@@ -815,14 +816,10 @@ namespace {
             || target.width == 0U || target.width > 64U) {
             return std::nullopt;
         }
-        static constexpr std::array<std::pair<std::string_view, double>, 8>
-            units { { { "fs", 1.0 }, { "ps", 1.0e3 }, { "ns", 1.0e6 },
-                { "us", 1.0e9 }, { "ms", 1.0e12 }, { "sec", 1.0e15 },
-                { "min", 60.0e15 }, { "hr", 3600.0e15 } } };
         const auto unit_name = text.substr(separator + 1U);
-        const auto unit = std::ranges::find(units, unit_name,
-            &std::pair<std::string_view, double>::first);
-        if (unit == units.end()) {
+        const auto unit_femtoseconds
+            = support::vhdl_time_unit_femtoseconds(unit_name);
+        if (!unit_femtoseconds) {
             return std::nullopt;
         }
         std::string number;
@@ -840,9 +837,7 @@ namespace {
         // Exact integer arithmetic when the literal and unit allow it.
         cpp_int ticks;
         if (!real_literal && number.find_first_of("eE") == std::string::npos) {
-            const auto unit_femtoseconds = static_cast<std::uint64_t>(
-                unit->second);
-            ticks = cpp_int { number } * unit_femtoseconds
+            ticks = cpp_int { number } * *unit_femtoseconds
                 / static_cast<std::uint64_t>(resolution);
         } else {
             char* end { };
@@ -850,7 +845,7 @@ namespace {
             if (end == number.c_str() || *end != '\0') {
                 return std::nullopt;
             }
-            const auto scaled = value * unit->second
+            const auto scaled = value * static_cast<double>(*unit_femtoseconds)
                 / static_cast<double>(resolution);
             if (!std::isfinite(scaled) || std::abs(scaled) > 9.2e18) {
                 return std::nullopt;

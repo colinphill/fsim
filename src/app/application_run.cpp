@@ -7,6 +7,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
+#include "fsim/support/glob_match.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
@@ -980,31 +981,7 @@ make_specialization_cache_keys(
 
 bool wildcard_match(std::string_view pattern, std::string_view text)
 {
-    std::size_t pattern_index = 0;
-    std::size_t text_index = 0;
-    std::size_t star = std::string_view::npos;
-    std::size_t retry = 0;
-    while (text_index < text.size()) {
-        if (pattern_index < pattern.size()
-            && (pattern[pattern_index] == '?'
-                || pattern[pattern_index] == text[text_index])) {
-            ++pattern_index;
-            ++text_index;
-        } else if (
-            pattern_index < pattern.size() && pattern[pattern_index] == '*') {
-            star = pattern_index++;
-            retry = text_index;
-        } else if (star != std::string_view::npos) {
-            pattern_index = star + 1;
-            text_index = ++retry;
-        } else {
-            return false;
-        }
-    }
-    while (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
-        ++pattern_index;
-    }
-    return pattern_index == pattern.size();
+    return support::glob_match(pattern, text);
 }
 
 bool trace_selected(

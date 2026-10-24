@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -11,9 +12,7 @@ namespace fsim::elaboration::elaboration_detail {
 
 namespace {
 
-std::string_view normalized_library(const std::string_view library) {
-    return library.empty() ? std::string_view{"work"} : library;
-}
+using support::normalized_library;
 
 std::string_view normalized_library(const semantic::sv::Unit& unit) {
     return normalized_library(unit.library);

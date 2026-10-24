@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
@@ -59,10 +60,7 @@ bool import_follows_reference(
         && import_order >= reference_order;
 }
 
-std::string_view normalized_library(const std::string_view library)
-{
-    return library.empty() ? std::string_view { "work" } : library;
-}
+using support::normalized_library;
 
 const sv::Unit* source_package_for_compilation_unit(
     const CompiledDesign& design, const sv::Unit& compilation_unit)

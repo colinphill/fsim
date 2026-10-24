@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
+#include "fsim/support/vhdl_time.hpp"
 
 #include <algorithm>
 #include <array>
@@ -171,13 +172,7 @@ constexpr std::string_view null_type { "@null" };
 
 [[nodiscard]] bool time_unit(const std::string_view unit)
 {
-    static constexpr std::array units {
-        std::string_view { "fs" }, std::string_view { "ps" },
-        std::string_view { "ns" }, std::string_view { "us" },
-        std::string_view { "ms" }, std::string_view { "sec" },
-        std::string_view { "min" }, std::string_view { "hr" },
-    };
-    return std::ranges::find(units, unit) != units.end();
+    return support::vhdl_time_unit_femtoseconds(unit).has_value();
 }
 
 [[nodiscard]] bool object_form(const vhdl::DeclarationForm form)

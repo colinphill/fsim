@@ -4,6 +4,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/design_library.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -111,10 +112,7 @@ ordered_workspace_objects(const std::span<const WorkspaceObjectSelection> object
     return ordered;
 }
 
-std::string_view normalized_library(const std::string_view library)
-{
-    return library.empty() ? std::string_view { "work" } : library;
-}
+using support::normalized_library;
 
 std::vector<semantic::UnitId> indexed_unit_ids(
     const semantic::CompiledDesign& design, const std::string_view library)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_command_line.hpp"
+#include "fsim/support/glob_match.hpp"
 
 #include "fsim/runtime/uvm_component.hpp"
 #include "fsim/runtime/uvm_objection.hpp"
@@ -52,40 +53,13 @@ bool wildcard_match(
     const std::size_t maximum_work,
     const std::size_t source,
     const std::string& argument) {
-  std::size_t pattern_index{};
-  std::size_t value_index{};
-  std::size_t star = std::string_view::npos;
-  std::size_t retry{};
-  const auto account = [&] {
+  return support::glob_match(pattern, value, [&] {
     if (++work > maximum_work) {
       throw Error{source, argument,
                   "UVM report-control wildcard work exceeds its limit",
                   std::string{kCommandResource}};
     }
-  };
-  while (value_index < value.size()) {
-    account();
-    if (pattern_index < pattern.size()
-        && (pattern[pattern_index] == '?'
-            || pattern[pattern_index] == value[value_index])) {
-      ++pattern_index;
-      ++value_index;
-    } else if (pattern_index < pattern.size()
-               && pattern[pattern_index] == '*') {
-      star = pattern_index++;
-      retry = value_index;
-    } else if (star != std::string_view::npos) {
-      pattern_index = star + 1;
-      value_index = ++retry;
-    } else {
-      return false;
-    }
-  }
-  while (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
-    account();
-    ++pattern_index;
-  }
-  return pattern_index == pattern.size();
+  });
 }
 
 std::vector<std::string_view> split_fields(const std::string_view value) {

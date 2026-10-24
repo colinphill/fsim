@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/uvm_factory.hpp"
+#include "fsim/support/glob_match.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -10,35 +11,7 @@
 namespace fsim::runtime {
 namespace {
 
-[[nodiscard]] bool wildcard_match(
-    const std::string_view pattern,
-    const std::string_view value) noexcept {
-  std::size_t pattern_index{};
-  std::size_t value_index{};
-  std::size_t star{std::string_view::npos};
-  std::size_t retry{};
-  while (value_index < value.size()) {
-    if (pattern_index < pattern.size()
-        && (pattern[pattern_index] == '?'
-            || pattern[pattern_index] == value[value_index])) {
-      ++pattern_index;
-      ++value_index;
-    } else if (pattern_index < pattern.size()
-               && pattern[pattern_index] == '*') {
-      star = pattern_index++;
-      retry = value_index;
-    } else if (star != std::string_view::npos) {
-      pattern_index = star + 1U;
-      value_index = ++retry;
-    } else {
-      return false;
-    }
-  }
-  while (pattern_index < pattern.size() && pattern[pattern_index] == '*') {
-    ++pattern_index;
-  }
-  return pattern_index == pattern.size();
-}
+using support::glob_match;
 
 [[nodiscard]] SystemVerilogUvmFactoryTraceStep trace_step(
     const SystemVerilogUvmFactoryOverride& entry) {
@@ -280,9 +253,9 @@ SystemVerilogUvmFactoryResolution SystemVerilogUvmFactoryService::resolve(
         const auto& candidate = instance_overrides_[index];
         const auto original_matches = candidate.original != 0
             ? candidate.original == current
-            : wildcard_match(candidate.original_name, current_name);
+            : glob_match(candidate.original_name, current_name);
         if (original_matches
-            && wildcard_match(candidate.instance_pattern, full_instance_path)) {
+            && glob_match(candidate.instance_pattern, full_instance_path)) {
           match = &candidate;
           match_index = index;
           break;
