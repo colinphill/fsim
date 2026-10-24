@@ -253,6 +253,50 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Efficiency audit batches A-F (after Batch 94)
+
+The owner asked for the efficiency audit's suggestions before more closure
+work. Each batch is its own commit, gated on the six-suite sweep with no
+losses against b94w1 and on the labelled ctest (the 23 known failures).
+
+| batch | commit | change |
+|---|---|---|
+| A | 4ebde37f | VHDL literal, unit and type-name indexes |
+| B | cb6eee87 | overload-resolution memo, hashed effective-subtype cache, bulk default values |
+| C | 00ce8008 | loop-generate range evaluated once; set-based name dedupe |
+| D | 3a5c15ad | shared library-name, glob and VHDL time-unit helpers |
+| E | a2c90ac3 | class-interpreter lookup index; sparse signal sidecars |
+| F1 | 4aacf48e | in-place register element writes (owner request, nvc elab35) |
+
+The audit's findings 8 and 9 (validation rescans) did not appear in any
+profile of the heavy cases and were left as they are.
+
+Heavy timing set: median of 3 runs at -j1 on a quiet machine. The baseline
+is b94z and the final candidate is effF1.
+
+| case | b94z (s) | effF1 (s) |
+|---|---:|---:|
+| nvc issue831 | 25.16 | 3.39 |
+| vests tc756 | 3.74 | 0.98 |
+| vests tc987 | 4.19 | 1.49 |
+| vests tc988 | 4.31 | 1.66 |
+| vests tc32 | 2.43 | 1.33 |
+| nvc elab35 | 2.61 | 1.97 |
+| nvc access9 | 2.80 | 2.71 |
+| nvc ieee10 | 2.33 | 2.29 |
+| nvc ieee12 | 4.76 | 4.57 |
+| nvc protected6 | 1.92 | 1.86 |
+| verilator t_constraint_dist_range | 5.60 | 5.69 |
+| verilator t_math_synmul | 10.45 | 10.10 |
+| vhdl-compliance tb_030 | 0.95 | 0.96 |
+| total | 71.24 | 38.98 |
+
+The single-case measurements:
+
+- vests tc1795, the loop-generate over a physical range: compile went from
+  7.25 s to 0.03 s.
+- The slow UVM testbenches: about 10-11 s each, before and after (neutral).
+
 ### Batch 94: SV class and hierarchical array parameters, VHDL-2019 range records, generic package protected objects, expanded names
 
 Batch 94 (4f5ba8e7) closed the three cases it could reach from the 16
