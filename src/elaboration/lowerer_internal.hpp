@@ -497,6 +497,15 @@ private:
         semantic::vhdl::SubtypeIndication result;
     };
 
+    // The visible callables a VHDL name denotes from a scope under one set
+    // of generic bindings, for the current specialized unit.
+    struct HirVhdlCallableCacheEntry {
+        semantic::vhdl::Name name;
+        semantic::ScopeId scope;
+        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::vector<semantic::CompiledVhdlCallableResolution> candidates;
+    };
+
     struct HirExpressionResolutionCacheEntry {
         std::vector<semantic::CompiledBindingFrame> binding_frames;
         semantic::CompiledDeclarationResolution resolution;
@@ -535,6 +544,7 @@ private:
         semantic::ExpressionId expression,
         const semantic::CompiledDeclarationResolution& resolution) const noexcept;
     void clear_hir_expression_resolution_cache() const noexcept;
+    void clear_hir_vhdl_callable_cache() const noexcept;
     [[nodiscard]] const std::optional<semantic::TypeId>*
     find_hir_vhdl_subtype_name_cache(
         semantic::ScopeId scope,
@@ -555,9 +565,18 @@ private:
         hir_boundary_fallback_;
     mutable bool hir_boundary_fallback_active_ { };
     mutable std::size_t hir_boundary_fallback_folds_ { };
+    // Calls of the fold above, folded or not: a result computed without one
+    // does not depend on the active callable's actuals.
+    mutable std::size_t hir_boundary_fallback_calls_ { };
     mutable std::size_t hir_effective_vhdl_subtype_cache_bytes_ { };
-    mutable std::vector<HirEffectiveVhdlSubtypeCacheEntry>
+    // Keyed by a hash of the subtype's identifying fields and scope; the
+    // bucket's entries are compared in full.
+    mutable std::unordered_map<std::size_t,
+        std::vector<HirEffectiveVhdlSubtypeCacheEntry>>
         hir_effective_vhdl_subtype_cache_;
+    mutable std::size_t hir_effective_vhdl_subtype_cache_entries_ { };
+    mutable std::size_t hir_effective_vhdl_subtype_cache_hits_ { };
+    mutable std::size_t hir_effective_vhdl_subtype_cache_misses_ { };
     mutable std::size_t hir_expression_resolution_cache_bytes_ { };
     mutable std::size_t hir_expression_resolution_cache_entries_ { };
     mutable std::size_t hir_expression_resolution_cache_hits_ { };
@@ -566,6 +585,10 @@ private:
     mutable std::map<semantic::ExpressionId,
         std::vector<HirExpressionResolutionCacheEntry>>
         hir_expression_resolution_cache_;
+    mutable std::unordered_map<std::string,
+        std::vector<HirVhdlCallableCacheEntry>>
+        hir_vhdl_callable_cache_;
+    mutable std::size_t hir_vhdl_callable_cache_entries_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_bytes_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_entries_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_hits_ { };
@@ -1686,6 +1709,7 @@ private:
                               ~ActiveGuard() { active = false; }
                           } guard { hir_boundary_fallback_active_ };
                           hir_boundary_fallback_active_ = true;
+                          ++hir_boundary_fallback_calls_;
                           const auto value = hir_constant_integer(expression);
                           if (value) {
                               ++hir_boundary_fallback_folds_;

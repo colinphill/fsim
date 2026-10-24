@@ -57,7 +57,7 @@ private:
 
 namespace {
 
-    constexpr std::size_t maximum_effective_subtype_cache_entries = 64U;
+    constexpr std::size_t maximum_effective_subtype_cache_entries = 4096U;
     constexpr std::size_t maximum_expression_resolution_cache_entries
         = 1024U;
     constexpr std::size_t maximum_vhdl_subtype_name_cache_entries = 512U;
@@ -70,7 +70,7 @@ namespace {
     constexpr std::size_t maximum_effective_subtype_cache_entry_bytes
         = 64U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_bytes
-        = 256U * 1024U;
+        = 8U * 1024U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_type_depth = 16U;
 
     bool profile_expression_resolution_cache() noexcept
@@ -9601,25 +9601,43 @@ Lowerer::hir_effective_vhdl_subtype(
     }
 
     const auto scope = hir_process_scope_;
-    for (const auto& entry : hir_effective_vhdl_subtype_cache_) {
-        if (entry.subtype == subtype && entry.scope == scope
-            && entry.binding_frames == hir_generic_binding_frames_) {
-            try {
-                return std::optional<semantic::vhdl::SubtypeIndication> {
-                    entry.result
-                };
-            } catch (const std::bad_alloc&) {
-                break;
+    const auto key = [&] {
+        auto hash = std::hash<std::string_view> { }(
+            subtype.type_mark.spelling);
+        for (const std::size_t part : { std::size_t { scope.value() },
+                 std::size_t { subtype.type_mark.target.value() },
+                 subtype.constraints.size(),
+                 static_cast<std::size_t>(subtype.domain) }) {
+            hash ^= part + 0x9e3779b97f4a7c15ULL + (hash << 6U)
+                + (hash >> 2U);
+        }
+        return hash;
+    }();
+    if (const auto bucket = hir_effective_vhdl_subtype_cache_.find(key);
+        bucket != hir_effective_vhdl_subtype_cache_.end()) {
+        for (const auto& entry : bucket->second) {
+            if (entry.scope == scope && entry.subtype == subtype
+                && entry.binding_frames == hir_generic_binding_frames_) {
+                try {
+                    auto cached = std::optional<semantic::vhdl::SubtypeIndication> {
+                        entry.result
+                    };
+                    ++hir_effective_vhdl_subtype_cache_hits_;
+                    return cached;
+                } catch (const std::bad_alloc&) {
+                    break;
+                }
             }
         }
     }
+    ++hir_effective_vhdl_subtype_cache_misses_;
 
     const auto folds_before = hir_boundary_fallback_folds_;
     auto result = resolve();
     if (!result || hir_boundary_fallback_folds_ != folds_before) {
         return result;
     }
-    if (hir_effective_vhdl_subtype_cache_.size()
+    if (hir_effective_vhdl_subtype_cache_entries_
             >= maximum_effective_subtype_cache_entries
         || hir_effective_vhdl_subtype_cache_bytes_
                 >= maximum_effective_subtype_cache_bytes) {
@@ -9638,7 +9656,7 @@ Lowerer::hir_effective_vhdl_subtype(
         return result;
     }
     try {
-        hir_effective_vhdl_subtype_cache_.push_back({
+        hir_effective_vhdl_subtype_cache_[key].push_back({
             subtype,
             scope,
             hir_generic_binding_frames_,
@@ -9647,6 +9665,7 @@ Lowerer::hir_effective_vhdl_subtype(
     } catch (const std::bad_alloc&) {
         return result;
     }
+    ++hir_effective_vhdl_subtype_cache_entries_;
     hir_effective_vhdl_subtype_cache_bytes_ += retained_bytes;
     return result;
 }
@@ -9788,6 +9807,18 @@ void Lowerer::end_hir_effective_vhdl_subtype_cache_scope() const noexcept
                       << '\n';
         }
         if (profile_expression_resolution_cache()
+            && (hir_effective_vhdl_subtype_cache_hits_ != 0U
+                || hir_effective_vhdl_subtype_cache_misses_ != 0U)) {
+            std::cerr << "fsim-profile: hir-effective-vhdl-subtype-cache"
+                      << " hits=" << hir_effective_vhdl_subtype_cache_hits_
+                      << " misses="
+                      << hir_effective_vhdl_subtype_cache_misses_
+                      << " entries="
+                      << hir_effective_vhdl_subtype_cache_entries_
+                      << " bytes=" << hir_effective_vhdl_subtype_cache_bytes_
+                      << '\n';
+        }
+        if (profile_expression_resolution_cache()
             && (hir_pure_integral_attempt_hits_ != 0U
                 || hir_pure_integral_attempt_misses_ != 0U)) {
             std::cerr << "fsim-profile: hir-pure-integral-attempt-cache"
@@ -9851,7 +9882,10 @@ void Lowerer::clear_hir_pure_integral_attempt_cache() const noexcept
 void Lowerer::clear_hir_effective_vhdl_subtype_cache() const noexcept
 {
     hir_effective_vhdl_subtype_cache_.clear();
+    hir_effective_vhdl_subtype_cache_entries_ = 0U;
     hir_effective_vhdl_subtype_cache_bytes_ = 0U;
+    hir_effective_vhdl_subtype_cache_hits_ = 0U;
+    hir_effective_vhdl_subtype_cache_misses_ = 0U;
 }
 
 void Lowerer::clear_hir_expression_resolution_cache() const noexcept
@@ -9996,9 +10030,36 @@ Lowerer::hir_vhdl_callable_resolutions(
     if (specialized_hir_unit_ == nullptr) {
         return { };
     }
-    return hir_resolver()
+    // Overload resolution recomputes the visible homographs' profiles, so
+    // the candidates are kept for the unit (cleared when it changes).
+    const auto key = std::string { name.text() };
+    if (const auto found = hir_vhdl_callable_cache_.find(key);
+        found != hir_vhdl_callable_cache_.end()) {
+        for (const auto& entry : found->second) {
+            if (entry.scope == use_scope && entry.name == name
+                && entry.binding_frames == hir_generic_binding_frames_) {
+                return entry.candidates;
+            }
+        }
+    }
+    const auto fallback_calls = hir_boundary_fallback_calls_;
+    auto candidates = hir_resolver()
         .resolve_vhdl_callables(name, use_scope)
         .candidates;
+    constexpr std::size_t maximum_entries { 1U << 16U };
+    if (hir_boundary_fallback_calls_ == fallback_calls
+        && hir_vhdl_callable_cache_entries_ < maximum_entries) {
+        hir_vhdl_callable_cache_[key].push_back({
+            name, use_scope, hir_generic_binding_frames_, candidates });
+        ++hir_vhdl_callable_cache_entries_;
+    }
+    return candidates;
+}
+
+void Lowerer::clear_hir_vhdl_callable_cache() const noexcept
+{
+    hir_vhdl_callable_cache_.clear();
+    hir_vhdl_callable_cache_entries_ = 0U;
 }
 
 std::optional<Lowerer::HirCallableResolution>
@@ -15628,14 +15689,6 @@ Lowerer::resolve_hir_vhdl_function_call(
         return std::nullopt;
     }
 
-    auto candidates = hir_vhdl_callable_resolutions(
-        *expression->vhdl->referenced_name,
-        expression->vhdl->scope);
-    if (candidates.empty()) {
-        candidates = hir_vhdl_protected_method_resolutions(
-            *expression->vhdl->referenced_name,
-            expression->vhdl->scope, true);
-    }
     // An arithmetic operator the type resolution typed is the predefined
     // operator: no user overload accepts it in its context (9.2.6, 12.5).
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
@@ -15646,6 +15699,14 @@ Lowerer::resolve_hir_vhdl_function_call(
             || op == "rem" || op == "**") {
             return std::nullopt;
         }
+    }
+    auto candidates = hir_vhdl_callable_resolutions(
+        *expression->vhdl->referenced_name,
+        expression->vhdl->scope);
+    if (candidates.empty()) {
+        candidates = hir_vhdl_protected_method_resolutions(
+            *expression->vhdl->referenced_name,
+            expression->vhdl->scope, true);
     }
     // A relation the type resolution typed BOOLEAN is not a user overload
     // returning another type (IEEE 1076-2008 9.2.3, 12.5).

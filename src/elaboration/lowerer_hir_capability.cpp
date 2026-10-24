@@ -1200,6 +1200,7 @@ void Lowerer::set_specialized_hir_unit(
     clear_hir_expression_resolution_cache();
     clear_hir_vhdl_subtype_name_cache();
     clear_hir_pure_integral_attempt_cache();
+    clear_hir_vhdl_callable_cache();
     specialized_hir_unit_ = unit;
     vhdl_standard_ = frontend::VhdlStandard::Vhdl2008;
     systemverilog_standard_
@@ -1308,6 +1309,7 @@ Lowerer::HirUnitSwap::HirUnitSwap(
     lowerer_.clear_hir_expression_resolution_cache();
     lowerer_.clear_hir_vhdl_subtype_name_cache();
     lowerer_.clear_hir_pure_integral_attempt_cache();
+    lowerer_.clear_hir_vhdl_callable_cache();
     lowerer_.specialized_hir_unit_ = unit;
 }
 
@@ -1320,6 +1322,7 @@ Lowerer::HirUnitSwap::~HirUnitSwap()
     lowerer_.clear_hir_expression_resolution_cache();
     lowerer_.clear_hir_vhdl_subtype_name_cache();
     lowerer_.clear_hir_pure_integral_attempt_cache();
+    lowerer_.clear_hir_vhdl_callable_cache();
     lowerer_.specialized_hir_unit_ = saved_;
 }
 
@@ -1354,27 +1357,29 @@ bool Lowerer::hir_vhdl_active_package_constant(
         || hir_generic_binding_frames_.empty()) {
         return false;
     }
+    // Only a name can denote a constant; resolving any other expression
+    // (an overloaded call) here would be wasted work.
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind
+            != semantic::vhdl::ExpressionKind::name) {
+        return false;
+    }
     const auto declaration_id = hir_referenced_declaration(expression_id);
     const auto declaration = declaration_id
         ? specialized_hir_unit_->find_declaration(*declaration_id)
         : std::nullopt;
-    if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind
-            != semantic::vhdl::ExpressionKind::name
-        || !declaration || declaration->vhdl == nullptr
+    if (!declaration || declaration->vhdl == nullptr
         || declaration->vhdl->form
             != semantic::vhdl::DeclarationForm::constant) {
         return false;
     }
-    const auto& scopes
-        = specialized_hir_unit_->design().semantics.scopes();
     const auto owner_unit = [&](const semantic::ScopeId scope)
         -> std::optional<semantic::UnitId> {
-        const auto record = std::ranges::find(
-            scopes, scope, &semantic::Scope::id);
-        return record != scopes.end()
+        const auto* record = semantic::find_by_id(
+            specialized_hir_unit_->design().semantics.scopes(), scope);
+        return record != nullptr
             ? std::optional { record->unit }
             : std::nullopt;
     };
@@ -18681,6 +18686,34 @@ std::optional<std::pair<double, double>> Lowerer::hir_vhdl_real_range(
     return std::pair { std::min(*left, *right), std::max(*left, *right) };
 }
 
+namespace {
+
+    // `width` bits of the low `element_width` bits of `element` repeated,
+    // copied in doubling runs rather than bit by bit.
+    std::optional<PackedLogic4> repeated_packed_element(
+        const PackedLogic4& element, const std::size_t element_width,
+        const std::size_t width)
+    {
+        if (width == 0U || element_width == 0U
+            || element.width() < element_width
+            || width % element_width != 0U) {
+            return std::nullopt;
+        }
+        PackedLogic4 result { width, Logic4::zero };
+        result.insert_bits(element.width() == element_width
+                ? element
+                : element.extract_bits(0U, element_width),
+            0U);
+        for (std::size_t filled { element_width }; filled < width;) {
+            const auto run = std::min(filled, width - filled);
+            result.insert_bits(result.extract_bits(0U, run), filled);
+            filled += run;
+        }
+        return result;
+    }
+
+} // namespace
+
 std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
     const semantic::vhdl::SubtypeIndication& declared,
     const std::size_t width,
@@ -18789,12 +18822,17 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
             if (!value) {
                 return std::nullopt;
             }
-            for (std::size_t bit { }; bit < *element_width; ++bit) {
-                if (value->is_logic9() || result.is_logic9()) {
-                    return std::nullopt;
-                }
-                result.set(offset + bit, value->get(bit));
+            if (*element_width == 0U) {
+                continue;
             }
+            if (value->is_logic9() || result.is_logic9()
+                || value->width() < *element_width) {
+                return std::nullopt;
+            }
+            result.insert_bits(*element_width == value->width()
+                    ? *value
+                    : value->extract_bits(0U, *element_width),
+                offset);
         }
         return offset == 0U ? std::optional { result } : std::nullopt;
     }
@@ -18815,13 +18853,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
         if (!value || value->is_logic9()) {
             return std::nullopt;
         }
-        PackedLogic4 result { width, Logic4::zero };
-        for (std::size_t offset { }; offset < width; offset += *element_width) {
-            for (std::size_t bit { }; bit < *element_width; ++bit) {
-                result.set(offset + bit, value->get(bit));
-            }
-        }
-        return result;
+        return repeated_packed_element(*value, *element_width, width);
     }
     if (definition == nullptr) {
         // STD.STANDARD vectors of INTEGER, TIME, REAL and BOOLEAN start at
@@ -18863,14 +18895,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
             element = unsigned_value(0U, 1U);
         }
         if (element && width % element_width == 0U) {
-            PackedLogic4 result { width, Logic4::zero };
-            for (std::size_t offset { }; offset < width;
-                offset += element_width) {
-                for (std::size_t bit { }; bit < element_width; ++bit) {
-                    result.set(offset + bit, element->get(bit));
-                }
-            }
-            return result;
+            return repeated_packed_element(*element, element_width, width);
         }
     }
     if (!scalar) {

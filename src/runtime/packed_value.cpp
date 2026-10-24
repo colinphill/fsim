@@ -1202,13 +1202,30 @@ PackedLogic4 PackedLogic4::from_logic9_msb_string(
 {
     PackedLogic4 result(value.size(), Logic4::zero);
     result.promote_to_logic9();
-    for (std::size_t offset = 0; offset < value.size(); ++offset) {
-        const auto parsed = parse_logic9(value[value.size() - offset - 1]);
-        if (!parsed) {
-            throw std::invalid_argument(
-                "nine-state vector contains an invalid digit");
+    // Each plane is written a word at a time, as set_logic9 encodes a bit.
+    const auto words = word_count(value.size());
+    for (std::size_t word = 0; word < words; ++word) {
+        std::array<std::uint64_t, 4U> planes { };
+        const auto first = word * bits_per_word;
+        const auto last = std::min(value.size(), first + bits_per_word);
+        for (std::size_t offset = first; offset < last; ++offset) {
+            const auto parsed = parse_logic9(value[value.size() - offset - 1]);
+            if (!parsed) {
+                throw std::invalid_argument(
+                    "nine-state vector contains an invalid digit");
+            }
+            const auto encoded
+                = static_cast<std::uint8_t>(canonical_logic9_value(*parsed));
+            const auto bit = std::uint64_t { 1 } << (offset - first);
+            for (std::size_t plane = 0; plane < 4U; ++plane) {
+                if (((encoded >> plane) & 1U) != 0U) {
+                    planes[plane] |= bit;
+                }
+            }
         }
-        result.set_logic9(offset, *parsed);
+        for (std::size_t plane = 0; plane < 4U; ++plane) {
+            result.mutable_logic9_plane(plane)[word] = planes[plane];
+        }
     }
     return result;
 }
