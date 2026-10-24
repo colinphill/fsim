@@ -430,6 +430,9 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             objects_type.index_width = 32U;
             objects_type.two_state_indices = true;
             objects_type.element_nominal_type = designated.type_mark.spelling;
+            if (!profile->members.empty()) {
+                objects_type = profile->heap_type;
+            }
             return insert_heap(std::move(objects_type), std::move(profile));
         }
     }
@@ -1610,8 +1613,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             return std::nullopt;
         }
         if (heap->shaped) {
-            return lower_hir_vhdl_shaped_allocator(
-                *heap, allocator_constraints, allocator_initializer, span);
+            // The allocator's subtype mark, whose element constraints shape
+            // a record object (9.3.7).
+            std::optional<semantic::vhdl::SubtypeIndication> allocated;
+            constexpr std::string_view mark_prefix { "@vhdl-subtype:" };
+            if (allocator_subtype && allocator_subtype->vhdl != nullptr
+                && allocator_subtype->vhdl->text.starts_with(mark_prefix)) {
+                const auto name = std::string_view {
+                    allocator_subtype->vhdl->text
+                }.substr(mark_prefix.size());
+                const auto resolved = hir_resolver().resolve_vhdl_type_identity(
+                    name, source.scope);
+                if (resolved.status
+                        == semantic::CompiledResolutionStatus::unique
+                    && resolved.type) {
+                    allocated.emplace();
+                    allocated->type_mark.spelling = std::string { name };
+                    allocated->type_mark.target = *resolved.type;
+                }
+            }
+            return lower_hir_vhdl_shaped_allocator(*heap,
+                allocator_constraints, allocator_initializer, allocated,
+                span);
         }
         if (heap->designated_subtype.domain
             == semantic::vhdl::ValueDomain::string) {

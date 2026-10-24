@@ -1334,6 +1334,40 @@ Lowerer::hir_vhdl_initialized_object_subtype(
     if (!shape || shape->ranges.empty() || !shape->complete()) {
         return std::nullopt;
     }
+    // An aggregate whose element subtype is open takes the element bounds
+    // from its element values (IEEE 1076-2008 9.3.3.3).
+    if (value && value->vhdl != nullptr
+        && value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && !value->vhdl->associations.empty()
+        && std::ranges::none_of(shape->element_constraints,
+            [](const ElementConstraint& constraint) {
+                return constraint.path == std::vector<std::string> { "" };
+            })
+        && declared.type_mark.target.valid()) {
+        const auto* base = semantic::vhdl_base_type_definition(
+            *specialized_hir_unit_, declared.type_mark.target);
+        if (base != nullptr && base->form == semantic::vhdl::TypeForm::array
+            && base->element_subtype) {
+            const auto element = hir_vhdl_chain_element_subtype(
+                declared, *base->element_subtype);
+            const auto element_shape = hir_vhdl_subtype_shape(element, scope);
+            if (element_shape && !element_shape->ranges.empty()
+                && !element_shape->complete()) {
+                const auto element_subtype
+                    = hir_vhdl_initialized_object_subtype(
+                        value->vhdl->associations.front().value, element,
+                        scope);
+                const auto inferred = element_subtype
+                    ? hir_vhdl_subtype_shape(*element_subtype, scope)
+                    : std::nullopt;
+                if (!inferred || !inferred->complete()) {
+                    return std::nullopt;
+                }
+                append_constraints(shape->element_constraints, { "" },
+                    *inferred);
+            }
+        }
+    }
     auto subtype = declared;
     apply_hir_vhdl_shape(subtype, *shape, scope);
     const auto completed = hir_vhdl_subtype_shape(subtype, scope);

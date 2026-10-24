@@ -4446,10 +4446,59 @@ CompiledDesignResolver::effective_vhdl_subtype(
         const auto resolver = CompiledDesignResolver {
             *design_, selected_unit_, effective_, active
         };
-        const auto prefix_resolution
-            = resolver.resolve_expression_name(prefix_id);
-        const auto paired_prefix_resolution
-            = resolver.resolve_expression_name(paired_prefix_id);
+        // `obj.e'left`: an element of a record object written as a selected
+        // name (IEEE 1076-2008 8.3) is the object's member.
+        auto steps = prefix_steps;
+        const auto object_member = [&](const vhdl::Expression& name)
+            -> std::optional<std::pair<DeclarationId,
+                std::vector<std::string>>> {
+            const auto parts = vhdl_name_parts(name.text);
+            if (parts.size() < 2U) {
+                return std::nullopt;
+            }
+            vhdl::Name head;
+            head.spelling = std::string { parts[0] };
+            head.canonical = head.spelling;
+            const auto object
+                = resolver.resolve_vhdl(head, name.scope).unique();
+            const auto declaration = object
+                ? find_declaration(*design_, effective_, *object)
+                : std::nullopt;
+            if (!declaration || declaration->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            switch (declaration->vhdl->form) {
+            case vhdl::DeclarationForm::variable:
+            case vhdl::DeclarationForm::constant:
+            case vhdl::DeclarationForm::signal:
+            case vhdl::DeclarationForm::port:
+            case vhdl::DeclarationForm::generic_constant:
+                break;
+            default:
+                return std::nullopt;
+            }
+            std::vector<std::string> members;
+            for (std::size_t index = 1U; index < parts.size(); ++index) {
+                members.push_back(
+                    "@vhdl-member:" + std::string { parts[index] });
+            }
+            return std::pair { *object, std::move(members) };
+        };
+        std::optional<DeclarationId> member_object;
+        if (prefix->vhdl->text == paired_prefix->vhdl->text) {
+            if (auto selected = object_member(*prefix->vhdl)) {
+                member_object = selected->first;
+                steps.insert(steps.begin(), selected->second.begin(),
+                    selected->second.end());
+            }
+        }
+        const auto prefix_resolution = member_object
+            ? CompiledDeclarationResolution {
+                  CompiledResolutionStatus::unique, { *member_object } }
+            : resolver.resolve_expression_name(prefix_id);
+        const auto paired_prefix_resolution = member_object
+            ? prefix_resolution
+            : resolver.resolve_expression_name(paired_prefix_id);
         const auto declaration_id = prefix_resolution.unique();
         const auto paired_declaration_id
             = paired_prefix_resolution.unique();
@@ -4543,10 +4592,31 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || form == vhdl::DeclarationForm::subtype
             || form == vhdl::DeclarationForm::generic_type;
         auto source_subtype = declaration->vhdl->subtype;
+        // Every element of a record object has the actual's shape: a record
+        // formal's element constraints come from its actual (IEEE 1076-2008
+        // 4.2.2.2), and a constrained record leaves nothing to choose.
+        const auto record_subtype = [&] {
+            std::set<TypeId> visited;
+            for (auto type_id = source_subtype
+                     ? source_subtype->type_mark.target
+                     : TypeId { };
+                 type_id.valid() && visited.insert(type_id).second;) {
+                const auto type = find_type(*design_, effective_, type_id);
+                if (!type || type->vhdl == nullptr) {
+                    return false;
+                }
+                if (type->vhdl->form == vhdl::TypeForm::record) {
+                    return true;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+            return false;
+        };
         const bool actual_shape_is_authoritative
             = declaration->vhdl->form
                     == vhdl::DeclarationForm::generic_constant
-            || (source_subtype && source_subtype->unconstrained);
+            || (source_subtype && source_subtype->unconstrained)
+            || (!steps.empty() && record_subtype());
         if (actual_shape_is_authoritative) {
             if (auto actual_subtype = bound_type(
                     *declaration_id, active, true)) {
@@ -4578,7 +4648,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (!source_subtype) {
             return finish(std::nullopt);
         }
-        for (const auto& step : prefix_steps) {
+        for (const auto& step : steps) {
             const vhdl::TypeDefinition* composite { };
             std::set<TypeId> visited;
             for (auto type_id = source_subtype->type_mark.target;

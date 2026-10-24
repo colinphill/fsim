@@ -26,11 +26,26 @@ bool shaped_rejected(const std::string_view reason)
     return false;
 }
 
+// The code of a character literal (`'X'`, IEEE 1076-2008 15.6), which a
+// CHARACTER element takes even where the literal could be a logic value.
+std::optional<std::uint8_t> character_literal_code(
+    const semantic::vhdl::Expression& expression)
+{
+    const auto& text = expression.text;
+    if ((expression.kind != semantic::vhdl::ExpressionKind::logic_literal
+            && expression.kind != semantic::vhdl::ExpressionKind::name)
+        || text.size() != 3U || text.front() != '\'' || text.back() != '\'') {
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(text[1]);
+}
+
 } // namespace
 
 semantic::vhdl::SubtypeIndication Lowerer::hir_vhdl_chain_element_subtype(
     const semantic::vhdl::SubtypeIndication& owner,
-    semantic::vhdl::SubtypeIndication element) const
+    semantic::vhdl::SubtypeIndication element,
+    const std::string_view step) const
 {
     std::vector<const semantic::vhdl::SubtypeIndication*> owners;
     std::vector<semantic::vhdl::SubtypeIndication> bases;
@@ -58,7 +73,7 @@ semantic::vhdl::SubtypeIndication Lowerer::hir_vhdl_chain_element_subtype(
     }
     for (auto next = owners.rbegin(); next != owners.rend(); ++next) {
         element = semantic::vhdl::constrained_element_subtype(
-            **next, "", std::move(element));
+            **next, step, std::move(element));
     }
     return element;
 }
@@ -197,7 +212,7 @@ std::optional<std::size_t> Lowerer::hir_vhdl_vector_element_width(
 std::optional<Lowerer::HirVhdlShapedProfile>
 Lowerer::hir_vhdl_shaped_profile(
     const semantic::vhdl::SubtypeIndication& subtype,
-    const bool open_array) const
+    const bool open_array, const bool string_elements) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return (shaped_rejected("profile check 1"), std::nullopt);
@@ -261,7 +276,8 @@ Lowerer::hir_vhdl_shaped_profile(
         || builtin == Builtin::std_standard_boolean_vector
         || builtin == Builtin::std_standard_integer_vector
         || builtin == Builtin::ieee_std_logic_1164_std_logic_vector
-        || builtin == Builtin::ieee_std_logic_1164_std_ulogic_vector;
+        || builtin == Builtin::ieee_std_logic_1164_std_ulogic_vector
+        || (string_elements && builtin == Builtin::std_standard_string);
     // An unconstrained array type: each object supplies its own bounds,
     // one range per index (5.3.2.2).
     if (open_array) {
@@ -309,30 +325,56 @@ Lowerer::hir_vhdl_shaped_profile(
     }
     if (array == nullptr) {
         // The predefined one-dimensional arrays (IEEE 1076-2008 5.3.2.4,
-        // 16.7): BIT, BOOLEAN, INTEGER and STD_ULOGIC elements.
+        // 5.3.2.3, 16.7): BIT, BOOLEAN, INTEGER, CHARACTER and STD_ULOGIC
+        // elements.
         const bool integer = builtin == Builtin::std_standard_integer_vector;
         const bool logic = builtin == Builtin::ieee_std_logic_1164_std_logic_vector
             || builtin == Builtin::ieee_std_logic_1164_std_ulogic_vector;
-        profile.element_width = integer
-            ? static_cast<std::size_t>(
-                  frontend::vhdl_predefined_integer_storage_width(
-                      vhdl_standard_))
-            : 1U;
-        profile.element_domain = integer ? frontend::ValueDomain::Integer
-            : logic ? frontend::ValueDomain::Logic9
-            : builtin == Builtin::std_standard_boolean_vector
-            ? frontend::ValueDomain::Boolean
-            : frontend::ValueDomain::Bit2;
-        profile.element_signed = integer;
-        // INTEGER'LEFT: the most negative value of its storage width.
-        auto integer_left = PackedLogic4(profile.element_width, Logic4::zero);
-        if (integer) {
-            integer_left.set(profile.element_width - 1U, Logic4::one);
+        if (builtin == Builtin::std_standard_string) {
+            profile.element_width = 8U;
+            profile.element_domain = frontend::ValueDomain::String;
+            // CHARACTER'LEFT is NUL (16.3).
+            profile.element_default = PackedLogic4(8U, Logic4::zero);
+            profile.type.element_nominal_type
+                = "@builtin:std.standard.character";
+        } else {
+            profile.element_width = integer
+                ? static_cast<std::size_t>(
+                      frontend::vhdl_predefined_integer_storage_width(
+                          vhdl_standard_))
+                : 1U;
+            profile.element_domain = integer ? frontend::ValueDomain::Integer
+                : logic ? frontend::ValueDomain::Logic9
+                : builtin == Builtin::std_standard_boolean_vector
+                ? frontend::ValueDomain::Boolean
+                : frontend::ValueDomain::Bit2;
+            profile.element_signed = integer;
+            // INTEGER'LEFT: the most negative value of its storage width.
+            auto integer_left
+                = PackedLogic4(profile.element_width, Logic4::zero);
+            if (integer) {
+                integer_left.set(profile.element_width - 1U, Logic4::one);
+            }
+            profile.element_default = integer
+                ? integer_left
+                : logic ? PackedLogic4::from_logic9_msb_string("U")
+                : PackedLogic4(1U, Logic4::zero);
         }
-        profile.element_default = integer
-            ? integer_left
-            : logic ? PackedLogic4::from_logic9_msb_string("U")
-            : PackedLogic4(1U, Logic4::zero);
+        // The predefined element type, named for images (16.2.2).
+        profile.element_subtype.type_mark.spelling
+            = builtin == Builtin::std_standard_string ? "character"
+            : integer ? "integer"
+            : logic ? "std_ulogic"
+            : builtin == Builtin::std_standard_boolean_vector ? "boolean"
+            : "bit";
+        profile.element_subtype.executable_width = profile.element_width;
+        profile.element_subtype.domain = integer
+            ? semantic::vhdl::ValueDomain::integer
+            : logic ? semantic::vhdl::ValueDomain::logic9
+            : builtin == Builtin::std_standard_boolean_vector
+            ? semantic::vhdl::ValueDomain::boolean
+            : semantic::vhdl::ValueDomain::bit2;
+        profile.element_subtype.signed_value = integer;
     } else {
         const auto declared_element = hir_vhdl_chain_element_subtype(
             subtype, *array->element_subtype);
@@ -576,6 +618,14 @@ Lowerer::hir_vhdl_shaped_element_selectors(
                 selectors = std::span { source.operands };
             }
         }
+        // `p.e(i)`: an array element of a designated record.
+        if (local == nullptr && source.text.find('.') != std::string::npos) {
+            if (const auto path = hir_vhdl_shaped_record_name_path(
+                    expression_id, source.text)) {
+                local = hir_vhdl_shaped_member_view(expression_id, *path);
+                selectors = std::span { source.operands };
+            }
+        }
     }
     if (local == nullptr
         || selectors.size() != local->profile.constraints.size()) {
@@ -618,6 +668,16 @@ Lowerer::hir_vhdl_shaped_attribute(
         return std::nullopt;
     }
     const auto* local = hir_vhdl_shaped_prefix(expression->vhdl->operands.front());
+    // A row of an array of open arrays has the ranges after the array's
+    // own (5.3.2.2).
+    std::size_t first { };
+    if (local == nullptr) {
+        if (const auto row = hir_vhdl_shaped_row(
+                expression->vhdl->operands.front())) {
+            local = row->local;
+            first = local->profile.outer_rank;
+        }
+    }
     if (local == nullptr) {
         return std::nullopt;
     }
@@ -626,12 +686,13 @@ Lowerer::hir_vhdl_shaped_attribute(
         const auto selected = hir_constant_integer(expression->vhdl->operands[1]);
         if (!selected || *selected < 1
             || static_cast<std::size_t>(*selected)
-                > local->profile.constraints.size()) {
+                > local->profile.constraints.size() - first) {
             return std::nullopt;
         }
         dimension = static_cast<std::uint32_t>(*selected - 1);
     }
-    return HirVhdlShapedAttributeUse { local, *attribute, dimension };
+    return HirVhdlShapedAttributeUse { local, *attribute,
+        static_cast<std::uint32_t>(dimension + first) };
 }
 
 std::optional<Lowerer::HirVhdlShapedAccess> Lowerer::hir_vhdl_shaped_access(
@@ -712,6 +773,99 @@ std::optional<VhdlShaped> Lowerer::lower_hir_vhdl_shaped_access(
     return result;
 }
 
+std::optional<Lowerer::HirVhdlShapedAccess> Lowerer::hir_vhdl_shaped_row(
+    const semantic::ExpressionId expression_id) const
+{
+    if (!hir_vhdl_shaped_active()) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->operands.empty()) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->vhdl;
+    const HirVhdlShapedLocal* local { };
+    std::span<const semantic::ExpressionId> selectors;
+    if (source.kind == semantic::vhdl::ExpressionKind::index
+        && source.operands.size() >= 2U) {
+        local = hir_vhdl_shaped_prefix(source.operands.front());
+        selectors = std::span { source.operands }.subspan(1U);
+    } else if (source.kind == semantic::vhdl::ExpressionKind::call
+        && source.text.find('.') != std::string::npos
+        && std::ranges::all_of(source.argument_names,
+            [](const std::string& name) { return name.empty(); })) {
+        // `p.e(i)` parsed as a call.
+        if (const auto path = hir_vhdl_shaped_record_name_path(
+                expression_id, source.text)) {
+            local = hir_vhdl_shaped_member_view(expression_id, *path);
+            selectors = std::span { source.operands };
+        }
+    }
+    if (local == nullptr || local->profile.outer_rank == 0U
+        || selectors.size() != local->profile.outer_rank
+        || selectors.size() >= local->profile.constraints.size()) {
+        return std::nullopt;
+    }
+    return HirVhdlShapedAccess { local,
+        { selectors.begin(), selectors.end() }, false, true };
+}
+
+Lowerer::HirVhdlShapedProfile Lowerer::hir_vhdl_shaped_row_profile(
+    const HirVhdlShapedProfile& profile) const
+{
+    auto row = profile;
+    row.constraints.erase(row.constraints.begin(),
+        row.constraints.begin()
+            + static_cast<std::ptrdiff_t>(profile.outer_rank));
+    row.outer_rank = 0U;
+    row.type.vhdl_rank = static_cast<std::uint32_t>(row.constraints.size());
+    const auto* array = profile.subtype.type_mark.target.valid()
+        ? semantic::vhdl_base_type_definition(
+              *specialized_hir_unit_, profile.subtype.type_mark.target)
+        : nullptr;
+    if (array != nullptr && array->element_subtype) {
+        row.subtype = hir_vhdl_chain_element_subtype(
+            profile.subtype, *array->element_subtype);
+    }
+    return row;
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_shaped_image(
+    const semantic::ExpressionId expression_id, const bool characters)
+{
+    if (!hir_vhdl_shaped_active()) {
+        return std::nullopt;
+    }
+    const auto profile = hir_vhdl_shaped_value_profile(expression_id);
+    if (!profile || profile->constraints.size() != 1U) {
+        return std::nullopt;
+    }
+    const bool character_elements
+        = profile->element_domain == frontend::ValueDomain::String;
+    const bool bit_elements = profile->element_width == 1U
+        && (profile->element_domain == frontend::ValueDomain::Bit2
+            || profile->element_domain == frontend::ValueDomain::Logic4
+            || profile->element_domain == frontend::ValueDomain::Logic9);
+    if (!character_elements && (characters || !bit_elements)) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    const auto value = lower_hir_vhdl_shaped_container(expression_id,
+        expression && expression->vhdl != nullptr
+            ? hir_source_span(expression->vhdl->source)
+            : frontend::SourceSpan { });
+    if (!value) {
+        return std::nullopt;
+    }
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(FormatContainerPattern {
+        destination, value->first });
+    return destination;
+}
+
 std::optional<Lowerer::HirVhdlShapedSlice> Lowerer::hir_vhdl_shaped_slice(
     const semantic::ExpressionId expression_id) const
 {
@@ -764,6 +918,10 @@ std::optional<std::size_t> Lowerer::hir_vhdl_shaped_width(
         return access->leaf ? access->local->profile.leaf_width
                             : access->local->profile.element_width;
     }
+    if (const auto path = hir_vhdl_shaped_record_path(expression_id);
+        path && path->member != nullptr && !path->member->shaped) {
+        return path->member->width;
+    }
     if (const auto comparison = specialized_hir_unit_->find_expression(
             expression_id);
         comparison && comparison->vhdl != nullptr
@@ -810,6 +968,10 @@ std::optional<frontend::ValueDomain> Lowerer::hir_vhdl_shaped_domain(
     if (const auto access = hir_vhdl_shaped_access(expression_id)) {
         return access->leaf ? access->local->profile.leaf_domain
                             : access->local->profile.element_domain;
+    }
+    if (const auto path = hir_vhdl_shaped_record_path(expression_id);
+        path && path->member != nullptr && !path->member->shaped) {
+        return path->member->domain;
     }
     if (const auto use = hir_vhdl_shaped_attribute(expression_id)) {
         return use->attribute == VhdlShapedAttribute::ascending
@@ -903,6 +1065,12 @@ Lowerer::lower_hir_vhdl_shaped_expression(
             process_.operations.emplace_back(UnaryNot { different, equal });
             return std::optional { different };
         }
+    }
+    // A static element, or a whole record, of a designated record.
+    if (const auto path = hir_vhdl_shaped_record_path(expression_id);
+        path && (!path->shaped || !path->shaped->members.empty())) {
+        return std::optional { lower_hir_vhdl_shaped_record_read(
+            expression_id, *path, expected_width, span()) };
     }
     if (auto access = hir_vhdl_shaped_access(expression_id)) {
         const auto bound = bind_hir_vhdl_shaped(*access->local, span());
@@ -1091,6 +1259,31 @@ bool Lowerer::lower_hir_vhdl_shaped_whole_assignment(
         });
         return true;
     }
+    // An aggregate of several dimensions has its own ranges; each must have
+    // the target's length (10.6.2.1).
+    if (value && value->vhdl != nullptr
+        && value->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+        && profile.constraints.size() != 1U) {
+        const auto source = lower_hir_vhdl_shaped_materialize(
+            profile, value_id, hir_source_span(value->vhdl->source));
+        if (!source) {
+            return false;
+        }
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::assign,
+            target,
+            *source,
+            { },
+            { },
+            { },
+            { },
+            0U,
+            VhdlShapedAttribute::length,
+            0U,
+            { },
+        });
+        return true;
+    }
     // A value of statically known length (10.6.2.1).
     const auto lowered = lower_hir_vhdl_shaped_value(value_id, profile,
         std::nullopt);
@@ -1125,6 +1318,10 @@ std::optional<bool> Lowerer::lower_hir_vhdl_shaped_assignment(
     const auto span = target_expression && target_expression->vhdl != nullptr
         ? hir_source_span(target_expression->vhdl->source)
         : frontend::SourceSpan { };
+    if (const auto path = hir_vhdl_shaped_record_path(target_id);
+        path && (!path->shaped || !path->shaped->members.empty())) {
+        return lower_hir_vhdl_shaped_record_write(*path, value_id, span);
+    }
     if (auto access = hir_vhdl_shaped_access(target_id)) {
         const auto bound = bind_hir_vhdl_shaped(*access->local, span);
         if (!bound) {
@@ -1141,12 +1338,42 @@ std::optional<bool> Lowerer::lower_hir_vhdl_shaped_assignment(
         if (!operation) {
             return false;
         }
-        auto value = lower_hir_expression(value_id, width);
+        const auto literal = specialized_hir_unit_->find_expression(value_id);
+        const auto code = profile.element_domain == frontend::ValueDomain::String
+                && !access->leaf && literal && literal->vhdl != nullptr
+            ? character_literal_code(*literal->vhdl)
+            : std::nullopt;
+        auto value = code
+            ? std::optional { load_constant(unsigned_value(*code, 8U),
+                  frontend::ValueDomain::String) }
+            : lower_hir_expression(value_id, width);
         if (!value) {
             return false;
         }
         if (register_width(*value) != width) {
             value = resize_register(*value, width, signed_value);
+        }
+        operation->value = *value;
+        process_.operations.emplace_back(std::move(*operation));
+        store_hir_vhdl_shaped(*bound);
+        return true;
+    }
+    // A row of an array of open arrays takes a value of its length.
+    if (auto row = hir_vhdl_shaped_row(target_id)) {
+        const auto bound = bind_hir_vhdl_shaped(*row->local, span);
+        if (!bound) {
+            return false;
+        }
+        row->local = &bound->local;
+        auto operation = lower_hir_vhdl_shaped_access(
+            *row, VhdlShapedOperation::element_write);
+        const auto value = operation
+            ? lower_hir_vhdl_shaped_value(value_id,
+                  hir_vhdl_shaped_row_profile(bound->local.profile),
+                  std::nullopt)
+            : std::nullopt;
+        if (!value) {
+            return false;
         }
         operation->value = *value;
         process_.operations.emplace_back(std::move(*operation));
@@ -1258,6 +1485,9 @@ Lowerer::hir_vhdl_shaped_value_profile(
     if (const auto* local = hir_vhdl_shaped_name(expression_id)) {
         return local->profile;
     }
+    if (const auto row = hir_vhdl_shaped_row(expression_id)) {
+        return hir_vhdl_shaped_row_profile(row->local->profile);
+    }
     const auto expression = specialized_hir_unit_->find_expression(expression_id);
     if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
@@ -1331,6 +1561,23 @@ Lowerer::lower_hir_vhdl_shaped_container(
             return std::nullopt;
         }
         return std::pair { bound->local.container, bound->local.profile };
+    }
+    if (auto row = hir_vhdl_shaped_row(expression_id)) {
+        const auto bound = bind_hir_vhdl_shaped(*row->local, span);
+        if (!bound) {
+            return std::nullopt;
+        }
+        row->local = &bound->local;
+        auto operation = lower_hir_vhdl_shaped_access(
+            *row, VhdlShapedOperation::element_read);
+        if (!operation) {
+            return std::nullopt;
+        }
+        auto profile = hir_vhdl_shaped_row_profile(bound->local.profile);
+        const auto result = allocate_container_register(profile.type);
+        operation->target = result;
+        process_.operations.emplace_back(std::move(*operation));
+        return std::pair { result, std::move(profile) };
     }
     const auto expression = specialized_hir_unit_->find_expression(expression_id);
     if (!expression || expression->vhdl == nullptr) {
@@ -1694,8 +1941,12 @@ Lowerer::hir_vhdl_shaped_heap_profile(
             .value_or(*access_type.designated_subtype);
         // STRING objects keep their own lengths in string storage.
         if (designated.domain != semantic::vhdl::ValueDomain::string) {
-            profile = hir_vhdl_shaped_profile(
-                *access_type.designated_subtype, true);
+            profile = hir_vhdl_shaped_record_profile(
+                *access_type.designated_subtype);
+            if (!profile) {
+                profile = hir_vhdl_shaped_profile(
+                    *access_type.designated_subtype, true);
+            }
         }
     }
     hir_vhdl_shaped_heap_profiles_.emplace(access_type.id.value(), profile);
@@ -1711,6 +1962,10 @@ const Lowerer::HirVhdlShapedLocal* Lowerer::hir_vhdl_shaped_heap_view(
         return nullptr;
     }
     const auto& source = *expression->vhdl;
+    // An array element of a designated record (`p.e`, IEEE 1076-2008 8.3).
+    if (const auto path = hir_vhdl_shaped_record_path(expression_id)) {
+        return hir_vhdl_shaped_member_view(expression_id, *path);
+    }
     std::optional<semantic::ExpressionId> handle;
     if (source.kind == semantic::vhdl::ExpressionKind::call
         && source.text == "@vhdl-dereference"
@@ -1748,7 +2003,8 @@ const Lowerer::HirVhdlShapedLocal* Lowerer::hir_vhdl_shaped_heap_view(
     }
     }
     auto profile = hir_vhdl_shaped_heap_profile(*type);
-    if (!profile) {
+    // A designated record is reached through its elements.
+    if (!profile || !profile->members.empty()) {
         return nullptr;
     }
     auto& view = hir_vhdl_shaped_heap_views_[handle->value()];
@@ -1771,23 +2027,27 @@ std::optional<Lowerer::HirVhdlShapedBound> Lowerer::bind_hir_vhdl_shaped(
     const HirVhdlShapedLocal& local, const frontend::SourceSpan& span)
 {
     HirVhdlShapedBound bound { local, std::nullopt, { } };
-    if (!local.heap_handle || local.access_type == nullptr) {
+    if ((!local.heap_handle && !local.heap_handle_declaration)
+        || local.access_type == nullptr) {
         return bound;
     }
     auto* heap = hir_vhdl_access_heap(*local.access_type, span);
     if (heap == nullptr || !heap->shaped) {
         return std::nullopt;
     }
-    const auto handle = lower_hir_expression(*local.heap_handle, 32U);
+    HirVhdlShapedRecordPath path;
+    path.handle = local.heap_handle;
+    path.handle_declaration = local.heap_handle_declaration;
+    const auto handle = lower_hir_vhdl_shaped_handle(path, *heap, span);
     if (!handle) {
         return std::nullopt;
     }
-    emit_hir_vhdl_access_live_check(*heap, *handle, span);
-    bound.local.container = allocate_container_register(heap->shaped->type);
+    bound.local.container = allocate_container_register(local.profile.type);
     bound.handle = *handle;
     bound.heap_objects = heap->objects;
     process_.operations.emplace_back(ContainerElementRead {
-        bound.local.container, heap->objects, *handle, false, { } });
+        bound.local.container, heap->objects, *handle, false,
+        local.heap_members });
     return bound;
 }
 
@@ -1796,7 +2056,7 @@ void Lowerer::store_hir_vhdl_shaped(const HirVhdlShapedBound& bound)
     if (bound.handle) {
         process_.operations.emplace_back(ContainerElementWrite {
             bound.heap_objects, *bound.handle, bound.local.container, false,
-            { } });
+            bound.local.heap_members });
     }
 }
 
@@ -1804,9 +2064,26 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
     const HirVhdlAccessHeap& heap,
     const std::span<const semantic::vhdl::RangeConstraint> constraints,
     const std::optional<semantic::ExpressionId> initializer,
+    const std::optional<semantic::vhdl::SubtypeIndication>& allocated,
     const frontend::SourceSpan& span)
 {
     const auto& profile = *heap.shaped;
+    // A record: `new T` takes its open elements' ranges from T's element
+    // constraints, `new T'(v)` from v (9.3.7).
+    if (!profile.members.empty()) {
+        const auto container = initializer
+            ? lower_hir_vhdl_shaped_materialize(profile, *initializer, span)
+            : lower_hir_vhdl_shaped_create(profile,
+                  allocated.value_or(profile.subtype));
+        if (!container) {
+            return (shaped_rejected("record allocator"), std::nullopt);
+        }
+        return issue_hir_vhdl_access_handle(
+            heap, span, [&](const RegisterId handle) {
+                process_.operations.emplace_back(ContainerElementWrite {
+                    heap.objects, handle, *container, false, { } });
+            });
+    }
     const auto container = allocate_container_register(profile.type);
     const auto fill = load_constant(profile.element_default,
         profile.element_domain);

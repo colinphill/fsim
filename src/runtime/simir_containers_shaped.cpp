@@ -116,6 +116,25 @@ struct ShapedPlace {
     const std::uint32_t leaf_width)
 {
     const auto outer_count = value.shape.size();
+    // Leading indices of an array of arrays select a subarray: the element
+    // they name of the array they index (IEEE 1076-2008 8.4).
+    if (inner.empty() && !indices.empty() && indices.size() < outer_count) {
+        ContainerValue leading;
+        leading.shape.assign(value.shape.begin(),
+            value.shape.begin() + static_cast<std::ptrdiff_t>(indices.size()));
+        const auto ordinal = shaped_ordinal(
+            process, instruction, leading, indices);
+        std::uint64_t count { 1U };
+        for (auto dimension = indices.size(); dimension < outer_count;
+             ++dimension) {
+            count *= shape_length(value.shape[dimension]);
+        }
+        const auto width
+            = static_cast<std::size_t>(count) * value.type.element_width;
+        const auto total = value.elements.front().width();
+        return { total - static_cast<std::size_t>(ordinal + 1U) * width,
+            width };
+    }
     if (indices.size() != outer_count + inner.size()) {
         container_error(process, instruction,
             "a VHDL array index has the wrong number of dimensions");
@@ -190,6 +209,64 @@ void require_shaped(
         || value.shape.size() != value.type.vhdl_rank) {
         container_error(process, instruction,
             "a VHDL shaped operation requires a shaped array value");
+    }
+}
+
+// A record value with run-time shaped elements (IEEE 1076-2008 5.3.3): each
+// element is a shaped array, another such record, or a one-element packed
+// value. Its packed form is its elements' in order, the first most
+// significant.
+[[nodiscard]] std::size_t shaped_record_width(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const ContainerValue& value)
+{
+    if (aggregate_box(value.type)) {
+        std::size_t width { };
+        for (const auto& member : value.nested_elements) {
+            width += shaped_record_width(process, instruction, member);
+        }
+        return width;
+    }
+    if (value.type.vhdl_shaped) {
+        require_shaped(process, instruction, value);
+    } else if (value.type.element_kind != ContainerElementKind::Packed
+        || value.elements.size() != 1U) {
+        container_error(process, instruction,
+            "a VHDL record element is not a packed or shaped value");
+    }
+    return value.elements.front().width();
+}
+
+void read_shaped_record(
+    const ContainerValue& value, PackedLogic4& packed, std::size_t& end)
+{
+    if (aggregate_box(value.type)) {
+        for (const auto& member : value.nested_elements) {
+            read_shaped_record(member, packed, end);
+        }
+        return;
+    }
+    const auto& bits = value.elements.front();
+    end -= bits.width();
+    if (bits.width() != 0U) {
+        packed.insert_bits(bits, end);
+    }
+}
+
+void write_shaped_record(
+    ContainerValue& value, const PackedLogic4& packed, std::size_t& end)
+{
+    if (aggregate_box(value.type)) {
+        for (auto& member : value.nested_elements) {
+            write_shaped_record(member, packed, end);
+        }
+        return;
+    }
+    auto& bits = value.elements.front();
+    end -= bits.width();
+    if (bits.width() != 0U) {
+        bits = packed.extract_bits(end, bits.width());
     }
 }
 
@@ -310,8 +387,32 @@ void Interpreter::Impl::execute_container(
         }
         const auto place = shaped_place(id, pc, source, indices,
             operation.inner, operation.width);
-        get_register(process, operation.value)
-            = source.elements.front().extract_bits(place.offset, place.width);
+        const auto bits = place.width == 0U
+            ? PackedLogic4(0U, Logic4::zero)
+            : source.elements.front().extract_bits(place.offset, place.width);
+        if (indices.size() < source.shape.size() && operation.inner.empty()) {
+            // A subarray read into `target` keeps the remaining ranges; one
+            // read into `value` must have its length.
+            if (operation.target != operation.source) {
+                ContainerValue subarray;
+                subarray.type = source.type;
+                subarray.type.vhdl_rank = static_cast<std::uint32_t>(
+                    source.shape.size() - indices.size());
+                subarray.shape.assign(source.shape.begin()
+                        + static_cast<std::ptrdiff_t>(indices.size()),
+                    source.shape.end());
+                subarray.elements.push_back(bits);
+                get_container_register(process, operation.target)
+                    = std::move(subarray);
+                break;
+            }
+            if (place.width != operation.width) {
+                container_error(id, pc,
+                    "VHDL array element length does not match its "
+                    "context's length");
+            }
+        }
+        get_register(process, operation.value) = bits;
         break;
     }
     case VhdlShapedOperation::element_write: {
@@ -334,6 +435,17 @@ void Interpreter::Impl::execute_container(
     }
     case VhdlShapedOperation::to_packed: {
         const auto& source = read_container_register(process, operation.source);
+        if (aggregate_box(source.type)) {
+            auto end = shaped_record_width(id, pc, source);
+            if (end != operation.width) {
+                container_error(id, pc,
+                    "VHDL record value does not match its target's subtype");
+            }
+            PackedLogic4 packed(end, Logic4::zero);
+            read_shaped_record(source, packed, end);
+            get_register(process, operation.value) = std::move(packed);
+            break;
+        }
         require_shaped(id, pc, source);
         if (source.elements.front().width() != operation.width) {
             container_error(id, pc,
@@ -347,6 +459,15 @@ void Interpreter::Impl::execute_container(
     case VhdlShapedOperation::from_packed: {
         const auto value = get_register(process, operation.value);
         auto& target = get_container_register(process, operation.target);
+        if (aggregate_box(target.type)) {
+            auto end = shaped_record_width(id, pc, target);
+            if (end != value.width()) {
+                container_error(id, pc,
+                    "VHDL record value does not match its target's subtype");
+            }
+            write_shaped_record(target, value, end);
+            break;
+        }
         require_shaped(id, pc, target);
         if (target.elements.front().width() != value.width()) {
             container_error(id, pc,

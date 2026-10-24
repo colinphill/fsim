@@ -951,6 +951,8 @@ endif()
       src/elaboration/lowerer_hir_vhdl_float.cpp
       src/elaboration/lowerer_hir_sva.cpp
       src/elaboration/lowerer_hir_vhdl_shaped.cpp
+      src/elaboration/lowerer_hir_vhdl_shaped_record.cpp
+      src/elaboration/lowerer_hir_vhdl_shaped_result.cpp
       src/elaboration/lowerer_hir_vhdl_special.cpp
       src/elaboration/lowerer_hir_vhdl_vital.cpp
       src/elaboration/lowerer_hir_vhdl_vital_delay.cpp

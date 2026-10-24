@@ -18004,11 +18004,22 @@ Lowerer::lower_hir_function_call_value(
     const auto* const callee_unit = interface_callable
         ? hir_callee_unit(interface_callable->receiver)
         : nullptr;
-    const auto type = [&] {
-        const HirUnitSwap swap { *this, callee_unit };
-        return hir_callable_type(resolution->body, result_width,
-            result_shape && result_shape->null_range);
-    }();
+    // A shaped result takes the bounds of the value the body returns.
+    std::optional<HirVhdlShapedProfile> shaped_result;
+    if (hir_vhdl_shaped_call_request_
+        && hir_vhdl_shaped_call_request_->first == expression_id.value()) {
+        shaped_result = std::move(hir_vhdl_shaped_call_request_->second);
+        hir_vhdl_shaped_call_request_.reset();
+    }
+    const auto type = shaped_result
+        ? std::optional { HirCallableType { 0U, shaped_result->element_domain,
+              shaped_result->element_signed, true, false,
+              shaped_result->type } }
+        : [&] {
+              const HirUnitSwap swap { *this, callee_unit };
+              return hir_callable_type(resolution->body, result_width,
+                  result_shape && result_shape->null_range);
+          }();
     const auto actuals = bind_hir_function_actuals(
         expression_id, resolution->body);
     const auto declaration = specialized_hir_unit_->find_declaration(
@@ -18356,6 +18367,9 @@ Lowerer::lower_hir_function_call_value(
         append_vhdl_element_constraint_key(
             callable_key, result_context->element_constraints);
     }
+    if (shaped_result) {
+        callable_key += "|vhdl-shaped-result";
+    }
     if (protected_members) {
         callable_key += "|protected:";
         for (const auto& member : *protected_members) {
@@ -18417,6 +18431,7 @@ Lowerer::lower_hir_function_call_value(
         frame.enclosing_callable_invocation_identity = lexical_parent;
         frame.type = *type;
         frame.vhdl_result_subtype = result_context;
+        frame.vhdl_shaped_result = shaped_result;
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
             frame.callee_unit = callee_unit;
@@ -22303,6 +22318,9 @@ bool Lowerer::lower_hir_callable_return(
         }
         return false;
     }
+    if (hir_callable_frames_[index].vhdl_shaped_result) {
+        return lower_hir_vhdl_shaped_return(index, *value);
+    }
     const auto type = hir_callable_frames_[index].type;
     if (type.container) {
         const auto result = hir_callable_frames_[index].container_result;
@@ -22940,6 +22958,75 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const SizeRestoreGuard generic_scope { hir_generic_binding_frames_ };
     for (const auto& environment : initial_frame->generic_environment) {
         hir_generic_binding_frames_.push_back(environment);
+    }
+    // An unconstrained formal has its actual's subtype in the body (IEEE
+    // 1076-2008 4.2.2.2), so names such as `d.msg'range` and constraints
+    // written with them resolve against this invocation's shapes.
+    if (declaration->vhdl != nullptr) {
+        semantic::CompiledBindingFrame formal_shapes;
+        const auto bind_formal_shape = [&](const std::uint32_t key) {
+            const auto formal_id = semantic::DeclarationId::from_index(key);
+            if (std::ranges::find(formal_shapes, formal_id,
+                    &semantic::CompiledActualBinding::formal)
+                != formal_shapes.end()) {
+                return;
+            }
+            const auto formal
+                = specialized_hir_unit_->find_declaration(formal_id);
+            if (!formal || formal->vhdl == nullptr
+                || !formal->vhdl->subtype) {
+                return;
+            }
+            auto subtype = *formal->vhdl->subtype;
+            const auto ranges
+                = initial_frame->vhdl_formal_ranges.find(key);
+            if (ranges != initial_frame->vhdl_formal_ranges.end()
+                && !ranges->second.empty()
+                && std::ranges::all_of(ranges->second,
+                    [](const auto& range) { return range.has_value(); })) {
+                std::erase_if(subtype.constraints,
+                    [](const semantic::vhdl::RangeConstraint& range) {
+                        return range.kind
+                            == semantic::vhdl::RangeKind::array_index;
+                    });
+                std::vector<semantic::vhdl::RangeConstraint> indexes;
+                for (const auto& range : ranges->second) {
+                    semantic::vhdl::RangeConstraint index;
+                    index.kind = semantic::vhdl::RangeKind::array_index;
+                    index.left = range->left;
+                    index.right = range->right;
+                    index.descending = range->descending;
+                    index.null = range->left != range->right
+                        && range->descending != (range->left > range->right);
+                    indexes.push_back(index);
+                }
+                subtype.constraints.insert(subtype.constraints.begin(),
+                    indexes.begin(), indexes.end());
+                subtype.unconstrained = false;
+                subtype.executable_width.reset();
+            }
+            const auto elements
+                = initial_frame->vhdl_formal_element_constraints.find(key);
+            if (elements
+                != initial_frame->vhdl_formal_element_constraints.end()) {
+                subtype.element_constraints = elements->second;
+            }
+            formal_shapes.push_back({ formal_id, { }, { }, { },
+                std::move(subtype) });
+        };
+        for (const auto& entry : initial_frame->vhdl_formal_ranges) {
+            bind_formal_shape(entry.first);
+        }
+        for (const auto& entry :
+            initial_frame->vhdl_formal_element_constraints) {
+            bind_formal_shape(entry.first);
+        }
+        // Beneath the frame of the body's generics, which stays the last
+        // frame: calls in the body take that one as their generic bindings,
+        // and must not inherit these.
+        if (!formal_shapes.empty()) {
+            hir_generic_binding_frames_.push_back(std::move(formal_shapes));
+        }
     }
     hir_generic_binding_frames_.push_back(
         initial_frame->generic_bindings);

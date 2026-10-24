@@ -1948,30 +1948,53 @@ std::optional<DynamicPartIndex> Lowerer::lower_hir_vhdl_dynamic_slice(
         left = widen_enumeration_ordinal(*left);
         right = widen_enumeration_ordinal(*right);
     }
+    return lower_hir_vhdl_dynamic_part(
+        *range, *left, *right, source_width, selected_width, base_offset);
+}
+
+std::optional<DynamicPartIndex> Lowerer::lower_hir_vhdl_dynamic_part(
+    const HirPackedRange& range, RegisterId left, RegisterId right,
+    const std::size_t source_width, const std::size_t selected_width,
+    const std::uint32_t base_offset)
+{
+    const auto range_width = index_distance(range.left, range.right) + 1U;
+    const auto element_width = source_width % range_width == 0U
+        ? source_width / range_width
+        : 0U;
+    const auto selected_elements = element_width != 0U
+            && selected_width % element_width == 0U
+        ? selected_width / element_width
+        : 0U;
+    if (element_width == 0U || selected_elements == 0U
+        || source_width - 1U
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())) {
+        return std::nullopt;
+    }
     const auto arithmetic_width = std::max<std::size_t>(
-        { register_width(*left), register_width(*right), 32U });
-    if (register_width(*left) != arithmetic_width) {
-        left = resize_register(*left, arithmetic_width, true);
+        { register_width(left), register_width(right), 32U });
+    if (register_width(left) != arithmetic_width) {
+        left = resize_register(left, arithmetic_width, true);
     }
-    if (register_width(*right) != arithmetic_width) {
-        right = resize_register(*right, arithmetic_width, true);
+    if (register_width(right) != arithmetic_width) {
+        right = resize_register(right, arithmetic_width, true);
     }
-    const auto lower = std::min(range->left, range->right);
-    const auto upper = std::max(range->left, range->right);
+    const auto lower = std::min(range.left, range.right);
+    const auto upper = std::max(range.left, range.right);
     process_.operations.emplace_back(IntegerCheck {
-        *left, lower, upper });
+        left, lower, upper });
     process_.operations.emplace_back(IntegerCheck {
-        *right, lower, upper });
+        right, lower, upper });
     const auto right_bound = load_integer(
-        range->right, arithmetic_width, frontend::ValueDomain::Integer);
+        range.right, arithmetic_width, frontend::ValueDomain::Integer);
     const auto normalize = [&](const RegisterId value) {
         const auto ordinal = allocate_register(
             arithmetic_width, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(IntegerBinary {
             IntegerBinaryOperator::subtract,
             ordinal,
-            range->descending ? value : right_bound,
-            range->descending ? right_bound : value,
+            range.descending ? value : right_bound,
+            range.descending ? right_bound : value,
         });
         process_.operations.emplace_back(IntegerCheck {
             ordinal,
@@ -1980,8 +2003,8 @@ std::optional<DynamicPartIndex> Lowerer::lower_hir_vhdl_dynamic_slice(
         });
         return resize_register(ordinal, 32U, true);
     };
-    const auto normalized_left = normalize(*left);
-    const auto normalized_right = normalize(*right);
+    const auto normalized_left = normalize(left);
+    const auto normalized_right = normalize(right);
     const auto distance = allocate_register(
         32U, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(IntegerBinary {
@@ -5265,6 +5288,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         }
         return domain;
     };
+    // FSIM_VHDL_AGGREGATE_TRACE names why an aggregate was rejected without
+    // a diagnostic.
+    const auto trace_aggregate_rejection = [&](const std::string& reason) {
+        if (std::getenv("FSIM_VHDL_AGGREGATE_TRACE") != nullptr) {
+            std::cerr << "[fsim-vhdl-aggregate] " << expression_id.value()
+                      << ": " << reason << '\n';
+        }
+    };
     const auto lower_value = [&](
                                  const semantic::ExpressionId value,
                                  const semantic::vhdl::SubtypeIndication& subtype,
@@ -5554,6 +5585,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             return std::nullopt;
         }
         if (domain == frontend::ValueDomain::Unknown) {
+            trace_aggregate_rejection("element storage domain is unknown");
             return std::nullopt;
         }
         if (register_domain(*lowered) != domain) {
@@ -5612,6 +5644,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     const auto aggregate_domain = aggregate_storage_domain(
         *effective, definition);
     if (aggregate_domain == frontend::ValueDomain::Unknown) {
+        trace_aggregate_rejection("aggregate storage domain is unknown");
         return std::nullopt;
     }
 
@@ -5627,6 +5660,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 semantic::vhdl::constrained_element_subtype(
                     *effective, elements[index].name,
                     elements[index].subtype));
+            // A range whose direction is still taken from its bounds runs
+            // from left to right, so it is not null.
             null_element[index] = subtype
                 && std::ranges::any_of(subtype->constraints,
                     [](const semantic::vhdl::RangeConstraint& range) {
@@ -5634,6 +5669,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                                 == semantic::vhdl::RangeKind::array_index
                             && (range.null
                                 || (range.left && range.right
+                                    && !range.direction_from_bounds
                                     && (range.descending
                                             ? *range.left < *range.right
                                             : *range.left > *range.right)));
@@ -5772,6 +5808,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             if (!width || *width > remaining
                 || remaining - *width
                     > std::numeric_limits<std::uint32_t>::max()) {
+                trace_aggregate_rejection("record element '"
+                    + elements[index].name + "' has no layout in "
+                    + std::to_string(remaining) + " remaining bits");
                 return std::nullopt;
             }
             remaining -= *width;
@@ -5783,6 +5822,28 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
             });
         }
         if (remaining != 0U) {
+            std::string ranges;
+            for (std::size_t index = 0U; index < elements.size(); ++index) {
+                const auto subtype = hir_effective_vhdl_subtype(
+                    semantic::vhdl::constrained_element_subtype(
+                        *effective, elements[index].name,
+                        elements[index].subtype));
+                ranges += " " + elements[index].name + "=";
+                for (const auto& range :
+                    subtype ? subtype->constraints
+                            : std::vector<semantic::vhdl::RangeConstraint> { }) {
+                    ranges += "[" + (range.left ? std::to_string(*range.left)
+                                                : std::string { "?" })
+                        + (range.descending ? " downto " : " to ")
+                        + (range.right ? std::to_string(*range.right)
+                                       : std::string { "?" })
+                        + (range.null ? " null" : "")
+                        + (range.direction_from_bounds ? " from-bounds" : "")
+                        + "]";
+                }
+            }
+            trace_aggregate_rejection("record elements leave "
+                + std::to_string(remaining) + " bits unfilled;" + ranges);
             return std::nullopt;
         }
         return destination;
@@ -11357,6 +11418,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const frontend::SystemVerilogScalarKind scalar_context,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context)
 {
+    if (auto shaped = lower_hir_vhdl_shaped_range_use(
+            expression_id, expected_width)) {
+        return *shaped;
+    }
     if (hir_vhdl_shaped_active()) {
         if (auto shaped = lower_hir_vhdl_shaped_expression(
                 expression_id, expected_width)) {
@@ -27431,7 +27496,21 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
             }
         }
     } else {
+        // TO_STRING of an array of run-time length (5.7).
+        if (!image_quotes) {
+            if (const auto image = lower_hir_vhdl_shaped_image(
+                    value_id, false)) {
+                return image;
+            }
+        }
         subtype = hir_vhdl_expression_subtype(value_id);
+        // An element of an array of run-time length has its element subtype.
+        if (!subtype && hir_vhdl_shaped_active()) {
+            if (const auto access = hir_vhdl_shaped_access(value_id);
+                access && !access->leaf) {
+                subtype = access->local->profile.element_subtype;
+            }
+        }
     }
     if (!type_id && subtype) {
         if (!subtype->type_mark.spelling.empty()) {
@@ -28843,6 +28922,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     }
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
         return lower_hir_string_expression(*target, contextual_subtype);
+    }
+    // A STRING of run-time length (5.3.2.2).
+    if (const auto text = lower_hir_vhdl_shaped_image(expression_id, true)) {
+        return text;
     }
     // An allocator or null as a STD.TEXTIO.LINE value (16.4).
     if (const auto line = lower_hir_vhdl_line_value(expression_id)) {

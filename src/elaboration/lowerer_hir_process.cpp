@@ -4221,6 +4221,7 @@ void Lowerer::reset_hir_process_state()
     hir_virtual_interface_writes_.clear();
     hir_vhdl_shaped_locals_.clear();
     hir_vhdl_shaped_heap_views_.clear();
+    hir_vhdl_shaped_member_views_.clear();
     hir_vhdl_shaped_heap_profiles_.clear();
     hir_vhdl_access_heaps_.clear();
     hir_vhdl_shaped_active_unit_ = nullptr;

@@ -616,14 +616,20 @@ enum class VhdlShapedOperation : std::uint8_t {
     query,
     // value := source(operands...), each index checked (8.4). With
     // `inner`, the trailing operands index the element's own statically
-    // shaped dimensions and the result is a `width`-bit leaf.
+    // shaped dimensions and the result is a `width`-bit leaf. Fewer
+    // operands than dimensions select a subarray (the element of an array
+    // of arrays): into `target`, keeping the remaining ranges, when target
+    // is not source; otherwise into value, which must be `width` bits.
     element_read,
     // target(operands...) := value, addressed as for element_read.
     element_write,
-    // value := the payload of source, which must be `width` bits.
+    // value := the payload of source, which must be `width` bits. A record
+    // source (an aggregate value of packed and shaped elements) yields its
+    // elements' payloads in order, the first most significant.
     to_packed,
     // target keeps its bounds; its payload := value, of equal length
-    // (10.6.2.1).
+    // (10.6.2.1). A record target takes its elements' payloads from value
+    // in that order.
     from_packed,
     // target keeps its bounds; its payload := source's, every dimension of
     // equal length (10.6.2.1, 14.7.3.4).

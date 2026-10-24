@@ -253,6 +253,68 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 95: shaped records, shaped function results, formal shapes
+
+Batch 95 closes the three nvc cases that need VHDL values whose index
+ranges are known only at run time. Against `b94w1`, the live tree gains 3
+cases and loses none:
+- nvc 3: issue1576, range1, record33.
+
+The first sweep with the frozen binary `b95a` lost nvc issue858. The
+formal-shape bindings sat in a frame above the body's generic frame, and
+calls in the body take the last frame as their generic bindings, so they
+lost the generic types. Merging the bindings into the generic frame
+(`b95b`) made recursive calls inherit them, and vhdl-compliance tb_041
+timed out. The bindings now sit in a frame beneath the generic frame
+(`b95c`), and that sweep is clean. ivtest pow_reg_signed has passed since the
+efficiency batches.
+
+| Suite | Batch94 passes / in scope | Batch95 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2634 / 2635 | 2634 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2059 / 2064 | 2059 / 2064 | 351 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1254 / 1261 | 1257 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+VHDL:
+- **Shaped records.** A record with an element of an unconstrained array
+  type, designated by an access value, is an aggregate container with one
+  member per element: a packed value for a static element, and a shaped
+  container for an open one (IEEE 1076-2008 5.3.3).
+  - `new T` with a record constraint and `new T'(v)` take each open
+    element's ranges from the constraint or the value (9.3.7).
+  - The following work on such records:
+    - element reads and writes, whole or by index (`c.data(i)(j)`);
+    - attributes of an element (`c.data'length`);
+    - whole-record copies;
+    - CHARACTER and STRING elements, including their images.
+- **Arrays of open arrays.** An element of `array (natural range <>) of
+  bit_vector` is a row of run-time length. A row can be read, written,
+  compared, converted with TO_STRING and queried with attributes.
+- **Aggregates of arrays of open arrays.** Such an aggregate takes its
+  element bounds from its first element value (9.3.3.3).
+- **Shaped function results.** A call of a function with an unconstrained
+  array result whose bounds no static proof gives returns a shaped value.
+  The bounds are those of the returned value (4.2.1).
+  - `f(x)'left`, `'right`, `'low`, `'high`, `'length` and `'ascending`
+    evaluate the call and read the result's range.
+  - These attributes used to read a guessed range of 0 to the context
+    width silently; they now give the correct value.
+  - The validator accepts a call written with an operator symbol
+    (`"+"(a, b)'range`) as an attribute prefix.
+- **Slices by run-time ranges.** `a(r'range)` and `a(r'reverse_range)`,
+  where r is a shaped object or such a call, select from the packed array
+  a between r's bounds. The slice's direction and length are checked (8.5).
+- **Formal shapes.** In a subprogram body, an unconstrained formal has its
+  actual's subtype. Names such as `d.msg'range`, and constraints written
+  with them, resolve against the call's shapes (4.2.2.2).
+  - A dotted range prefix (`d.msg'range`) resolves its object first.
+
+Trace variables: `FSIM_VHDL_SHAPE_TRACE` and `FSIM_HIR_LOWER_TRACE_FAILURES`
+now trace the shaped-record rejections.
+
 ### Efficiency audit batches A-F (after Batch 94)
 
 The owner asked for the efficiency audit's suggestions before more closure

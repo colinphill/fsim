@@ -523,10 +523,14 @@ private:
         }
         // A direct call returning an unconstrained array is only a candidate
         // for contextual range deferral here. The lowerer must still prove
-        // the call's concrete result shape before emitting the attribute.
+        // the call's concrete result shape before emitting the attribute,
+        // or read it from the result at run time. An operator a user
+        // function overloads (`"+"(a, b)`) is such a call too.
         if (prefix && prefix->vhdl != nullptr
-            && prefix->vhdl->kind
-                == semantic::vhdl::ExpressionKind::call
+            && (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                || prefix->vhdl->kind == semantic::vhdl::ExpressionKind::unary
+                || prefix->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::binary)
             && prefix->vhdl->referenced_name
             && prefix->vhdl->referenced_name->selected) {
             const auto function = specialization_.find_declaration(
