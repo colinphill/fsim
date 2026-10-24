@@ -1569,6 +1569,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::size_t capacity { };
         std::deque<PackedLogic4> entries;
         std::deque<std::string> string_entries;
+        // The bytes of the strings in `string_entries`.
+        std::size_t string_bytes { };
         std::deque<MailboxReader> readers;
         std::deque<MailboxWriter> writers;
     };
@@ -4244,6 +4246,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process, ContainerRegisterId id);
     [[nodiscard]] const ContainerValue& read_container_register(
         const ProcessState& process, ContainerRegisterId id) const;
+    // The bits of a one-bit queue as one value, its first bit most
+    // significant (a DPI open-array actual of run-time size).
+    [[nodiscard]] static PackedLogic4 bit_stream_value(
+        const ContainerValue& bits)
+    {
+        PackedLogic4 value(bits.elements.size(), Logic4::zero);
+        for (std::size_t index { }; index < bits.elements.size(); ++index) {
+            value.set(bits.elements.size() - 1U - index,
+                bits.elements[index].get(0U));
+        }
+        return value;
+    }
     [[nodiscard]] SharedContainerValue container_register_storage(
         const ProcessState& process, ContainerRegisterId id) const;
     void set_container_register_storage(
@@ -5280,6 +5294,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Run a signal's conversion-driver programs and assign their results to
     // the stub drivers; true when the signal has any.
     bool run_vhdl_conversion_drivers(SignalId signal_id, bool initializing);
+    // Set the driving-value mirror of an inout formal whose effective value
+    // its resolver program converts from the actual: its drivers' value, or
+    // its default without one. False when the mirror keeps its value.
+    bool publish_vhdl_formal_driving_value(
+        SignalId signal_id, bool initializing);
     // `@vhdl-disconnect:<signal>:<delay>`: a null transaction on the
     // calling process's driver. Returns false for other identities.
     bool try_vhdl_disconnect_call(

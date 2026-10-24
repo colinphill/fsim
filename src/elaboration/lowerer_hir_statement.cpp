@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_internal.hpp"
+#include "hierarchy_sv_type_layout_internal.hpp"
 #include "hir_output_conversion.hpp"
 #include "vhdl_hir_type_validation.hpp"
 
@@ -109,6 +110,35 @@ Lowerer::SizedIntegralComparison Lowerer::size_integral_comparison(
     };
 }
 
+std::optional<std::size_t> Lowerer::hir_tagged_union_aggregate_member(
+    const semantic::sv::Expression& expression, const ContainerType& type)
+{
+    constexpr std::string_view prefix { "@sv-tagged:" };
+    if (expression.kind != semantic::sv::ExpressionKind::call
+        || !expression.text.starts_with(prefix)
+        || expression.operands.size() != 1U
+        || !hir_tagged_union_aggregate(type)) {
+        return std::nullopt;
+    }
+    const auto name = std::string_view { expression.text }.substr(
+        prefix.size());
+    const auto found = std::find(
+        std::next(type.member_names.begin()), type.member_names.end(), name);
+    return found == type.member_names.end()
+        ? std::nullopt
+        : std::optional { static_cast<std::size_t>(
+              std::distance(type.member_names.begin(), found)) };
+}
+
+bool Lowerer::hir_tagged_union_aggregate(const ContainerType& type)
+{
+    return type.element_kind == ContainerElementKind::Aggregate
+        && !type.member_names.empty()
+        && type.member_names.front()
+            == hierarchy_sv_type_layout_detail::
+                systemverilog_tagged_union_tag_member;
+}
+
 std::optional<ContainerRegisterId>
 Lowerer::lower_hir_container_assignment_pattern(
     const semantic::ExpressionId expression_id,
@@ -123,7 +153,9 @@ Lowerer::lower_hir_container_assignment_pattern(
     }
     const auto root_span = hir_source_span(root->systemverilog->source);
     if (root->systemverilog->kind
-        != semantic::sv::ExpressionKind::assignment_pattern) {
+            != semantic::sv::ExpressionKind::assignment_pattern
+        && !hir_tagged_union_aggregate_member(
+            *root->systemverilog, *target.type)) {
         return std::nullopt;
     }
     const auto& root_pattern = *root->systemverilog;
@@ -218,9 +250,18 @@ Lowerer::lower_hir_container_assignment_pattern(
         const auto& source = *expression->systemverilog;
         const bool pattern = source.kind
             == semantic::sv::ExpressionKind::assignment_pattern;
+        // `tagged M (e)` of an unpacked tagged union sets the tag and member
+        // M (IEEE 1800-2023 7.3.2, 11.9).
+        const auto tagged_member = hir_tagged_union_aggregate_member(
+            source, aggregate);
+        if (!pattern && !tagged_member && source.kind
+                == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-tagged:")) {
+            return false;
+        }
         // A structure value (`'{default: s}`) is assigned whole (IEEE
         // 1800-2017 10.9.2).
-        if (!pattern) {
+        if (!pattern && !tagged_member) {
             const auto boxed
                 = runtime::simir::nested_element_container_type(aggregate);
             if (boxed
@@ -244,7 +285,21 @@ Lowerer::lower_hir_container_assignment_pattern(
         // Substructure members that take the pattern's keys again.
         std::vector<bool> inherit(values.size());
         std::optional<semantic::ExpressionId> pattern_default;
-        if (!pattern) {
+        if (tagged_member) {
+            auto tag_path = path;
+            tag_path.push_back(0U);
+            process_.operations.emplace_back(ContainerAggregateWrite {
+                output,
+                index,
+                load_integer(static_cast<std::int64_t>(*tagged_member - 1U),
+                    aggregate.element_types.front().element_width,
+                    frontend::ValueDomain::Logic4),
+                std::move(tag_path),
+                signed_index,
+                linear_index,
+            });
+            values[*tagged_member] = source.operands.front();
+        } else if (!pattern) {
             const auto count = aggregate.union_aggregate
                 ? std::size_t { 1U }
                 : values.size();
@@ -472,8 +527,11 @@ Lowerer::lower_hir_container_assignment_pattern(
             pattern_default = default_value;
         }
         for (std::size_t member { }; member < values.size(); ++member) {
+            if (tagged_member && member == 0U) {
+                continue;
+            }
             if (!values[member]) {
-                if (aggregate.union_aggregate) {
+                if (aggregate.union_aggregate || tagged_member) {
                     continue;
                 }
                 report(
@@ -2730,6 +2788,19 @@ bool Lowerer::lower_hir_statement(
         }
         return lowered;
     };
+    // A VHDL wait, or a procedure that may wait, lets other processes
+    // change the shared heaps.
+    if (statement->vhdl != nullptr
+        && (statement->vhdl->kind
+                == semantic::vhdl::StatementKind::wait_statement
+            || statement->vhdl->kind
+                == semantic::vhdl::StatementKind::procedure_call)
+        && hir_vhdl_shared_access_heaps_active()) {
+        store_hir_vhdl_shared_access_heaps();
+        const auto lowered = lower_hir_statement_unsuspended(statement_id);
+        reload_hir_vhdl_shared_access_heaps();
+        return notify(lowered);
+    }
     if (!suspends) {
         return notify(lower_hir_statement_unsuspended(statement_id));
     }
@@ -6520,8 +6591,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (statement->systemverilog != nullptr
             && container && container_value_expression
             && container_value_expression->systemverilog != nullptr
-            && container_value_expression->systemverilog->kind
-                == semantic::sv::ExpressionKind::assignment_pattern) {
+            && (container_value_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::assignment_pattern
+                || (container->type != nullptr
+                    && hir_tagged_union_aggregate_member(
+                        *container_value_expression->systemverilog,
+                        *container->type)))) {
             const auto& input = *statement->systemverilog;
             // A time-free continuous assignment writes as its process
             // evaluates (10.3); a nonblocking one publishes the whole value
@@ -8213,9 +8288,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 if (const auto pattern
                     = specialized_hir_unit_->find_expression(*value);
                     pattern && pattern->systemverilog != nullptr
-                    && pattern->systemverilog->kind
-                        == semantic::sv::ExpressionKind::assignment_pattern
-                    && element->type != nullptr) {
+                    && element->type != nullptr
+                    && (pattern->systemverilog->kind
+                            == semantic::sv::ExpressionKind::assignment_pattern
+                        || (element->selected_type != nullptr
+                            && hir_tagged_union_aggregate_member(
+                                *pattern->systemverilog,
+                                *element->selected_type)))) {
                     const auto target_index
                         = lower_hir_container_element_index(*element);
                     if (!target_index) {
@@ -10706,44 +10785,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
             if (!signal_assignment && !nonblocking
                 && string_binding->kind == HirStringBindingKind::local
                 && string_binding->local) {
-                const auto allocator = specialized_hir_unit_->find_expression(
-                    *value);
-                const auto subtype = allocator && allocator->vhdl != nullptr
-                        && allocator->vhdl->text == "@vhdl-new"
-                        && allocator->vhdl->operands.size() == 1U
-                    ? specialized_hir_unit_->find_expression(
-                          allocator->vhdl->operands.front())
-                    : std::nullopt;
-                const auto bound = subtype && subtype->vhdl != nullptr
-                        && subtype->vhdl->operands.size() == 1U
-                    ? specialized_hir_unit_->find_expression(
-                          subtype->vhdl->operands.front())
-                    : std::nullopt;
-                if (bound && bound->vhdl != nullptr
-                    && bound->vhdl->kind
-                        == semantic::vhdl::ExpressionKind::binary
-                    && (bound->vhdl->text == "to"
-                        || bound->vhdl->text == "downto")
-                    && bound->vhdl->operands.size() == 2U) {
-                    const auto left
-                        = hir_constant_integer(bound->vhdl->operands[0]);
-                    const auto right
-                        = hir_constant_integer(bound->vhdl->operands[1]);
-                    if (left && right) {
-                        const auto descending = bound->vhdl->text == "downto";
-                        const auto count = descending
-                            ? (*left >= *right ? *left - *right + 1 : 0)
-                            : (*right >= *left ? *right - *left + 1 : 0);
-                        if (count <= (std::int64_t { 1 } << 24)) {
-                            process_.operations.emplace_back(
-                                LoadStringConstant {
-                                    *string_binding->local,
-                                    std::string(
-                                        static_cast<std::size_t>(count),
-                                        '\0') });
-                            return true;
-                        }
+                if (hir_vhdl_line_allocator_length(*value)) {
+                    const auto allocated = lower_hir_vhdl_line_value(*value);
+                    if (!allocated) {
+                        return false;
                     }
+                    process_.operations.emplace_back(CopyStringRegister {
+                        *string_binding->local, *allocated });
+                    return true;
                 }
             }
             // A concatenation of integral operands and string literals is
@@ -13544,6 +13593,43 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return true;
         }
+        // A signal formal associated in parts: each part of the written bits
+        // goes to its actual signal (IEEE 1076-2008 6.5.7.1).
+        if (!binding->signal && !binding->signal_parts.empty()
+            && vhdl_projected_assignment && !index && !slice
+            && !dynamic_selection && !dynamic_vhdl_selection) {
+            const auto low = constant_selection ? constant_selection->offset
+                                                : std::size_t { };
+            const auto high = low + register_width(*lowered);
+            for (std::size_t part_index { };
+                part_index < binding->signal_parts.size(); ++part_index) {
+                const auto& part = binding->signal_parts[part_index];
+                const auto part_low = binding->signal_part_offsets[part_index];
+                const auto first = std::max(low, part_low);
+                const auto last = std::min(high, part_low + part.width);
+                if (first >= last) {
+                    continue;
+                }
+                const auto bits = allocate_register(last - first, part.domain);
+                process_.operations.emplace_back(Extract {
+                    bits, *lowered, static_cast<std::uint32_t>(first - low),
+                    static_cast<std::uint32_t>(last - first) });
+                const auto offset = (part.signal_selection
+                        ? part.signal_selection->offset
+                        : std::size_t { })
+                    + (first - part_low);
+                process_.operations.emplace_back(WriteProjectedSlice {
+                    *part.signal,
+                    bits,
+                    static_cast<std::uint32_t>(offset),
+                    vhdl_projected_assignment->delay,
+                    vhdl_projected_assignment->rejection,
+                    vhdl_projected_assignment->mode,
+                });
+                record_readonly_vhdl_output_write(part);
+            }
+            return true;
+        }
         if (!binding->signal) {
             trace_assignment_failure("signal-binding");
             return assignment_rejected(__LINE__);
@@ -14438,8 +14524,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return true;
         }
-        const auto selector_width = hir_expression_width(
-            *condition, hir_process_scope_);
+        // An unpacked tagged union is matched by its tag and members in
+        // place (IEEE 1800-2023 12.6.1).
+        const auto aggregate_selector = pattern_matching
+            ? hir_container_object_binding(*condition)
+            : std::nullopt;
+        const bool tagged_aggregate_selector = aggregate_selector
+            && aggregate_selector->type != nullptr
+            && hir_tagged_union_aggregate(*aggregate_selector->type);
+        const auto selector_width = tagged_aggregate_selector
+            ? std::optional<std::size_t> { 1U }
+            : hir_expression_width(*condition, hir_process_scope_);
         if (!selector_width || *selector_width == 0U) {
             trace_case_failure("selector-width", *condition);
             if (inside_matching || pattern_matching) {
@@ -16419,7 +16514,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 }
             }
         }
-        const auto selector = selector_is_predefined_string
+        const auto selector = tagged_aggregate_selector
+            ? std::optional { load_constant(
+                  unsigned_value(0U, 1U), frontend::ValueDomain::Bit2) }
+            : selector_is_predefined_string
             ? lower_hir_string_to_packed(
                   *condition, *selector_width,
                   selector_subtype ? &*selector_subtype : nullptr)
@@ -16559,14 +16657,34 @@ bool Lowerer::lower_hir_statement_unsuspended(
             };
             bool signed_value { };
             std::optional<semantic::sv::TypeReference> type;
+            // An unpacked tagged union, or a string or unpacked member of
+            // one, held in a container or string register.
+            std::optional<StringRegisterId> string { };
+            std::optional<ContainerRegisterId> container { };
+            std::shared_ptr<const ContainerType> container_type { };
         };
-        const PatternOperand root_pattern_operand {
+        PatternOperand root_pattern_operand {
             *selector,
             register_width(*selector),
             register_domain(*selector),
             hir_expression_signed(*condition),
             selector_type,
         };
+        if (tagged_aggregate_selector) {
+            root_pattern_operand.container_type
+                = std::make_shared<const ContainerType>(
+                    *aggregate_selector->type);
+            if (aggregate_selector->local) {
+                root_pattern_operand.container = *aggregate_selector->local;
+            } else {
+                root_pattern_operand.container = allocate_container_register(
+                    *aggregate_selector->type);
+                process_.operations.emplace_back(ReadContainerObject {
+                    *root_pattern_operand.container,
+                    aggregate_selector->object });
+                record_container_object_dependency(aggregate_selector->object);
+            }
+        }
         const auto type_definition = [&](const PatternOperand& operand)
             -> const semantic::sv::TypeDefinition* {
             if (!operand.type) {
@@ -16708,6 +16826,103 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 member.type.signed_value,
                 member.type,
             };
+        };
+        // `tagged M [p]` of an unpacked tagged union: the tag selects M, and
+        // p matches M's value (IEEE 1800-2023 12.6.1).
+        const auto lower_tagged_aggregate_pattern = [&](
+                                                        const semantic::sv::Expression& pattern,
+                                                        const PatternOperand& operand,
+                                                        const auto& lower)
+            -> std::optional<LoweredChoice> {
+            const auto& aggregate = *operand.container_type;
+            const auto member_name = std::string_view { pattern.text }.substr(
+                std::string_view { "@match-tagged:" }.size());
+            const auto found = std::find(std::next(aggregate.member_names.begin()),
+                aggregate.member_names.end(), member_name);
+            if (found == aggregate.member_names.end()
+                || pattern.operands.size() > 1U) {
+                report(
+                    "FSIM-ELAB-SVMATCH-008",
+                    "tagged case pattern names unknown member '"
+                        + std::string { member_name } + "'",
+                    hir_source_span(pattern.source));
+                return LoweredChoice { make_false(), { } };
+            }
+            const auto member = static_cast<std::uint32_t>(
+                std::distance(aggregate.member_names.begin(), found));
+            const auto zero = load_constant(
+                unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
+            const auto tag_width = aggregate.element_types.front().element_width;
+            const auto tag = allocate_register(
+                tag_width, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ContainerAggregateRead {
+                tag, *operand.container, zero, { 0U } });
+            const auto tag_matches = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal,
+                tag_matches,
+                tag,
+                load_constant(unsigned_value(member - 1U, tag_width),
+                    frontend::ValueDomain::Logic4),
+            });
+            const auto payload = pattern.operands.empty()
+                ? std::nullopt
+                : specialized_hir_unit_->find_expression(
+                      pattern.operands.front());
+            if (pattern.operands.empty()
+                || (payload && payload->systemverilog != nullptr
+                    && payload->systemverilog->text == "@match-wildcard")) {
+                return LoweredChoice { tag_matches, { } };
+            }
+            const auto& member_type = aggregate.element_types[member];
+            PatternOperand member_operand;
+            if (const auto* type = type_definition(operand);
+                type != nullptr && member - 1U < type->members.size()) {
+                member_operand.type = type->members[member - 1U].type;
+            }
+            const bool single = member_type.fixed
+                && member_type.dimensions.size() == 1U
+                && member_type.dimensions.front().first
+                    == member_type.dimensions.front().second;
+            if (single && member_type.element_width != 0U
+                && (member_type.element_kind == ContainerElementKind::Packed
+                    || member_type.element_kind
+                        == ContainerElementKind::Scalar)) {
+                member_operand.domain = member_type.two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+                member_operand.width = member_type.element_width;
+                member_operand.signed_value = member_type.signed_elements;
+                member_operand.value = allocate_register(
+                    member_operand.width, member_operand.domain);
+                process_.operations.emplace_back(ContainerAggregateRead {
+                    member_operand.value, *operand.container, zero,
+                    { member } });
+            } else if (single
+                && member_type.element_kind == ContainerElementKind::String) {
+                member_operand.string = allocate_string_register();
+                ContainerStringRead read;
+                read.destination = *member_operand.string;
+                read.source = *operand.container;
+                read.index = zero;
+                read.members = { member };
+                process_.operations.emplace_back(std::move(read));
+            } else {
+                member_operand.container
+                    = allocate_container_register(member_type);
+                member_operand.container_type
+                    = std::make_shared<const ContainerType>(member_type);
+                process_.operations.emplace_back(ContainerElementRead {
+                    *member_operand.container, *operand.container, zero,
+                    true, { member } });
+            }
+            auto nested = lower(pattern.operands.front(), member_operand, lower);
+            if (!nested) {
+                return std::nullopt;
+            }
+            nested->matched = combine_matches(tag_matches, nested->matched);
+            return nested;
         };
         const auto lower_choice = [&](const semantic::ExpressionId choice,
                                       const PatternOperand& operand,
@@ -16994,11 +17209,37 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             operand.domain,
                             operand.signed_value,
                             operand.type,
+                            operand.string,
+                            operand.container,
+                            operand.container_type,
                         } },
                     };
                 }
                 constexpr auto tagged_prefix
                     = std::string_view { "@match-tagged:" };
+                // A string or unpacked value matches a binding or a
+                // wildcard only.
+                if (operand.string
+                    || (operand.container
+                        && !(pattern.kind
+                                == semantic::sv::ExpressionKind::call
+                            && pattern.text.starts_with(tagged_prefix)
+                            && operand.container_type
+                            && hir_tagged_union_aggregate(
+                                *operand.container_type)))) {
+                    report(
+                        "FSIM-ELAB-SVMATCH-008",
+                        "a string or unpacked tagged-union member matches "
+                        "only an identifier or wildcard pattern",
+                        hir_source_span(pattern.source));
+                    return LoweredChoice { make_false(), { } };
+                }
+                if (pattern.kind == semantic::sv::ExpressionKind::call
+                    && pattern.text.starts_with(tagged_prefix)
+                    && operand.container) {
+                    return lower_tagged_aggregate_pattern(
+                        pattern, operand, self);
+                }
                 if (pattern.kind == semantic::sv::ExpressionKind::call
                     && pattern.text.starts_with(tagged_prefix)) {
                     const auto* type = type_definition(operand);
@@ -19840,8 +20081,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     integer_value(
                         iteration_value,
                         register_width(*vhdl_loop_parameter)) });
+                hir_static_loop_values_.emplace_back(
+                    *vhdl_loop_declaration, iteration_value);
             }
-            if (!lower_hir_statements(statements)) {
+            const bool lowered = lower_hir_statements(statements);
+            if (vhdl_loop_parameter && vhdl_loop_initial) {
+                hir_static_loop_values_.pop_back();
+            }
+            if (!lowered) {
                 loop_controls_.pop_back();
                 restore_scope();
                 return false;

@@ -226,6 +226,12 @@ class Resolver final {
   // typedef visible from the compilation unit.
   [[nodiscard]] std::optional<Type> packed_member_type(
       const Type& type, std::string_view member) const;
+  // The member of a structure or union type, by name.
+  [[nodiscard]] const PackedMember* structure_member(
+      const Type& type, std::string_view member) const;
+  // The class type of a structure or union member holding a class handle.
+  [[nodiscard]] std::optional<Type> structure_member_class_type(
+      const Type& type, std::string_view member, const Scope& scope) const;
   [[nodiscard]] static std::string_view trim_type_spelling(
       std::string_view spelling);
   [[nodiscard]] Type selected_type_actual(

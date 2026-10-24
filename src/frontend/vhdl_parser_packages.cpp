@@ -682,6 +682,33 @@ PackageInstantiation VhdlParser::parse_vhdl_package_instantiation(
     return result;
 }
 
+std::vector<std::string> vhdl_ieee_intrinsic_package_declarations(
+    const std::string_view package) {
+  if (package == "fixed_generic_pkg" || package == "fixed_pkg") {
+    return {
+        "ufixed", "sfixed", "fixed_round_style", "fixed_overflow_style",
+        "fixed_round", "fixed_truncate", "fixed_saturate", "fixed_wrap",
+        "to_ufixed", "to_sfixed", "resize", "from_string",
+        "from_bstring", "from_binary_string", "+", "-", "*", "/", "rem",
+        "mod", "=", "/=", "<", "<=", ">", ">=",
+    };
+  }
+  if (package == "float_generic_pkg" || package == "float_pkg") {
+    return {
+        "float", "unresolved_float", "float32", "valid_fpstate",
+        "float_exponent_width", "float_fraction_width",
+        "float_round_style", "float_denormalize", "float_check_error",
+        "to_float", "to_slv", "to_integer", "classfp", "finite", "isnan",
+        "unordered", "is_negative", "zerofp", "neg_zerofp", "nanfp",
+        "qnanfp", "pos_inffp", "neg_inffp", "add", "subtract",
+        "multiply", "divide", "sqrt", "eq", "ne", "lt", "le", "gt", "ge",
+        "to_real", "abs", "+", "-", "*", "/", "=", "/=", "<", "<=", ">",
+        ">=",
+    };
+  }
+  return { };
+}
+
 bool VhdlParser::expand_vhdl_library_package_instance() {
   auto& tokens = tokens_;
   const auto start = position();
@@ -838,6 +865,41 @@ bool VhdlParser::expand_vhdl_library_package_instance() {
         && word(cursor + 3U, "generic")) {
       declaration = cursor;
     }
+  }
+  // An instance of IEEE fixed_generic_pkg or float_generic_pkg with its
+  // default generics is the compiler-intrinsic package under the instance
+  // name, as ieee.fixed_pkg and ieee.float_pkg are (IEEE 1076-2019 G.4).
+  if (!declaration && name_parts.size() == 2U && name_parts[0] == "ieee"
+      && associations.empty()
+      && !vhdl_ieee_intrinsic_package_declarations(template_name).empty()) {
+    const auto make = [&](const TokenKind token_kind, std::string text) {
+      return Token { token_kind, std::move(text), instance_token.span, { },
+          { } };
+    };
+    const auto instance = detail::ascii_lower(instance_token.text);
+    const std::vector<Token> expanded {
+      make(TokenKind::Identifier, "package"),
+      make(TokenKind::Identifier, instance_token.text),
+      make(TokenKind::Identifier, "is"),
+      make(TokenKind::Identifier, "constant"),
+      make(TokenKind::Identifier, "CopyRightNotice"),
+      make(TokenKind::Colon, ":"),
+      make(TokenKind::Identifier, "STRING"),
+      make(TokenKind::ColonEqual, ":="),
+      make(TokenKind::StringLiteral,
+          "\"Copyright IEEE P1076 WG. Licensed Apache 2.0\""),
+      make(TokenKind::Semicolon, ";"),
+      make(TokenKind::Identifier, "end"),
+      make(TokenKind::Identifier, "package"),
+      make(TokenKind::Identifier, instance_token.text),
+      make(TokenKind::Semicolon, ";"),
+    };
+    tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(start),
+        tokens.begin() + static_cast<std::ptrdiff_t>(end + 1U));
+    tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(start),
+        expanded.begin(), expanded.end());
+    ieee_intrinsic_package_instances_.emplace_back(instance, template_name);
+    return true;
   }
   if (!declaration || !kind(*declaration + 4U, TokenKind::LeftParen)) {
     return false;

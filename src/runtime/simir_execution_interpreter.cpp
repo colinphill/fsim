@@ -854,10 +854,14 @@ void Interpreter::Impl::execute(ProcessId id)
                     for (std::size_t index = 0; index < op.actuals.size(); ++index) {
                         const auto string_actual = !op.actual_kinds.empty()
                             && op.actual_kinds[index] == 1U;
+                        const auto stream_actual = !op.actual_kinds.empty()
+                            && op.actual_kinds[index] == 2U;
                         actuals.push_back(
-                            string_actual
-                                ? PackedLogic4(64)
-                                : get_register(process, op.actuals[index]));
+                            string_actual ? PackedLogic4(64)
+                            : stream_actual
+                            ? bit_stream_value(read_container_register(
+                                  process, op.actuals[index]))
+                            : get_register(process, op.actuals[index]));
                         string_actuals.push_back(
                             string_actual
                                 ? get_string_register(process, op.actuals[index])
@@ -886,14 +890,15 @@ void Interpreter::Impl::execute(ProcessId id)
                             && op.actual_kinds[index] == 1U;
                         if (string_actual) {
                             get_string_register(process, op.actuals[index]) = string_actuals[index];
-                        } else {
+                        } else if (op.actual_kinds.empty()
+                            || op.actual_kinds[index] != 2U) {
                             get_register(process, op.actuals[index]) = actuals[index];
                         }
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {
                     if (op.value.size() > maximum_string_bytes) {
-                        fail(process, "string literal exceeds 4096-byte limit");
+                        fail(process, "string literal exceeds the string length limit");
                     }
                     try {
                         (void)systemverilog_string_length(op.value);
@@ -943,7 +948,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             > maximum_string_bytes - result.size()) {
                             fail(
                                 process,
-                                "string concatenation exceeds 4096-byte limit");
+                                "string concatenation exceeds the string length limit");
                         }
                         result += value;
                     }

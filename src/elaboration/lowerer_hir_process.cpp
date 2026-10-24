@@ -1306,9 +1306,11 @@ bool Lowerer::initialize_hir_declarations(
                         *input.initializer);
                 const auto pattern = initializer
                     && initializer->systemverilog != nullptr
-                    && initializer->systemverilog->kind
-                        == semantic::sv::ExpressionKind::
-                            assignment_pattern;
+                    && (initializer->systemverilog->kind
+                            == semantic::sv::ExpressionKind::
+                                assignment_pattern
+                        || hir_tagged_union_aggregate_member(
+                            *initializer->systemverilog, *type));
                 // `int a[] = new[n];` sizes a dynamic array with a size
                 // known only when the scope is entered (7.5.1).
                 const auto* constructor = initializer
@@ -3442,7 +3444,8 @@ Lowerer::lower_hir_vhdl_conversion_program(
     const semantic::ExpressionId expression,
     const SignalId destination,
     const std::string_view hierarchy,
-    std::optional<semantic::vhdl::SubtypeIndication> vhdl_context)
+    std::optional<semantic::vhdl::SubtypeIndication> vhdl_context,
+    std::optional<HirInputActualMember> member)
 {
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
@@ -3465,6 +3468,7 @@ Lowerer::lower_hir_vhdl_conversion_program(
     description.input_actual_destination = destination;
     description.input_actual_vhdl_context = std::move(vhdl_context);
     description.input_actual_program = true;
+    description.input_actual_member = std::move(member);
     description.kind = frontend::ProcessKind::VhdlProcess;
     hir_vhdl_resolver_registers_.reset();
     // Inertial parts of an aggregate actual follow their signals a delta
@@ -3524,17 +3528,26 @@ Lowerer::lower_hir_vhdl_formal_conversion(
     const auto expression = value
         ? specialized_hir_unit_->find_expression(*value)
         : std::nullopt;
+    constexpr std::string_view implicit_prefix { "fsim__formal_conversion_" };
+    // The effective side of an inout formal reads its actual, through the
+    // actual part's function when there is one (IEEE 1076-2008 6.5.7.1).
+    const bool effective = input.label.starts_with(implicit_prefix)
+        && input.label.ends_with("$in");
     if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
-        || expression->vhdl->operands.size() != 1U) {
+        || (!effective
+            && (expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::call
+                || expression->vhdl->operands.size() != 1U))) {
         return std::nullopt;
     }
-    const auto operand = specialized_hir_unit_->find_expression(
-        expression->vhdl->operands.front());
-    constexpr std::string_view implicit_prefix { "fsim__formal_conversion_" };
+    const auto operand = effective
+        ? expression
+        : specialized_hir_unit_->find_expression(
+              expression->vhdl->operands.front());
     const auto target = specialized_hir_unit_->find_expression(*input.target);
     if (!operand || operand->vhdl == nullptr
-        || operand->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || (!effective
+            && operand->vhdl->kind != semantic::vhdl::ExpressionKind::name)
         || !input.label.starts_with(implicit_prefix)
         || !target || target->vhdl == nullptr
         || target->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
@@ -3547,12 +3560,45 @@ Lowerer::lower_hir_vhdl_formal_conversion(
     if (!binding || !binding->signal) {
         return std::nullopt;
     }
-    auto conversion = lower_hir_vhdl_conversion_program(
-        *value, *binding->signal, hierarchy, std::nullopt);
+    // A static record subelement target (`r.inner`) takes the program's
+    // value as the driver of that subelement.
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> slice;
+    std::optional<HirInputActualMember> member;
+    std::optional<semantic::vhdl::SubtypeIndication> context;
+    if (const auto record = specialized_hir_unit_->find_declaration(
+            *declaration);
+        !record || record->vhdl == nullptr) {
+        return std::nullopt;
+    } else if (!equal_ignoring_ascii_case(
+                   target->vhdl->text, record->vhdl->name)) {
+        const auto selection = effective
+            ? std::nullopt
+            : hir_vhdl_member_selection(*input.target);
+        if (!selection || selection->declaration != *declaration
+            || selection->index || selection->access_object_root
+            || binding->signal_selection || selection->width == 0U
+            || selection->offset + selection->width
+                > design_.signal_info_[*binding->signal].width
+            || design_.signal_info_[*binding->signal].width
+                > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        slice = std::pair { static_cast<std::uint32_t>(selection->offset),
+            static_cast<std::uint32_t>(selection->width) };
+        member = HirInputActualMember { selection->width, selection->domain,
+            selection->signed_value,
+            vhdl_integer_range(
+                hir_effective_vhdl_subtype(selection->subtype)
+                    .value_or(selection->subtype)) };
+        context = selection->subtype;
+    }
+    auto conversion = lower_hir_vhdl_conversion_program(*value,
+        *binding->signal, hierarchy, std::move(context), std::move(member));
     if (!conversion) {
         return std::nullopt;
     }
-    return HirVhdlFormalConversion { *binding->signal, std::move(*conversion) };
+    return HirVhdlFormalConversion {
+        *binding->signal, std::move(*conversion), effective, slice };
 }
 
 std::optional<Process> Lowerer::lower_hir_output_actual(
@@ -4404,6 +4450,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         branch.when_true = static_cast<InstructionIndex>(
             process_.operations.size());
     }
+    if (language == frontend::Language::Vhdl2008) {
+        load_hir_vhdl_shared_access_heaps();
+    }
     const auto input_adapter = description.input_actual.has_value()
         || description.input_actual_destination.has_value()
         || description.input_actual_string_object.has_value();
@@ -4672,6 +4721,21 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         std::optional<SignalInfo> destination_copy;
         if (description.input_actual_program) {
             destination_copy = design_.signal_info_[destination];
+        }
+        if (const auto& member = description.input_actual_member;
+            member && destination_copy) {
+            auto& part = *destination_copy;
+            part.width = member->width;
+            part.source_domain = member->domain;
+            part.is_signed = member->signed_value;
+            part.integer_range = member->integer_range;
+            part.packed_range.reset();
+            part.vhdl_array.reset();
+            part.vhdl_access.reset();
+            part.vhdl_physical.reset();
+            part.packed_members.clear();
+            part.enumeration_literals.clear();
+            part.enumeration_range.reset();
         }
         const auto& signal = destination_copy
             ? *destination_copy
@@ -5417,6 +5481,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         hir_local_container_types_.clear();
         return std::nullopt;
     }
+    store_hir_vhdl_shared_access_heaps();
     auto callable_body_begin = process_.operations.size();
     if (!lower_pending_hir_callables()) {
         report(

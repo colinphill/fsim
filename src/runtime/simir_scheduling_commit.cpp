@@ -1741,6 +1741,30 @@ bool Interpreter::Impl::run_vhdl_conversion_drivers(
         process.pc = 0U;
         process.halted = false;
         execute(driver.program);
+        if (driver.offset) {
+            // A subelement driver of an unresolved signal: its initial
+            // value is part of the signal's (IEEE 1076-2008 14.7.5.2).
+            auto part = get_register(process, driver.output);
+            if (initializing) {
+                auto& slot = driver_slot(driver.stub, signal_id);
+                auto whole = signals[signal_id].initial_value;
+                slot = whole;
+                for (std::size_t bit { }; bit < part.width()
+                    && *driver.offset + bit < whole.width(); ++bit) {
+                    slot.set(*driver.offset + bit, part.get(bit));
+                    whole.set(*driver.offset + bit, part.get(bit));
+                }
+                if (signal_id < driven_values.size()) {
+                    driven_values[signal_id] = whole;
+                }
+                signals[signal_id].initial_value = std::move(whole);
+                refresh_direct_signal_planes(signal_id);
+            } else {
+                commit_driver_slice(
+                    driver.stub, signal_id, std::move(part), *driver.offset);
+            }
+            continue;
+        }
         auto value = coerce_value_kind(
             get_register(process, driver.output), signal.value_kind);
         if (initializing || resolver) {
@@ -1750,6 +1774,80 @@ bool Interpreter::Impl::run_vhdl_conversion_drivers(
             commit_driver(driver.stub, signal_id, std::move(value));
         }
     }
+    return true;
+}
+
+bool Interpreter::Impl::publish_vhdl_formal_driving_value(
+    const SignalId signal_id, const bool initializing)
+{
+    const auto found = vhdl_resolvers.find(signal_id);
+    if (found == vhdl_resolvers.end() || !found->second.driving_mirror) {
+        return false;
+    }
+    const auto mirror = *found->second.driving_mirror;
+    // The formal's driving value is its driver's (IEEE 1076-2008 14.7.3.2);
+    // with no driver, the formal's default (6.5.2).
+    std::vector<const DriverRecord*> connected;
+    driver_values.at(signal_id).for_each_in_process_order(
+        [&](const DriverRecord& record) {
+            if (!vhdl_disconnected_drivers.contains(
+                    { signal_id, record.process })) {
+                connected.push_back(&record);
+            }
+        });
+    const bool whole_sole_driver = connected.size() == 1U
+        && !connected.front()->scalar_regions;
+    auto driving = whole_sole_driver
+        ? connected.front()->value
+        : vhdl_driver_initial_values.at(signal_id);
+    // Several drivers need a resolved type; a resolution function has its
+    // own program, so these resolve as STD_LOGIC, per scalar subelement of
+    // the drivers that drive it. A subelement without a driver keeps the
+    // default (14.7.3.2).
+    if (!whole_sole_driver && !connected.empty()) {
+        const bool logic9 = driving.is_logic9();
+        for (std::size_t bit { }; bit < driving.width(); ++bit) {
+            bool has_source { };
+            auto resolved = Logic9::z;
+            for (const auto* const record : connected) {
+                if (record->value.width() != driving.width()
+                    || (record->scalar_regions
+                        && std::ranges::none_of(*record->scalar_regions,
+                            [bit](const Process::DriverRegion& region) {
+                                return bit >= region.offset
+                                    && bit - region.offset < region.width;
+                            }))) {
+                    continue;
+                }
+                if (!logic9) {
+                    driving.set(bit, record->value.get(bit));
+                    continue;
+                }
+                const auto bit_value = record->value.get_logic9(bit);
+                resolved = has_source
+                    ? runtime::resolve(resolved, bit_value)
+                    : bit_value;
+                has_source = true;
+            }
+            if (has_source) {
+                driving.set_logic9(bit, resolved);
+            }
+        }
+    }
+    auto value = normalize_signal_value(mirror,
+        coerce_value_kind(std::move(driving), get_signal(mirror).value_kind));
+    if (initializing) {
+        if (mirror < driven_values.size()) {
+            driven_values[mirror] = value;
+        }
+        signals[mirror].initial_value = std::move(value);
+        refresh_direct_signal_planes(mirror);
+        return true;
+    }
+    if (mirror < driven_values.size() && driven_values[mirror] == value) {
+        return false;
+    }
+    commit(mirror, std::move(value));
     return true;
 }
 
@@ -1769,6 +1867,15 @@ void Interpreter::Impl::drain_vhdl_resolutions()
         if (run_vhdl_conversion_drivers(signal_id, false)
             && !vhdl_resolvers.contains(signal_id)) {
             continue;
+        }
+        // An inout formal converted both ways: its driving value reaches the
+        // actual, whose new value comes back as the formal's effective value
+        // in the same cycle, so the formal may be resolved again.
+        if (const auto resolver = vhdl_resolvers.find(signal_id);
+            resolver != vhdl_resolvers.end()
+            && resolver->second.driving_mirror) {
+            pending_vhdl_resolution_set.erase(signal_id);
+            publish_vhdl_formal_driving_value(signal_id, false);
         }
         auto value = run_vhdl_resolver(signal_id);
         vhdl_resolved_values.insert_or_assign(signal_id, value);
@@ -1797,13 +1904,21 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
         refresh_direct_signal_planes(signal_id);
     };
     std::vector<SignalId> converted;
+    // An inout formal's driving value starts at its drivers' initial value.
+    for (const auto& [signal_id, resolver] : vhdl_resolvers) {
+        if (resolver.driving_mirror) {
+            publish_vhdl_formal_driving_value(signal_id, true);
+        }
+    }
     // A conversion driver starts at its program's result over its sources'
     // initial values; a signal without a resolver program resolves its
     // drivers natively.
     for (const auto& [signal_id, drivers] : vhdl_conversion_drivers) {
-        (void)drivers;
         run_vhdl_conversion_drivers(signal_id, true);
-        if (!vhdl_resolvers.contains(signal_id)) {
+        if (!vhdl_resolvers.contains(signal_id)
+            && !std::ranges::any_of(drivers, [](const auto& driver) {
+                   return driver.offset.has_value();
+               })) {
             publish(signal_id, resolved_driver_value(signal_id));
         }
     }

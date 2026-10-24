@@ -768,7 +768,7 @@ std::string format_runtime_string(const RuntimeStringFormat& operation,
     const auto append = [&](const std::string_view part) {
         if (part.size() > maximum_string_bytes - result.size()) {
             throw std::length_error {
-                "formatted string exceeds 4096-byte limit"
+                "formatted string exceeds the string length limit"
             };
         }
         result += part;

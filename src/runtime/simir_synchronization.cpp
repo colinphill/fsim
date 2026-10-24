@@ -4,6 +4,7 @@
 
 #include "fsim/runtime/systemverilog_string.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 
@@ -31,8 +32,10 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
   return std::max<std::size_t>(1U, words * sizeof(std::uint64_t) * 2U);
 }
 
+// A string entry is charged its bytes when it enters the mailbox queue, so
+// the capacity bound counts only the fixed part of each entry.
 [[nodiscard]] constexpr std::size_t mailbox_string_entry_storage_bytes() {
-  return sizeof(std::string) + maximum_string_bytes;
+  return sizeof(std::string);
 }
 
 }  // namespace
@@ -152,7 +155,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     mailboxes.push_back(
         MailboxState{create->element_kind, create->element_width,
                      requested == 0 ? maximum : requested,
-                     {}, {}, {}, {}});
+                     {}, {}, 0U, {}, {}});
     const auto handle = mailbox_handle_tag | mailboxes.size();
     write_process_register(
         process,
@@ -180,6 +183,12 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       }
     } else {
       string_value = read_string_register(put->string_source);
+      if (string_value.size() > maximum_container_storage_bytes
+              - std::min(mailbox.string_bytes,
+                  maximum_container_storage_bytes)) {
+        process.pc = instruction;
+        fail(process, "mailbox string storage exceeds the bounded storage limit");
+      }
     }
     // Hand a put value to the waiting readers in order; a get consumes it,
     // a peek leaves it for the next reader or the mailbox queue.
@@ -214,7 +223,13 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
           break;
         }
       }
-      if (!consumed) entries.push_back(delivered);
+      if (!consumed) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(delivered)>,
+                          std::string>) {
+          mailbox.string_bytes += delivered.size();
+        }
+        entries.push_back(delivered);
+      }
     };
     const auto entry_count = mailbox.element_kind == MailboxElementKind::string
         ? mailbox.string_entries.size()
@@ -266,6 +281,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       }
       if (!get->peek) {
         if (mailbox.element_kind == MailboxElementKind::string) {
+          mailbox.string_bytes -= mailbox.string_entries.front().size();
           mailbox.string_entries.pop_front();
         } else {
           mailbox.entries.pop_front();
@@ -275,6 +291,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
           mailbox.writers.pop_front();
           if (!wake(writer.process)) continue;
           if (mailbox.element_kind == MailboxElementKind::string) {
+            mailbox.string_bytes += writer.string_value.size();
             mailbox.string_entries.push_back(
                 std::move(writer.string_value));
           } else {

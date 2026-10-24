@@ -8927,6 +8927,10 @@ private:
                 }
             }
         }
+        if (const auto width = systemverilog_unpacked_structure_bits(
+                *type, declaration->systemverilog->scope, 0U)) {
+            return width;
+        }
         // A fixed-size unpacked array's bit-stream width counts every
         // element (IEEE 1800-2017 20.6.2).
         if (type->container_form == sv::TypeForm::static_array) {
@@ -9070,6 +9074,52 @@ private:
     }
 
     /// The bit width of a packed type, when evident.
+    /// The bit-stream width of an unpacked structure: every member element,
+    /// unpacked array members included (IEEE 1800-2017 6.24.3, 20.6.2).
+    [[nodiscard]] std::optional<std::size_t>
+    systemverilog_unpacked_structure_bits(const sv::TypeReference& type,
+        const ScopeId scope, const std::size_t depth)
+    {
+        constexpr std::size_t maximum_type_depth { 64U };
+        if (depth >= maximum_type_depth || type.container_form
+            || !type.unpacked_dimensions.empty()) {
+            return std::nullopt;
+        }
+        const auto layout = CompiledDesignResolver { unit_ }
+                                .underlying_systemverilog_type(type, scope)
+                                .value_or(type);
+        const auto definition = layout.target.target.valid()
+            ? unit_.find_type(layout.target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr
+            || definition->systemverilog->form
+                != sv::TypeForm::unpacked_structure
+            || definition->systemverilog->members.empty()) {
+            return std::nullopt;
+        }
+        std::size_t total { };
+        for (const auto& member : definition->systemverilog->members) {
+            const auto described
+                = describe_systemverilog_type(unit_, member.type, scope);
+            auto width = described ? described->total_bits() : std::nullopt;
+            if (!width || !described->bits || *described->bits == 0U) {
+                return std::nullopt;
+            }
+            auto element = member.type;
+            element.container_form.reset();
+            element.unpacked_dimensions.clear();
+            if (const auto nested = systemverilog_unpacked_structure_bits(
+                    element, scope, depth + 1U)) {
+                width = *width / *described->bits * *nested;
+            }
+            if (*width > maximum_systemverilog_constant_work_units - total) {
+                return std::nullopt;
+            }
+            total += static_cast<std::size_t>(*width);
+        }
+        return total;
+    }
+
     [[nodiscard]] std::optional<std::size_t> systemverilog_type_bit_width(
         const sv::TypeReference& type)
     {

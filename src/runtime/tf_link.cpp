@@ -295,12 +295,15 @@ PLI_INT32 append_delay(const uint64_t ticks) {
 }
 
 PLI_INT32 append_synchronization(const uint32_t kind) {
-  // A checktf routine may also ask for synchronization before simulation.
+  // A checktf routine may also ask for synchronization before simulation;
+  // any routine may switch asynchronous parameter-change calls.
+  const bool asynchronous = kind == FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_ON ||
+                            kind == FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_OFF;
   if (current_call_context == nullptr ||
-      (!writable_phase(current_call_context->phase) &&
+      (!asynchronous && !writable_phase(current_call_context->phase) &&
        current_call_context->phase != FSIM_TF_CALL_PHASE_CHECK) ||
       (kind != FSIM_TF_SYNCHRONIZATION_READ_WRITE &&
-       kind != FSIM_TF_SYNCHRONIZATION_READ_ONLY) ||
+       kind != FSIM_TF_SYNCHRONIZATION_READ_ONLY && !asynchronous) ||
       current_call_context->synchronization_count >=
           current_call_context->synchronization_capacity) {
     return 1;
@@ -710,8 +713,19 @@ void io_printf(PLI_BYTE8* const format, ...) {
 }
 FSIM_TF_BYTES(mc_scan_plusargs, (PLI_BYTE8*))
 FSIM_TF_INT(tf_add_long, (PLI_INT32*, PLI_INT32*, PLI_INT32, PLI_INT32))
-FSIM_TF_INT(tf_asynchoff, (void))
-FSIM_TF_INT(tf_asynchon, (void))
+// tf_asynchon and tf_asynchoff return 1 on success and 0 on error.
+PLI_INT32 tf_asynchoff(void) {
+  return append_synchronization(
+             FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_OFF) == 0
+             ? 1
+             : 0;
+}
+PLI_INT32 tf_asynchon(void) {
+  return append_synchronization(
+             FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_ON) == 0
+             ? 1
+             : 0;
+}
 PLI_INT32 tf_clearalldelays(void) {
   auto* const time = current_time();
   if (current_call_context == nullptr ||
@@ -926,8 +940,12 @@ PLI_BYTE8* tf_getworkarea(void) {
                                          : current_call_context->work_area;
 }
 
-FSIM_TF_INT(tf_iasynchoff, (PLI_BYTE8*))
-FSIM_TF_INT(tf_iasynchon, (PLI_BYTE8*))
+PLI_INT32 tf_iasynchoff(PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_asynchoff() : 0;
+}
+PLI_INT32 tf_iasynchon(PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_asynchon() : 0;
+}
 PLI_INT32 tf_iclearalldelays(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_clearalldelays() : 1;
 }

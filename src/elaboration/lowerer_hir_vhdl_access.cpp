@@ -262,6 +262,117 @@ bool Lowerer::is_hir_vhdl_access_expression(
         });
 }
 
+void Lowerer::load_hir_vhdl_shared_access_heaps()
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return;
+    }
+    const auto consider = [&](const semantic::vhdl::Declaration& declaration) {
+        if (declaration.form != semantic::vhdl::DeclarationForm::variable
+            || !declaration.shared || !declaration.subtype) {
+            return;
+        }
+        const auto* type = hir_vhdl_named_type(*specialized_hir_unit_,
+            *declaration.subtype, semantic::vhdl::TypeForm::access);
+        // A TEXTIO LINE is held as a string, not through a heap.
+        if (type == nullptr
+            || compiler_owned_textio_line_type(*specialized_hir_unit_,
+                *declaration.subtype, declaration.scope, type)) {
+            return;
+        }
+        if (const auto found = hir_vhdl_access_heaps_.find(type->id.value());
+            found != hir_vhdl_access_heaps_.end()
+            && found->second.shared_objects) {
+            return;
+        }
+        const auto binding = hir_runtime_binding(
+            declaration.id, hir_process_scope_, false);
+        if (!binding || !binding->signal
+            || *binding->signal >= design_.signal_info_.size()) {
+            return;
+        }
+        auto* heap = hir_vhdl_access_heap(
+            *type, hir_source_span(declaration.source));
+        if (heap == nullptr) {
+            return;
+        }
+        // One heap per access type and declaring instance or package.
+        const auto& variable = design_.signal_info_[*binding->signal].name;
+        const auto owner = variable.substr(
+            0U, variable.find_last_of('.') == std::string::npos
+                ? 0U
+                : variable.find_last_of('.'));
+        const auto storage = [&](const ContainerRegisterId value,
+                                 const std::string_view part) {
+            const auto name = owner + ".@vhdl-heap."
+                + std::to_string(type->id.value()) + "."
+                + std::string { part };
+            if (const auto found = design_.container_by_name_.find(name);
+                found != design_.container_by_name_.end()) {
+                return found->second;
+            }
+            const auto& container_type = process_.container_register_types
+                [static_cast<std::size_t>(value)];
+            const auto object = static_cast<ContainerObjectId>(
+                design_.container_objects_.size());
+            design_.container_object_info_.push_back(ContainerObjectInfo {
+                object, name, container_type,
+                hir_source_span(declaration.source), false,
+                frontend::PortDirection::Unknown, std::nullopt });
+            design_.container_objects_.push_back(ContainerObject {
+                name, default_container_value(container_type),
+                std::nullopt });
+            design_.container_by_name_.emplace(name, object);
+            return object;
+        };
+        heap->shared_objects = storage(heap->objects, "objects");
+        heap->shared_handles = storage(heap->issued_handles, "handles");
+        process_.operations.emplace_back(ReadContainerObject {
+            heap->objects, *heap->shared_objects });
+        process_.operations.emplace_back(ReadContainerObject {
+            heap->issued_handles, *heap->shared_handles });
+    };
+    for (const auto& declaration :
+        specialized_hir_unit_->vhdl_declarations()) {
+        consider(declaration);
+    }
+    for (const auto& declaration :
+        specialized_hir_unit_->design().vhdl_hir.declarations()) {
+        consider(declaration);
+    }
+}
+
+bool Lowerer::hir_vhdl_shared_access_heaps_active() const
+{
+    return std::ranges::any_of(hir_vhdl_access_heaps_,
+        [](const auto& entry) { return entry.second.shared_objects.has_value(); });
+}
+
+void Lowerer::store_hir_vhdl_shared_access_heaps()
+{
+    for (const auto& [type, heap] : hir_vhdl_access_heaps_) {
+        if (heap.shared_objects && heap.shared_handles) {
+            process_.operations.emplace_back(WriteContainerObject {
+                *heap.shared_objects, heap.objects, std::nullopt, false });
+            process_.operations.emplace_back(WriteContainerObject {
+                *heap.shared_handles, heap.issued_handles, std::nullopt,
+                false });
+        }
+    }
+}
+
+void Lowerer::reload_hir_vhdl_shared_access_heaps()
+{
+    for (const auto& [type, heap] : hir_vhdl_access_heaps_) {
+        if (heap.shared_objects && heap.shared_handles) {
+            process_.operations.emplace_back(ReadContainerObject {
+                heap.objects, *heap.shared_objects });
+            process_.operations.emplace_back(ReadContainerObject {
+                heap.issued_handles, *heap.shared_handles });
+        }
+    }
+}
+
 Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     const semantic::vhdl::TypeDefinition& type,
     const frontend::SourceSpan& span,
@@ -310,7 +421,8 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
         const auto ledger = allocate_container_register(ledger_type);
         const auto [inserted, unused] = hir_vhdl_access_heaps_.emplace(
             type.id.value(), HirVhdlAccessHeap {
-                objects, ledger, maximum, designated, std::move(shaped) });
+                objects, ledger, maximum, designated, std::move(shaped),
+                std::nullopt, std::nullopt });
         (void)unused;
         return &inserted->second;
     };
@@ -1734,7 +1846,8 @@ void Lowerer::emit_hir_vhdl_access_reclamation(
     const HirVhdlAccessHeap& heap,
     const RegisterId candidate)
 {
-    if (!type.reclaim_when_unreachable) {
+    // Other processes' variables may designate a shared heap's objects.
+    if (!type.reclaim_when_unreachable || heap.shared_objects) {
         return;
     }
     const auto zero
@@ -1890,6 +2003,98 @@ bool Lowerer::is_hir_vhdl_access_assignment(
         && compiler_owned_textio_line_type(
             *specialized_hir_unit_, *subtype,
             hir_process_scope_, access_type);
+}
+
+bool Lowerer::hir_vhdl_textio_line_subtype(
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const semantic::ScopeId use_scope) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto* type = hir_vhdl_named_type(*specialized_hir_unit_, subtype,
+        semantic::vhdl::TypeForm::access);
+    return compiler_owned_textio_line_type(
+        *specialized_hir_unit_, subtype, use_scope, type);
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_line_value(
+    const semantic::ExpressionId expression_id)
+{
+    const auto value = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!value || value->vhdl == nullptr
+        || value->vhdl->kind != semantic::vhdl::ExpressionKind::call) {
+        return std::nullopt;
+    }
+    const auto& source = *value->vhdl;
+    if (source.text == "@vhdl-null") {
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant {
+            destination, std::string { } });
+        return destination;
+    }
+    if (source.text == "@vhdl-new-qualified" && source.operands.size() == 2U) {
+        return lower_hir_string_expression(source.operands[1]);
+    }
+    // `new string(1 to n)`: a STRING of n CHARACTER'LEFT (NUL) elements
+    // (IEEE 1076-2008 9.3.7, 6.4.2.3).
+    if (source.text != "@vhdl-new" || source.operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto count = hir_vhdl_line_allocator_length(expression_id);
+    if (!count) {
+        return std::nullopt;
+    }
+    StringMethod fill;
+    fill.operation = runtime::simir::StringMethodOperator::vhdl_string_fill;
+    fill.string_destination = allocate_string_register();
+    fill.source = fill.string_destination;
+    fill.first = load_integer(static_cast<std::int64_t>(*count), 32U,
+        frontend::ValueDomain::Bit2);
+    fill.second = load_integer(0, 32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(fill);
+    return fill.string_destination;
+}
+
+std::optional<std::size_t> Lowerer::hir_vhdl_line_allocator_length(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto value = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!value || value->vhdl == nullptr || value->vhdl->text != "@vhdl-new"
+        || value->vhdl->operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto subtype = specialized_hir_unit_->find_expression(
+        value->vhdl->operands.front());
+    const auto bound = subtype && subtype->vhdl != nullptr
+            && subtype->vhdl->operands.size() == 1U
+        ? specialized_hir_unit_->find_expression(
+              subtype->vhdl->operands.front())
+        : std::nullopt;
+    if (!bound || bound->vhdl == nullptr
+        || bound->vhdl->kind != semantic::vhdl::ExpressionKind::binary
+        || (bound->vhdl->text != "to" && bound->vhdl->text != "downto")
+        || bound->vhdl->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto left = hir_constant_integer(bound->vhdl->operands[0]);
+    const auto right = hir_constant_integer(bound->vhdl->operands[1]);
+    if (!left || !right) {
+        return std::nullopt;
+    }
+    const auto descending = bound->vhdl->text == "downto";
+    const auto count = descending
+        ? (*left >= *right ? *left - *right + 1 : 0)
+        : (*right >= *left ? *right - *left + 1 : 0);
+    if (count < 0
+        || count > static_cast<std::int64_t>(maximum_string_bytes)) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(count);
 }
 
 bool Lowerer::reject_hir_vhdl_access_signal_escape(
@@ -2087,53 +2292,18 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         && assigned_line->vhdl != nullptr
         && assigned_line->vhdl->kind
             == semantic::vhdl::ExpressionKind::call) {
-        if (assigned_line->vhdl->text == "@vhdl-null") {
-            process_.operations.emplace_back(LoadStringConstant {
-                *line_binding->local, std::string { } });
-            return true;
-        }
         if (assigned_line->vhdl->text == "@vhdl-new-qualified"
-            && assigned_line->vhdl->operands.size() == 2U) {
-            const auto initial = lower_hir_string_expression(
-                assigned_line->vhdl->operands[1]);
-            if (!initial) {
-                return false;
+            || assigned_line->vhdl->text == "@vhdl-null"
+            || assigned_line->vhdl->text == "@vhdl-new") {
+            const auto value
+                = lower_hir_vhdl_line_value(*statement->vhdl->value);
+            if (value) {
+                process_.operations.emplace_back(CopyStringRegister {
+                    *line_binding->local, *value });
+                return true;
             }
-            process_.operations.emplace_back(CopyStringRegister {
-                *line_binding->local, *initial });
-            return true;
-        }
-        // `new string(1 to n)`: a STRING of n CHARACTER'LEFT (NUL)
-        // elements (IEEE 1076-2008 9.3.7, 6.4.2.3).
-        if (assigned_line->vhdl->text == "@vhdl-new"
-            && assigned_line->vhdl->operands.size() == 1U) {
-            const auto subtype = specialized_hir_unit_->find_expression(
-                assigned_line->vhdl->operands.front());
-            const auto bound = subtype && subtype->vhdl != nullptr
-                    && subtype->vhdl->operands.size() == 1U
-                ? specialized_hir_unit_->find_expression(
-                      subtype->vhdl->operands.front())
-                : std::nullopt;
-            if (bound && bound->vhdl != nullptr
-                && bound->vhdl->kind == semantic::vhdl::ExpressionKind::binary
-                && (bound->vhdl->text == "to" || bound->vhdl->text == "downto")
-                && bound->vhdl->operands.size() == 2U) {
-                const auto left = hir_constant_integer(bound->vhdl->operands[0]);
-                const auto right
-                    = hir_constant_integer(bound->vhdl->operands[1]);
-                if (left && right) {
-                    const auto descending = bound->vhdl->text == "downto";
-                    const auto count = descending
-                        ? (*left >= *right ? *left - *right + 1 : 0)
-                        : (*right >= *left ? *right - *left + 1 : 0);
-                    if (count >= 0 && count <= (std::int64_t { 1 } << 24)) {
-                        process_.operations.emplace_back(LoadStringConstant {
-                            *line_binding->local,
-                            std::string(static_cast<std::size_t>(count),
-                                '\0') });
-                        return true;
-                    }
-                }
+            if (assigned_line->vhdl->text != "@vhdl-new") {
+                return false;
             }
         }
     }
@@ -2202,6 +2372,14 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                   *type, hir_source_span(target->vhdl->source),
                   subtype ? &*subtype : nullptr)
             : nullptr;
+        // A shared variable of the access type holds its value as a
+        // design object (IEEE 1076-2008 6.4.2.4).
+        if (binding && !binding->local && binding->signal && heap != nullptr
+            && heap->shared_objects && assigned) {
+            process_.operations.emplace_back(
+                WriteBlocking { *binding->signal, *assigned });
+            return true;
+        }
         if (!binding || !binding->local || type == nullptr
             || heap == nullptr || !assigned) {
             return false;
@@ -2251,6 +2429,13 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
             : binding && binding->local
                 ? binding->local
                 : std::nullopt;
+        if (!handle && !member->root.valid() && binding && binding->signal) {
+            const auto value = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ReadSignal {
+                value, *binding->signal });
+            handle = value;
+        }
     } else {
         const auto prefix = dereference->vhdl->operands.front();
         subtype = hir_vhdl_expression_subtype(prefix);

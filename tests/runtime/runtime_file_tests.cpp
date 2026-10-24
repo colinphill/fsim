@@ -1121,7 +1121,7 @@ void test_simir_text_files()
         bounded.run().status == RunStatus::completed,
         "overlong input is reported through $ferror");
     require(
-        bounded.string_object_value(bounded_error).find("4096-byte limit")
+        bounded.string_object_value(bounded_error).find("string length limit")
             != std::string::npos,
         "overlong input retains a bounded error message");
     require(

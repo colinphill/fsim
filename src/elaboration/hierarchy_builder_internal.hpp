@@ -865,6 +865,13 @@ private:
     bool lower_compiled_vhdl_formal_conversion(Lowerer& lowerer,
         semantic::StatementId statement, std::string_view path,
         const semantic::vhdl::Unit& owner);
+    // Splits an inout formal that has a resolver program for its effective
+    // value: a new mirror signal holds its driving value.
+    SignalId add_vhdl_formal_driving_mirror(SignalId formal);
+    // Points a process's reads (and `sources`) of split inout formals at
+    // their driving values.
+    void read_vhdl_formal_driving_values(
+        Process& process, std::vector<SignalId>* sources = nullptr);
     bool lower_compiled_vhdl_input_conversion(Lowerer& lowerer,
         const semantic::SpecializedHirUnit& specialization,
         semantic::ExpressionId actual, SignalId destination,
@@ -2118,6 +2125,10 @@ private:
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     // The out and buffer ports some expression reads, found on first use.
     std::optional<std::unordered_set<std::uint32_t>> vhdl_read_output_ports_;
+    // An inout formal whose effective value is converted from its actual,
+    // and the signal holding its driving value (IEEE 1076-2008 14.7.3.2):
+    // the formal's out-side conversion reads that signal.
+    std::unordered_map<SignalId, SignalId> vhdl_formal_driving_mirrors_;
     // An out or inout port associated with a resolved VHDL actual: the
     // instance it belongs to and its default, which is the initial value of
     // the port's drivers (IEEE 1076-2008 6.5.2, 14.7.3.2).

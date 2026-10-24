@@ -397,10 +397,11 @@ std::optional<std::string> validate_string_method_metadata(
     const auto kind = operation.operation;
     if (!string_register(operation.source))
         return "StringMethod source string register is out of range";
-    if (kind > StringMethodOperator::vhdl_character_element)
+    if (kind > StringMethodOperator::vhdl_string_fill)
         return "StringMethod kind is invalid";
     const bool element = kind == StringMethodOperator::vhdl_composite_element
-        || kind == StringMethodOperator::vhdl_character_element;
+        || kind == StringMethodOperator::vhdl_character_element
+        || kind == StringMethodOperator::vhdl_string_fill;
     const bool packed_format = kind == StringMethodOperator::format_packed
         || kind == StringMethodOperator::format_packed_dynamic_field;
     const bool string_format = kind == StringMethodOperator::format_string

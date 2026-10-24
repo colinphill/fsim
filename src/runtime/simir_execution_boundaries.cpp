@@ -2546,8 +2546,13 @@ void Interpreter::Impl::handle_boundary(
             const auto actual = method->actuals[index];
             const auto string_actual = !method->actual_kinds.empty()
                 && method->actual_kinds[index] == 1U;
+            const auto stream_actual = !method->actual_kinds.empty()
+                && method->actual_kinds[index] == 2U;
             actuals.push_back(
-                string_actual ? PackedLogic4(64) : read_boundary_value(actual));
+                string_actual ? PackedLogic4(64)
+                : stream_actual
+                ? bit_stream_value(read_container_register(process, actual))
+                : read_boundary_value(actual));
             string_actuals.push_back(
                 string_actual
                     ? process.executor->read_string_register(actual)
@@ -2582,7 +2587,8 @@ void Interpreter::Impl::handle_boundary(
             if (string_actual) {
                 process.executor->write_string_register(
                     method->actuals[index], string_actuals[index]);
-            } else {
+            } else if (method->actual_kinds.empty()
+                || method->actual_kinds[index] != 2U) {
                 write_process_register(process, method->actuals[index], actuals[index]);
             }
         }

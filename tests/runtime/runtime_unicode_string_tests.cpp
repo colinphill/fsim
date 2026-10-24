@@ -35,10 +35,11 @@ void test_systemverilog_byte_strings() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
-  const auto valid_field = PackedLogic4::from_aval_bval(64U, 4096U, 0U);
-  require(checked_vhdl_textio_field_width(valid_field) == 4096U,
+  const auto valid_field
+      = PackedLogic4::from_aval_bval(64U, maximum_string_bytes, 0U);
+  require(checked_vhdl_textio_field_width(valid_field) == maximum_string_bytes,
       "the full-width field check accepts its upper bound");
-  for (const auto value : { std::uint64_t { 4097U },
+  for (const auto value : { std::uint64_t { maximum_string_bytes + 1U },
            UINT64_C(1) << 32U, UINT64_C(1) << 63U }) {
     const auto invalid_field = PackedLogic4::from_aval_bval(64U, value, 0U);
     require_throws<std::length_error>(
@@ -138,7 +139,7 @@ void test_systemverilog_byte_strings() {
         "executing a negative dynamic TextIO field was accepted" };
   } catch (const std::length_error& error) {
     require(
-        std::string_view { error.what() }.find("4096-byte limit")
+        std::string_view { error.what() }.find("string length limit")
             != std::string_view::npos,
         "the executed TextIO field operation validates negative widths");
   }

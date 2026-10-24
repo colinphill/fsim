@@ -11,10 +11,10 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 295 |
+| verilator | 63 | 296 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
-| nvc | 219 | 0 |
+| nvc | 221 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## sv-tests
@@ -294,6 +294,7 @@ Exclusions never count as closures.
 | `t_struct_nest_uarray` | out of scope | compares %p text against Verilator's hexadecimal elements |
 | `t_struct_unpacked` | out of scope | compares %p text against Verilator's hexadecimal members |
 | `t_struct_unpacked_clean` | out of scope | Verilator $c extension |
+| `t_sv_cpu` | out of scope | selects pad[NUMPADS:1] from an unpacked array declared [1:NUMPADS]; a part-select's range direction matches the declaration |
 | `t_sys_file_autoflush` | out of scope | calls $frewind, which is not an IEEE system task (IEEE 1800-2017 21.3.5 defines $rewind) |
 | `t_sys_file_basic` | out of scope | calls $frewind, which is not an IEEE system task (IEEE 1800-2017 21.3.5 defines $rewind) |
 | `t_sys_file_basic_cover_expr` | out of scope | calls $frewind, which is not an IEEE system task (IEEE 1800-2017 21.3.5 defines $rewind) |
@@ -772,6 +773,7 @@ Exclusions never count as closures.
 | `debug4` | not run | leaves p2(7 downto 4) of an individually associated port unassociated (IEEE 1076-2008 6.5.7.1); the gold is nvc's call stack |
 | `elab39` | not run | nvc-specific test kind shell |
 | `file1` | not run | expects READ's LENGTH to be 3 for the 5-character value "hello" (IEEE 1076-2008 5.5.2) and reads a character file through a string file type, whose format is implementation-defined |
+| `ieee9` | not run | expects a conversion to a constrained sfixed subtype to keep the operand's index range; IEEE 1076-2019 9.3.6 gives the result the subtype's bounds |
 | `image2` | not run | asserts the 'IMAGE of a record with a REAL element as "((42,-5),true,2.5)"; the image of a floating-point value has implementation-defined digits and notation (IEEE 1076-2019 16.2.2, 5.2.5.1) |
 | `integer1` | not run | declares a 64-bit integer type |
 | `integer2` | not run | expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; out-of-range INTEGER arithmetic is erroneous (IEEE 1076-2019 5.2.3.1) |
@@ -886,6 +888,7 @@ Exclusions never count as closures.
 | `psl22` | not run | declares a PSL default clock among concurrent statements |
 | `psl7` | not run | declares a PSL default clock among concurrent statements |
 | `rand1` | not run | uses nvc's own library packages |
+| `range4` | not run | chains relational operators (`ascending > descending = false`); a relation has at most one (IEEE 1076-2019 9.1) |
 | `real14` | not run | copy of ivtest itor_rtoi; expects results the test notes are not defined by the standard (IEEE 1800-2017 20.5) |
 | `reflect1` | not run | applies 'REFLECT to the enumeration literal TRUE; IEEE 1076-2019 16.2 defines O'REFLECT only for an object prefix |
 | `reflect2` | not run | documents nvc reflection bounds the test calls incorrect |

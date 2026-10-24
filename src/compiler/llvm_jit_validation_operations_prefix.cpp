@@ -54,9 +54,12 @@ void validate_prefix_operation(
         [&](const auto& operation) {
             using OperationType = std::decay_t<decltype(operation)>;
                 if constexpr (std::is_same_v<OperationType, LoadConstant>) {
+                    // A null array constant (IEEE 1076-2008 5.3.2.1) has no
+                    // bits; like other null registers it is interpreter-only.
                     if (operation.value.width() == 0) {
-                        reject(process, index,
-                            "LoadConstant width must be greater than zero");
+                        reject_unsupported(process, index,
+                            "zero-width (null array) registers are "
+                            "interpreter-only");
                     }
                     result.uses_logic9 = result.uses_logic9
                         || operation.value.is_logic9();

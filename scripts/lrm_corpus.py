@@ -978,6 +978,11 @@ VERILATOR_NONSTANDARD = {
     # An out-of-bounds read of an unpacked array returns the element type's
     # default (IEEE 1800-2017 7.4.6); the expected sum assumes otherwise.
     "t_array_mda": "expects a value from an out-of-bounds array read",
+    # A part-select of an unpacked array runs in the direction of its
+    # declared range (IEEE 1800-2023 7.4.6, 11.5.1).
+    "t_sv_cpu": "selects pad[NUMPADS:1] from an unpacked array declared "
+        "[1:NUMPADS]; a part-select's range direction matches the "
+        "declaration",
     # `always begin if (a) ... end` has no timing control: a zero-delay loop
     # (IEEE 1800-2017 9.2.2.1).
     "t_tri_eqcase_input": "runs an always block without a timing control",
@@ -2488,6 +2493,15 @@ NVC_NONSTANDARD = {
     # 1076-2019 5.2.3.1).
     **{name: "reads 64-bit integer and physical values through VHPI"
        for name in ("issue978", "vhpi18")},
+    # A conversion to a constrained array subtype takes the subtype's
+    # bounds and matches elements left to left (IEEE 1076-2019 9.3.6), so
+    # sfixed(7 downto -8)(signed(v)) keeps the fraction bits.
+    "ieee9": "expects a conversion to a constrained sfixed subtype to keep "
+        "the operand's index range; IEEE 1076-2019 9.3.6 gives the result "
+        "the subtype's bounds",
+    # A relation has at most one relational operator (IEEE 1076-2019 9.1).
+    "range4": "chains relational operators (`ascending > descending = "
+        "false`); a relation has at most one (IEEE 1076-2019 9.1)",
 }
 
 NVC_SKIP_FLAGS = {

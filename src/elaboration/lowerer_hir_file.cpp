@@ -8,7 +8,9 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 
 namespace fsim::elaboration {
 namespace {
@@ -459,6 +461,25 @@ Lowerer::hir_vhdl_standard_enumeration_literal(
     } else if (source.referenced_name
         && !source.referenced_name->overloads.empty()) {
         return std::nullopt;
+    }
+    // `c.left` selects an element of a record object, not the SIDE literal;
+    // only a package prefix (`std.textio.left`) names a literal (IEEE
+    // 1076-2008 8.3).
+    if (const auto dot = std::string_view { source.text }.rfind('.');
+        dot != std::string_view::npos) {
+        auto prefix = std::string { std::string_view { source.text }
+                                        .substr(0U, dot) };
+        std::ranges::transform(prefix, prefix.begin(), [](const char c) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c)));
+        });
+        const auto package = std::string_view { prefix }.substr(
+            prefix.rfind('.') == std::string::npos ? 0U
+                                                   : prefix.rfind('.') + 1U);
+        if (package != "standard" && package != "textio"
+            && package != "env") {
+            return std::nullopt;
+        }
     }
     // These predefined enumeration literals are represented without an
     // owning declaration when their standard-package profile is implicit.

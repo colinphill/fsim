@@ -77,7 +77,7 @@ struct ConvertToTwoState {
     RegisterId source { };
 };
 
-inline constexpr std::size_t maximum_string_bytes = 4096;
+inline constexpr std::size_t maximum_string_bytes = 1U << 20U;
 inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes = 1024U * 1024U;
 inline constexpr std::size_t maximum_open_file_handles = 4'096;
@@ -213,7 +213,10 @@ enum class StringMethodOperator : std::uint8_t {
     // elements are returned as character literals (IEEE 1076-2019 5.7,
     // 16.2.2).
     vhdl_composite_element,
-    vhdl_character_element
+    vhdl_character_element,
+    // `first` (a count) copies of the character whose position is `second`:
+    // the value of an allocator `new string(1 to n)` (IEEE 1076-2008 9.3.7).
+    vhdl_string_fill
 };
 struct StringMethod {
     StringMethodOperator operation { };

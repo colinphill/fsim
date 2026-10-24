@@ -646,61 +646,63 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         resolver.sources = std::move(program.sources);
         design_.signals_[signal].vhdl_resolver = std::move(resolver);
     }
-    // An adapter that only copies its formals over the whole of one resolved
-    // actual is a source of that actual like a formal conversion (IEEE
+    // An adapter that only copies its formals over the whole of resolved
+    // actuals is a source of each actual like a formal conversion (IEEE
     // 1076-2019 14.7.3.2): its driving value follows the formals in the
     // same simulation cycle.
     for (auto& [index, routes] : adapters) {
-        const auto destination = routes.front().first;
-        if (!rejected.contains(destination)
-            || std::ranges::any_of(routes, [&](const auto& route) {
-                   return route.first != destination;
-               })) {
-            continue;
+        std::map<SignalId, std::vector<Route>> placed_by_destination;
+        for (const auto& [destination, route] : routes) {
+            placed_by_destination[destination].push_back(route);
         }
         const auto adapter = design_.process_view(index);
         if (std::ranges::any_of(adapter.driver_regions(),
                 [&](const auto& region) {
-                    return region.signal != destination;
+                    return !placed_by_destination.contains(region.signal);
                 })) {
             continue;
         }
-        const auto& info = design_.signal_info_[destination];
-        const auto& runtime_signal = design_.signals_[destination];
-        const bool resolved = runtime_signal.resolution
-                != ResolutionKind::none
-            || resolver_by_signal_.contains(destination)
-            || explicit_resolution(destination)
-                    .value_or(native_resolution(info))
-                != ResolutionKind::none;
-        if (!resolved || runtime_signal.vhdl_resolver
-            || vhdl_guarded_signal_kinds_.contains(destination)
-            || vhdl_unprotected_shared_signals_.contains(destination)
-            || input_targets.contains(destination)
-            || !info.systemverilog_net_type.empty()) {
-            continue;
-        }
-        std::vector<Route> placed;
-        for (const auto& route : routes) {
-            placed.push_back(route.second);
-        }
-        std::ranges::sort(placed, {}, &Route::offset);
-        std::uint64_t covered { };
         bool eligible = true;
-        for (const auto& route : placed) {
-            const auto& formal = design_.signals_[route.formal];
-            if (route.offset != covered || route.formal == destination
-                || formal.vhdl_resolver || input_targets.contains(route.formal)
-                || formal.value_kind != runtime_signal.value_kind) {
+        for (auto& [destination, placed] : placed_by_destination) {
+            const auto& info = design_.signal_info_[destination];
+            const auto& runtime_signal = design_.signals_[destination];
+            const bool resolved = runtime_signal.resolution
+                    != ResolutionKind::none
+                || resolver_by_signal_.contains(destination)
+                || explicit_resolution(destination)
+                        .value_or(native_resolution(info))
+                    != ResolutionKind::none;
+            if (!rejected.contains(destination) || !resolved
+                || runtime_signal.vhdl_resolver
+                || vhdl_guarded_signal_kinds_.contains(destination)
+                || vhdl_unprotected_shared_signals_.contains(destination)
+                || input_targets.contains(destination)
+                || !info.systemverilog_net_type.empty()) {
                 eligible = false;
                 break;
             }
-            covered += route.width;
+            std::ranges::sort(placed, {}, &Route::offset);
+            std::uint64_t covered { };
+            for (const auto& route : placed) {
+                const auto& formal = design_.signals_[route.formal];
+                if (route.offset != covered || route.formal == destination
+                    || formal.vhdl_resolver
+                    || input_targets.contains(route.formal)
+                    || formal.value_kind != runtime_signal.value_kind) {
+                    eligible = false;
+                    break;
+                }
+                covered += route.width;
+            }
+            if (!eligible || covered != signal_width(destination)) {
+                eligible = false;
+                break;
+            }
         }
-        if (!eligible || covered != signal_width(destination)) {
+        if (!eligible) {
             continue;
         }
-        // The adapter halts and keeps its driver, which the program sets.
+        // The adapter halts and keeps its drivers, which the programs set.
         const auto stub_id = adapter.id();
         Process stub;
         stub.id = stub_id;
@@ -708,14 +710,18 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         stub.language_standard = adapter.language_standard();
         stub.compatibility_profile = adapter.compatibility_profile();
         stub.initialize = false;
-        stub.driver_regions.push_back(
-            Process::DriverRegion { destination, 0U, 0U, true });
+        for (const auto& [destination, placed] : placed_by_destination) {
+            stub.driver_regions.push_back(
+                Process::DriverRegion { destination, 0U, 0U, true });
+        }
         stub.operations.emplace_back(Halt { });
         design_.rebuild_process_record(index, std::move(stub));
-        auto program = route_program(destination, placed, "port_driver_");
-        design_.signals_[destination].vhdl_conversion_drivers.push_back(
-            VhdlConversionDriver { stub_id, program.id, program.output,
-                std::move(program.sources) });
+        for (const auto& [destination, placed] : placed_by_destination) {
+            auto program = route_program(destination, placed, "port_driver_");
+            design_.signals_[destination].vhdl_conversion_drivers.push_back(
+                VhdlConversionDriver { stub_id, program.id, program.output,
+                    std::move(program.sources) });
+        }
     }
 }
 
@@ -810,6 +816,74 @@ bool HierarchyBuilder::vhdl_output_port_read(
     return vhdl_read_output_ports_->contains(port.value());
 }
 
+SignalId HierarchyBuilder::add_vhdl_formal_driving_mirror(
+    const SignalId formal)
+{
+    // The formal keeps its drivers; its resolver program gives its effective
+    // value from the actual, and the runtime copies its drivers' value to a
+    // mirror signal in the same cycle (IEEE 1076-2008 14.7.3.2).
+    const auto mirror = static_cast<SignalId>(design_.signals_.size());
+    if (static_cast<std::size_t>(mirror) != design_.signals_.size()) {
+        throw std::length_error { "too many SimIR signals" };
+    }
+    auto info = design_.signal_info_[formal];
+    info.id = mirror;
+    info.name += "$driving";
+    info.is_port = false;
+    auto signal = design_.signals_[formal];
+    signal.name = info.name;
+    signal.resolution = ResolutionKind::none;
+    signal.vhdl_resolver.reset();
+    signal.vhdl_conversion_drivers.clear();
+    design_.signal_by_name_.insert_or_assign(info.name, mirror);
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(std::move(signal));
+    design_.signals_[formal].vhdl_resolver->driving_mirror = mirror;
+    set_resolution(formal, ResolutionKind::vhdl_user_function);
+    vhdl_formal_driving_mirrors_.insert_or_assign(formal, mirror);
+    return mirror;
+}
+
+void HierarchyBuilder::read_vhdl_formal_driving_values(
+    Process& process, std::vector<SignalId>* const sources)
+{
+    // The out side of an inout formal reads the formal's driving value, not
+    // its effective value (IEEE 1076-2008 14.7.3.2).
+    if (vhdl_formal_driving_mirrors_.empty()) {
+        return;
+    }
+    const auto retarget = [&](SignalId& signal) {
+        const auto mirror = vhdl_formal_driving_mirrors_.find(signal);
+        if (mirror == vhdl_formal_driving_mirrors_.end()) {
+            return false;
+        }
+        signal = mirror->second;
+        return true;
+    };
+    for (std::size_t index { }; index < process.operations.size(); ++index) {
+        auto operation = process.operations.expanded(index);
+        bool changed { };
+        if (auto* const read = operation_get_if<ReadSignal>(&operation)) {
+            changed = retarget(read->signal);
+        } else if (auto* const wait = operation_get_if<WaitOn>(&operation)) {
+            for (auto& signal : wait->signals) {
+                changed = retarget(signal) || changed;
+            }
+        }
+        if (changed) {
+            process.operations.replace(index, std::move(operation));
+        }
+    }
+    for (auto& sensitivity : process.static_sensitivity) {
+        (void)retarget(sensitivity.signal);
+    }
+    if (sources != nullptr) {
+        for (auto& source : *sources) {
+            (void)retarget(source);
+        }
+    }
+}
+
 bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     Lowerer& lowerer,
     const semantic::StatementId statement,
@@ -836,17 +910,39 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
                 .value_or(native_resolution(
                     design_.signal_info_[destination]))
             != ResolutionKind::none;
+    // Only an unresolved inout formal splits its effective value from its
+    // driving value; a resolved one keeps its continuous assignments.
+    if (conversion->effective && resolved) {
+        return false;
+    }
+    // A subelement of an unresolved actual takes the converted value as its
+    // driver; a resolved one keeps its assignment.
+    if (conversion->slice && resolved) {
+        return false;
+    }
     auto& program = conversion->conversion;
     auto& process = program.program.process;
     process.language_standard = owner.standard;
     process.compatibility_profile = owner.compatibility_profile;
+    if (!conversion->effective) {
+        read_vhdl_formal_driving_values(process, &program.sources);
+    }
     canonicalize_process_operations(process);
     const auto process_id = process.id;
     design_.append_process_record(std::move(process));
-    if (resolved) {
-        // The converted value is one driver of the resolved actual: a
-        // halted stub owns that driver, and the runtime assigns it the
-        // program's result in the cycle a source changes.
+    if (conversion->effective) {
+        VhdlSignalResolver resolver {
+            process_id, program.program.input, program.program.output, { } };
+        resolver.sources = std::move(program.sources);
+        design_.signals_[destination].vhdl_resolver = std::move(resolver);
+        add_vhdl_formal_driving_mirror(destination);
+        return true;
+    }
+    if (resolved || conversion->slice) {
+        // The converted value is one driver of the resolved actual, or of a
+        // subelement of the actual: a halted stub owns that driver, and the
+        // runtime assigns it the program's result in the cycle a source
+        // changes.
         const auto stub_index = design_.process_count();
         Process stub;
         stub.id = static_cast<ProcessId>(stub_index);
@@ -859,14 +955,20 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
         stub.language_standard = owner.standard;
         stub.compatibility_profile = owner.compatibility_profile;
         stub.initialize = false;
-        stub.driver_regions.push_back(Process::DriverRegion {
-            destination, 0U, 0U, true });
+        stub.driver_regions.push_back(conversion->slice
+                ? Process::DriverRegion { destination,
+                      conversion->slice->first, conversion->slice->second,
+                      false }
+                : Process::DriverRegion { destination, 0U, 0U, true });
         stub.operations.emplace_back(Halt { });
         design_.append_process_record(std::move(stub));
+        VhdlConversionDriver driver { static_cast<ProcessId>(stub_index),
+            process_id, program.program.output, std::move(program.sources) };
+        if (conversion->slice) {
+            driver.offset = conversion->slice->first;
+        }
         design_.signals_[destination].vhdl_conversion_drivers.push_back(
-            VhdlConversionDriver { static_cast<ProcessId>(stub_index),
-                process_id, program.program.output,
-                std::move(program.sources) });
+            std::move(driver));
         return true;
     }
     VhdlSignalResolver resolver {
@@ -894,44 +996,6 @@ bool HierarchyBuilder::lower_compiled_vhdl_input_conversion(
     auto program = lowerer.lower_hir_vhdl_conversion_program(
         actual, destination, path, context);
     if (!program) {
-        return false;
-    }
-    // A resolved source's effective value settles after its drivers; an
-    // aggregate of such signals (std_logic) keeps the port adapter, which
-    // follows it. Resolution kinds are bound later, so read the declared
-    // resolution from the source's type.
-    // One association is a whole conversion of its source, as for a plain
-    // conversion actual.
-    // Nested formal parts count each leaf association.
-    const auto leaf_associations = [&](const auto& self,
-                                       const semantic::ExpressionId id,
-                                       const std::size_t depth) -> std::size_t {
-        const auto expression = specialization.find_expression(id);
-        if (!expression || expression->vhdl == nullptr || depth > 16U
-            || expression->vhdl->kind
-                != semantic::vhdl::ExpressionKind::aggregate
-            || (depth != 0U
-                && expression->vhdl->text != "@vhdl-formal-subelements")) {
-            return 1U;
-        }
-        std::size_t count { };
-        for (const auto& association : expression->vhdl->associations) {
-            count += self(self, association.value, depth + 1U);
-        }
-        return count;
-    };
-    if (const auto expression = specialization.find_expression(actual);
-        expression && expression->vhdl != nullptr
-        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
-        && leaf_associations(leaf_associations, actual, 0U) > 1U
-        && std::ranges::any_of(program->sources, [&](const SignalId source) {
-               return source < design_.signal_info_.size()
-                   && (native_resolution(design_.signal_info_[source])
-                           != ResolutionKind::none
-                       || explicit_resolution(source)
-                       || (source < design_.signals_.size()
-                           && design_.signals_[source].vhdl_resolver));
-           })) {
         return false;
     }
     auto& process = program->program.process;

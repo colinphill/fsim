@@ -65,8 +65,14 @@ struct VhdlSignalResolver {
   std::vector<VhdlResolverVariant> variants{};
   // A port-association conversion (IEEE 1076-2008 6.5.7.1): the program
   // reads these signals and runs, in the same simulation cycle, whenever
-  // one of them changes. Such a signal has no drivers of its own.
+  // one of them changes. Such a signal has no drivers of its own, unless
+  // it is an inout formal whose effective value comes from its actual.
   std::vector<SignalId> sources{};
+  // For such an inout formal (IEEE 1076-2008 14.7.3.2, 14.7.3.3): the signal
+  // that holds the formal's driving value, which the runtime sets from the
+  // formal's drivers in the same simulation cycle; the formal's out-side
+  // conversion reads it.
+  std::optional<SignalId> driving_mirror{};
 
   friend bool operator==(
       const VhdlSignalResolver&, const VhdlSignalResolver&) = default;
@@ -82,6 +88,9 @@ struct VhdlConversionDriver {
   ProcessId program{};
   RegisterId output{};
   std::vector<SignalId> sources{};
+  // The bit offset of the subelement the program's value drives; the whole
+  // signal when absent.
+  std::optional<std::uint32_t> offset{};
 
   friend bool operator==(
       const VhdlConversionDriver&, const VhdlConversionDriver&) = default;

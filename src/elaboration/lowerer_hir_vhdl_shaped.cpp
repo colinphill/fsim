@@ -336,6 +336,20 @@ Lowerer::hir_vhdl_shaped_profile(
     } else {
         const auto declared_element = hir_vhdl_chain_element_subtype(
             subtype, *array->element_subtype);
+        // An element of an unconstrained array type takes its index ranges
+        // from each object as well (5.3.2.2): an object's shape is its own
+        // ranges then its element's, and `v(i)(j)` names a leaf (8.4).
+        if (open_array) {
+            if (auto nested = hir_vhdl_shaped_profile(declared_element, true)) {
+                nested->subtype = subtype;
+                nested->outer_rank = profile.constraints.size();
+                nested->constraints.insert(nested->constraints.begin(),
+                    profile.constraints.begin(), profile.constraints.end());
+                nested->type.vhdl_rank = static_cast<std::uint32_t>(
+                    nested->constraints.size());
+                return nested;
+            }
+        }
         const auto element = hir_effective_vhdl_subtype(declared_element);
         if (!element || !element->executable_width
             || *element->executable_width == 0U
@@ -639,6 +653,28 @@ std::optional<Lowerer::HirVhdlShapedAccess> Lowerer::hir_vhdl_shaped_access(
         || expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
         || expression->vhdl->operands.size() < 2U) {
         return std::nullopt;
+    }
+    // A leaf of an array of unconstrained arrays: both indexes select in
+    // the one flattened shape.
+    if (const auto row = specialized_hir_unit_->find_expression(
+            expression->vhdl->operands.front());
+        row && row->vhdl != nullptr
+        && row->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && row->vhdl->operands.size() >= 2U) {
+        const auto* local = hir_vhdl_shaped_prefix(row->vhdl->operands.front());
+        if (local != nullptr && local->profile.outer_rank != 0U
+            && local->profile.outer_rank == row->vhdl->operands.size() - 1U
+            && local->profile.constraints.size()
+                == local->profile.outer_rank
+                    + expression->vhdl->operands.size() - 1U) {
+            HirVhdlShapedAccess access { local, { }, false };
+            access.selectors.assign(row->vhdl->operands.begin() + 1,
+                row->vhdl->operands.end());
+            access.selectors.insert(access.selectors.end(),
+                expression->vhdl->operands.begin() + 1,
+                expression->vhdl->operands.end());
+            return access;
+        }
     }
     auto element = hir_vhdl_shaped_access(expression->vhdl->operands.front());
     if (!element || element->leaf
@@ -1856,7 +1892,45 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
                         { } });
                 });
         }
-        if (profile.constraints.size() != 1U) {
+        // An array of unconstrained arrays: the value's element subtype
+        // supplies the element's index ranges (5.3.2.2).
+        std::vector<HirPackedRange> inner;
+        if (profile.outer_rank == 1U) {
+            const auto shape = hir_vhdl_shape(value_id);
+            if (!shape) {
+                return (shaped_rejected("allocator element shape"),
+                    std::nullopt);
+            }
+            const auto element = std::ranges::find_if(
+                shape->element_constraints,
+                [](const semantic::vhdl::ElementConstraint& constraint) {
+                    return constraint.path.size() == 1U
+                        && constraint.path.front().empty();
+                });
+            if (element == shape->element_constraints.end()) {
+                return (shaped_rejected("allocator element shape"),
+                    std::nullopt);
+            }
+            for (const auto& constraint : element->constraints) {
+                if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                    continue;
+                }
+                const auto left = constraint.left ? constraint.left
+                    : constraint.left_expression
+                    ? hir_constant_integer(*constraint.left_expression)
+                    : std::nullopt;
+                const auto right = constraint.right ? constraint.right
+                    : constraint.right_expression
+                    ? hir_constant_integer(*constraint.right_expression)
+                    : std::nullopt;
+                if (!left || !right) {
+                    return (shaped_rejected("allocator element bounds"),
+                        std::nullopt);
+                }
+                inner.push_back({ *left, *right, constraint.descending });
+            }
+        }
+        if (profile.constraints.size() != 1U + inner.size()) {
             return (shaped_rejected("allocator value rank"), std::nullopt);
         }
         const auto value_source = specialized_hir_unit_->find_expression(value_id);
@@ -1885,10 +1959,18 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_shaped_allocator(
         if (!lowered) {
             return std::nullopt;
         }
-        create({ load_integer(range->left, 64U, frontend::ValueDomain::Integer),
-                   load_integer(range->right, 64U,
-                       frontend::ValueDomain::Integer) },
-            { static_cast<std::uint8_t>(range->descending ? 1U : 0U) });
+        std::vector<RegisterId> bounds;
+        std::vector<std::uint8_t> directions;
+        inner.insert(inner.begin(),
+            HirPackedRange { range->left, range->right, range->descending });
+        for (const auto& dimension : inner) {
+            bounds.push_back(load_integer(
+                dimension.left, 64U, frontend::ValueDomain::Integer));
+            bounds.push_back(load_integer(
+                dimension.right, 64U, frontend::ValueDomain::Integer));
+            directions.push_back(dimension.descending ? 1U : 0U);
+        }
+        create(std::move(bounds), std::move(directions));
         process_.operations.emplace_back(VhdlShaped {
             VhdlShapedOperation::from_packed,
             container,

@@ -1535,6 +1535,7 @@ use work.second_values.all;
 entity ambiguous_package_constant is
 end entity ambiguous_package_constant;
 architecture rtl of ambiguous_package_constant is
+  constant copy : natural := width;
 begin
 end architecture rtl;
 )",

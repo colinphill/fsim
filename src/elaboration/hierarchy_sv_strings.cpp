@@ -171,7 +171,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
     if (initial_value.size() > maximum_string_bytes) {
         report(
             "FSIM-ELAB-SVSTRING-007",
-            "module string initializer exceeds the 4096-byte limit",
+            "module string initializer exceeds the string length limit",
             declaration_span);
         return false;
     }

@@ -12,12 +12,17 @@ using namespace runtime::simir;
 
 namespace {
 
-bool float_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
+bool float_type_name(const std::string_view spelling)
 {
-    const auto name = lowercase_vhdl_simple_name(subtype.type_mark.spelling);
+    const auto name = lowercase_vhdl_simple_name(spelling);
     return name == "float" || name == "unresolved_float"
         || name == "u_float" || name == "float32"
         || name == "unresolved_float32" || name == "u_float32";
+}
+
+bool float_subtype_name(const semantic::vhdl::SubtypeIndication& subtype)
+{
+    return float_type_name(subtype.type_mark.spelling);
 }
 
 bool float_result_name(const std::string_view name)
@@ -45,13 +50,194 @@ bool packed_result_name(const std::string_view name)
         || name == "to_std_logic_vector";
 }
 
+bool float_arithmetic_operator(const std::string_view text)
+{
+    return text == "+" || text == "-" || text == "*" || text == "/";
+}
+
+bool float_relational_operator(const std::string_view text)
+{
+    return text == "=" || text == "/=" || text == "<" || text == "<="
+        || text == ">" || text == ">=";
+}
+
 } // namespace
+
+bool Lowerer::hir_vhdl_intrinsic_member_present(
+    const std::string_view member) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto& design = specialized_hir_unit_->design();
+    auto& cached = hir_vhdl_intrinsic_member_presence_[std::string { member }];
+    if (cached.first != &design) {
+        cached = { &design,
+            std::ranges::any_of(design.vhdl_units(),
+                [&](const semantic::vhdl::Unit& unit) {
+                    return std::ranges::find(
+                               unit.standard_package_declarations, member)
+                        != unit.standard_package_declarations.end();
+                }) };
+    }
+    return cached.second;
+}
+
+bool Lowerer::hir_vhdl_float_valued(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr) {
+        return false;
+    }
+    const auto& source = *expression->vhdl;
+    if (source.kind == semantic::vhdl::ExpressionKind::binary) {
+        return float_arithmetic_operator(source.text)
+            && is_hir_vhdl_float_operator(expression_id);
+    }
+    if (source.kind == semantic::vhdl::ExpressionKind::call
+        && float_result_name(lowercase_vhdl_simple_name(source.text))
+        && is_hir_vhdl_float_function(expression_id)) {
+        return true;
+    }
+    auto subtype = hir_vhdl_expression_subtype(expression_id);
+    // A user subtype of a float type (`subtype t is float32`) is one too.
+    const auto float_subtype = [&](const semantic::vhdl::SubtypeIndication& value) {
+        return float_subtype_name(value)
+            || float_type_name(
+                hir_vhdl_subtype_chain(value, source.scope).spelling);
+    };
+    if (subtype && !float_subtype(*subtype)) {
+        subtype = hir_effective_vhdl_subtype(*subtype);
+    }
+    return subtype && float_subtype(*subtype)
+        && hir_expression_width(expression_id, hir_process_scope_)
+            == std::optional<std::size_t> { 32U };
+}
+
+bool Lowerer::is_hir_vhdl_float_operator(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::binary
+        || expression->vhdl->operands.size() != 2U
+        || (!float_arithmetic_operator(expression->vhdl->text)
+            && !float_relational_operator(expression->vhdl->text))) {
+        return false;
+    }
+    if (!hir_vhdl_intrinsic_member_present("float32")) {
+        return false;
+    }
+    const auto& source = *expression->vhdl;
+    // A user operator overload keeps its own meaning; one whose formals
+    // are not floats (`"+"(a, b : rec)`) is not this operator.
+    if (source.referenced_name && source.referenced_name->selected) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            *source.referenced_name->selected);
+        if (declaration && declaration->vhdl != nullptr) {
+            static const std::vector<semantic::DeclarationId> none;
+            const auto& formals = declaration->vhdl->callable
+                ? declaration->vhdl->callable->formals
+                : none;
+            const bool float_formal = std::ranges::any_of(formals,
+                [&](const semantic::DeclarationId formal_id) {
+                    const auto formal
+                        = specialized_hir_unit_->find_declaration(formal_id);
+                    return formal && formal->vhdl != nullptr
+                        && formal->vhdl->subtype
+                        && (float_subtype_name(*formal->vhdl->subtype)
+                            || float_type_name(hir_vhdl_subtype_chain(
+                                *formal->vhdl->subtype,
+                                formal->vhdl->scope).spelling));
+                });
+            if (formals.empty() || float_formal) {
+                return false;
+            }
+        }
+    }
+    const auto lhs = hir_vhdl_float_valued(source.operands[0]);
+    const auto rhs = hir_vhdl_float_valued(source.operands[1]);
+    if (!lhs && !rhs) {
+        return false;
+    }
+    const auto other = lhs ? source.operands[1] : source.operands[0];
+    return (lhs && rhs) || hir_vhdl_expression_is_real(other)
+        || hir_expression_domain(other, hir_process_scope_)
+            == std::optional { frontend::ValueDomain::Integer };
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_float_as_real(
+    const semantic::ExpressionId expression_id)
+{
+    using Kind = frontend::SystemVerilogScalarKind;
+    if (hir_vhdl_float_valued(expression_id)) {
+        const auto bits = lower_hir_expression(expression_id, 32U);
+        if (!bits) {
+            return std::nullopt;
+        }
+        const auto payload = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(CopyRegister { payload, *bits });
+        const auto real = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            runtime::SystemVerilogScalarBinaryOperator::Convert, real,
+            payload, payload, Kind::ShortReal, Kind::ShortReal, Kind::Real });
+        return real;
+    }
+    if (hir_vhdl_expression_is_real(expression_id)) {
+        return lower_hir_expression(expression_id, 64U, Kind::Real);
+    }
+    if (hir_expression_domain(expression_id, hir_process_scope_)
+        == std::optional { frontend::ValueDomain::Integer }) {
+        const auto width = hir_expression_width(
+            expression_id, hir_process_scope_).value_or(32U);
+        const auto integer = lower_hir_expression(expression_id, width);
+        if (!integer) {
+            return std::nullopt;
+        }
+        const auto real = allocate_register(64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogMath {
+            .function = runtime::SystemVerilogMathFunction::Itor,
+            .destination = real,
+            .first = *integer,
+            .first_width = static_cast<std::uint32_t>(
+                register_width(*integer)),
+            .first_signed = true,
+        });
+        return real;
+    }
+    return std::nullopt;
+}
+
+RegisterId Lowerer::hir_vhdl_real_to_float_bits(const RegisterId real)
+{
+    using Kind = frontend::SystemVerilogScalarKind;
+    const auto payload = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogScalarBinary {
+        runtime::SystemVerilogScalarBinaryOperator::Convert, payload, real,
+        real, Kind::Real, Kind::Real, Kind::ShortReal });
+    const auto bits = allocate_register(32U, frontend::ValueDomain::Logic9);
+    process_.operations.emplace_back(CopyRegister { bits, payload });
+    return bits;
+}
 
 bool Lowerer::is_hir_vhdl_float_function(
     const semantic::ExpressionId expression_id) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return false;
+    }
+    if (is_hir_vhdl_float_operator(expression_id)) {
+        return true;
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
@@ -64,7 +250,8 @@ bool Lowerer::is_hir_vhdl_float_function(
     const auto& source = *expression->vhdl;
     const auto name = lowercase_vhdl_simple_name(source.text);
     if (!float_result_name(name) && !boolean_result_name(name)
-        && !packed_result_name(name) && name != "to_integer") {
+        && !packed_result_name(name) && name != "to_integer"
+        && name != "to_real") {
         return false;
     }
     if (!hir_resolver().vhdl_standard_package_member_visible(
@@ -80,10 +267,7 @@ bool Lowerer::is_hir_vhdl_float_function(
     if (source.operands.empty()) {
         return true;
     }
-    const auto first = source.operands.front();
-    const auto subtype = hir_vhdl_expression_subtype(first);
-    return (subtype && float_subtype_name(*subtype))
-        || is_hir_vhdl_float_function(first);
+    return hir_vhdl_float_valued(source.operands.front());
 }
 
 std::optional<Lowerer::HirVhdlIntrinsicProfile>
@@ -95,7 +279,18 @@ Lowerer::hir_vhdl_float_function_profile(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary) {
+        return float_relational_operator(expression->vhdl->text)
+            ? HirVhdlIntrinsicProfile {
+                  1U, frontend::ValueDomain::Boolean, false }
+            : HirVhdlIntrinsicProfile {
+                  32U, frontend::ValueDomain::Logic9, false };
+    }
     const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
+    if (name == "to_real") {
+        return HirVhdlIntrinsicProfile {
+            64U, frontend::ValueDomain::Bit2, false };
+    }
     if (float_result_name(name)) {
         return HirVhdlIntrinsicProfile {
             32U, frontend::ValueDomain::Logic9, false };
@@ -126,12 +321,15 @@ bool Lowerer::validate_hir_vhdl_float_context(
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     const auto name = lowercase_vhdl_simple_name(expression->vhdl->text);
-    if (!float_result_name(name)) {
+    if (expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || !float_result_name(name)) {
         return true;
     }
     const auto effective = hir_effective_vhdl_subtype(context)
         .value_or(context);
-    auto valid = float_subtype_name(effective);
+    auto valid = float_subtype_name(effective)
+        || float_type_name(
+            hir_vhdl_subtype_chain(context, expression->vhdl->scope).spelling);
     if (valid && !effective.constraints.empty()) {
         const auto& range = effective.constraints.front();
         const auto left = hir_range_left(range);
@@ -164,6 +362,100 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
     const auto& source = *expression->vhdl;
     const auto root_name = lowercase_vhdl_simple_name(source.text);
     const auto span = hir_source_span(source.source);
+    using ScalarKind = frontend::SystemVerilogScalarKind;
+    using ScalarOperator = runtime::SystemVerilogScalarBinaryOperator;
+    // binary32 operations are exact in REAL and rounded once to binary32
+    // (round_nearest, IEEE 1076-2019 G.5).
+    const auto real_operation = [&](const ScalarOperator operation,
+                                    const RegisterId lhs,
+                                    const RegisterId rhs) {
+        const auto compare = operation >= ScalarOperator::Equal;
+        const auto destination = allocate_register(
+            compare ? 1U : 64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(SystemVerilogScalarBinary {
+            operation, destination, lhs, rhs, ScalarKind::Real,
+            ScalarKind::Real,
+            compare ? ScalarKind::None : ScalarKind::Real });
+        if (!compare) {
+            return destination;
+        }
+        const auto result = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(CopyRegister { result, destination });
+        return result;
+    };
+    const auto scalar_operator = [](const std::string_view text)
+        -> std::optional<ScalarOperator> {
+        if (text == "+" || text == "add") {
+            return ScalarOperator::Add;
+        }
+        if (text == "-" || text == "subtract") {
+            return ScalarOperator::Subtract;
+        }
+        if (text == "*" || text == "multiply") {
+            return ScalarOperator::Multiply;
+        }
+        if (text == "/" || text == "divide") {
+            return ScalarOperator::Divide;
+        }
+        if (text == "=" || text == "eq") {
+            return ScalarOperator::Equal;
+        }
+        if (text == "/=" || text == "ne") {
+            return ScalarOperator::NotEqual;
+        }
+        if (text == "<" || text == "lt") {
+            return ScalarOperator::Less;
+        }
+        if (text == "<=" || text == "le") {
+            return ScalarOperator::LessEqual;
+        }
+        if (text == ">" || text == "gt") {
+            return ScalarOperator::Greater;
+        }
+        if (text == ">=" || text == "ge") {
+            return ScalarOperator::GreaterEqual;
+        }
+        return std::nullopt;
+    };
+    const auto runtime_binary = [&](const std::string_view text)
+        -> std::optional<RegisterId> {
+        const auto operation = scalar_operator(text);
+        if (!operation || source.operands.size() < 2U) {
+            return std::nullopt;
+        }
+        const auto lhs = lower_hir_vhdl_float_as_real(source.operands[0]);
+        const auto rhs = lhs
+            ? lower_hir_vhdl_float_as_real(source.operands[1])
+            : std::nullopt;
+        if (!lhs || !rhs) {
+            return std::nullopt;
+        }
+        const auto value = real_operation(*operation, *lhs, *rhs);
+        return *operation >= ScalarOperator::Equal
+            ? value
+            : hir_vhdl_real_to_float_bits(value);
+    };
+    if (source.kind == semantic::vhdl::ExpressionKind::binary) {
+        const auto value = runtime_binary(source.text);
+        if (!value) {
+            report("FSIM-ELAB-VHFLT-003",
+                "binary32 operator '" + source.text
+                    + "' requires FLOAT, REAL or INTEGER operands",
+                span);
+        }
+        return { true, value };
+    }
+    if (root_name == "to_real") {
+        const auto value = source.operands.size() == 1U
+            ? lower_hir_vhdl_float_as_real(source.operands.front())
+            : std::nullopt;
+        if (!value) {
+            report("FSIM-ELAB-VHFLT-003",
+                "to_real requires one binary32 FLOAT operand", span);
+        }
+        return { true, value };
+    }
 
     const auto valid_dimensions = [&](const semantic::vhdl::Expression& call) {
         if (call.operands.size() != 2U) {
@@ -258,6 +550,67 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         return std::nullopt;
     };
 
+    // TO_FLOAT of a run-time REAL or INTEGER with the binary32 sizes.
+    const auto runtime_float = [&]() -> std::optional<RegisterId> {
+        if (root_name == "to_float" && !source.operands.empty()) {
+            const auto sizes = source.operands.size() == 1U
+                || (source.operands.size() == 2U
+                    && hir_vhdl_float_valued(source.operands[1]))
+                || (source.operands.size() >= 3U
+                    && hir_constant_integer(source.operands[1])
+                        == std::optional<std::int64_t> { 8 }
+                    && hir_constant_integer(source.operands[2])
+                        == std::optional<std::int64_t> { 23 });
+            const auto argument = source.operands.front();
+            if (!sizes
+                || (!hir_vhdl_expression_is_real(argument)
+                    && hir_expression_domain(argument, hir_process_scope_)
+                        != std::optional {
+                            frontend::ValueDomain::Integer })) {
+                return std::nullopt;
+            }
+            const auto real = lower_hir_vhdl_float_as_real(argument);
+            return real ? std::optional { hir_vhdl_real_to_float_bits(*real) }
+                        : std::nullopt;
+        }
+        if (root_name == "add" || root_name == "subtract"
+            || root_name == "multiply" || root_name == "divide") {
+            return runtime_binary(root_name);
+        }
+        if (root_name == "abs" && source.operands.size() == 1U) {
+            const auto real = lower_hir_vhdl_float_as_real(
+                source.operands.front());
+            if (!real) {
+                return std::nullopt;
+            }
+            const auto zero = load_constant(
+                unsigned_value(std::bit_cast<std::uint64_t>(0.0), 64U),
+                frontend::ValueDomain::Bit2);
+            const auto negative = real_operation(
+                ScalarOperator::Less, *real, zero);
+            const auto negated = real_operation(
+                ScalarOperator::Subtract, zero, *real);
+            const auto magnitude = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ConditionalSelect {
+                magnitude, negative, negated, *real });
+            return hir_vhdl_real_to_float_bits(magnitude);
+        }
+        return std::nullopt;
+    };
+    if (float_result_name(root_name) && !evaluate(expression_id)) {
+        if (const auto value = runtime_float()) {
+            return { true, value };
+        }
+    }
+    if (boolean_result_name(root_name) && scalar_operator(root_name)
+        && (!evaluate(source.operands.front())
+            || (source.operands.size() > 1U
+                && !evaluate(source.operands[1])))) {
+        if (const auto value = runtime_binary(root_name)) {
+            return { true, value };
+        }
+    }
     if (float_result_name(root_name)) {
         const auto bits = evaluate(expression_id);
         if (!bits) {

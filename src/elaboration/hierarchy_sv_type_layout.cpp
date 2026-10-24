@@ -285,8 +285,10 @@ std::optional<std::size_t> systemverilog_declaration_width(
                             == semantic::sv::TypeForm::packed_structure
                         || record.form
                             == semantic::sv::TypeForm::packed_union
-                        || record.form
-                            == semantic::sv::TypeForm::tagged_union
+                        || (record.form
+                                == semantic::sv::TypeForm::tagged_union
+                            && !systemverilog_tagged_union_aggregate(
+                                working_specialization, record))
                         || (tagged_member_depth != 0U
                             && record.form
                                 == semantic::sv::TypeForm::unpacked_structure);
@@ -388,6 +390,59 @@ std::optional<std::size_t> systemverilog_declaration_width(
         return width;
     };
     return resolve(resolve, *declaration.type);
+}
+
+bool systemverilog_tagged_union_aggregate(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeDefinition& type)
+{
+    if (type.form != semantic::sv::TypeForm::tagged_union) {
+        return false;
+    }
+    const semantic::CompiledDesignResolver resolver { specialization };
+    std::unordered_set<std::uint32_t> visiting;
+    const auto unpacked = [&](const auto& self,
+                              const semantic::sv::TypeDefinition& record)
+        -> bool {
+        const auto declaration = record.declaration.valid()
+            ? specialization.find_declaration(record.declaration)
+            : std::nullopt;
+        const auto scope = declaration && declaration->systemverilog != nullptr
+            ? declaration->systemverilog->scope
+            : specialization.scope();
+        return std::ranges::any_of(record.members,
+            [&](const semantic::sv::PackedMember& member) {
+                const auto effective
+                    = resolver.effective_systemverilog_type(member.type, scope)
+                          .value_or(member.type);
+                const auto& spelling = effective.target.spelling;
+                if (effective.container_form
+                    || !effective.unpacked_dimensions.empty()
+                    || effective.value_form == semantic::sv::TypeForm::string
+                    || spelling == "string" || spelling == "real"
+                    || spelling == "shortreal" || spelling == "realtime") {
+                    return true;
+                }
+                if (!effective.target.target.valid()
+                    || !visiting.insert(effective.target.target.value())
+                            .second) {
+                    return false;
+                }
+                const auto definition
+                    = specialization.find_type(effective.target.target);
+                if (!definition || definition->systemverilog == nullptr) {
+                    return false;
+                }
+                // A nested structure or union is laid out with the tagged
+                // union unless one of its own members has no packed form.
+                const auto form = definition->systemverilog->form;
+                return (form == semantic::sv::TypeForm::unpacked_structure
+                           || form == semantic::sv::TypeForm::unpacked_union
+                           || form == semantic::sv::TypeForm::tagged_union)
+                    && self(self, *definition->systemverilog);
+            });
+    };
+    return unpacked(unpacked, type);
 }
 
 std::optional<ContainerType> systemverilog_container_type(
@@ -729,10 +784,14 @@ std::optional<ContainerType> systemverilog_container_type(
                 return std::nullopt;
             }
             const auto& type = *definition->systemverilog;
+            const bool tagged_aggregate
+                = systemverilog_tagged_union_aggregate(
+                    working_specialization, type);
             if (type.form
                     == semantic::sv::TypeForm::unpacked_structure
                 || type.form
-                    == semantic::sv::TypeForm::unpacked_union) {
+                    == semantic::sv::TypeForm::unpacked_union
+                || tagged_aggregate) {
                 result.element_kind
                     = ContainerElementKind::Aggregate;
                 result.element_width = 0U;
@@ -741,7 +800,33 @@ std::optional<ContainerType> systemverilog_container_type(
                 result.aggregate_value = box_leaf;
                 result.element_nominal_type
                     = nominal_identity(candidate);
+                // A boxed packed leaf of `width` four-state bits.
+                const auto packed_leaf = [](const std::uint32_t width) {
+                    ContainerType leaf;
+                    leaf.element_kind = ContainerElementKind::Packed;
+                    leaf.element_width = width;
+                    leaf.fixed = true;
+                    leaf.index_left = 0;
+                    leaf.index_right = 0;
+                    leaf.dimensions.emplace_back(0, 0);
+                    return leaf;
+                };
+                // The tag leads the members; a void member holds no value.
+                if (tagged_aggregate) {
+                    result.member_names.emplace_back(
+                        systemverilog_tagged_union_tag_member);
+                    result.element_types.push_back(packed_leaf(
+                        std::max<std::uint32_t>(1U,
+                            static_cast<std::uint32_t>(std::bit_width(
+                                type.members.size() - 1U)))));
+                }
                 for (const auto& member : type.members) {
+                    if (tagged_aggregate
+                        && member.type.target.spelling == "void") {
+                        result.member_names.push_back(member.name);
+                        result.element_types.push_back(packed_leaf(1U));
+                        continue;
+                    }
                     auto member_type = self(self, member.type, true,
                         definition_scope(type, scope));
                     if (!member_type) {

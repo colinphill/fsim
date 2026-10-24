@@ -93,6 +93,9 @@ systemverilog_random_distribution_kind(std::string_view spelling) noexcept;
     std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<std::string_view>
 vhdl_logic_string_function_name(std::string_view spelling) noexcept;
+// The static range constraint of an integer subtype, if it has one.
+[[nodiscard]] std::optional<frontend::IntegerRange> vhdl_integer_range(
+    const semantic::vhdl::SubtypeIndication& subtype);
 // The target name of a call through a subprogram alias whose target has no
 // declaration, a predefined or IEEE subprogram (IEEE 1076-2008 6.6.3):
 // `alias s is to_string [std_ulogic return string]` makes `s(x)` a call of
@@ -403,16 +406,32 @@ public:
         HirVhdlResolverProgram program;
         std::vector<SignalId> sources;
     };
+    // A conversion program for a subelement of its destination (`r.inner`)
+    // produces that subelement's value.
+    struct HirInputActualMember {
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+        bool signed_value { };
+        std::optional<frontend::IntegerRange> integer_range;
+    };
     [[nodiscard]] std::optional<HirVhdlConversionProgram>
     lower_hir_vhdl_conversion_program(semantic::ExpressionId expression,
         SignalId destination, std::string_view hierarchy,
-        std::optional<semantic::vhdl::SubtypeIndication> vhdl_context);
+        std::optional<semantic::vhdl::SubtypeIndication> vhdl_context,
+        std::optional<HirInputActualMember> member = std::nullopt);
     // The concurrent assignment the parser derives from an output port's
     // formal conversion `f(formal) => actual`, as a conversion program of
     // the actual signal.
     struct HirVhdlFormalConversion {
         SignalId destination { };
         HirVhdlConversionProgram conversion;
+        // The effective value of an inout formal, converted from its actual
+        // (IEEE 1076-2008 14.7.3.3); otherwise the formal's value reaching
+        // its actual.
+        bool effective { };
+        // The bit offset and width of the subelement of the destination the
+        // conversion drives (`r.inner`); the whole destination when absent.
+        std::optional<std::pair<std::uint32_t, std::uint32_t>> slice;
     };
     [[nodiscard]] std::optional<HirVhdlFormalConversion>
     lower_hir_vhdl_formal_conversion(semantic::StatementId statement,
@@ -585,6 +604,7 @@ private:
             input_actual_assignment_type;
         std::optional<semantic::vhdl::SubtypeIndication>
             input_actual_vhdl_context;
+        std::optional<HirInputActualMember> input_actual_member;
         std::optional<SignalId> output_actual_source;
         std::optional<semantic::ExpressionId> output_actual;
         // The bit offset and width within the actual that one instance of
@@ -808,6 +828,10 @@ private:
         std::size_t leaf_width { };
         frontend::ValueDomain leaf_domain { frontend::ValueDomain::Unknown };
         bool leaf_signed { };
+        // An array of unconstrained arrays designated by an access type:
+        // the element's index ranges follow the `outer_rank` ranges of the
+        // array itself in `constraints`, and the leaves are the elements.
+        std::size_t outer_rank { };
         ContainerType type;
     };
 
@@ -1429,6 +1453,19 @@ private:
     // The 1 to N range a predefined STRING gives a string literal.
     [[nodiscard]] std::optional<HirPackedRange> hir_vhdl_string_literal_range(
         std::string_view value);
+    // The range of an array index subtype named by `name`: its declared
+    // constraint, its type's range, or a predefined INTEGER subtype.
+    [[nodiscard]] std::optional<HirPackedRange> hir_vhdl_index_subtype_range(
+        const semantic::vhdl::Name& name) const;
+    // The range a string literal actual gives an unconstrained one-dimensional
+    // array formal: from the index subtype's left bound in its direction.
+    [[nodiscard]] std::optional<HirPackedRange>
+    hir_vhdl_literal_actual_range(semantic::ExpressionId actual,
+        const semantic::vhdl::SubtypeIndication& formal) const;
+    // The TO_UNSIGNED/TO_SIGNED truncation warning of NUMERIC_STD
+    // arithmetic between a vector and an integer.
+    void warn_hir_vhdl_numeric_integer_truncation(
+        semantic::ExpressionId expression_id, RegisterId lhs, RegisterId rhs);
     // The range of a subtype with exactly one array index constraint.
     [[nodiscard]] std::optional<HirPackedRange> hir_vhdl_single_index_range(
         const semantic::vhdl::SubtypeIndication& subtype,
@@ -1822,6 +1859,26 @@ private:
     [[nodiscard]] bool validate_hir_vhdl_fixed_context(
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication& context);
+    // The index range of an IEEE ufixed or sfixed value: a constrained
+    // object, a conversion with static bounds, or a fixed_generic_pkg
+    // arithmetic operator result (IEEE 1076-2019 G.4).
+    struct HirVhdlFixedRange {
+        std::int64_t left { };
+        std::int64_t right { };
+        bool signed_value { };
+    };
+    [[nodiscard]] std::optional<HirVhdlFixedRange> hir_vhdl_fixed_range(
+        semantic::ExpressionId expression, std::size_t depth = 0U) const;
+    // A fixed_generic_pkg arithmetic or relational operator on two fixed
+    // operands, which aligns their binary points.
+    [[nodiscard]] bool is_hir_vhdl_fixed_operator(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_fixed_operator(
+        semantic::ExpressionId expression);
+    // TO_STRING of a fixed value with a fraction: the binary image with a
+    // '.' between indices 0 and -1.
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_vhdl_fixed_to_string(semantic::ExpressionId operand);
     [[nodiscard]] bool is_hir_vhdl_float_function(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirVhdlIntrinsicProfile>
@@ -1834,6 +1891,26 @@ private:
     [[nodiscard]] bool validate_hir_vhdl_float_context(
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication& context);
+    // Whether any package of the design exports the IEEE intrinsic
+    // `member` (UFIXED, FLOAT32): fixed and float operators exist only then.
+    [[nodiscard]] bool hir_vhdl_intrinsic_member_present(
+        std::string_view member) const;
+    mutable std::unordered_map<std::string,
+        std::pair<const semantic::CompiledDesign*, bool>>
+        hir_vhdl_intrinsic_member_presence_;
+    // A value of an IEEE float_generic_pkg binary32 FLOAT subtype.
+    [[nodiscard]] bool hir_vhdl_float_valued(
+        semantic::ExpressionId expression) const;
+    // A float_generic_pkg arithmetic or relational operator with a FLOAT
+    // operand, its other operand FLOAT, REAL or INTEGER (IEEE 1076-2019
+    // G.5).
+    [[nodiscard]] bool is_hir_vhdl_float_operator(
+        semantic::ExpressionId expression) const;
+    // A FLOAT, REAL or INTEGER operand as a REAL payload.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_float_as_real(
+        semantic::ExpressionId expression);
+    // A REAL payload rounded to the nearest binary32 FLOAT.
+    [[nodiscard]] RegisterId hir_vhdl_real_to_float_bits(RegisterId real);
     struct HirVhdlSynopsysNumericContext {
         bool signed_visible { };
         bool unsigned_visible { };
@@ -2008,6 +2085,11 @@ private:
         // The matched member's type, which a later pattern on the
         // identifier matches against (IEEE 1800-2023 12.6.3).
         std::optional<semantic::sv::TypeReference> type;
+        // A string or unpacked member of an unpacked tagged union binds its
+        // value in a string or container register instead.
+        std::optional<runtime::simir::StringRegisterId> string { };
+        std::optional<runtime::simir::ContainerRegisterId> container { };
+        std::shared_ptr<const runtime::simir::ContainerType> container_type { };
     };
     [[nodiscard]] std::optional<HirCasePatternBinding>
     hir_case_pattern_binding(
@@ -2318,6 +2400,10 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_math_real_call(
         semantic::ExpressionId expression);
+    // A floating value converted to an integer type of `width` bits.
+    [[nodiscard]] RegisterId lower_hir_vhdl_real_to_integer(RegisterId value,
+        std::size_t width,
+        const std::optional<semantic::vhdl::SubtypeIndication>& target);
     // `T(x)` for array types whose elements are integer and floating: each
     // element converts in place (IEEE 1076-2008 9.3.6).
     [[nodiscard]] std::optional<RegisterId>
@@ -2545,6 +2631,12 @@ private:
         semantic::ExpressionId expression);
     [[nodiscard]] bool is_hir_vhdl_access_expression(
         semantic::ExpressionId expression) const;
+    // Loads the heaps of the access types of the shared variables this
+    // process sees; stores and reloads them around a suspension.
+    void load_hir_vhdl_shared_access_heaps();
+    void store_hir_vhdl_shared_access_heaps();
+    void reload_hir_vhdl_shared_access_heaps();
+    [[nodiscard]] bool hir_vhdl_shared_access_heaps_active() const;
     [[nodiscard]] HirVhdlAccessHeap* hir_vhdl_access_heap(
         const semantic::vhdl::TypeDefinition& type,
         const frontend::SourceSpan& span,
@@ -2720,6 +2812,17 @@ private:
     lower_hir_string_expression(
         semantic::ExpressionId expression,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    // Whether `subtype` is STD.TEXTIO.LINE, held as its STRING (16.4).
+    [[nodiscard]] bool hir_vhdl_textio_line_subtype(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId use_scope) const;
+    // The STRING a LINE value `null`, `new string'(s)` or `new string(l to
+    // r)` designates (IEEE 1076-2008 9.3.7); nullopt for another value.
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_line_value(
+        semantic::ExpressionId expression);
+    // The element count of `new string(l to r)` with constant bounds.
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_line_allocator_length(
+        semantic::ExpressionId expression) const;
     // A string operand, or a packed one's bytes with zero bytes dropped
     // (IEEE 1800-2017 6.16, 6.24.1).
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_text_value(
@@ -2813,7 +2916,32 @@ private:
         semantic::vhdl::Direction vhdl_direction {
             semantic::vhdl::Direction::unknown
         };
+        // A signal formal associated in parts (`r.x => a, r.y => b`, IEEE
+        // 1076-2008 6.5.7.1): each part's signal binding and its offset in
+        // the formal. `signal` is then empty.
+        std::vector<HirRuntimeBinding> signal_parts;
+        std::vector<std::size_t> signal_part_offsets;
     };
+    struct HirVhdlRecordField {
+        std::size_t offset { };
+        std::size_t width { };
+        semantic::vhdl::SubtypeIndication subtype;
+    };
+    // The element `name` of a record subtype: its offset from the least
+    // significant bit and its width.
+    [[nodiscard]] std::optional<HirVhdlRecordField> hir_vhdl_record_field(
+        const semantic::vhdl::SubtypeIndication& owner,
+        std::string_view name) const;
+    // A record signal formal whose elements are associated individually.
+    [[nodiscard]] std::optional<HirRuntimeBinding>
+    hir_vhdl_signal_part_binding(semantic::DeclarationId formal,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const semantic::vhdl::Expression& aggregate,
+        const std::function<std::optional<HirRuntimeBinding>(
+            semantic::ExpressionId)>& bind_part);
+    // The value of a signal formal associated in parts.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_signal_parts_read(
+        const HirRuntimeBinding& binding);
     [[nodiscard]] bool signal_binding_can_emit_write(
         const HirRuntimeBinding& binding) const noexcept;
     [[nodiscard]] bool signal_binding_is_writable(
@@ -3046,6 +3174,14 @@ private:
         RegisterId index { };
         bool signed_index { };
     };
+    // The member ordinal `tagged M (e)` selects in an unpacked tagged union
+    // laid out as its tag and members (IEEE 1800-2023 7.3.2).
+    [[nodiscard]] static std::optional<std::size_t>
+    hir_tagged_union_aggregate_member(
+        const semantic::sv::Expression& expression,
+        const runtime::simir::ContainerType& type);
+    [[nodiscard]] static bool hir_tagged_union_aggregate(
+        const runtime::simir::ContainerType& type);
     [[nodiscard]] std::optional<runtime::simir::ContainerRegisterId>
     lower_hir_container_assignment_pattern(
         semantic::ExpressionId expression,
@@ -3075,6 +3211,8 @@ private:
             // The container an index step selects from.
             runtime::simir::ContainerType container;
         };
+        // The expression the path names, when it has one.
+        semantic::ExpressionId expression;
         HirContainerObjectBinding root;
         // A value-container property of an object (`obj.v[i].m`): the root
         // is read from, and written back to, the object (IEEE 1800-2017
@@ -3738,6 +3876,10 @@ private:
         // actual's fixed array type; `width` is all its elements' bits,
         // leftmost element most significant.
         std::optional<runtime::simir::ContainerType> open_array;
+        // A dynamic array or queue actual of an input open-array formal:
+        // its first dimension has its run-time size, and its bits pass as
+        // a bit stream (`width` is 0).
+        bool runtime_extent { };
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;
@@ -4371,6 +4513,12 @@ private:
     std::unordered_map<SignalId, std::size_t> hir_virtual_interface_writes_;
     // VHDL objects with run-time index ranges, by declaration.
     std::unordered_map<std::uint32_t, HirVhdlShapedLocal> hir_vhdl_shaped_locals_;
+    // The value of each VHDL loop parameter while an unrolled iteration of
+    // its loop is lowered (IEEE 1076-2008 10.10). hir_constant_integer sees
+    // them only while a call captures its actuals' shapes.
+    std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
+        hir_static_loop_values_;
+    bool hir_static_loop_shapes_ { };
     mutable std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
         hir_vhdl_shaped_heap_views_;
     // The array type an aggregate with a sole non-static range choice takes
@@ -4676,6 +4824,12 @@ private:
         // Objects of an unconstrained array type each keep their own
         // bounds (IEEE 1076-2008 5.4.1, 9.3.7).
         std::optional<HirVhdlShapedProfile> shaped;
+        // The design storage of a heap whose values shared variables hold
+        // (IEEE 1076-2008 6.4.2.4): every process designates the same
+        // objects, so the process loads it when it resumes and stores it
+        // before it suspends.
+        std::optional<ContainerObjectId> shared_objects;
+        std::optional<ContainerObjectId> shared_handles;
     };
     std::unordered_map<std::uint32_t, HirVhdlAccessHeap>
         hir_vhdl_access_heaps_;

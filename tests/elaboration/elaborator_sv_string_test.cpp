@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <cstddef>
 #include <string>
@@ -317,7 +318,8 @@ endmodule
 
     std::string oversized_source
         = "module oversized_string_top;\n  string value = \"";
-    oversized_source.append(std::size_t { 4097U }, 'x');
+    oversized_source.append(
+        fsim::runtime::simir::maximum_string_bytes + 1U, 'x');
     oversized_source += "\";\nendmodule\n";
     const auto oversized_parsed = fsim::frontend::parse_text(
         "sv-string-oversized.sv", oversized_source,
@@ -334,7 +336,7 @@ endmodule
         !oversized.ok()
         && size_diagnostic != oversized.diagnostics.end()
         && size_diagnostic->message
-            == "module string initializer exceeds the 4096-byte limit");
+            == "module string initializer exceeds the string length limit");
 
     auto boundary_vhdl = fsim::frontend::parse_text(
         "sv-string-boundary.vhd",

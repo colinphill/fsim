@@ -141,6 +141,10 @@ void validate_class_operation(
             const auto kind = operation.actual_kinds.empty()
                 ? 0U
                 : operation.actual_kinds[actual_index];
+            if (kind == 2U) {
+                reject_unsupported(process, index,
+                    "a DPI open-array actual of run-time size is interpreted");
+            }
             if (kind > 1U) {
                 reject(
                     process, index,

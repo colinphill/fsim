@@ -339,6 +339,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     }
 
     HirSvValuePath path;
+    path.expression = expression_id;
     path.root = *root;
     path.class_root = std::move(class_root);
     path.class_root_type = std::move(class_root_type);
@@ -786,12 +787,54 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
         record_container_object_dependency(path.root.object);
     }
     cursor.container = cursor.root;
+    // A member of an unpacked tagged union is read or written only while
+    // the tag selects it; otherwise it is a run-time error (IEEE 1800-2023
+    // 7.3.2, 11.9).
+    const auto check_tag = [&](const ContainerType& owner,
+                               const ContainerRegisterId container,
+                               const std::uint32_t member) {
+        if (!hir_tagged_union_aggregate(owner) || member == 0U) {
+            return;
+        }
+        const auto tag_width = owner.element_types.front().element_width;
+        const auto tag = allocate_register(
+            tag_width, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ContainerAggregateRead {
+            tag,
+            container,
+            load_constant(unsigned_value(0U, 32U), frontend::ValueDomain::Bit2),
+            { 0U },
+        });
+        const auto active = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal,
+            active,
+            tag,
+            load_constant(unsigned_value(member - 1U, tag_width),
+                frontend::ValueDomain::Logic4),
+        });
+        const auto expression = path.expression.valid()
+            ? specialized_hir_unit_->find_expression(path.expression)
+            : std::nullopt;
+        process_.operations.emplace_back(Assert {
+            active,
+            "tagged union member access does not match the current tag",
+            AssertionSeverity::error,
+            expression && expression->systemverilog != nullptr
+                ? runtime_source_location(
+                      hir_source_span(expression->systemverilog->source))
+                : runtime::simir::SourceLocation { },
+        });
+    };
     // Every step but the last produces an intermediate container value.
     for (std::size_t index { }; index + 1U < path.steps.size(); ++index) {
         const auto& step = path.steps[index];
         HirSvValuePathCursor::Level level;
         level.container = cursor.container;
         if (step.member) {
+            check_tag(index == 0U ? *path.root.type
+                                  : cursor.levels.back().type,
+                cursor.container, *step.member);
             level.index = load_constant(
                 unsigned_value(0U, 32U), frontend::ValueDomain::Bit2);
             level.members = { *step.member };
@@ -838,6 +881,11 @@ Lowerer::lower_hir_sv_value_path_descend(const HirSvValuePath& path)
         process_.operations.emplace_back(std::move(read));
         cursor.container = child;
         cursor.levels.push_back(std::move(level));
+    }
+    if (!path.steps.empty() && path.steps.back().member) {
+        check_tag(path.steps.size() == 1U ? *path.root.type
+                                          : cursor.levels.back().type,
+            cursor.container, *path.steps.back().member);
     }
     return cursor;
 }

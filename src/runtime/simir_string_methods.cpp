@@ -177,7 +177,7 @@ std::uint32_t checked_vhdl_textio_field_width(
             aval.subspan(1U), [](const auto word) { return word != 0U; })
         || aval.front() > maximum_string_bytes) {
         throw std::length_error {
-            "VHDL TextIO field exceeds the 4096-byte limit"
+            "VHDL TextIO field exceeds the string length limit"
         };
     }
     return static_cast<std::uint32_t>(aval.front());
@@ -573,6 +573,18 @@ StringMethodResult execute_string_method(
             static_cast<std::uint64_t>(vhdl_physical_value(source, argument)),
             std::nullopt };
     }
+    if (operation == StringMethodOperator::vhdl_string_fill) {
+        if (!first || *first < 0
+            || static_cast<std::size_t>(*first) > maximum_string_bytes
+            || !second || *second < 0 || *second > 0xff) {
+            throw std::invalid_argument {
+                "VHDL allocator string length or character is out of range"
+            };
+        }
+        return { std::nullopt, std::nullopt,
+            std::string(static_cast<std::size_t>(*first),
+                static_cast<char>(*second)) };
+    }
     if (operation == StringMethodOperator::vhdl_composite_element
         || operation == StringMethodOperator::vhdl_character_element) {
         const auto elements = vhdl_composite_value_elements(source,
@@ -747,7 +759,7 @@ void execute_string_format(
     }
     if (formatted.size() > maximum_string_bytes - destination.size()) {
         throw std::length_error {
-            "formatted string exceeds 4096-byte limit"
+            "formatted string exceeds the string length limit"
         };
     }
     destination += formatted;
@@ -815,7 +827,8 @@ void Interpreter::Impl::execute_string(
         || operation.operation == StringMethodOperator::vhdl_physical_value;
     const bool element = operation.operation
             == StringMethodOperator::vhdl_composite_element
-        || operation.operation == StringMethodOperator::vhdl_character_element;
+        || operation.operation == StringMethodOperator::vhdl_character_element
+        || operation.operation == StringMethodOperator::vhdl_string_fill;
     const bool has_first = operation.operation == StringMethodOperator::getc
         || operation.operation == StringMethodOperator::putc
         || operation.operation == StringMethodOperator::substr

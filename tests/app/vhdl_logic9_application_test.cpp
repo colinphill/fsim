@@ -906,7 +906,9 @@ void verify_capture(const Capture& capture)
             "1010",
             "1",
             "0",
-            "10111101",
+            // TO_01 maps every element to xmap when any element is not
+            // 0, 1, L or H (IEEE 1076-2019 std_logic_1164 body).
+            "11111111",
             "1",
             "0" };
     assert(capture.values == expected_values);

@@ -870,8 +870,24 @@ end context ieee_std_context;
                          "use ieee.vital_timing.all;\n"
                          "use ieee.vital_primitives.all;\n";
         }
+        // The packages whose IEEE sources declare a CopyRightNotice keep it
+        // as an ordinary STRING constant (IEEE 1076-2019 G.1).
+        constexpr std::array copyright_packages {
+            std::string_view { "math_real" },
+            std::string_view { "numeric_bit_unsigned" },
+            std::string_view { "numeric_std_unsigned" },
+            std::string_view { "fixed_generic_pkg" },
+            std::string_view { "fixed_pkg" },
+            std::string_view { "float_generic_pkg" },
+            std::string_view { "float_pkg" },
+        };
+        const auto copyright = std::ranges::find(copyright_packages, package)
+                != copyright_packages.end()
+            ? std::string { "  constant CopyRightNotice : STRING :=\n"
+                            "    \"Copyright IEEE P1076 WG. Licensed Apache 2.0\";\n" }
+            : std::string { };
         const auto declaration_projection = dependency
-            + "package " + std::string { package } + " is\n"
+            + "package " + std::string { package } + " is\n" + copyright
             + "end package " + std::string { package } + ";\n";
         const auto body_projection = "package body " + std::string { package } + " is\n"
             + "end package body " + std::string { package } + ";\n";
@@ -1003,75 +1019,11 @@ end context ieee_std_context;
                     "owrite",
                 };
             } else if (unit.primary_name.empty()
-                && (package == "fixed_generic_pkg"
-                    || package == "fixed_pkg")) {
-                unit.standard_package_declarations = {
-                    "ufixed",
-                    "sfixed",
-                    "fixed_round_style",
-                    "fixed_overflow_style",
-                    "fixed_round",
-                    "fixed_truncate",
-                    "fixed_saturate",
-                    "fixed_wrap",
-                    "to_ufixed",
-                    "to_sfixed",
-                    "resize",
-                    "from_string",
-                    "from_bstring",
-                    "from_binary_string",
-                    "+",
-                    "-",
-                    "*",
-                    "/",
-                    "rem",
-                    "mod",
-                    "=",
-                    "/=",
-                    "<",
-                    "<=",
-                    ">",
-                    ">=",
-                };
-            } else if (unit.primary_name.empty()
-                && (package == "float_generic_pkg"
-                    || package == "float_pkg")) {
-                unit.standard_package_declarations = {
-                    "float",
-                    "unresolved_float",
-                    "float32",
-                    "valid_fpstate",
-                    "float_exponent_width",
-                    "float_fraction_width",
-                    "float_round_style",
-                    "float_denormalize",
-                    "float_check_error",
-                    "to_float",
-                    "to_slv",
-                    "to_integer",
-                    "classfp",
-                    "finite",
-                    "isnan",
-                    "unordered",
-                    "is_negative",
-                    "zerofp",
-                    "neg_zerofp",
-                    "nanfp",
-                    "qnanfp",
-                    "pos_inffp",
-                    "neg_inffp",
-                    "add",
-                    "subtract",
-                    "multiply",
-                    "divide",
-                    "sqrt",
-                    "eq",
-                    "ne",
-                    "lt",
-                    "le",
-                    "gt",
-                    "ge",
-                };
+                && !frontend::vhdl_ieee_intrinsic_package_declarations(package)
+                        .empty()) {
+                unit.standard_package_declarations
+                    = frontend::vhdl_ieee_intrinsic_package_declarations(
+                        package);
             } else if (unit.primary_name.empty()
                 && (package == "numeric_bit_unsigned"
                     || package == "numeric_std_unsigned")) {
@@ -1086,7 +1038,7 @@ end context ieee_std_context;
             } else if (unit.primary_name.empty()
                 && package == "math_real") {
                 unit.standard_package_declarations = {
-                    "copyrightnotice", "math_e", "math_1_over_e", "math_pi",
+                    "math_e", "math_1_over_e", "math_pi",
                     "math_2_pi", "math_1_over_pi", "math_pi_over_2",
                     "math_pi_over_3", "math_pi_over_4", "math_3_pi_over_2",
                     "math_log_of_2", "math_log_of_10", "math_log2_of_e",

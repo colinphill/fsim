@@ -563,7 +563,7 @@ std::string Interpreter::Impl::read_file_line(
     while (character >= 0 && character != '\n') {
         character = read_file_character(process, handle);
     }
-    file.last_error = "SystemVerilog input line exceeds the 4096-byte limit";
+    file.last_error = "SystemVerilog input line exceeds the string length limit";
     count = 0;
     return { };
 }

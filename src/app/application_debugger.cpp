@@ -865,7 +865,7 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
         } else if (
             command[2].size()
             > runtime::simir::maximum_string_bytes) {
-          output_ << "string deposit exceeds the 4096-byte limit\n";
+          output_ << "string deposit exceeds the string length limit\n";
         } else {
           simulation_.deposit_string_object(
               object->second, command[2]);

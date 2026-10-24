@@ -168,7 +168,7 @@ std::uint32_t LlvmProcessExecutor::concatenate_strings(
                 throw runtime::simir::InterpreterError(
                     state.process.id(),
                     instruction,
-                    "string concatenation exceeds 4096-byte limit");
+                    "string concatenation exceeds the string length limit");
             }
             result += value;
         }

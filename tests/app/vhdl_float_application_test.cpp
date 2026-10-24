@@ -275,9 +275,9 @@ end architecture;
           fsim::project::Optimization::o0),
       diagnostics);
   assert(!invalid_project);
+  // A dynamic to_float operand lowers (no FSIM-ELAB-VHFLT-001).
   for (const std::string_view code : {
-           "FSIM-ELAB-VHFLT-001", "FSIM-ELAB-VHFLT-002",
-           "FSIM-ELAB-VHFLT-004"}) {
+           "FSIM-ELAB-VHFLT-002", "FSIM-ELAB-VHFLT-004"}) {
     assert(std::ranges::any_of(
         diagnostics.diagnostics(),
         [&](const fsim::diagnostic::Diagnostic& diagnostic) {

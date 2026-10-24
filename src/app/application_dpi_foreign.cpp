@@ -38,7 +38,8 @@ using runtime::PackedLogic4;
 // pointer; B and V vectors always pass by pointer (IEEE 1800-2023 H.8). An
 // open array `A` passes an svOpenArrayHandle (H.12) for elements of type
 // `element`, `width` bits each, over the unpacked `bounds` (left, right per
-// dimension); `&` then marks an output or inout.
+// dimension); `&` then marks an output or inout. A dimension of a dynamic
+// array or queue actual has `?` bounds, 0 upwards to its run-time size.
 struct Parameter {
     char code { };
     bool reference { };
@@ -46,6 +47,10 @@ struct Parameter {
     char element { };
     std::vector<std::int32_t> bounds;
 };
+
+// The bound of a dimension whose size the actual gives at run time.
+constexpr std::int32_t runtime_extent
+    = std::numeric_limits<std::int32_t>::min();
 
 struct Signature {
     std::string linkage;
@@ -130,8 +135,11 @@ struct Signature {
                                                    : rest.substr(slash + 1U);
             while (!rest.empty()) {
                 const auto next = rest.find('/');
-                parameter.bounds.push_back(static_cast<std::int32_t>(
-                    std::stol(std::string { rest.substr(0U, next) })));
+                const auto bound = rest.substr(0U, next);
+                parameter.bounds.push_back(bound == "?"
+                        ? runtime_extent
+                        : static_cast<std::int32_t>(
+                              std::stol(std::string { bound })));
                 rest = next == std::string_view::npos
                     ? std::string_view { }
                     : rest.substr(next + 1U);
@@ -296,8 +304,9 @@ struct Slot {
     std::vector<std::uint32_t> bits;
     std::vector<LogicWord> logic;
     void* reference { };
-    // An open array's elements and handle.
+    // An open array's elements, bounds and handle.
     std::vector<unsigned char> bytes;
+    std::vector<std::int32_t> bounds;
     fsim_svdpi_open_array_v3 open { };
 };
 
@@ -346,7 +355,35 @@ void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& va
 void store_open_array(Slot& slot, const Parameter& parameter,
     const PackedLogic4& value)
 {
-    const auto count = open_elements(parameter);
+    // A run-time sized dimension takes its size from the actual's bits.
+    slot.bounds = parameter.bounds;
+    std::size_t count = 1U;
+    std::optional<std::size_t> extent_dimension;
+    for (std::size_t index = 0U; index + 1U < slot.bounds.size(); index += 2U) {
+        const auto left = std::int64_t { slot.bounds[index] };
+        const auto right = std::int64_t { slot.bounds[index + 1U] };
+        if (left == runtime_extent) {
+            extent_dimension = index;
+            continue;
+        }
+        count *= static_cast<std::size_t>(
+            (left >= right ? left - right : right - left) + 1);
+    }
+    if (extent_dimension) {
+        const auto row_bits = count * parameter.width;
+        if (row_bits == 0U || value.width() % row_bits != 0U
+            || value.width() / row_bits
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+            throw std::runtime_error {
+                "DPI open-array actual does not match its dimensions" };
+        }
+        const auto size = value.width() / row_bits;
+        slot.bounds[*extent_dimension] = 0;
+        slot.bounds[*extent_dimension + 1U]
+            = static_cast<std::int32_t>(size) - 1;
+        count *= size;
+    }
     const auto stride = element_bytes(parameter);
     const Parameter element { parameter.element, false, parameter.width, { }, { } };
     slot.bytes.assign(count * stride, 0U);
@@ -381,7 +418,7 @@ void store_open_array(Slot& slot, const Parameter& parameter,
     slot.open.element_width = static_cast<std::uint32_t>(parameter.width);
     slot.open.element_bytes = static_cast<std::uint32_t>(stride);
     slot.open.data = slot.bytes.data();
-    slot.open.bounds = parameter.bounds.data();
+    slot.open.bounds = slot.bounds.data();
     slot.scalar.pointer = &slot.open;
 }
 

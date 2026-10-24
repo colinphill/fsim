@@ -381,6 +381,14 @@ void Resolver::retain_task_profile(
         && is_class_property_access(expression.operands.front())) {
       return packed_member_type(*receiver_type, member);
     }
+    // A class handle member of an unpacked structure element (7.2).
+    if (!identity && receiver_type) {
+      if (auto type = structure_member_class_type(
+              *receiver_type, member, scope)) {
+        expression.nominal_type = *class_identity(*type);
+        return type;
+      }
+    }
     // A member of a value element of an object's array (`obj.v[i].m`) is
     // a member path on the indexed property (`index.m`).
     constexpr std::string_view element_prefix{"@sv-container-index:"};

@@ -10198,9 +10198,15 @@ namespace {
 
         for (const auto* type : types) {
             const auto* specialized = owner_specialization(*type);
+            // An unpacked tagged union with a member that has no packed form
+            // is laid out as its tag and members.
+            const bool tagged_aggregate = specialized != nullptr
+                && hierarchy_sv_type_layout_detail::
+                    systemverilog_tagged_union_aggregate(*specialized, *type);
             if (type->form == TypeForm::packed_structure
                 || type->form == TypeForm::packed_union
-                || type->form == TypeForm::tagged_union) {
+                || (type->form == TypeForm::tagged_union
+                    && !tagged_aggregate)) {
                 std::optional<std::uint64_t> union_width;
                 for (const auto& member : type->members) {
                     const auto width = width_of(member.type, specialized);
@@ -13203,7 +13209,11 @@ namespace {
                 const bool packed_owner = owner != nullptr
                     && (owner->form == TypeForm::packed_structure
                         || owner->form == TypeForm::packed_union
-                        || owner->form == TypeForm::tagged_union);
+                        || (owner->form == TypeForm::tagged_union
+                            && !(root_specialization != nullptr
+                                && hierarchy_sv_type_layout_detail::
+                                    systemverilog_tagged_union_aggregate(
+                                        *root_specialization, *owner))));
                 if (packed_owner
                     && (member == nullptr
                         || !width_of(
@@ -19546,14 +19556,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             // (IEEE 1076-2008 6.5.7.1) gives the formal its effective value
             // in the same simulation cycle as the actual (14.7.3.3), unlike
             // an expression actual's implicit signal assignment.
-            if (accepts_input && !produces_output && !value && !static_value
-                && lower_compiled_vhdl_input_conversion(actual_lowerer,
-                    port_actual_specialization, *binding.expression, id,
-                    working_path, formal_declaration.subtype,
-                    architecture)) {
-                record_lowering_census(vhdl_port_input_actual_occurrences_);
-                // The implicit signals the program reads (an inertial part's
-                // S'DELAYED) are driven by processes of their own.
+            // The implicit signals a conversion program reads (an inertial
+            // part's S'DELAYED) are driven by processes of their own.
+            const auto append_generated = [&] {
                 for (auto& generated : actual_lowerer.take_generated_processes()) {
                     generated.language_standard = architecture.standard;
                     generated.compatibility_profile
@@ -19563,6 +19568,28 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                         .processes.push_back(generated.id);
                     design_.append_process_record(std::move(generated));
                 }
+            };
+            // An inout formal takes its effective value from its actual in
+            // the same cycle as well; its driving value reaches the actual
+            // through the output association (IEEE 1076-2008 14.7.3.2-3).
+            bool split_inout { };
+            if (accepts_input && produces_output && !value && !static_value
+                && lower_compiled_vhdl_input_conversion(actual_lowerer,
+                    port_actual_specialization, *binding.expression, id,
+                    working_path, formal_declaration.subtype,
+                    architecture)) {
+                record_lowering_census(vhdl_port_input_actual_occurrences_);
+                append_generated();
+                add_vhdl_formal_driving_mirror(id);
+                split_inout = true;
+            }
+            if (accepts_input && !produces_output && !value && !static_value
+                && lower_compiled_vhdl_input_conversion(actual_lowerer,
+                    port_actual_specialization, *binding.expression, id,
+                    working_path, formal_declaration.subtype,
+                    architecture)) {
+                record_lowering_census(vhdl_port_input_actual_occurrences_);
+                append_generated();
                 return CompiledVhdlPortActual {
                     id,
                     std::move(actual_hir_type_identity),
@@ -19572,7 +19599,7 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     std::move(actual_hir_scope),
                 };
             }
-            if (accepts_input && !value && !static_value) {
+            if (accepts_input && !split_inout && !value && !static_value) {
                 record_lowering_census(
                     vhdl_port_input_actual_occurrences_);
                 if (!append_adapter(
@@ -19591,13 +19618,16 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             if (actual_signal && produces_output) {
                 record_lowering_census(
                     vhdl_port_output_actual_occurrences_);
-                if (!append_adapter(
-                        actual_lowerer.lower_hir_output_actual(
-                            id,
-                            *binding.expression,
-                            frontend::Language::Vhdl2008,
-                            working_path,
-                            concurrent_order++))) {
+                auto output = actual_lowerer.lower_hir_output_actual(
+                    id,
+                    *binding.expression,
+                    frontend::Language::Vhdl2008,
+                    working_path,
+                    concurrent_order++);
+                if (output && split_inout) {
+                    read_vhdl_formal_driving_values(*output);
+                }
+                if (!append_adapter(std::move(output))) {
                     actual_signal.reset();
                 } else if (input_adapter && appended_adapter) {
                     vhdl_inout_adapters_.push_back(VhdlInoutAdapters {
@@ -22078,6 +22108,24 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             object.declaration_span = compiled_source_span(
                 *compiled_, declaration.source);
 
+            // The body completes the declaration of the same package: each
+            // instance of a generic package has its own (IEEE 1076-2008
+            // 4.9, 5.6.3).
+            const auto declaring_unit = [&](const semantic::DeclarationId id)
+                -> const semantic::vhdl::Unit* {
+                const auto declaration = working_specialization
+                    .find_declaration(id);
+                const auto& scopes = compiled_->semantics.scopes();
+                if (!declaration || declaration->vhdl == nullptr
+                    || !declaration->vhdl->scope.valid()
+                    || declaration->vhdl->scope.value() >= scopes.size()) {
+                    return nullptr;
+                }
+                return compiled_vhdl_unit(*compiled_,
+                    scopes[declaration->vhdl->scope.value()].unit);
+            };
+            const auto* object_unit
+                = declaring_unit(object_type->vhdl->declaration);
             const semantic::vhdl::TypeDefinition* protected_body { };
             for (const auto& stored :
                 compiled_->vhdl_hir.types()) {
@@ -22091,8 +22139,21 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                         object_type->vhdl->name)) {
                     continue;
                 }
-                protected_body = candidate->vhdl;
-                break;
+                const auto* body_unit
+                    = declaring_unit(candidate->vhdl->declaration);
+                const bool same_package = object_unit != nullptr
+                    && body_unit != nullptr
+                    && (body_unit->id == object_unit->id
+                        || (compiled_vhdl_name_equal(
+                                body_unit->name, object_unit->name)
+                            && compiled_vhdl_name_equal(
+                                body_unit->library, object_unit->library)));
+                if (protected_body == nullptr || same_package) {
+                    protected_body = candidate->vhdl;
+                }
+                if (same_package) {
+                    break;
+                }
             }
             if (protected_body == nullptr) {
                 report(
@@ -24208,6 +24269,34 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                                 unit->library, owner.library)));
             });
     };
+    // Whether an expression in the unit, or in an architecture of the
+    // entity, refers to the simple name.
+    const auto unit_references_name = [&](const semantic::vhdl::Unit& owner,
+                                          const std::string_view name) {
+        const auto& design = specialized->design();
+        const auto& scopes = design.semantics.scopes();
+        return std::ranges::any_of(design.vhdl_hir.expressions(),
+            [&](const semantic::vhdl::Expression& candidate) {
+                if (!candidate.referenced_name
+                    || !compiled_vhdl_name_equal(
+                        candidate.referenced_name->spelling, name)
+                    || !candidate.scope.valid()
+                    || candidate.scope.value() >= scopes.size()) {
+                    return false;
+                }
+                const auto* unit = compiled_vhdl_unit(
+                    design, scopes[candidate.scope.value()].unit);
+                return unit != nullptr
+                    && (unit->id == owner.id
+                        || (owner.kind == semantic::vhdl::UnitKind::entity
+                            && unit->kind
+                                == semantic::vhdl::UnitKind::architecture
+                            && compiled_vhdl_name_equal(
+                                unit->primary_name, owner.name)
+                            && compiled_vhdl_name_equal(
+                                unit->library, owner.library)));
+            });
+    };
     validate_items = [&](const semantic::vhdl::Unit& owner) {
         std::unordered_map<std::string, std::string>
             visible_constants;
@@ -24338,9 +24427,14 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                                     = visible_constants.emplace(
                                         declaration->vhdl->name,
                                         package_owner);
+                                // Homographs are neither directly
+                                // visible; only a use of the simple name
+                                // is an error (12.4).
                                 if (!inserted
                                     && known->second
-                                        != package_owner) {
+                                        != package_owner
+                                    && unit_references_name(owner,
+                                        declaration->vhdl->name)) {
                                     report(
                                         "FSIM-ELAB-PKG-004",
                                         "VHDL package constant '"

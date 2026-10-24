@@ -196,6 +196,14 @@ ParseResult VhdlParser::run()
             } else {
                 auto unit = parse_package(start);
                 attach_context(unit);
+                for (const auto& [instance, template_name] :
+                    ieee_intrinsic_package_instances_) {
+                    if (instance == detail::ascii_lower(unit.name)) {
+                        unit.standard_package_declarations
+                            = vhdl_ieee_intrinsic_package_declarations(
+                                template_name);
+                    }
+                }
                 design.units.push_back(std::move(unit));
             }
             // Nested packages follow their enclosing unit, with its context.

@@ -970,7 +970,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                 index < actuals.size();
                 ++index) {
                 if (kinds.empty() || index >= kinds.size()
-                    || kinds[index] != 1U) {
+                    || kinds[index] == 0U) {
                     invalidate(actuals[index]);
                 }
             }
@@ -2636,6 +2636,14 @@ void HierarchyBuilder::validate_process_drivers()
             set_resolution(signal, ResolutionKind::none);
             continue;
         }
+        // An inout formal converted both ways resolves its effective value
+        // from its actual through its resolver program (IEEE 1076-2008
+        // 14.7.3.3), whatever its type.
+        if (const auto& resolver = design_.signals_[signal].vhdl_resolver;
+            resolver && resolver->driving_mirror) {
+            set_resolution(signal, ResolutionKind::vhdl_user_function);
+            continue;
+        }
         const auto selected = explicit_resolution(signal);
         set_resolution(
             signal,
@@ -2698,11 +2706,21 @@ void HierarchyBuilder::validate_process_drivers()
                })) {
             continue;
         }
+        // A conversion driver starts at its program's value, which the
+        // runtime resolves with the others.
+        const auto& conversion_drivers
+            = design_.signals_[signal].vhdl_conversion_drivers;
         bool own_driver { };
         if (const auto found = driver_processes.find(signal);
             found != driver_processes.end()) {
             own_driver = std::ranges::any_of(found->second,
                 [&](const ProcessId process) {
+                    if (std::ranges::any_of(conversion_drivers,
+                            [&](const VhdlConversionDriver& driver) {
+                                return driver.stub == process;
+                            })) {
+                        return false;
+                    }
                     const auto view = design_.process_view(process);
                     return std::ranges::none_of(ports,
                         [&](const VhdlPortSource& port) {

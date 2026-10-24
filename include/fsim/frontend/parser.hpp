@@ -120,6 +120,12 @@ struct ParseResult {
 using SystemVerilogPackageMemberLookup = std::function<bool(
     std::string_view package, std::string_view member)>;
 
+// The names IEEE fixed_generic_pkg and float_generic_pkg (and their
+// fixed_pkg and float_pkg instances) export as compiler intrinsics; empty
+// for any other package.
+[[nodiscard]] std::vector<std::string> vhdl_ieee_intrinsic_package_declarations(
+    std::string_view package);
+
 [[nodiscard]] ParseResult parse(SourceText source, Language language,
     VhdlStandard vhdl_standard = VhdlStandard::Vhdl2008);
 [[nodiscard]] ParseResult parse_text(std::string_view source_name,

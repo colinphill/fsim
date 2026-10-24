@@ -457,6 +457,10 @@ private:
     std::string name;
   };
   std::vector<ExpandedPackageInstance> expanded_package_instances_;
+  // Design-unit-level instances of an IEEE intrinsic generic package: the
+  // instance name and the template, whose intrinsic names the unit exports.
+  std::vector<std::pair<std::string, std::string>>
+      ieee_intrinsic_package_instances_;
   // The identity of a declaration begun at `start`: its source position and
   // name, qualified by the package instance it was expanded into.
   std::string vhdl_declaration_identity(const Token &start,

@@ -277,7 +277,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, LoadStringConstant>) {
             if (op.value.size() > maximum_string_bytes) {
-                fail(member_index, pc, "string literal exceeds 4096-byte limit");
+                fail(member_index, pc, "string literal exceeds the string length limit");
             }
             try {
                 (void)systemverilog_string_length(op.value);

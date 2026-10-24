@@ -388,7 +388,9 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
   result.block_port_map = std::move(associations.connections);
   // `f(o) => x` converts an output port's value for its actual (IEEE
   // 1076-2008 6.5.7.1): the port stays unassociated and the block drives
-  // `x` with `f(o)`. The parser grouped such associations under `f`.
+  // `x` with `f(o)`. An inout port also takes its effective value from the
+  // actual, through the actual part's function in `f(o) => g(x)`. The
+  // parser grouped such associations under `f`.
   {
     std::vector<PortConnection> kept;
     for (auto& connection : result.block_port_map) {
@@ -413,6 +415,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
                 const auto port = port_named(choices.front().text);
                 return port != result.block_ports.end()
                     && (port->direction == PortDirection::Output
+                        || port->direction == PortDirection::Inout
                         || port->direction == PortDirection::Buffer);
               });
       if (!convertible) {
@@ -421,9 +424,37 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
       }
       for (std::size_t index{}; index < group.operands.size(); ++index) {
         const auto& formal = group.aggregate_choice_expressions[index].front();
+        const auto& actual = group.operands[index];
         // The block itself reads the port to convert it.
         if (const auto port = port_named(formal.text);
             port != result.block_ports.end()) {
+          if (port->direction == PortDirection::Inout) {
+            Expression actual_name = actual;
+            if (actual.kind == ExpressionKind::Call
+                && actual.operands.size() == 1U
+                && actual.operands.front().kind == ExpressionKind::Identifier
+                && !actual.text.starts_with('@')) {
+              actual_name = actual.operands.front();
+            }
+            Statement in;
+            in.kind = StatementKind::Assignment;
+            in.assignment_kind = AssignmentKind::Continuous;
+            in.target = formal;
+            in.value = actual;
+            in.span = connection.span;
+            in.label = "fsim__formal_conversion_" + formal.text + "$in";
+            result.then_body.concurrent_statements.push_back(std::move(in));
+            Statement out;
+            out.kind = StatementKind::Assignment;
+            out.assignment_kind = AssignmentKind::Continuous;
+            out.target = std::move(actual_name);
+            out.value = Expression { ExpressionKind::Call, *connection.port,
+                { formal }, actual.span };
+            out.span = connection.span;
+            out.label = "fsim__formal_conversion_" + formal.text;
+            result.then_body.concurrent_statements.push_back(std::move(out));
+            continue;
+          }
           port->direction = PortDirection::Buffer;
         }
         Statement out;
@@ -1495,14 +1526,11 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
         formal.value = implicit_name;
         formal.span = connection.span;
         rewritten.push_back(std::move(formal));
-        Statement out;
-        out.kind = StatementKind::Assignment;
-        out.assignment_kind = AssignmentKind::Continuous;
-        out.target = actual_name;
-        out.value = Expression { ExpressionKind::Call, conversion, { implicit_name }, span };
-        out.span = span;
-        out.label = implicit;
-        unit.concurrent_statements.push_back(std::move(out));
+        // An inout formal's effective value is its actual, converted by
+        // the actual part's function; its driving value reaches the actual
+        // through the formal part's function (IEEE 1076-2008 6.5.7.1,
+        // 14.7.3.2, 14.7.3.3). Elaboration lowers both to same-cycle
+        // conversion programs, the effective one first.
         if (port->direction == PortDirection::Inout) {
           Statement in;
           in.kind = StatementKind::Assignment;
@@ -1512,8 +1540,17 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
               ? Expression { ExpressionKind::Call, *actual_conversion, { actual_name }, span }
               : actual_name;
           in.span = span;
+          in.label = implicit + "$in";
           unit.concurrent_statements.push_back(std::move(in));
         }
+        Statement out;
+        out.kind = StatementKind::Assignment;
+        out.assignment_kind = AssignmentKind::Continuous;
+        out.target = actual_name;
+        out.value = Expression { ExpressionKind::Call, conversion, { implicit_name }, span };
+        out.span = span;
+        out.label = implicit;
+        unit.concurrent_statements.push_back(std::move(out));
       }
     }
     instance.connections = std::move(rewritten);

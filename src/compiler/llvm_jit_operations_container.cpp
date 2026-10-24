@@ -606,7 +606,8 @@ void ContainerOperationLowerer::lower(
     using runtime::simir::StringMethodOperator;
     const bool element = value.operation
             == StringMethodOperator::vhdl_composite_element
-        || value.operation == StringMethodOperator::vhdl_character_element;
+        || value.operation == StringMethodOperator::vhdl_character_element
+        || value.operation == StringMethodOperator::vhdl_string_fill;
     const auto first = value.operation == StringMethodOperator::getc
             || value.operation == StringMethodOperator::putc
             || value.operation == StringMethodOperator::substr || element

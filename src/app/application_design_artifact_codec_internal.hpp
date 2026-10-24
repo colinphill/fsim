@@ -567,7 +567,7 @@ namespace codec_detail {
             std::same_as<T, runtime::simir::StringMethodOperator>) {
             return value >= runtime::simir::StringMethodOperator::getc
                 && value
-                    <= runtime::simir::StringMethodOperator::vhdl_character_element;
+                    <= runtime::simir::StringMethodOperator::vhdl_string_fill;
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlReflectionClass>) {
             return value >= runtime::simir::VhdlReflectionClass::enumeration
@@ -858,7 +858,8 @@ namespace codec_detail {
     auto archive_fields(T& value)
     {
         return std::tie(
-            value.stub, value.program, value.output, value.sources);
+            value.stub, value.program, value.output, value.sources,
+            value.offset);
     }
 
     template <typename T>
@@ -868,7 +869,8 @@ namespace codec_detail {
     {
         return std::tie(
             value.process, value.input, value.output, value.drivers,
-            value.guarded_kind, value.variants, value.sources);
+            value.guarded_kind, value.variants, value.sources,
+            value.driving_mirror);
     }
 
     template <typename T>

@@ -1133,7 +1133,7 @@ std::optional<Type> Resolver::class_type_parameter_actual(
   }
   return std::nullopt;
 }
-std::optional<Type> Resolver::packed_member_type(
+const PackedMember* Resolver::structure_member(
     const Type& type, const std::string_view member) const {
   const Type* structure = &type;
   if (structure->packed_members.empty() && !type.named_type.empty()) {
@@ -1143,15 +1143,35 @@ std::optional<Type> Resolver::packed_member_type(
           || alias->packed_members.empty()) {
         continue;
       }
-      if (unique != nullptr) return std::nullopt;
+      if (unique != nullptr) return nullptr;
       unique = alias;
     }
-    if (unique == nullptr) return std::nullopt;
+    if (unique == nullptr) return nullptr;
     structure = unique;
   }
   const auto found = std::ranges::find(
       structure->packed_members, member, &PackedMember::name);
-  if (found == structure->packed_members.end()) return std::nullopt;
+  return found == structure->packed_members.end() ? nullptr : &*found;
+}
+std::optional<Type> Resolver::structure_member_class_type(
+    const Type& type, const std::string_view member,
+    const Scope& scope) const {
+  if (class_identity(type)) return std::nullopt;
+  const auto* found = structure_member(type, member);
+  if (found == nullptr) return std::nullopt;
+  const auto& name = found->nested_types.size() == 1U
+          && !found->nested_types.front().named_type.empty()
+      ? found->nested_types.front().named_type
+      : found->spelling;
+  if (name.empty()) return std::nullopt;
+  const auto classes = resolve_class_name(name, scope);
+  if (classes.size() != 1U) return std::nullopt;
+  return class_type(*classes.front());
+}
+std::optional<Type> Resolver::packed_member_type(
+    const Type& type, const std::string_view member) const {
+  const auto* found = structure_member(type, member);
+  if (found == nullptr) return std::nullopt;
   // A nested structure member keeps its own members, so a further member
   // can be selected (`c.s.inner.id`, IEEE 1800-2017 7.2).
   if (found->nested_types.size() == 1U
@@ -1313,13 +1333,33 @@ void Resolver::resolve_class_scope_constants(
       }
     }
   }
+  // `C::p.a.b`: members of a packed structure class parameter (7.2.1).
+  const auto scope_end = expression.kind == ExpressionKind::Identifier
+      ? expression.text.rfind("::", expression.text.find('.'))
+      : std::string::npos;
+  const auto first_dot = scope_end == std::string::npos
+      ? std::string::npos
+      : expression.text.find('.', scope_end + 2U);
   if (expression.kind == ExpressionKind::Identifier
-      && expression.text.find('.') == std::string::npos) {
-    const auto at = expression.text.rfind("::");
+      && (expression.text.find('.') == std::string::npos
+          || first_dot != std::string::npos)) {
+    const auto name = std::string_view{expression.text}.substr(0U, first_dot);
+    const auto at = name.rfind("::");
     if (at != std::string::npos && at != 0U) {
-      const auto member = expression.text.substr(at + 2U);
+      const auto member = std::string{name.substr(at + 2U)};
+      std::vector<std::string> selected;
+      if (first_dot != std::string::npos) {
+        std::string_view rest{expression.text};
+        rest.remove_prefix(first_dot + 1U);
+        while (!rest.empty()) {
+          const auto next = rest.find('.');
+          selected.emplace_back(rest.substr(0U, next));
+          if (next == std::string_view::npos) break;
+          rest.remove_prefix(next + 1U);
+        }
+      }
       const auto selection = resolve_class_selection(
-          std::string_view{expression.text}.substr(0U, at), scope,
+          name.substr(0U, at), scope,
           expression.systemverilog_class_selection.get());
       if (selection && selection->declaration != nullptr) {
         const auto& owner = *selection->declaration;
@@ -1334,10 +1374,23 @@ void Resolver::resolve_class_scope_constants(
                 && formal != owner.parameters.end())) {
           const auto* declaring =
               match.property != nullptr ? match.owner : &owner;
-          const auto type = match.property != nullptr
+          auto type = match.property != nullptr
               ? resolve_alias_type(match.property->declaration.type,
                     declaring->canonical_identity)
               : formal->type;
+          std::vector<Type> selected_types;
+          for (const auto& field : selected) {
+            auto field_type = packed_member_type(
+                selected_types.empty() ? type : selected_types.back(), field);
+            if (!field_type) break;
+            selected_types.push_back(std::move(*field_type));
+          }
+          if (selected_types.size() != selected.size()) {
+            for (auto& operand : expression.operands) {
+              resolve_class_scope_constants(operand, scope, depth + 1U);
+            }
+            return;
+          }
           expression.kind = ExpressionKind::Call;
           expression.text = "@sv-static-property:"
               + declaring->canonical_identity + "::" + member;
@@ -1348,6 +1401,13 @@ void Resolver::resolve_class_scope_constants(
             resolve_class_owner_constants(expression, scope, depth);
           }
           retain_result_type(expression, type);
+          for (std::size_t index = 0; index < selected.size(); ++index) {
+            Expression select{ExpressionKind::Call,
+                "@sv-select:" + selected[index], {}, expression.span};
+            select.operands.push_back(std::move(expression));
+            expression = std::move(select);
+            retain_result_type(expression, selected_types[index]);
+          }
           return;
         }
       }
@@ -1671,6 +1731,132 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
       value = Expression{ExpressionKind::Identifier,
           value.text.substr(static_prefix.size()), {}, value.span};
     }
+    // `$bits(t)` of a typedef of the class body (`typedef logic [a-1:0]
+    // t`) is the typedef's width under this specialization's parameters
+    // (IEEE 1800-2023 20.6.2, 8.25); inlined outside the class, the name
+    // would select another scope's type.
+    if (value.kind == ExpressionKind::Call && value.text == "$bits"
+        && value.operands.size() == 1U
+        && value.operands.front().kind == ExpressionKind::Identifier) {
+      const auto alias = std::ranges::find_if(owner.type_aliases,
+          [&](const auto& candidate) {
+            return candidate.name == value.operands.front().text;
+          });
+      if (alias != owner.type_aliases.end()) {
+        const auto& type = alias->type;
+        const bool vector = type.named_type.empty()
+            && type.packed_members.empty() && !type.systemverilog_container
+            && type.systemverilog_packed_dimensions.empty()
+            && (type.domain == ValueDomain::Logic4
+                || type.domain == ValueDomain::Bit2);
+        const auto span = value.span;
+        if (vector && type.packed_range_expression) {
+          auto left = self(self, type.packed_range_expression->left, depth + 1U);
+          auto right =
+              self(self, type.packed_range_expression->right, depth + 1U);
+          if (!left || !right) return std::nullopt;
+          const auto length = [&](const Expression& high,
+                                  const Expression& low) {
+            return Expression{ExpressionKind::Binary, "+",
+                {Expression{ExpressionKind::Binary, "-", {high, low}, span},
+                    Expression{ExpressionKind::IntegerLiteral, "1", {}, span}},
+                span};
+          };
+          return Expression{ExpressionKind::Call, "?:",
+              {Expression{ExpressionKind::Binary, ">=", {*left, *right}, span},
+                  length(*left, *right), length(*right, *left)},
+              span};
+        }
+        if (vector) {
+          if (const auto width = type.width()) {
+            return Expression{ExpressionKind::IntegerLiteral,
+                std::to_string(*width), {}, span};
+          }
+        }
+        return std::nullopt;
+      }
+    }
+    // `inner::v` through a class typedef of the class body (`typedef
+    // A#(y + 1) inner`): the typedef's actuals fold under this
+    // specialization's parameters and name the specialization whose
+    // parameter is read (IEEE 1800-2023 8.25.1); inlined outside the
+    // class, the typedef name would not resolve.
+    if (const auto separator = value.text.find("::");
+        value.kind == ExpressionKind::Identifier && scope != nullptr
+        && separator != std::string::npos
+        && value.text.find("::", separator + 2U) == std::string::npos
+        && value.text.find('#') == std::string::npos
+        && value.text.find('.') > separator) {
+      const auto alias = std::ranges::find_if(owner.type_aliases,
+          [&](const auto& candidate) {
+            return candidate.name
+                == std::string_view{value.text}.substr(0U, separator);
+          });
+      if (alias != owner.type_aliases.end()) {
+        const auto& type = alias->type;
+        const auto& base = type.systemverilog_class_name.empty()
+            ? type.named_type : type.systemverilog_class_name;
+        if (base.empty()) return std::nullopt;
+        const auto fold = [](const auto& fold_self, const Expression& folded)
+            -> std::optional<std::int64_t> {
+          if (folded.kind == ExpressionKind::IntegerLiteral
+              && folded.operands.empty() && !folded.text.empty()
+              && std::ranges::all_of(folded.text, [](const char character) {
+                   return std::isdigit(static_cast<unsigned char>(character))
+                       != 0;
+                 })
+              && folded.text.size() < 18U) {
+            return std::stoll(folded.text);
+          }
+          if (folded.kind != ExpressionKind::Binary
+              || folded.operands.size() != 2U) {
+            return std::nullopt;
+          }
+          const auto left = fold_self(fold_self, folded.operands[0]);
+          const auto right = fold_self(fold_self, folded.operands[1]);
+          if (!left || !right) return std::nullopt;
+          if (folded.text == "+") return *left + *right;
+          if (folded.text == "-") return *left - *right;
+          if (folded.text == "*") return *left * *right;
+          if (folded.text == "/" && *right != 0) return *left / *right;
+          return std::nullopt;
+        };
+        std::string specialization = base + "#(";
+        auto selection = std::make_shared<Type>();
+        selection->named_type = base;
+        bool first = true;
+        for (const auto& actual : type.systemverilog_class_parameter_actuals) {
+          if (actual.type_actual) return std::nullopt;
+          auto replaced = self(self, actual.value, depth + 1U);
+          if (!replaced) return std::nullopt;
+          const auto folded = fold(fold, *replaced);
+          if (!folded) return std::nullopt;
+          if (!first) specialization += ", ";
+          first = false;
+          specialization += actual.name
+              ? "." + *actual.name + "(" + std::to_string(*folded) + ")"
+              : std::to_string(*folded);
+          auto& retained = selection->systemverilog_class_parameter_actuals
+              .emplace_back(actual);
+          retained.value = Expression{ExpressionKind::IntegerLiteral,
+              std::to_string(*folded), {}, actual.value.span};
+        }
+        specialization += ")";
+        const auto owners = resolve_class_name(base, *scope);
+        if (owners.size() != 1U) return std::nullopt;
+        const auto member = value.text.substr(separator + 2U);
+        if (member.find('.') == std::string::npos) {
+          return class_specialization_parameter_value(*owners.front(),
+              specialization, member, scope);
+        }
+        // `inner::p.a`: the member of a structure constant is selected
+        // through the specialization the typedef names.
+        selection->spelling = specialization;
+        value.text = specialization + "::" + member;
+        value.systemverilog_class_selection = std::move(selection);
+        return value;
+      }
+    }
     // A member of a structure parameter (`c.depth`): its root is the
     // actual's name, or else the value is not substituted here.
     if (value.kind == ExpressionKind::Identifier
@@ -1736,7 +1922,20 @@ std::optional<Expression> Resolver::class_specialization_parameter_value(
         || !property->declaration.initializer) {
       return std::nullopt;
     }
-
+    // An assignment pattern takes its layout from the declared type (IEEE
+    // 1800-2023 10.9); inlined bare it has none, so the constant is read
+    // through the class instead.
+    const auto aggregate = [](const auto& self_aggregate,
+                              const Expression& candidate) -> bool {
+      return candidate.kind == ExpressionKind::Aggregate
+          || std::ranges::any_of(candidate.operands,
+                 [&](const Expression& operand) {
+                   return self_aggregate(self_aggregate, operand);
+                 });
+    };
+    if (aggregate(aggregate, *property->declaration.initializer)) {
+      return std::nullopt;
+    }
     return substitute(substitute, *property->declaration.initializer, 0U);
   }
   if (const auto found = values.find(selected->name); found != values.end()) {
@@ -3110,6 +3309,15 @@ void Resolver::retain_result_type(
       expression.text = "@sv-select:" + member;
       expression.operands = {std::move(receiver)};
       return type;
+    }
+    // A class handle member of an unpacked structure or tagged union
+    // (`s.obj`) is a handle of that class (IEEE 1800-2023 7.2, 7.3.2).
+    if (receiver_type && !class_identity(*receiver_type)) {
+      if (auto type = structure_member_class_type(
+              *receiver_type, expression.text.substr(dot + 1U), scope)) {
+        expression.nominal_type = *class_identity(*type);
+        return type;
+      }
     }
     if (!receiver_type || !class_identity(*receiver_type)) return std::nullopt;
     const auto member = expression.text.substr(dot + 1U);

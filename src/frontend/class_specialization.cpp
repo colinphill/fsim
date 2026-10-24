@@ -1003,6 +1003,8 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
     std::vector<std::pair<std::string, std::string>> identity_values;
     std::vector<bool> assigned(declaration.parameters.size(), false);
     bool saw_named = false;
+    // An assignment-pattern value the semantic specialization binds.
+    bool deferred_value = false;
     bool saw_positional = false;
     const auto inherited_entry =
         inherited_parameters.find(declaration.canonical_identity);
@@ -1127,7 +1129,13 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
         const auto string_value = string_parameter
             ? evaluate_string(actual.value, string_values)
             : std::optional<std::string>{};
-        if (!value && !string_value) {
+        if (!value && !string_value
+            && actual.value.kind == ExpressionKind::Aggregate) {
+          // An assignment pattern takes its layout from the formal's type:
+          // the semantic class specialization evaluates it (IEEE 1800-2023
+          // 8.25, 10.9).
+          deferred_value = true;
+        } else if (!value && !string_value) {
           diagnose(
               result,
               "FSIM-SV-CLASS-SPEC-004",
@@ -1197,6 +1205,11 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
               ? evaluate_string(
                     formal.default_value, string_values)
               : std::optional<std::string>{};
+          if (!value && !string_value
+              && formal.default_value.kind == ExpressionKind::Aggregate) {
+            deferred_value = true;
+            continue;
+          }
           if (!value && !string_value) {
             diagnose(
                 result,
@@ -1228,7 +1241,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
                              + ":" + spelling));
       }
     }
-    if (symbolic_type_actual) {
+    if (symbolic_type_actual || deferred_value) {
       return std::nullopt;
     }
 
