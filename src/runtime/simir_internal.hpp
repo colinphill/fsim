@@ -1957,16 +1957,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         signal_container_element_aliases;
     std::vector<std::optional<ContainerObjectId>>
         signal_container_aggregate_aliases;
-    std::vector<std::optional<PackedLogic4>>
+    // Per signal, present only for an aggregate alias proxy: pointer-sized
+    // when absent.
+    std::vector<support::RareOptional<PackedLogic4>>
         aggregate_signal_current_projection;
-    std::vector<std::optional<PackedLogic4>>
+    std::vector<support::RareOptional<PackedLogic4>>
         aggregate_signal_stored_projection;
     std::vector<AggregateSignalBatch> aggregate_signal_batches;
     std::vector<std::uint64_t>
         aggregate_signal_current_projection_revisions;
     std::vector<std::uint64_t>
         aggregate_signal_stored_projection_revisions;
-    std::vector<std::optional<std::pair<std::size_t, PackedLogic4>>>
+    std::vector<support::RareOptional<std::pair<std::size_t, PackedLogic4>>>
         aggregate_signal_last_changes;
     std::vector<std::uint64_t>
         aggregate_signal_last_projection_revisions;

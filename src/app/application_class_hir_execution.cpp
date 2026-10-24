@@ -610,8 +610,76 @@ SystemVerilogClassHirExecution::instance_property(
     return nullptr;
 }
 
+const SystemVerilogClassHirExecution::HirLookupIndex&
+SystemVerilogClassHirExecution::hir_index() const
+{
+    if (hir_index_ && hir_index_->revision == hir_.revision()) {
+        return *hir_index_;
+    }
+    auto& index = hir_index_.emplace();
+    index.revision = hir_.revision();
+    for (const auto& unit : hir_.units()) {
+        if (unit.kind == semantic::sv::UnitKind::package) {
+            index.package_scopes.insert(unit.scope.value());
+            for (const auto declaration : unit.declarations) {
+                auto& packages
+                    = index.packages_by_declaration[declaration.value()];
+                if (packages.empty() || packages.back() != &unit) {
+                    packages.push_back(&unit);
+                }
+            }
+        } else if (unit.kind == semantic::sv::UnitKind::module) {
+            index.modules_by_name[unit.name].push_back(&unit);
+        }
+    }
+    for (const auto& candidate : hir_.classes()) {
+        for (const auto& parameter : candidate.parameters) {
+            index.class_parameters.insert(parameter.declaration.value());
+            if (!parameter.type_parameter) {
+                index.class_value_parameters.insert(
+                    parameter.declaration.value());
+            }
+        }
+        for (const auto member : candidate.member_declarations) {
+            index.class_members.insert(member.value());
+        }
+        index.class_scopes.insert(candidate.scope.value());
+    }
+    for (const auto& candidate : hir_.declarations()) {
+        if (candidate.form
+            == semantic::sv::DeclarationForm::enumeration_literal) {
+            index.enumeration_literals_by_scope[candidate.scope.value()]
+                .push_back(&candidate);
+        } else if (candidate.form
+            == semantic::sv::DeclarationForm::typedef_declaration) {
+            index.typedefs_by_name[candidate.name].push_back(&candidate);
+        }
+    }
+    for (const auto& definition : hir_.types()) {
+        for (const auto& literal : definition.enumeration_literals) {
+            auto& types = index.types_by_enumeration_literal[literal.name];
+            if (types.empty() || types.back() != &definition) {
+                types.push_back(&definition);
+            }
+        }
+    }
+    return index;
+}
+
+bool SystemVerilogClassHirExecution::is_package_member(
+    const semantic::sv::Declaration& declaration) const
+{
+    const auto& index = hir_index();
+    const auto found
+        = index.packages_by_declaration.find(declaration.id.value());
+    return found != index.packages_by_declaration.end()
+        && std::ranges::any_of(found->second, [&](const auto* unit) {
+               return unit->scope == declaration.scope;
+           });
+}
+
 bool SystemVerilogClassHirExecution::is_package_global(
-    const semantic::DeclarationId id) const noexcept
+    const semantic::DeclarationId id) const
 {
     const auto* selected = declaration(id);
     if (selected == nullptr
@@ -619,16 +687,11 @@ bool SystemVerilogClassHirExecution::is_package_global(
             && selected->form != semantic::sv::DeclarationForm::net)) {
         return false;
     }
-    return std::ranges::any_of(hir_.units(), [&](const auto& unit) {
-        return unit.kind == semantic::sv::UnitKind::package
-            && unit.scope == selected->scope
-            && std::ranges::find(unit.declarations, id)
-                != unit.declarations.end();
-    });
+    return is_package_member(*selected);
 }
 
 bool SystemVerilogClassHirExecution::is_package_constant(
-    const semantic::DeclarationId id) const noexcept
+    const semantic::DeclarationId id) const
 {
     const auto* selected = declaration(id);
     if (selected == nullptr
@@ -639,14 +702,11 @@ bool SystemVerilogClassHirExecution::is_package_constant(
                 != semantic::sv::DeclarationForm::enumeration_literal)) {
         return false;
     }
-    return std::ranges::any_of(hir_.units(), [&](const auto& unit) {
-        return unit.kind == semantic::sv::UnitKind::package
-            && (std::ranges::find(unit.declarations, id)
-                    != unit.declarations.end()
-                || (selected->form
-                        == semantic::sv::DeclarationForm::enumeration_literal
-                    && unit.scope == selected->scope));
-    });
+    const auto& index = hir_index();
+    return index.packages_by_declaration.contains(id.value())
+        || (selected->form
+                == semantic::sv::DeclarationForm::enumeration_literal
+            && index.package_scopes.contains(selected->scope.value()));
 }
 
 const SystemVerilogClassHirExecution::VariableReference*
@@ -1338,15 +1398,17 @@ SystemVerilogClassHirExecution::invoke_package_function(
         return std::nullopt;
     }
     const semantic::sv::Unit* package { };
-    for (const auto& unit : hir_.units()) {
-        if (unit.kind == semantic::sv::UnitKind::package
-            && unit.scope == selected->scope
-            && std::ranges::find(unit.declarations, selected->id)
-                != unit.declarations.end()) {
+    const auto& packages = hir_index().packages_by_declaration;
+    if (const auto found = packages.find(selected->id.value());
+        found != packages.end()) {
+        for (const auto* unit : found->second) {
+            if (unit->scope != selected->scope) {
+                continue;
+            }
             if (package != nullptr) {
                 return std::nullopt;
             }
-            package = &unit;
+            package = unit;
         }
     }
     if (package == nullptr) {
@@ -4110,14 +4172,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
         && value->kind == semantic::sv::ExpressionKind::name
         && value->referenced_name && value->referenced_name->selected) {
         const auto selected = *value->referenced_name->selected;
-        const bool class_parameter = std::ranges::any_of(hir_.classes(),
-            [&](const auto& candidate) {
-                return std::ranges::any_of(candidate.parameters,
-                    [&](const auto& parameter) {
-                        return !parameter.type_parameter
-                            && parameter.declaration == selected;
-                    });
-            });
+        const bool class_parameter
+            = hir_index().class_value_parameters.contains(selected.value());
         if (class_parameter) {
             const auto binding = read_owner_parameter_(handle, selected);
             if (binding.found && binding.value) {
@@ -4176,19 +4232,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
                })) {
             target_width = static_cast<std::size_t>(
                 std::strtoull(std::string { name }.c_str(), nullptr, 10));
-        } else {
-            for (const auto& candidate : hir_.declarations()) {
-                if (candidate.form
-                        != semantic::sv::DeclarationForm::typedef_declaration
-                    || candidate.name != name || !candidate.type) {
+        } else if (const auto typedefs
+                   = hir_index().typedefs_by_name.find(name);
+                   typedefs != hir_index().typedefs_by_name.end()) {
+            for (const auto* candidate : typedefs->second) {
+                if (!candidate->type) {
                     continue;
                 }
-                const auto candidate_width = width(*candidate.type, 0U);
+                const auto candidate_width = width(*candidate->type, 0U);
                 if (candidate_width == 0U) {
                     continue;
                 }
                 target_width = candidate_width;
-                target_signed = candidate.type->signed_value;
+                target_signed = candidate->type->signed_value;
                 break;
             }
         }
@@ -4375,25 +4431,14 @@ SystemVerilogClassHirExecution::evaluate_packed(
                     == semantic::sv::DeclarationForm::local_parameter
                 || constant->form
                     == semantic::sv::DeclarationForm::parameter)) {
-            const bool class_constant = std::ranges::any_of(
-                hir_.classes(), [&](const auto& candidate) {
-                    return std::ranges::any_of(
-                               candidate.parameters,
-                               [&](const auto& parameter) {
-                                   return parameter.declaration == constant->id;
-                               })
-                        || std::ranges::find(
-                               candidate.member_declarations, constant->id)
-                            != candidate.member_declarations.end()
-                        || candidate.scope == constant->scope;
-                });
-            const bool package_constant = std::ranges::any_of(
-                hir_.units(), [&](const auto& unit) {
-                    return unit.kind == semantic::sv::UnitKind::package
-                        && std::ranges::find(
-                               unit.declarations, constant->id)
-                            != unit.declarations.end();
-                });
+            const auto& index = hir_index();
+            const bool class_constant
+                = index.class_parameters.contains(constant->id.value())
+                || index.class_members.contains(constant->id.value())
+                || index.class_scopes.contains(constant->scope.value());
+            const bool package_constant
+                = hir_index().packages_by_declaration.contains(
+                    constant->id.value());
             const bool owner_local_parameter
                 = constant->form
                     == semantic::sv::DeclarationForm::local_parameter
@@ -4451,27 +4496,31 @@ SystemVerilogClassHirExecution::evaluate_packed(
                 const auto selected_literal_name
                     = std::string_view { value->text }.substr(dot + 1U);
                 bool ambiguous_owner_literal { };
-                for (const auto& unit : hir_.units()) {
-                    if (unit.kind != semantic::sv::UnitKind::module
-                        || unit.name != unit_name) {
-                        continue;
-                    }
+                const auto& index = hir_index();
+                const auto modules = index.modules_by_name.find(unit_name);
+                for (const auto* module : modules == index.modules_by_name.end()
+                         ? std::span<const semantic::sv::Unit* const> { }
+                         : std::span { modules->second }) {
+                    const auto& unit = *module;
                     const semantic::sv::Declaration*
                         unit_literal_declaration { };
                     bool ambiguous_declaration { };
-                    for (const auto& candidate : hir_.declarations()) {
-                        if (candidate.scope != unit.scope
-                            || candidate.name != selected_literal_name
-                            || candidate.form
-                                != semantic::sv::DeclarationForm::enumeration_literal) {
+                    const auto literals
+                        = index.enumeration_literals_by_scope.find(
+                            unit.scope.value());
+                    for (const auto* candidate :
+                        literals == index.enumeration_literals_by_scope.end()
+                            ? std::span<const semantic::sv::Declaration* const> { }
+                            : std::span { literals->second }) {
+                        if (candidate->name != selected_literal_name) {
                             continue;
                         }
                         if (unit_literal_declaration != nullptr
-                            && unit_literal_declaration->id != candidate.id) {
+                            && unit_literal_declaration->id != candidate->id) {
                             ambiguous_declaration = true;
                             break;
                         }
-                        unit_literal_declaration = &candidate;
+                        unit_literal_declaration = candidate;
                     }
                     if (ambiguous_declaration
                         || unit_literal_declaration == nullptr
@@ -4510,7 +4559,14 @@ SystemVerilogClassHirExecution::evaluate_packed(
             }
             std::optional<runtime::PackedLogic4> literal_value;
             std::size_t matches { };
-            for (const auto& definition : hir_.types()) {
+            // Only the types with a literal of this name can match.
+            const auto& literal_types
+                = hir_index().types_by_enumeration_literal;
+            const auto named_types = literal_types.find(literal_name);
+            for (const auto* type : named_types == literal_types.end()
+                     ? std::span<const semantic::sv::TypeDefinition* const> { }
+                     : std::span { named_types->second }) {
+                const auto& definition = *type;
                 if (qualified_literal_declaration
                     && std::ranges::none_of(
                         definition.enumeration_literals,
@@ -5458,14 +5514,8 @@ SystemVerilogClassHirExecution::evaluate_packed(
             && operand->referenced_name->selected) {
             const auto* selected
                 = declaration(*operand->referenced_name->selected);
-            const bool package_function = selected != nullptr
-                && std::ranges::any_of(hir_.units(), [&](const auto& unit) {
-                    return unit.kind == semantic::sv::UnitKind::package
-                        && unit.scope == selected->scope
-                        && std::ranges::find(
-                            unit.declarations, selected->id)
-                            != unit.declarations.end();
-                });
+            const bool package_function
+                = selected != nullptr && is_package_member(*selected);
             return package_function
                 && selected->form
                     == semantic::sv::DeclarationForm::function
@@ -6846,14 +6896,8 @@ SystemVerilogClassHirExecution::execute(
             }
             if (item->task.selected) {
                 const auto* selected = declaration(*item->task.selected);
-                const bool package_owned = selected != nullptr
-                    && std::ranges::any_of(hir_.units(), [&](const auto& unit) {
-                        return unit.kind == semantic::sv::UnitKind::package
-                            && unit.scope == selected->scope
-                            && std::ranges::find(
-                                   unit.declarations, selected->id)
-                                != unit.declarations.end();
-                    });
+                const bool package_owned
+                    = selected != nullptr && is_package_member(*selected);
                 const bool package_function = package_owned
                     && selected->form
                         == semantic::sv::DeclarationForm::function

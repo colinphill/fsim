@@ -4,6 +4,8 @@
 #include "application_internal.hpp"
 
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace fsim::app::application_detail {
 
@@ -373,9 +375,39 @@ private:
         StringEnvironment& string_environment,
         std::optional<std::string>* string_result = nullptr);
     [[nodiscard]] bool is_package_global(
-        semantic::DeclarationId id) const noexcept;
+        semantic::DeclarationId id) const;
     [[nodiscard]] bool is_package_constant(
-        semantic::DeclarationId id) const noexcept;
+        semantic::DeclarationId id) const;
+    // Lookup acceleration over hir_, rebuilt whenever its revision changes.
+    struct HirLookupIndex {
+        std::uint64_t revision { };
+        // The package units listing each declaration, by declaration id.
+        std::unordered_map<std::uint32_t,
+            std::vector<const semantic::sv::Unit*>> packages_by_declaration;
+        std::unordered_set<std::uint32_t> package_scopes;
+        // Declarations of class parameters (value parameters separately),
+        // class members, and the class scopes.
+        std::unordered_set<std::uint32_t> class_parameters;
+        std::unordered_set<std::uint32_t> class_value_parameters;
+        std::unordered_set<std::uint32_t> class_members;
+        std::unordered_set<std::uint32_t> class_scopes;
+        std::unordered_map<std::string_view,
+            std::vector<const semantic::sv::Unit*>> modules_by_name;
+        // Enumeration literal declarations by scope.
+        std::unordered_map<std::uint32_t,
+            std::vector<const semantic::sv::Declaration*>>
+            enumeration_literals_by_scope;
+        std::unordered_map<std::string_view,
+            std::vector<const semantic::sv::Declaration*>> typedefs_by_name;
+        // The types with an enumeration literal of each name.
+        std::unordered_map<std::string_view,
+            std::vector<const semantic::sv::TypeDefinition*>>
+            types_by_enumeration_literal;
+    };
+    [[nodiscard]] const HirLookupIndex& hir_index() const;
+    // Whether a package in the declaration's own scope lists it.
+    [[nodiscard]] bool is_package_member(
+        const semantic::sv::Declaration& declaration) const;
     [[nodiscard]] std::vector<std::size_t> map_actual_formals(
         const semantic::sv::SpecializedClassMethod& method,
         std::span<const std::string> actual_names,
@@ -457,6 +489,7 @@ private:
 
     std::span<const semantic::sv::ClassSpecialization> specializations_;
     const semantic::sv::Hir& hir_;
+    mutable std::optional<HirLookupIndex> hir_index_;
     const runtime::SystemVerilogClassHeap& heap_;
     FunctionInvoker invoke_function_;
     StaticFunctionInvoker invoke_static_function_;
