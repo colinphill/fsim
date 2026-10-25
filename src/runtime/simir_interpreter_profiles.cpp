@@ -674,6 +674,11 @@ Interpreter::Interpreter(
     : impl_(std::make_unique<Impl>(options, seed))
 {
 }
+void Interpreter::retain_state_until_exit() noexcept
+{
+    impl_->retain_state_until_exit = true;
+}
+
 Interpreter::~Interpreter()
 {
     if (!impl_) {
@@ -1748,7 +1753,7 @@ Interpreter::~Interpreter()
     impl_->report_process_profile();
     impl_->report_update_profile();
     // The kernel reports its diagnostic profile from its destructor.
-    if (support::exit_without_teardown()
+    if (impl_->retain_state_until_exit && support::exit_without_teardown()
         && std::getenv("FSIM_PROFILE_KERNEL") == nullptr) {
         // Freeing the design state only delays exit. HDL files are the one
         // destructor side effect, so flush them first.

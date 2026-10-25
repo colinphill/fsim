@@ -80,12 +80,16 @@ void Interpreter::Impl::capture_callable_values(
 
 void Interpreter::Impl::restore_callable_values(
     ProcessState& process,
-    const ProcessState::CallableFrameState& context)
+    const ProcessState::CallableFrameState& context,
+    const std::set<RegisterId>& excluded_packed,
+    const std::set<StringRegisterId>& excluded_strings,
+    const std::set<ContainerRegisterId>& excluded_containers)
 {
     for (std::size_t index = 0; index < context.packed.size(); ++index) {
         // A register an inner frame shadowed at every capture so far holds
         // no value of this context yet; the live register keeps its own.
-        if (context.packed[index].empty()) {
+        if (context.packed[index].empty()
+            || excluded_packed.contains(context.packed_ids[index])) {
             continue;
         }
         if (process.executor) {
@@ -97,6 +101,9 @@ void Interpreter::Impl::restore_callable_values(
         }
     }
     for (std::size_t index = 0; index < context.strings.size(); ++index) {
+        if (excluded_strings.contains(context.string_ids[index])) {
+            continue;
+        }
         if (process.executor) {
             process.executor->write_string_register(
                 context.string_ids[index], context.strings[index]);
@@ -106,6 +113,9 @@ void Interpreter::Impl::restore_callable_values(
         }
     }
     for (std::size_t index = 0; index < context.containers.size(); ++index) {
+        if (excluded_containers.contains(context.container_ids[index])) {
+            continue;
+        }
         if (!context.containers[index]) {
             fail(process, "automatic callable capture has null container storage");
         }

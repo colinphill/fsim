@@ -201,6 +201,124 @@ public:
         return identity;
     }
 
+    // The genvars of the loop generates around a class declaration,
+    // outermost first (IEEE 1800-2017 27.4).
+    const std::vector<std::string>& generate_iterators(
+        const ClassDeclaration& declaration)
+    {
+        static const std::vector<std::string> none;
+        if (!declaration.generate_owner) {
+            return none;
+        }
+        if (generate_iterators_.empty()) {
+            const auto walk = [&](const auto& self, const GenerateRegion& region,
+                                  std::vector<std::string> iterators) -> void {
+                if (region.kind == GenerateKind::iterative
+                    && !region.iterator.empty()) {
+                    iterators.push_back(region.iterator);
+                }
+                generate_iterators_.emplace(region.declaration, iterators);
+                for (const auto& nested : region.nested) {
+                    self(self, nested, iterators);
+                }
+            };
+            for (const auto& unit : hir_.units()) {
+                for (const auto& region : unit.generates) {
+                    walk(walk, region, { });
+                }
+            }
+            // Keeps the table non-empty once built.
+            generate_iterators_.emplace(DeclarationId { }, none);
+        }
+        const auto found = generate_iterators_.find(*declaration.generate_owner);
+        return found == generate_iterators_.end() ? none : found->second;
+    }
+
+    // The specialization of a loop-generate class for one iteration: the
+    // default specialization with the iteration's genvar values, whose base
+    // and interfaces are the same iteration's when they are generate classes
+    // too (IEEE 1800-2017 8.2, 27.4).
+    std::optional<std::string> specialize_generated(
+        const ClassDeclaration& declaration,
+        const std::span<const std::pair<std::string, std::string>> environment)
+    {
+        const auto& iterators = generate_iterators(declaration);
+        if (iterators.empty()) {
+            return std::nullopt;
+        }
+        std::vector<std::pair<std::string, std::string>> restricted;
+        for (const auto& iterator : iterators) {
+            const auto value = std::ranges::find(
+                environment, iterator,
+                &std::pair<std::string, std::string>::first);
+            if (value == environment.end()) {
+                return std::nullopt;
+            }
+            restricted.push_back(*value);
+        }
+        const auto errors = result_.errors.size();
+        const auto default_identity
+            = specialize(declaration, { }, declaration.source);
+        if (!default_identity) {
+            discard_errors(errors);
+            return std::nullopt;
+        }
+        std::string identity = *default_identity + "#gen{";
+        for (const auto& [name, value] : restricted) {
+            identity += encoded(name) + '=' + value + ';';
+        }
+        identity += '}';
+        if (materialized_.contains(identity)) {
+            return identity;
+        }
+        auto output = result_.specializations[
+            materialized_.at(*default_identity)];
+        output.specialization_identity = identity;
+        output.default_specialization = false;
+        output.generate_environment = restricted;
+        const auto retarget = [&](SpecializedClassRelation& relation) {
+            const auto* related = class_for(relation.declaration_identity);
+            if (related == nullptr) {
+                return;
+            }
+            if (const auto selected
+                = specialize_generated(*related, environment)) {
+                relation.specialization_identity = *selected;
+            }
+        };
+        if (output.base) {
+            retarget(*output.base);
+        }
+        for (auto& relation : output.interfaces) {
+            retarget(relation);
+        }
+        if (const auto found = environments_.find(*default_identity);
+            found != environments_.end()) {
+            environments_.try_emplace(identity, found->second);
+        }
+        materialized_.emplace(identity, result_.specializations.size());
+        result_.specializations.push_back(std::move(output));
+        return identity;
+    }
+
+    std::optional<std::string> specialize_generated(
+        const std::string_view declaration_identity,
+        const std::span<const std::pair<std::string, std::string>> environment)
+    {
+        const auto* declaration = class_for(declaration_identity);
+        return declaration == nullptr
+            ? std::nullopt
+            : specialize_generated(*declaration, environment);
+    }
+
+    const std::vector<std::string>& generate_iterators(
+        const std::string_view declaration_identity)
+    {
+        static const std::vector<std::string> none;
+        const auto* declaration = class_for(declaration_identity);
+        return declaration == nullptr ? none : generate_iterators(*declaration);
+    }
+
     void run(const std::span<const ClassSpecializationRequest> requests)
     {
         std::vector<const ClassDeclaration*> defaults;
@@ -2757,6 +2875,7 @@ private:
     // properties and methods, over every class.
     std::unordered_set<std::string> type_parameter_names_;
     std::unordered_set<std::string> class_member_identities_;
+    std::map<DeclarationId, std::vector<std::string>> generate_iterators_;
     std::map<DeclarationId, bool> declaration_closures_;
     std::map<StatementId, bool> statement_closures_;
     std::map<ExpressionId, bool> expression_closures_;
@@ -2910,6 +3029,95 @@ ClassSpecializationIndex::for_expression(const ExpressionId expression) const
     return found == expressions_.end()
         ? std::nullopt
         : std::optional { found->second };
+}
+
+std::span<const std::string> ClassSpecializationIndex::generate_iterators(
+    const std::string_view declaration_identity) const
+{
+    if (!live_) {
+        return { };
+    }
+    return live_->specializer.generate_iterators(declaration_identity);
+}
+
+std::optional<ClassSpecializationId>
+ClassSpecializationIndex::specialize_generated(
+    const std::string_view declaration_identity,
+    const std::span<const std::pair<std::string, std::string>> environment)
+{
+    if (!live_) {
+        return std::nullopt;
+    }
+    const auto first = size();
+    const auto identity = live_->specializer.specialize_generated(
+        declaration_identity, environment);
+    index_from(first);
+    return identity ? find(*identity) : std::nullopt;
+}
+
+std::optional<ClassSpecializationId>
+ClassSpecializationIndex::specialize_generated_identity(
+    const std::string_view specialization_identity)
+{
+    constexpr std::string_view marker { "#gen{" };
+    const auto start = specialization_identity.find(marker);
+    const auto angle = specialization_identity.find('<');
+    if (start == std::string_view::npos || angle == std::string_view::npos
+        || angle > start || specialization_identity.back() != '}') {
+        return std::nullopt;
+    }
+    std::vector<std::pair<std::string, std::string>> environment;
+    auto rest = specialization_identity.substr(
+        start + marker.size(),
+        specialization_identity.size() - start - marker.size() - 1U);
+    while (!rest.empty()) {
+        // "<length>:<genvar>=<value>;" as specialize_generated writes it.
+        std::size_t length { };
+        const auto colon = rest.find(':');
+        const auto [end, error] = std::from_chars(
+            rest.data(), rest.data() + (colon == std::string_view::npos
+                                            ? 0U : colon), length);
+        if (colon == std::string_view::npos || error != std::errc { }
+            || end != rest.data() + colon
+            || colon + 1U + length >= rest.size()
+            || rest[colon + 1U + length] != '=') {
+            return std::nullopt;
+        }
+        const auto name = rest.substr(colon + 1U, length);
+        rest.remove_prefix(colon + 2U + length);
+        const auto semicolon = rest.find(';');
+        if (semicolon == std::string_view::npos) {
+            return std::nullopt;
+        }
+        environment.emplace_back(
+            std::string { name }, std::string { rest.substr(0U, semicolon) });
+        rest.remove_prefix(semicolon + 1U);
+    }
+    return specialize_generated(
+        specialization_identity.substr(0U, angle), environment);
+}
+
+std::vector<ClassSpecializationId>
+ClassSpecializationIndex::generated_specializations(
+    const std::string_view declaration_identity) const
+{
+    std::vector<ClassSpecializationId> result;
+    const auto& specializations = this->result().specializations;
+    for (std::size_t index { }; index < specializations.size(); ++index) {
+        const auto& candidate = specializations[index];
+        if (!candidate.generate_environment.empty()
+            && candidate.declaration_identity == declaration_identity) {
+            result.push_back(static_cast<ClassSpecializationId>(index));
+        }
+    }
+    return result;
+}
+
+bool ClassSpecializationIndex::bound(const ClassSpecializationId id) const
+{
+    return id < size()
+        && (!at(id).generate_environment.empty()
+            || !binding_frame(id).empty());
 }
 
 std::optional<ClassSpecializationId> ClassSpecializationIndex::base(

@@ -197,7 +197,8 @@ class Resolver final {
     }
   }
 
-  void resolve_generate_body(GenerateBody& body, const Scope& inherited);
+  void resolve_generate_body(
+      GenerateBody& body, const Scope& inherited, const std::string& label);
   // Whether `member.rand_mode` or `member.constraint_mode` in a method names
   // a random property or constraint block of the object itself.
   [[nodiscard]] bool this_mode_member(

@@ -23,6 +23,12 @@ void VhdlParser::note_vhdl_access_object(
   } else {
     vhdl_access_object_names_.erase(name);
   }
+  if (vhdl_protected_access_type_names_.contains(
+          vhdl_name(std::string { mark }))) {
+    vhdl_protected_access_object_names_.insert(name);
+  } else {
+    vhdl_protected_access_object_names_.erase(name);
+  }
   // An object declared with a unit's name hides that unit within its
   // declarative region (IEEE 1076-2008 12.3).
   if (vhdl_physical_unit_names_.contains(name)) {
@@ -1325,6 +1331,17 @@ Expression VhdlParser::parse_primary()
                 // dereferences `l'length` and `l(i)` (IEEE 1076-2008 8.3).
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
+            } else if (canonical_part == "all" && !saw_dereference
+                && vhdl_protected_access_object_names_.contains(canonical)
+                && at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
+                // `p.all.m` names a method of the protected object `p`
+                // designates (IEEE 1076-2019 5.4.1).
+                selected_spelling += '.';
+                selected_spelling += part.text;
+                canonical += ".all";
+                selected.text = canonical;
+                selected.span = cover(name.span, part.span);
+                attach_selected_spelling(selected);
             } else if (canonical_part == "all") {
                 // Only the name before the first dereference is spelled
                 // out; `pp.all.all` dereferences the dereference.

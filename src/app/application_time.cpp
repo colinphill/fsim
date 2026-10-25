@@ -199,6 +199,7 @@ void visit_generate_delays(
       visit_procedure_delays(procedure, function);
     }
     visit_class_delays(body.systemverilog_classes, function);
+    visit_clocking_delays(body.systemverilog_clocking_blocks, function);
     visit_generate_delays(body.generate_regions, function);
   };
   for (auto& region : regions) {

@@ -100,15 +100,44 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                                   && view.vhdl->form
                                       != Form::generic_procedure_instance);
                       });
-                  const auto template_id = template_resolution.unique();
+                  // A signature selects one of overloaded templates (IEEE
+                  // 1076-2019 4.4).
+                  auto selected_templates = template_resolution;
+                  if (declaration->vhdl->alias_signature) {
+                      std::erase_if(selected_templates.candidates,
+                          [&](const semantic::DeclarationId candidate) {
+                              const auto view
+                                  = specialized.find_declaration(candidate);
+                              if (!view || view->vhdl == nullptr) {
+                                  return true;
+                              }
+                              return std::ranges::none_of(
+                                  view->vhdl->children,
+                                  [&](const semantic::DeclarationId child) {
+                                      return resolver
+                                          .vhdl_callable_matches_signature(
+                                              *declaration->vhdl
+                                                   ->alias_signature,
+                                              declaration->vhdl->scope,
+                                              child);
+                                  });
+                          });
+                      selected_templates.status
+                          = selected_templates.candidates.empty()
+                          ? semantic::CompiledResolutionStatus::not_found
+                          : selected_templates.candidates.size() == 1U
+                          ? semantic::CompiledResolutionStatus::unique
+                          : semantic::CompiledResolutionStatus::ambiguous;
+                  }
+                  const auto template_id = selected_templates.unique();
                   if (!template_id) {
                       append_diagnostic(
-                          template_resolution.status
+                          selected_templates.status
                                   == semantic::CompiledResolutionStatus::
                                       ambiguous
                               ? "FSIM-ELAB-VHGSUB-002"
                               : "FSIM-ELAB-VHGSUB-001",
-                          template_resolution.status
+                          selected_templates.status
                                   == semantic::CompiledResolutionStatus::
                                       ambiguous
                               ? "generic subprogram template is ambiguous"
@@ -359,25 +388,8 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                     && form != Form::generic_procedure_template) {
                     continue;
                 }
-                const auto body_id = std::ranges::find_if(
-                    body_unit.declarations,
-                    [&](const semantic::DeclarationId candidate_id) {
-                        const auto candidate
-                            = specialized.find_declaration(candidate_id);
-                        return candidate && candidate->vhdl != nullptr
-                            && candidate->vhdl->form == form
-                            && name_equal(
-                                candidate->vhdl->name,
-                                specification->vhdl->name);
-                    });
-                if (body_id == body_unit.declarations.end()) {
-                    continue;
-                }
-                const auto body = specialized.find_declaration(*body_id);
                 const auto specification_profile
                     = generic_template_profile(*specification->vhdl);
-                const auto body_profile
-                    = generic_template_profile(*body->vhdl);
                 corresponding_generic_types.clear();
                 for (const auto generic : specification_profile.first) {
                     const auto record = specialized.find_declaration(generic);
@@ -387,23 +399,47 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                             record->vhdl->name);
                     }
                 }
-                const auto callable_conforms
-                    = specification_profile.second
-                    && body_profile.second
-                    && callables_conform(
-                        *specification_profile.second,
-                        *body_profile.second);
-                if (generic_formals_conform(
-                        specification_profile.first,
-                        body_profile.first)
-                    && callable_conforms) {
+                // An overloaded template's body is the homograph whose
+                // generic list and profile conform (IEEE 1076-2008 4.10).
+                std::optional<semantic::CompiledDeclarationView>
+                    first_body;
+                bool conforming_body { };
+                for (const auto candidate_id : body_unit.declarations) {
+                    const auto body
+                        = specialized.find_declaration(candidate_id);
+                    if (!body || body->vhdl == nullptr
+                        || body->vhdl->form != form
+                        || !name_equal(
+                            body->vhdl->name, specification->vhdl->name)) {
+                        continue;
+                    }
+                    if (!first_body) {
+                        first_body = body;
+                    }
+                    const auto body_profile
+                        = generic_template_profile(*body->vhdl);
+                    const auto callable_conforms
+                        = specification_profile.second
+                        && body_profile.second
+                        && callables_conform(
+                            *specification_profile.second,
+                            *body_profile.second);
+                    if (generic_formals_conform(
+                            specification_profile.first,
+                            body_profile.first)
+                        && callable_conforms) {
+                        conforming_body = true;
+                        break;
+                    }
+                }
+                if (!first_body || conforming_body) {
                     continue;
                 }
                 append_diagnostic(
                     "FSIM-ELAB-VHGSUB-013",
                     "generic subprogram declaration and body do not have "
                     "conforming generic lists and callable profiles",
-                    body->vhdl->source);
+                    first_body->vhdl->source);
                 generic_callables_valid = false;
             }
         }

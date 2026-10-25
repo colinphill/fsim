@@ -1136,6 +1136,7 @@ namespace codec_detail {
         hasher.add_string(value.element_nominal_type);
         hasher.add_bool(value.vhdl_shaped);
         hasher.add_u64(value.vhdl_rank);
+        hasher.add_bool(value.sparse);
         hasher.add_u64(value.element_types.size());
         for (const auto& element_type : value.element_types) {
             append_process_layout_hash(hasher, element_type);

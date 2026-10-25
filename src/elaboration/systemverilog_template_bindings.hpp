@@ -7,10 +7,12 @@
 #include "scoped_bindings.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -56,6 +58,18 @@ make_systemverilog_template_signal_remap(
     std::span<const SystemVerilogTemplateSignalRole> target_roles,
     std::span<const SignalInfo> signal_info,
     std::span<const runtime::simir::Signal> signals);
+
+// Rewrites the signal operands of `operation` through `rename`, and its
+// debug scope from `hierarchy`'s first path to its second; with no
+// hierarchy, debug scopes are kept and every operation that names no signal
+// is accepted. False when an operand has no image, the operation can name
+// signals in other ways, or a moved template has an operation outside the
+// set known to be hierarchy-neutral.
+[[nodiscard]] bool remap_operation_signals(
+    runtime::simir::Operation& operation,
+    const std::function<bool(runtime::simir::SignalId&)>& rename,
+    std::optional<std::pair<std::string_view, std::string_view>> hierarchy,
+    bool* operation_changed = nullptr);
 
 [[nodiscard]] bool remap_systemverilog_template_process(
     runtime::simir::Process& process,

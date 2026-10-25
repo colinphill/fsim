@@ -44,6 +44,16 @@ struct SystemVerilogClassHandleContainerDescriptor {
   // budget. Language-unbounded source containers account their initial
   // descriptor storage and retain an addressability-derived element ceiling.
   bool reserve_maximum_storage{true};
+  // An associative container's key type: string keys, or integral keys
+  // of `key_width` bits ordered as signed or unsigned values (IEEE
+  // 1800-2017 7.8).
+  bool string_keys{};
+  std::size_t key_width{32};
+  bool signed_keys{true};
+  // A multidimensional fixed-size array's bounds, outermost first; its
+  // elements are stored with the rightmost dimension varying fastest
+  // (IEEE 1800-2017 7.4.5).
+  std::vector<std::pair<std::int64_t, std::int64_t>> dimensions{};
 };
 
 /// Value-semantic container storage for opaque class handles. The caller sets
@@ -60,6 +70,10 @@ class SystemVerilogClassHandleContainer final {
   [[nodiscard]] std::size_t size() const noexcept;
   [[nodiscard]] std::size_t maximum_elements() const noexcept {
     return descriptor_.maximum_elements;
+  }
+  [[nodiscard]] const SystemVerilogClassHandleContainerDescriptor&
+  descriptor() const noexcept {
+    return descriptor_;
   }
   [[nodiscard]] SystemVerilogClassHandle at(std::size_t index) const;
   void set(
@@ -166,6 +180,9 @@ struct SystemVerilogClassPropertyDescriptor {
       SystemVerilogClassRandomKind::None};
   bool signed_value{};
   std::string nominal_type;
+  /// A container of containers whose leaves are class handles, held as a
+  /// nested value container (IEEE 1800-2017 7.4.5, 8.9).
+  bool nested_handles{};
 };
 
 struct SystemVerilogClassDescriptor {
@@ -191,6 +208,8 @@ struct SystemVerilogClassPropertyValue {
   // array of values); empty until first written, when it reads as its
   // type's default value.
   std::optional<simir::ContainerValue> container;
+  // The leaves of `container` are class handles.
+  bool nested_handles{};
   std::optional<SystemVerilogClassRandomState> random_state;
 };
 

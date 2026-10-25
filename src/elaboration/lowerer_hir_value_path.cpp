@@ -204,33 +204,15 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             root = hir_container_object_binding(current);
             // A container property of `this` named by its simple name in a
             // method (IEEE 1800-2017 8.11).
-            if (!root && hir_class_receiver_register_
-                && source.text.find('.') == std::string::npos) {
-                if (const auto declaration
-                    = hir_referenced_declaration(current)) {
-                    for (const auto& candidate : specialized_hir_unit_
-                             ->design().systemverilog_hir.classes()) {
-                        for (const auto& property : candidate.properties) {
-                            if (property.declaration != *declaration
-                                || property.static_storage) {
-                                continue;
-                            }
-                            auto type = hir_class_value_container_type(
-                                property.canonical_identity);
-                            if (!type) {
-                                break;
-                            }
-                            class_root = HirSvValuePath::ClassRoot {
-                                std::nullopt, property.canonical_identity };
-                            class_root_type
-                                = std::make_shared<const ContainerType>(
-                                    std::move(*type));
-                            root = HirContainerObjectBinding {
-                                property.declaration,
-                                property.canonical_identity, { },
-                                std::nullopt, class_root_type.get(), false };
-                        }
-                    }
+            if (!root && hir_class_receiver_register_) {
+                if (auto property = hir_class_this_value_property(current)) {
+                    class_root = HirSvValuePath::ClassRoot {
+                        std::nullopt, property->identity };
+                    class_root_type = std::make_shared<const ContainerType>(
+                        std::move(property->type));
+                    root = HirContainerObjectBinding { property->declaration,
+                        property->identity, { }, std::nullopt,
+                        class_root_type.get(), false };
                 }
             }
             if (!root) {

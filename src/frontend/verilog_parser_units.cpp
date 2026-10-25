@@ -1003,6 +1003,18 @@ void VerilogParser::parse_generate_branch(
                 generated.systemverilog_aliases.begin()),
             std::make_move_iterator(
                 generated.systemverilog_aliases.end()));
+    } else if (match_keyword("clocking")) {
+        // A clocking block of a generate block (IEEE 1800-2023 14.3, 27.3);
+        // a sequence or property declared in it joins the block's
+        // assertion declarations.
+        DesignUnit generated;
+        parse_clocking_block(generated, previous(), false, &body);
+        body.systemverilog_assertion_declarations.insert(
+            body.systemverilog_assertion_declarations.end(),
+            std::make_move_iterator(
+                generated.systemverilog_assertion_declarations.begin()),
+            std::make_move_iterator(
+                generated.systemverilog_assertion_declarations.end()));
     } else if (match_keyword("let")) {
         DesignUnit generated;
         parse_let_declaration(generated, previous());
@@ -1225,6 +1237,13 @@ void VerilogParser::parse_generate_declaration(
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
     }
+    // A handle of a class declared in the generate block (`C c = new();`) is
+    // set at time zero like a module variable (IEEE 1800-2017 6.8, 8.7).
+    std::optional<Expression> handle_initializer;
+    if (initializer && class_handle_declaration && !container_declaration) {
+      handle_initializer = std::move(initializer);
+      initializer.reset();
+    }
     const auto duplicate = std::find_if(
         body.signals.begin(),
         body.signals.end(),
@@ -1298,9 +1317,9 @@ void VerilogParser::parse_generate_declaration(
       driver.value = std::move(*initializer);
       driver.span = span_from(name, previous());
       body.concurrent_statements.push_back(std::move(driver));
-    } else if (initializer && !container_declaration
-        && !class_handle_declaration
-        && declaration_type.domain != ValueDomain::String) {
+    } else if ((initializer && !container_declaration
+                   && declaration_type.domain != ValueDomain::String)
+        || handle_initializer) {
       // A variable initializer sets the generated variable at time zero
       // (IEEE 1800-2017 6.8), as for a module variable.
       Statement assignment;
@@ -1308,7 +1327,8 @@ void VerilogParser::parse_generate_declaration(
       assignment.assignment_kind = AssignmentKind::Blocking;
       assignment.target = Expression{
           ExpressionKind::Identifier, name.text, {}, name.span};
-      assignment.value = std::move(*initializer);
+      assignment.value = handle_initializer
+          ? std::move(*handle_initializer) : std::move(*initializer);
       assignment.span = span_from(name, previous());
       Process process;
       process.kind = ProcessKind::Initial;

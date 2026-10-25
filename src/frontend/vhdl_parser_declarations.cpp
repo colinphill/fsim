@@ -475,6 +475,20 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     const auto designated_start = current();
     auto designated_type = parse_vhdl_type(true, true);
     const auto designated_span = cover(designated_start.span, previous().span);
+    {
+      auto designated_mark = std::string_view { designated_type.spelling };
+      if (const auto dot = designated_mark.find_last_of('.');
+          dot != std::string_view::npos) {
+        designated_mark.remove_prefix(dot + 1U);
+      }
+      const auto kind = vhdl_named_type_kinds_.find(
+          vhdl_name(std::string { designated_mark }));
+      if (kind != vhdl_named_type_kinds_.end()
+          && kind->second == TypeDeclarationKind::VhdlProtected) {
+        vhdl_access_type_names_.erase(canonical_name);
+        vhdl_protected_access_type_names_.insert(canonical_name);
+      }
+    }
     expect(TokenKind::Semicolon, "';' after access type declaration",
            "FSIM-VHDL-PARSE-237");
 

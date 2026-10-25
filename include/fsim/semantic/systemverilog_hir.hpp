@@ -654,6 +654,17 @@ struct TypeReference {
         const TypeReference&, const TypeReference&) = default;
 };
 
+/// A container of class handles whose elements are containers themselves
+/// (`C q[int][bit]`, IEEE 1800-2017 7.4.5, 7.8): an object holds it as a
+/// nested value container of 64-bit handles.
+[[nodiscard]] inline bool nested_class_handle_container(
+    const TypeReference& type) noexcept
+{
+    return !type.class_identity.empty() && type.container_form
+        && type.container_element_types.size() == 1U
+        && type.container_element_types.front().container_form;
+}
+
 enum class ActualKind : std::uint8_t {
     expression,
     type,
@@ -1138,6 +1149,32 @@ struct Defparam {
     ResidualDependencies dependencies;
 };
 
+struct ClockingSkew {
+    EdgeKind edge { EdgeKind::any };
+    std::optional<Delay> delay;
+    bool one_step { };
+    SourceSpanId source;
+};
+
+struct ClockingSignal {
+    Name name;
+    Direction direction { Direction::unknown };
+    std::optional<ClockingSkew> skew;
+    std::optional<ClockingSkew> output_skew;
+    std::optional<ExpressionId> expression;
+    SourceSpanId source;
+};
+
+struct ClockingBlock {
+    std::string name;
+    std::vector<Sensitivity> event;
+    std::optional<ClockingSkew> default_input_skew;
+    std::optional<ClockingSkew> default_output_skew;
+    std::vector<ClockingSignal> signals;
+    SourceSpanId source;
+    OriginId origin;
+};
+
 struct GenerateRegion {
     DeclarationId declaration;
     ScopeId scope;
@@ -1159,6 +1196,8 @@ struct GenerateRegion {
     std::vector<std::string> class_declarations;
     std::vector<GenerateAlternative> alternatives;
     std::vector<GenerateRegion> nested;
+    // Clocking blocks of each generated scope (IEEE 1800-2023 14.3, 27.3).
+    std::vector<ClockingBlock> clocking_blocks;
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
@@ -1871,32 +1910,6 @@ struct DpiDeclaration {
     bool validated { };
     std::optional<DpiResolvedProfile> resolved_profile;
     std::vector<SourceToken> tokens;
-    SourceSpanId source;
-    OriginId origin;
-};
-
-struct ClockingSkew {
-    EdgeKind edge { EdgeKind::any };
-    std::optional<Delay> delay;
-    bool one_step { };
-    SourceSpanId source;
-};
-
-struct ClockingSignal {
-    Name name;
-    Direction direction { Direction::unknown };
-    std::optional<ClockingSkew> skew;
-    std::optional<ClockingSkew> output_skew;
-    std::optional<ExpressionId> expression;
-    SourceSpanId source;
-};
-
-struct ClockingBlock {
-    std::string name;
-    std::vector<Sensitivity> event;
-    std::optional<ClockingSkew> default_input_skew;
-    std::optional<ClockingSkew> default_output_skew;
-    std::vector<ClockingSignal> signals;
     SourceSpanId source;
     OriginId origin;
 };

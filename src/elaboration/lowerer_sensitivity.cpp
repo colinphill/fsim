@@ -40,7 +40,44 @@ void Lowerer::record_container_object_dependency(
         });
     if (alias != design_.container_signal_aliases_.rend()) {
         record_implicit_signal_dependency(alias->signal);
+        return;
     }
+    // Without a signal holding its value, an implicit event list waits on
+    // the object's change signal (IEEE 1800-2023 9.2.2.2.1, 10.3.2).
+    if (object >= design_.container_objects_.size()
+        || object >= design_.container_object_info_.size()) {
+        return;
+    }
+    auto& container = design_.container_objects_[object];
+    if (container.slice_alias) {
+        record_container_object_dependency(container.slice_alias->object);
+        return;
+    }
+    if (!container.change_signal) {
+        if (design_.signals_.size()
+            >= std::numeric_limits<SignalId>::max()) {
+            return;
+        }
+        const auto id = static_cast<SignalId>(design_.signals_.size());
+        const auto name
+            = design_.container_object_info_[object].name + "$changed";
+        SignalInfo info;
+        info.id = id;
+        info.name = name;
+        info.width = 1U;
+        info.type_name = "bit";
+        info.source_domain = frontend::ValueDomain::Bit2;
+        design_.signal_info_.push_back(std::move(info));
+        design_.signals_.push_back(Signal {
+            name,
+            PackedLogic4 { 1U, Logic4::zero },
+            ResolutionKind::none,
+            value_kind(frontend::ValueDomain::Bit2),
+        });
+        design_.signal_by_name_.emplace(name, id);
+        container.change_signal = id;
+    }
+    record_implicit_signal_dependency(*container.change_signal);
 }
 
 std::optional<runtime::simir::Sensitivity>

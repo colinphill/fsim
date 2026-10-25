@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::semantic::sv {
@@ -155,6 +156,11 @@ struct ClassSpecialization {
     // Every parameter takes its default: the specialization a bare class
     // name denotes.
     bool default_specialization { };
+    // The loop-generate iteration this specialization belongs to, as
+    // (genvar, value) pairs outermost first. A class declared in a generate
+    // block is a distinct type in each generated scope (IEEE 1800-2017
+    // 27.4, 8.2), whose members see that scope's genvar values.
+    std::vector<std::pair<std::string, std::string>> generate_environment;
     SourceSpanId source;
     OriginId origin;
 };
@@ -234,6 +240,28 @@ public:
     /// (`Box#(7)::f()`).
     [[nodiscard]] std::optional<ClassSpecializationId> for_expression(
         ExpressionId expression) const;
+    /// The genvars whose values distinguish the classes of a class
+    /// declaration (those of the loop generates enclosing it, outermost
+    /// first); empty for a class outside every loop generate.
+    [[nodiscard]] std::span<const std::string> generate_iterators(
+        std::string_view declaration_identity) const;
+    /// The specialization of a class declared in a loop generate for the
+    /// iteration `environment` names (the genvar values of the scope in which
+    /// the class is used); none when the class is not iteration-specific or
+    /// the environment lacks one of its genvars. Materialized when new.
+    [[nodiscard]] std::optional<ClassSpecializationId> specialize_generated(
+        std::string_view declaration_identity,
+        std::span<const std::pair<std::string, std::string>> environment);
+    /// The specialization an identity made by specialize_generated names,
+    /// rebuilt from the identity alone (a loaded design names it).
+    [[nodiscard]] std::optional<ClassSpecializationId>
+    specialize_generated_identity(std::string_view specialization_identity);
+    /// Every iteration-specific specialization of a declaration.
+    [[nodiscard]] std::vector<ClassSpecializationId> generated_specializations(
+        std::string_view declaration_identity) const;
+    /// Whether `id` runs under bindings of its own (class parameters or a
+    /// generate iteration) rather than the bare declaration's.
+    [[nodiscard]] bool bound(ClassSpecializationId id) const;
     [[nodiscard]] std::optional<ClassSpecializationId> base(
         ClassSpecializationId id) const;
     /// The specialization in `id`'s base chain (itself included) whose

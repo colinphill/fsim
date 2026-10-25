@@ -78,6 +78,7 @@ void remember_body_declarations(
   remember_names(names, body.procedures);
   remember_names(names, body.package_instances);
   remember_names(names, body.instances);
+  remember_names(names, body.systemverilog_clocking_blocks);
   remember_process_blocks(names, body.processes);
 }
 

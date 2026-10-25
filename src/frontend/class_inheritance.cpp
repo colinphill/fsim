@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/frontend/class_resolution.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -294,6 +295,10 @@ bool validate_systemverilog_class_inheritance(
     for (const auto& declaration : unit.systemverilog_classes) {
       collect_classes(declaration, classes);
     }
+    for_each_generate_class(
+        unit,
+        [&](const SystemVerilogClassDeclaration& declaration,
+            const std::string&) { collect_classes(declaration, classes); });
   }
   for (const auto& declaration : design.systemverilog_classes) {
     collect_classes(declaration, classes);

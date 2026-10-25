@@ -159,6 +159,7 @@ namespace {
         "class object");
     SystemVerilogClassPropertyValue property;
     property.kind = descriptor_property.kind;
+    property.nested_handles = descriptor_property.nested_handles;
     const auto width = descriptor_property.kind
             == SystemVerilogClassPropertyKind::Integer
         ? std::size_t{64}

@@ -3904,7 +3904,7 @@ Interpreter::scalar_signal_snapshots() const
 const std::string& Interpreter::string_object_value(
     const StringObjectId object) const
 {
-    return impl_->get_string_object(object).initial_value;
+    return impl_->string_object_storage(object);
 }
 
 void Interpreter::Impl::initialize_package_static_string_object(
@@ -3939,7 +3939,7 @@ void Interpreter::deposit_string_object(
         };
     }
     (void)systemverilog_string_length(value);
-    impl_->get_string_object(object).initial_value = value;
+    impl_->string_object_storage(object) = value;
 }
 
 const ContainerValue& Interpreter::container_object_value(

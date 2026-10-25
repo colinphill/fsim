@@ -509,6 +509,14 @@ void Interpreter::Impl::push_callable_frame(
     if (operation.identity == 0) {
         fail(process, "automatic callable frame identity is zero");
     }
+    // Writes by the owning activation after the last suspension live only in
+    // the live registers. Refresh every escaping context before the callee
+    // can shadow those registers, because popping the callee frame restores
+    // the contexts (IEEE 1800-2017 6.21, 9.3.2: fork branches and the
+    // activation that joined them observe the same automatic variables).
+    if (!process.cold().escaping_callable_contexts.empty()) {
+        capture_escaping_callable_contexts(process);
+    }
     ProcessState::CallableFrameState frame;
     frame.identity = operation.identity;
     frame.packed_ids = operation.packed;
@@ -749,7 +757,35 @@ void Interpreter::Impl::restore_escaping_callable_contexts(
         if (!context) {
             fail(process, "escaping automatic callable context is null");
         }
-        restore_callable_values(process, *context);
+        // Registers of frames above the owning activation belong to those
+        // frames (IEEE 1800-2017 6.21): a callee's own locals and arguments
+        // must survive the restore that follows an inner call's return.
+        std::set<RegisterId> excluded_packed;
+        std::set<StringRegisterId> excluded_strings;
+        std::set<ContainerRegisterId> excluded_containers;
+        const auto& frames = process.cold().callable_frames;
+        std::size_t first_shadowing_frame { };
+        for (std::size_t index = frames.size(); index > 0; --index) {
+            if (frames[index - 1U].escaping_context == context) {
+                first_shadowing_frame = index;
+                break;
+            }
+        }
+        for (std::size_t index = first_shadowing_frame;
+            index < frames.size(); ++index) {
+            excluded_packed.insert(
+                frames[index].packed_ids.begin(),
+                frames[index].packed_ids.end());
+            excluded_strings.insert(
+                frames[index].string_ids.begin(),
+                frames[index].string_ids.end());
+            excluded_containers.insert(
+                frames[index].container_ids.begin(),
+                frames[index].container_ids.end());
+        }
+        restore_callable_values(
+            process, *context,
+            excluded_packed, excluded_strings, excluded_containers);
     }
 }
 

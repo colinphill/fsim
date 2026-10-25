@@ -1568,12 +1568,24 @@ struct ProcessSrandom {
 
 #include "fsim/runtime/simir_signal.hpp"
 
+/// A string port connected to one element of a fixed string array: the
+/// port's object is that element's storage (IEEE 1800-2017 23.3.3.5).
+struct StringElementAlias {
+    ContainerObjectId object { };
+    std::uint32_t ordinal { };
+
+    friend bool operator==(
+        const StringElementAlias&,
+        const StringElementAlias&) = default;
+};
+
 struct StringObject {
     std::string name;
     std::string initial_value;
     // Opaque design-local semantic unit identity for package-owned storage.
     // Zero marks objects without a SystemVerilog package owner.
     std::uint32_t package_owner_id { };
+    std::optional<StringElementAlias> element_alias { };
 };
 
 /// One fixed-array object view backed by a selected range of an earlier
@@ -1597,6 +1609,10 @@ struct ContainerObject {
     // Opaque design-local semantic unit identity for package-owned storage.
     // Zero marks objects without a SystemVerilog package owner.
     std::uint32_t package_owner_id { };
+    // A one-bit signal toggled at each change of an object that has no
+    // readable signal alias, so a process with an implicit event list can
+    // wait on it (IEEE 1800-2023 9.2.2.2.1, 10.3.2).
+    std::optional<SignalId> change_signal { };
 };
 
 struct ContainerSignalAlias {
@@ -2513,6 +2529,11 @@ public:
         std::uint64_t seed = 1);
     ~Interpreter();
     Interpreter(Interpreter&&) noexcept;
+    /// Marks the interpreter that lives until its command ends: when the
+    /// executable exits without teardown (support::exit_without_teardown),
+    /// its destructor skips freeing the design state. Other interpreters,
+    /// such as elaboration-time evaluators, free theirs.
+    void retain_state_until_exit() noexcept;
     Interpreter& operator=(Interpreter&&) noexcept;
     Interpreter(const Interpreter&) = delete;
     Interpreter& operator=(const Interpreter&) = delete;

@@ -33,6 +33,14 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
       : property.type.four_state ? "logic" : "bit";
 
   const auto container_form = property.type.container_form;
+  if (semantic::sv::nested_class_handle_container(property.type)) {
+    // Nested containers of handles are value containers of handle leaves
+    // (IEEE 1800-2017 7.4.5, 7.8).
+    result.kind = runtime::SystemVerilogClassPropertyKind::Container;
+    result.width = 0;
+    result.nested_handles = true;
+    return result;
+  }
   if (!property.type.class_identity.empty() && container_form) {
     runtime::SystemVerilogClassHandleContainerDescriptor container;
     container.declared_element_type = property.type.class_identity;
@@ -69,6 +77,9 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
           };
         }
         total_elements *= static_cast<std::size_t>(width);
+        if (property.type.unpacked_dimensions.size() > 1U) {
+          container.dimensions.emplace_back(*range.left, *range.right);
+        }
       }
       container.maximum_elements = total_elements;
       container.initial_elements = container.maximum_elements;
@@ -108,6 +119,26 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
       container.kind
           = runtime::SystemVerilogClassContainerKind::AssociativeArray;
       container.reserve_maximum_storage = false;
+      // The key type orders and names the elements (IEEE 1800-2017 7.8).
+      if (const auto& index = property.type.associative_index_metadata) {
+        std::string_view spelling{index->target.spelling};
+        if (const auto separator = spelling.find_last_of(".:$");
+            separator != std::string_view::npos) {
+          spelling.remove_prefix(separator + 1U);
+        }
+        container.string_keys = spelling == "string"
+            || index->value_form == semantic::sv::TypeForm::string;
+        const bool signed_keyword = spelling == "int" || spelling == "integer"
+            || spelling == "byte" || spelling == "shortint"
+            || spelling == "longint";
+        container.signed_keys = index->signed_value || signed_keyword;
+        const auto keyword_width = spelling == "byte" ? 8U
+            : spelling == "shortint" ? 16U
+            : spelling == "longint" || spelling == "time" ? 64U : 32U;
+        container.key_width = index->executable_width
+            ? static_cast<std::size_t>(*index->executable_width)
+            : keyword_width;
+      }
     }
     result.kind = runtime::SystemVerilogClassPropertyKind::Container;
     result.width = 0;

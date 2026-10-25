@@ -1264,8 +1264,7 @@ void Interpreter::Impl::execute_file(
                         return get_string_register(process, target.id).size();
                     }
                     if (target.kind == InputScanTargetKind::string_object) {
-                        return get_string_object(target.id)
-                            .initial_value.size();
+                        return string_object_storage(target.id).size();
                     }
                     return std::nullopt;
                 })) {
@@ -1324,7 +1323,7 @@ void Interpreter::Impl::execute_file(
                 get_string_register(process, target.id) = std::move(value.text);
                 break;
             case InputScanTargetKind::string_object:
-                get_string_object(target.id).initial_value = std::move(value.text);
+                string_object_storage(target.id) = std::move(value.text);
                 break;
             }
         }

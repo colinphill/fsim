@@ -18,7 +18,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
     StringMap& string_objects,
     ReadOnlyStringSet& read_only_strings,
     const frontend::PortDirection direction,
-    const frontend::SourceSpan& declaration_span)
+    const frontend::SourceSpan& declaration_span,
+    const bool procedural_initializer)
 {
     const auto full_name = materialized_path + "." + declaration.name;
     if (const auto alias = string_objects.find(declaration.name);
@@ -39,13 +40,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
             design_.string_by_name_.insert_or_assign(
                 declaration.name, alias->second);
         }
-        design_.string_object_info_.push_back(StringObjectInfo {
-            alias->second,
-            full_name,
-            declaration_span,
-            true,
-            direction,
-        });
+        // The connected object keeps its own record; the port is another
+        // name for it.
         if (direction == frontend::PortDirection::Input) {
             read_only_strings.insert(alias->second);
         }
@@ -158,7 +154,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
         };
         const auto evaluated = evaluate_string(
             evaluate_string, *declaration.initializer);
-        if (!evaluated) {
+        // A runtime initializer (`$sformatf("%m")`) runs as the
+        // declaration's time-zero initializer process (IEEE 1800-2023 6.8).
+        if (!evaluated && !procedural_initializer) {
             report(
                 "FSIM-ELAB-HIR-001",
                 "compiled string declaration '" + declaration.name
@@ -166,7 +164,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
                 declaration_span);
             return false;
         }
-        initial_value = *evaluated;
+        initial_value = evaluated.value_or(std::string { });
     }
     if (initial_value.size() > maximum_string_bytes) {
         report(

@@ -911,7 +911,7 @@ void Interpreter::Impl::execute(ProcessId id)
                     get_string_register(process, op.destination) = get_string_register(process, op.source);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ReadStringObject>) {
-                    get_string_register(process, op.destination) = get_string_object(op.object).initial_value;
+                    get_string_register(process, op.destination) = string_object_storage(op.object);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, WriteStringObject>) {
                     if (package_static_initialization_active) {
@@ -932,13 +932,12 @@ void Interpreter::Impl::execute(ProcessId id)
                             [this, object = op.object,
                                 value = get_string_register(
                                     process, op.source)](Scheduler&) {
-                                get_string_object(object).initial_value
-                                    = value;
+                                string_object_storage(object) = value;
                             });
                         ++process.pc;
                         return;
                     }
-                    get_string_object(op.object).initial_value = get_string_register(process, op.source);
+                    string_object_storage(op.object) = get_string_register(process, op.source);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {
                     std::string result;

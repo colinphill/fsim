@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
+#include "fsim/frontend/class_resolution.hpp"
 #include "fsim/support/uvm_identity.hpp"
 
 #include <algorithm>
@@ -85,6 +86,11 @@ Resolver::Resolver(ParsedDesign& design, std::vector<Diagnostic>& diagnostics)
     for (auto& declaration : unit.systemverilog_classes) {
       collect(declaration, &unit);
     }
+    for_each_generate_class(
+        unit,
+        [&](SystemVerilogClassDeclaration& declaration, const std::string&) {
+          collect(declaration, &unit);
+        });
   }
 }
 void Resolver::run() {
@@ -370,10 +376,10 @@ void Resolver::run() {
     }
     for (auto& region : unit.generate_regions) {
       resolve_generate_constants(region, scope);
-      resolve_generate_body(region.then_body, scope);
-      resolve_generate_body(region.else_body, scope);
+      resolve_generate_body(region.then_body, scope, region.then_scope);
+      resolve_generate_body(region.else_body, scope, region.else_scope);
       for (auto& alternative : region.alternatives) {
-        resolve_generate_body(alternative.body, scope);
+        resolve_generate_body(alternative.body, scope, alternative.scope);
       }
     }
   }
@@ -621,8 +627,14 @@ void Resolver::hydrate_task_bodies() {
     }
   }
 }
-void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited) {
+void Resolver::resolve_generate_body(
+    GenerateBody& body, const Scope& inherited, const std::string& label) {
   auto scope = inherited;
+  // A generate block is a named scope (IEEE 1800-2017 27.3): its classes are
+  // identified under the block, and lookups from inside walk outward.
+  if (!label.empty()) {
+    scope.lexical_identity += "::" + label;
+  }
   for (auto& constant : body.constants) {
     if (constant.kind == ParameterKind::Value) {
       resolve_module_constant(constant.default_value, scope);
@@ -638,6 +650,18 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
       resolve_typed_expression(
           *variable.initializer, scope, variable.type);
     }
+  }
+  for (auto& declaration : body.systemverilog_classes) {
+    auto class_scope = scope;
+    class_scope.lexical_identity = declaration.canonical_identity;
+    class_scope.class_owner = &declaration;
+    // A class member hides an enclosing object of the same name (IEEE
+    // 1800-2017 8.6, 23.9).
+    class_scope.objects.hide_if([&](const std::string& name) {
+      return find_property(declaration.canonical_identity, name)
+          .property != nullptr;
+    });
+    resolve_class(declaration, class_scope);
   }
   for (auto& function : body.functions) {
     resolve_function(function, scope);
@@ -675,10 +699,10 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
   }
   for (auto& region : body.generate_regions) {
     resolve_generate_constants(region, scope);
-    resolve_generate_body(region.then_body, scope);
-    resolve_generate_body(region.else_body, scope);
+    resolve_generate_body(region.then_body, scope, region.then_scope);
+    resolve_generate_body(region.else_body, scope, region.else_scope);
     for (auto& alternative : region.alternatives) {
-      resolve_generate_body(alternative.body, scope);
+      resolve_generate_body(alternative.body, scope, alternative.scope);
     }
   }
 }

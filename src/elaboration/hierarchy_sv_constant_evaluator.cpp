@@ -36,6 +36,20 @@ using ExpressionKind = semantic::sv::ExpressionKind;
 using Scalar = frontend::SystemVerilogScalarConstant;
 using ScalarKind = frontend::SystemVerilogScalarKind;
 
+/// FSIM_SV_CONST_TRACE and FSIM_SV_CONST_CAST_TRACE, read once.
+[[nodiscard]] bool sv_const_trace()
+{
+    static const bool enabled = std::getenv("FSIM_SV_CONST_TRACE") != nullptr;
+    return enabled;
+}
+
+[[nodiscard]] bool sv_const_cast_trace()
+{
+    static const bool enabled
+        = std::getenv("FSIM_SV_CONST_CAST_TRACE") != nullptr;
+    return enabled;
+}
+
 [[nodiscard]] bool systemverilog_constant_declaration(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::DeclarationId declaration)
@@ -433,7 +447,7 @@ void convert_to_two_state(Value& value)
 [[nodiscard]] frontend::ValueDomain type_domain(
     const semantic::sv::TypeReference& type)
 {
-    const auto spelling = type.target.spelling;
+    const auto& spelling = type.target.spelling;
     if (spelling == "byte" || spelling == "shortint"
         || spelling == "int" || spelling == "longint"
         || spelling == "integer") {
@@ -1509,6 +1523,12 @@ public:
     {
     }
 
+    /// Hierarchy identities this evaluator has read (hierarchy_reads_).
+    [[nodiscard]] std::size_t hierarchy_reads() const noexcept
+    {
+        return hierarchy_reads_;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate(
         const semantic::ExpressionId expression)
     {
@@ -1842,7 +1862,8 @@ private:
         return static_cast<std::size_t>(distance);
     }
 
-    /// A fixed one-dimensional unpacked array type, through typedefs.
+    /// A fixed one-dimensional unpacked array type, through typedefs. `type`
+    /// is a HIR record, so the result is kept per specialization.
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
     unpacked_array_type(const semantic::sv::TypeReference& type,
         const semantic::ScopeId scope) const
@@ -1850,13 +1871,20 @@ private:
         if (fixed_one_dimensional_array_type(type)) {
             return type;
         }
-        const auto resolved = semantic::CompiledDesignResolver {
+        auto& kept = specialization_cache(specialization_)
+                         .constants->unpacked_array_types;
+        if (const auto found = kept.find(&type);
+            found != kept.end() && found->second.first == scope) {
+            return found->second.second;
+        }
+        auto resolved = semantic::CompiledDesignResolver {
             specialization_
         }.underlying_systemverilog_type(type, scope);
-        if (resolved && fixed_one_dimensional_array_type(*resolved)) {
-            return resolved;
+        if (resolved && !fixed_one_dimensional_array_type(*resolved)) {
+            resolved.reset();
         }
-        return std::nullopt;
+        kept.insert_or_assign(&type, std::pair { scope, resolved });
+        return resolved;
     }
 
     [[nodiscard]] bool initialize_local_array(
@@ -2007,7 +2035,7 @@ private:
         if (record.kind == ExpressionKind::logic_literal
             || record.kind == ExpressionKind::integer_literal) {
             std::string ignored;
-            const auto value = parse_literal(record.text, true, ignored);
+            const auto value = literal_value(record, true, ignored);
             return finish(value
                     ? std::optional { value->width }
                     : std::nullopt);
@@ -2059,8 +2087,8 @@ private:
                     && base->systemverilog->referenced_name
                 ? base->systemverilog->referenced_name->selected
                 : std::nullopt;
-            const auto type = selected ? declaration_type(*selected)
-                                       : std::nullopt;
+            static const std::optional<semantic::sv::TypeReference> none;
+            const auto& type = selected ? declaration_type(*selected) : none;
             if (type && !type->unpacked_dimensions.empty()
                 && (!type->container_form
                     || *type->container_form
@@ -2199,7 +2227,8 @@ private:
                 // The layout evaluates dimension bounds, so it is not const.
                 auto& layout = const_cast<HirConstantEvaluator&>(*this);
                 if (declaration_record.type
-                    && layout.unpacked_aggregate(*declaration_record.type)) {
+                    && layout.record_unpacked_aggregate(
+                        *declaration_record.type)) {
                     if (const auto width
                         = layout.aggregate_width(*declaration_record.type);
                         width && *width != 0U
@@ -2226,11 +2255,21 @@ private:
         return finish(std::nullopt);
     }
 
+    /// The self-determined width of an expression (IEEE 1800-2017 11.6.1),
+    /// kept for the specialization: it reads declared types, not frames.
     [[nodiscard]] std::optional<std::uint32_t> expression_width(
         const semantic::ExpressionId expression) const
     {
+        auto& widths = specialization_cache(specialization_)
+                           .constants->expression_widths;
+        if (const auto found = widths.find(expression.value());
+            found != widths.end()) {
+            return found->second;
+        }
         std::unordered_set<std::uint32_t> visiting;
-        return expression_width(expression, visiting);
+        const auto width = expression_width(expression, visiting);
+        widths.emplace(expression.value(), width);
+        return width;
     }
 
     [[nodiscard]] std::optional<Value> value_for_declaration(
@@ -2552,6 +2591,43 @@ private:
         return result;
     }
 
+    /// The value a plain name bound in a constant-function frame denotes,
+    /// as evaluate_name finds it, read in place; null for any other name.
+    [[nodiscard]] const Value* frame_local(
+        const semantic::ExpressionId expression) const
+    {
+        if (frames_.empty()) {
+            return nullptr;
+        }
+        const auto view = specialization_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return nullptr;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind != ExpressionKind::name || record.decimal_literal
+            || !record.referenced_name
+            || !record.referenced_name->selected || record.text == "$"
+            || record.text.starts_with('@')
+            || record.text.find('.') != std::string::npos) {
+            return nullptr;
+        }
+        for (auto frame = frames_.rbegin(); frame != frames_.rend();
+             ++frame) {
+            if (frame->pattern_values.contains(record.text)) {
+                return nullptr;
+            }
+        }
+        for (auto frame = frames_.rbegin(); frame != frames_.rend();
+             ++frame) {
+            if (const auto found
+                = frame->values.find(*record.referenced_name->selected);
+                found != frame->values.end()) {
+                return &found->second;
+            }
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_unary(
         const semantic::sv::Expression& record)
     {
@@ -2840,38 +2916,77 @@ private:
                 || operand.text == "~^" || operand.text == "^~");
     }
 
+    /// The operator classes and operand facts of a binary expression,
+    /// kept for the specialization: they read declared types, not frames.
+    [[nodiscard]] const SpecializationConstants::BinaryPlan& binary_plan(
+        const semantic::sv::Expression& record)
+    {
+        auto& plans = specialization_cache(specialization_)
+                          .constants->binary_plans;
+        if (const auto found = plans.find(record.id.value());
+            found != plans.end()) {
+            return found->second;
+        }
+        SpecializationConstants::BinaryPlan plan;
+        const auto& op = record.text;
+        // Only these operators take real operands (IEEE 1800-2017 11.3.1,
+        // Table 11-1); `%`, case and wildcard equality, bitwise and shift
+        // operators are integral only.
+        plan.real_operator = op == "+" || op == "-" || op == "*"
+            || op == "/" || op == "**" || op == "==" || op == "!="
+            || op == "<" || op == "<=" || op == ">" || op == ">=";
+        plan.logical_operator
+            = op == "&&" || op == "||" || op == "->" || op == "<->";
+        plan.real_operand = real_valued(record.operands.front())
+            || real_valued(record.operands.back());
+        plan.chandle_operand
+            = value_kind_hint(record.operands.front()) == ScalarKind::Chandle
+            || value_kind_hint(record.operands.back()) == ScalarKind::Chandle;
+        plan.arithmetic_context = op == "+" || op == "-" || op == "*"
+            || op == "/" || op == "%" || op == "&" || op == "|" || op == "^"
+            || op == "~^" || op == "^~";
+        plan.relational_context = op == "==" || op == "!=" || op == "==="
+            || op == "!==" || op == "<" || op == "<=" || op == ">"
+            || op == ">=";
+        plan.left_context = op == "**" || op == "<<" || op == ">>"
+            || op == "<<<" || op == ">>>";
+        plan.contextual = contextual_binary_operator(op);
+        plan.left_context_determined
+            = context_determined_operator(record.operands.front());
+        plan.right_context_determined
+            = context_determined_operator(record.operands.back());
+        const bool integral = !(plan.real_operator
+                                  && (plan.real_operand
+                                      || plan.chandle_operand))
+            && !(!plan.real_operator && !plan.logical_operator
+                && plan.real_operand);
+        if (integral
+            && (plan.arithmetic_context || plan.relational_context
+                || plan.left_context)) {
+            plan.left_width = expression_width(record.operands.front());
+            if (!plan.left_context && plan.left_width) {
+                plan.right_width = expression_width(record.operands.back());
+            }
+        }
+        return plans.insert_or_assign(record.id.value(), std::move(plan))
+            .first->second;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_binary(
         const semantic::sv::Expression& record)
     {
         if (record.operands.size() != 2U) {
             return std::nullopt;
         }
-        // Only these operators take real operands (IEEE 1800-2017 11.3.1,
-        // Table 11-1); `%`, case and wildcard equality, bitwise and shift
-        // operators are integral only.
-        const bool real_operator = record.text == "+" || record.text == "-"
-            || record.text == "*" || record.text == "/"
-            || record.text == "**" || record.text == "=="
-            || record.text == "!=" || record.text == "<"
-            || record.text == "<=" || record.text == ">"
-            || record.text == ">=";
-        const bool logical_operator = record.text == "&&"
-            || record.text == "||" || record.text == "->"
-            || record.text == "<->";
-        if (!real_operator && !logical_operator
-            && (real_valued(record.operands.front())
-                || real_valued(record.operands.back()))) {
+        const auto& plan = binary_plan(record);
+        if (!plan.real_operator && !plan.logical_operator
+            && plan.real_operand) {
             error_ = "operator '" + record.text
                 + "' is not legal for real operands";
             return std::nullopt;
         }
-        if (real_operator
-            && (real_valued(record.operands.front())
-                || real_valued(record.operands.back())
-                || value_kind_hint(record.operands.front())
-                    == ScalarKind::Chandle
-                || value_kind_hint(record.operands.back())
-                    == ScalarKind::Chandle)) {
+        if (plan.real_operator
+            && (plan.real_operand || plan.chandle_operand)) {
             return evaluate_real_binary(record);
         }
         // Operands of arithmetic and bitwise operators take the width of
@@ -2879,24 +2994,17 @@ private:
         // of the two, and the left operand of a power or shift its context
         // (IEEE 1800-2017 11.6.1, 11.8.2); they are extended before the
         // operator applies, so no carry is lost.
-        const auto& op = record.text;
-        const bool arithmetic_context = op == "+" || op == "-" || op == "*"
-            || op == "/" || op == "%" || op == "&" || op == "|" || op == "^"
-            || op == "~^" || op == "^~";
-        const bool relational_context = op == "==" || op == "!="
-            || op == "===" || op == "!==" || op == "<" || op == "<="
-            || op == ">" || op == ">=";
-        const bool left_context = op == "**" || op == "<<" || op == ">>"
-            || op == "<<<" || op == ">>>";
-        const auto outer = arithmetic_context || left_context
+        const bool left_context = plan.left_context;
+        const auto outer = plan.arithmetic_context || left_context
             ? take_context(record.id)
             : std::nullopt;
         std::optional<std::uint32_t> target;
-        if (arithmetic_context || relational_context || left_context) {
-            const auto left_width = expression_width(record.operands.front());
+        if (plan.arithmetic_context || plan.relational_context
+            || left_context) {
+            const auto left_width = plan.left_width;
             const auto right_width = left_context
                 ? std::optional<std::uint32_t> { 0U }
-                : expression_width(record.operands.back());
+                : plan.right_width;
             if (left_width && right_width) {
                 auto width = std::max(*left_width, *right_width);
                 if (outer) {
@@ -2947,9 +3055,9 @@ private:
                 const bool both_signed
                     = left->signed_value && right->signed_value;
                 const auto extend = [&](Value& value,
-                                        const semantic::ExpressionId id) {
+                                        const bool context_determined) {
                     const bool negated = value.signed_value
-                        && context_determined_operator(id);
+                        && context_determined;
                     if (!both_signed && !negated) {
                         value.signed_value = false;
                     }
@@ -2965,8 +3073,8 @@ private:
                         value.signed_value = false;
                     }
                 };
-                extend(*left, record.operands.front());
-                extend(*right, record.operands.back());
+                extend(*left, plan.left_context_determined);
+                extend(*right, plan.right_context_determined);
             }
         }
         // The context of an arithmetic, bitwise or relational operator
@@ -2975,19 +3083,19 @@ private:
         // 11.8.2). Evaluated self-determined, a signed one of these is
         // sign-extended to the common width first; a primary operand
         // extends by the expression's signedness.
-        if (contextual_binary_operator(record.text)
+        if (plan.contextual
             && !(left->signed_value && right->signed_value)) {
             const auto width = std::max(left->width, right->width);
             const auto widen = [&](Value& value,
-                                   const semantic::ExpressionId id) {
+                                   const bool context_determined) {
                 if (!value.signed_value || value.width >= width
-                    || !context_determined_operator(id)) {
+                    || !context_determined) {
                     return;
                 }
                 value = resized(std::move(value), width);
             };
-            widen(*left, record.operands.front());
-            widen(*right, record.operands.back());
+            widen(*left, plan.left_context_determined);
+            widen(*right, plan.right_context_determined);
         }
         if (auto fast = small_binary(record.text, *left, *right)) {
             return std::move(*fast);
@@ -3411,18 +3519,20 @@ private:
             || !record.referenced_name->selected) {
             return std::nullopt;
         }
-        auto type = declaration_type(*record.referenced_name->selected);
+        const auto& declared
+            = declaration_type(*record.referenced_name->selected);
+        const auto* type = declared ? &*declared : nullptr;
         // A member of a structure (`s.m`) has its member's dimensions
         // (IEEE 1800-2017 7.2.1).
+        semantic::sv::TypeReference member_type;
         if (const auto dot = record.text.find('.');
             type && dot != std::string::npos) {
-            semantic::sv::TypeReference member_type;
             if (!packed_member_slice(*type,
                     std::string_view { record.text }.substr(dot + 1U),
                     &member_type)) {
                 return std::nullopt;
             }
-            type = std::move(member_type);
+            type = &member_type;
         }
         if (!type || type->packed_dimensions.size() < 2U
             || !type->unpacked_dimensions.empty() || type->container_form) {
@@ -3484,14 +3594,14 @@ private:
             }
             // An element of a packed structure array constant (7.4.1).
             if (auto element = typed_constant(record.id)) {
-                if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+                if (sv_const_trace()) {
                     std::fprintf(stderr,
                         "FSIM_SV_CONST structure array element = %s\n",
                         element->first.canonical().c_str());
                 }
                 return std::move(element->first);
             }
-            if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+            if (sv_const_trace()) {
                 std::fprintf(stderr,
                     "FSIM_SV_CONST no structure array element (%s)\n",
                     error_.c_str());
@@ -3550,10 +3660,21 @@ private:
                 return make_value(
                     std::move(packed), false, false, base->domain);
             }
-            const auto base = evaluate(record.operands.front());
-            const auto index = base
-                ? evaluate(record.operands.back()) : std::nullopt;
-            if (!base || !index || !index->known()) {
+            // A frame local is read in place rather than copied; operand
+            // evaluation order is unspecified (IEEE 1800-2017 11.3.5).
+            std::optional<Value> base_value;
+            std::optional<Value> index;
+            const Value* base = nullptr;
+            if (frame_local(record.operands.front()) != nullptr) {
+                index = evaluate(record.operands.back());
+                base = frame_local(record.operands.front());
+            } else {
+                base_value = evaluate(record.operands.front());
+                base = base_value ? &*base_value : nullptr;
+                index = base ? evaluate(record.operands.back())
+                             : std::nullopt;
+            }
+            if (base == nullptr || !index || !index->known()) {
                 return std::nullopt;
             }
             const auto integer = index->integer_value();
@@ -3839,7 +3960,7 @@ private:
                         .ends_with("::")))) {
             return std::nullopt;
         }
-        const auto type = declaration_type(*declaration);
+        const auto& type = declaration_type(*declaration);
         if (!type || (type->unpacked_dimensions.empty() && !object)
             || (type->container_form
                 && *type->container_form
@@ -4005,7 +4126,7 @@ private:
                 ? specialization_.find_declaration(
                       *view->systemverilog->referenced_name->selected)
                 : std::nullopt;
-            if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+            if (sv_const_trace()) {
                 std::fprintf(stderr,
                     "FSIM_SV_CONST $bits operand kind=%d frames=%zu "
                     "selected=%d typedef=%d\n",
@@ -4107,8 +4228,25 @@ private:
             frontend::ValueDomain::Integer);
     }
 
-    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    /// The effective type of a declaration in this specialization, kept per
+    /// specialization: the resolver reads no constant-function frame.
+    [[nodiscard]] const std::optional<semantic::sv::TypeReference>&
     declaration_type(const semantic::DeclarationId declaration_id) const
+    {
+        auto& types = specialization_cache(specialization_)
+                          .constants->declaration_types;
+        if (const auto found = types.find(declaration_id.value());
+            found != types.end()) {
+            return found->second;
+        }
+        auto type = resolve_declaration_type(declaration_id);
+        // Resolution can resolve other declarations; the entry stays put.
+        return types.try_emplace(declaration_id.value(), std::move(type))
+            .first->second;
+    }
+
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    resolve_declaration_type(const semantic::DeclarationId declaration_id) const
     {
         const semantic::CompiledDesignResolver resolver { specialization_ };
         const auto selected_id = resolver.actual_declaration(declaration_id)
@@ -4205,7 +4343,7 @@ private:
                     // FSIM_SV_CONST_CAST_TRACE names a typed pattern that
                     // does not take its aggregate type's layout.
                     const bool trace
-                        = std::getenv("FSIM_SV_CONST_CAST_TRACE") != nullptr;
+                        = sv_const_cast_trace();
                     if (aggregate) {
                         if (auto image = evaluate_for_type(
                                 *cast_value, *pattern_type)) {
@@ -4848,7 +4986,7 @@ private:
             return evaluate_unpacked_pattern(record, *type);
         }
         if (!record.nominal_type.empty()
-            && std::getenv("FSIM_SV_CONST_CAST_TRACE") != nullptr) {
+            && sv_const_cast_trace()) {
             std::cerr << "FSIM_SV_CONST_CAST pattern " << record.nominal_type
                       << " target=" << record.nominal_type_target.has_value()
                       << '\n';
@@ -5611,6 +5749,23 @@ private:
         return aggregate_members(type) != nullptr;
     }
 
+    /// unpacked_aggregate for a type held by a declaration record, kept per
+    /// specialization when the type has no unpacked dimension bounds.
+    [[nodiscard]] bool record_unpacked_aggregate(
+        const semantic::sv::TypeReference& type)
+    {
+        auto& kinds = specialization_cache(specialization_)
+                          .constants->record_unpacked_aggregates;
+        if (const auto found = kinds.find(&type); found != kinds.end()) {
+            return found->second;
+        }
+        const bool result = unpacked_aggregate(type);
+        if (with_unpacked_dimensions(type).unpacked_dimensions.empty()) {
+            kinds.emplace(&type, result);
+        }
+        return result;
+    }
+
     /// The value of an assignment pattern for an unpacked structure or
     /// fixed-size array, as its bit stream: positional items in order, or
     /// member keys and `default:` (IEEE 1800-2017 10.9.1, 10.9.2).
@@ -5855,6 +6010,61 @@ private:
             std::move(element), *left, *right, *element_width };
     }
 
+    /// Whether the type of the named base `name` can be a packed array of
+    /// packed structures: its shape and element type, without its range
+    /// bounds, which alone may read a constant-function frame. Kept per
+    /// specialization by name record.
+    [[nodiscard]] bool structure_array_name(
+        const semantic::sv::Expression& name,
+        const semantic::sv::TypeReference& type) const
+    {
+        auto& names = specialization_cache(specialization_)
+                          .constants->structure_array_names;
+        if (const auto found = names.find(&name); found != names.end()) {
+            return found->second;
+        }
+        const bool nested = type.packed_dimensions.size() == 2U;
+        bool result = type.packed_range && type.packed_dimensions.size() <= 2U
+            && !type.target.spelling.empty()
+            && (nested
+                || (!type.target.spelling.starts_with("struct")
+                    && !type.target.spelling.starts_with("union")));
+        if (result) {
+            auto element = type;
+            element.packed_range.reset();
+            if (nested) {
+                element.packed_range = type.packed_dimensions.back();
+            }
+            element.packed_dimensions.clear();
+            element.signed_value = false;
+            result = packed_members(element) != nullptr;
+        }
+        names.emplace(&name, result);
+        return result;
+    }
+
+    /// An integer or logic literal's value, parsed once per specialization
+    /// (IEEE 1800-2017 5.7).
+    [[nodiscard]] std::optional<Value> literal_value(
+        const semantic::sv::Expression& record, const bool integer_literal,
+        std::string& error) const
+    {
+        auto& literals = specialization_cache(specialization_)
+                             .constants->literals[integer_literal ? 1U : 0U];
+        auto found = literals.find(&record);
+        if (found == literals.end()) {
+            std::string parse_error;
+            auto value = parse_literal(record.text, integer_literal,
+                parse_error);
+            found = literals.emplace(&record,
+                std::pair { std::move(value), std::move(parse_error) }).first;
+        }
+        if (!found->second.first) {
+            error = found->second.second;
+        }
+        return found->second.first;
+    }
+
     /// The value and type of a constant reached through packed structure
     /// members and packed structure array elements (`P[1].m`, `C::p.m`,
     /// IEEE 1800-2023 7.2.1, 7.4.1, 8.25.1). Null for anything else.
@@ -5906,7 +6116,7 @@ private:
                 return std::nullopt;
             }
             auto value = evaluate(id);
-            if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+            if (sv_const_trace()) {
                 std::fprintf(stderr, "FSIM_SV_CONST typed name '%s' = %s\n",
                     record.text.c_str(),
                     value ? value->canonical().c_str() : "none");
@@ -5945,15 +6155,19 @@ private:
                     || !declaration->systemverilog->type) {
                     return std::nullopt;
                 }
-                auto type = *declaration->systemverilog->type;
+                const auto* declared = &*declaration->systemverilog->type;
+                semantic::sv::TypeReference member_type;
                 if (const auto dot = name.text.find('.');
-                    dot != std::string::npos
-                    && !packed_member_slice(type,
-                        std::string_view { name.text }.substr(dot + 1U),
-                        &type)) {
-                    return std::nullopt;
+                    dot != std::string::npos) {
+                    if (!packed_member_slice(*declared,
+                            std::string_view { name.text }.substr(dot + 1U),
+                            &member_type)) {
+                        return std::nullopt;
+                    }
+                    declared = &member_type;
                 }
-                if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+                const auto& type = *declared;
+                if (sv_const_trace()) {
                     std::fprintf(stderr,
                         "FSIM_SV_CONST element of '%s': type '%s' range=%d "
                         "dimensions=%zu array=%d\n",
@@ -5962,7 +6176,8 @@ private:
                         type.packed_dimensions.size(),
                         packed_structure_array(type) ? 1 : 0);
                 }
-                if (!packed_structure_array(type)) {
+                if (!structure_array_name(name, type)
+                    || !packed_structure_array(type)) {
                     return std::nullopt;
                 }
             }
@@ -5997,9 +6212,13 @@ private:
         const semantic::sv::TypeReference& type)
     {
         const auto view = specialization_.find_expression(expression);
-        if (view && view->systemverilog != nullptr
-            && view->systemverilog->kind == ExpressionKind::assignment_pattern
-            && unpacked_aggregate(type)) {
+        // Only an assignment pattern takes its form from the type (10.9).
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->kind
+                != ExpressionKind::assignment_pattern) {
+            return evaluate(expression);
+        }
+        if (unpacked_aggregate(type)) {
             if (auto image
                 = evaluate_unpacked_pattern(*view->systemverilog, type)) {
                 return image;
@@ -6155,7 +6374,7 @@ private:
                 member.type, &specialization_, member_visiting);
             auto value = evaluate_typed(value_id, member.type);
             if (!value || !member_width) {
-                if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+                if (sv_const_trace()) {
                     std::fprintf(stderr,
                         "FSIM_SV_CONST pattern member '%s' failed: %s\n",
                         member.name.c_str(), error_.c_str());
@@ -6921,9 +7140,19 @@ private:
                 }
             }
             // A pattern takes the shape of the variable or local array
-            // element it is assigned to (IEEE 1800-2017 10.9).
+            // element it is assigned to (IEEE 1800-2017 10.9); any other
+            // value is self-determined.
+            const auto value_view
+                = specialization_.find_expression(*record.value);
+            const bool pattern = value_view
+                && value_view->systemverilog != nullptr
+                && value_view->systemverilog->kind
+                    == ExpressionKind::assignment_pattern;
             const auto target_type = [&]()
                 -> std::optional<semantic::sv::TypeReference> {
+                if (!pattern) {
+                    return std::nullopt;
+                }
                 if (named != nullptr) {
                     const auto declared
                         = specialization_.find_declaration(*named);
@@ -7089,15 +7318,19 @@ private:
     /// Whether an expression has a real-family type: a real literal, a real
     /// declaration, a real cast or math function, or an arithmetic or
     /// conditional operator with a real operand (11.3.1, 11.4.11).
+    /// Kept for the specialization: it reads declared types, not frames.
     [[nodiscard]] bool real_valued(const semantic::ExpressionId expression)
     {
-        if (const auto found = real_valued_.find(expression.value());
-            found != real_valued_.end()) {
+        auto& known = specialization_cache(specialization_)
+                          .constants->real_valued;
+        if (const auto found = known.find(expression.value());
+            found != known.end()) {
             return found->second;
         }
-        real_valued_.emplace(expression.value(), false);
+        // Not real while its own operands are examined.
+        known.emplace(expression.value(), false);
         const auto result = real_valued_impl(expression);
-        real_valued_[expression.value()] = result;
+        known[expression.value()] = result;
         return result;
     }
 
@@ -7502,7 +7735,7 @@ private:
                 }
             }
         }
-        if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+        if (sv_const_trace()) {
             std::fprintf(stderr, "FSIM_SV_CONST class constant '%s' %s\n",
                 std::string { identity }.c_str(),
                 owner == nullptr ? "has no owner" : "found");
@@ -7546,7 +7779,7 @@ private:
             return frames_.back().values.at(formal->declaration);
         }
         auto value = value_for_declaration(property->declaration);
-        if (std::getenv("FSIM_SV_CONST_TRACE") != nullptr) {
+        if (sv_const_trace()) {
             std::fprintf(stderr,
                 "FSIM_SV_CONST class constant '%s' = %s (%s)\n",
                 std::string { identity }.c_str(),
@@ -7578,7 +7811,7 @@ private:
         }
         if (record.kind == ExpressionKind::integer_literal
             || record.kind == ExpressionKind::logic_literal) {
-            return parse_literal(record.text,
+            return literal_value(record,
                 record.kind == ExpressionKind::integer_literal, error_);
         }
         if (record.kind == ExpressionKind::string_literal
@@ -7639,17 +7872,53 @@ private:
     [[nodiscard]] std::optional<std::uint32_t> take_context(
         const semantic::ExpressionId id) const
     {
-        const auto found = contexts_.find(id.value());
-        return found == contexts_.end() ? std::nullopt
-                                        : std::optional { found->second };
+        const auto* found = contexts_.find(id.value());
+        return found == nullptr ? std::nullopt : std::optional { *found };
     }
+
+    /// Context widths of the operands being evaluated, by expression: a
+    /// few entries at a time, one per enclosing operator level.
+    class OperandContexts {
+    public:
+        std::uint32_t& operator[](const std::uint32_t expression)
+        {
+            for (auto& entry : entries_) {
+                if (entry.first == expression) {
+                    return entry.second;
+                }
+            }
+            return entries_.emplace_back(expression, 0U).second;
+        }
+        void erase(const std::uint32_t expression)
+        {
+            for (auto& entry : entries_) {
+                if (entry.first == expression) {
+                    entry = entries_.back();
+                    entries_.pop_back();
+                    return;
+                }
+            }
+        }
+        [[nodiscard]] const std::uint32_t* find(
+            const std::uint32_t expression) const
+        {
+            for (const auto& entry : entries_) {
+                if (entry.first == expression) {
+                    return &entry.second;
+                }
+            }
+            return nullptr;
+        }
+
+    private:
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> entries_;
+    };
 
     const semantic::SpecializedHirUnit& specialization_;
     std::string& error_;
     std::vector<std::pair<std::size_t, std::uint32_t>> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
-    std::unordered_map<std::uint32_t, std::uint32_t> contexts_;
-    std::unordered_map<std::uint32_t, bool> real_valued_;
+    OperandContexts contexts_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };
 };
@@ -7992,16 +8261,32 @@ evaluate_hir_systemverilog_value(
 {
     error.clear();
     // Evaluation depends only on the specialization and the expression;
-    // instances sharing a specialization evaluate each expression once.
-    auto& results = specialization_cache(specialization).constants->expressions;
+    // instances sharing a specialization evaluate each expression once. A
+    // unit-scope expression lexically reaches no generate-local name, so a
+    // value of one that read no hierarchy identity holds for every
+    // occurrence derived from the specialization.
+    auto& constants = *specialization_cache(specialization).constants;
+    auto& results = constants.expressions;
     if (const auto found = results.find(expression.value());
         found != results.end()) {
         error = found->second.second;
         return found->second.first;
     }
-    auto value = HirConstantEvaluator { specialization, error }.evaluate(
-        expression);
-    results.emplace(expression.value(), std::pair { value, error });
+    auto& unit_values = *constants.unit_expressions;
+    if (const auto found = unit_values.find(expression.value());
+        found != unit_values.end()) {
+        return found->second;
+    }
+    HirConstantEvaluator evaluator { specialization, error };
+    auto value = evaluator.evaluate(expression);
+    const auto view = specialization.find_expression(expression);
+    if (value && evaluator.hierarchy_reads() == 0U && view
+        && view->systemverilog != nullptr
+        && view->systemverilog->scope == specialization.scope()) {
+        unit_values.emplace(expression.value(), *value);
+    } else {
+        results.emplace(expression.value(), std::pair { value, error });
+    }
     return value;
 }
 

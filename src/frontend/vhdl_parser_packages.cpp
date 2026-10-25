@@ -689,7 +689,9 @@ std::vector<std::string> vhdl_ieee_intrinsic_package_declarations(
         "ufixed", "sfixed", "fixed_round_style", "fixed_overflow_style",
         "fixed_round", "fixed_truncate", "fixed_saturate", "fixed_wrap",
         "to_ufixed", "to_sfixed", "resize", "from_string",
-        "from_bstring", "from_binary_string", "+", "-", "*", "/", "rem",
+        "from_bstring", "from_binary_string", "to_real", "to_integer",
+        "shift_left", "shift_right", "ufixed_high", "ufixed_low",
+        "sfixed_high", "sfixed_low", "+", "-", "*", "/", "rem",
         "mod", "=", "/=", "<", "<=", ">", ">=",
     };
   }
@@ -702,7 +704,7 @@ std::vector<std::string> vhdl_ieee_intrinsic_package_declarations(
         "unordered", "is_negative", "zerofp", "neg_zerofp", "nanfp",
         "qnanfp", "pos_inffp", "neg_inffp", "add", "subtract",
         "multiply", "divide", "sqrt", "eq", "ne", "lt", "le", "gt", "ge",
-        "to_real", "abs", "+", "-", "*", "/", "=", "/=", "<", "<=", ">",
+        "to_real", "abs", "resize", "+", "-", "*", "/", "=", "/=", "<", "<=", ">",
         ">=",
     };
   }

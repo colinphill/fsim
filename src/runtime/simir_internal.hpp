@@ -4047,6 +4047,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t nanoseconds { };
     };
     bool commit_signal_profile_enabled { };
+    // Interpreter::retain_state_until_exit.
+    bool retain_state_until_exit { };
     // Aggregate revision at which each aliased container's element vector
     // was last extracted from its proxy (no_container_extract_revision when
     // never or invalidated).
@@ -4243,6 +4245,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] const StringObject&
     get_string_object(StringObjectId id) const;
+
+    // The value storage of a string object: its own, or the container
+    // element it aliases.
+    [[nodiscard]] std::string& string_object_storage(StringObjectId id);
+    [[nodiscard]] const std::string&
+    string_object_storage(StringObjectId id) const;
 
     [[nodiscard]] ContainerValue& get_container_register(
         ProcessState& process, ContainerRegisterId id);
@@ -4668,7 +4676,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void restore_callable_values(
         ProcessState& process,
-        const ProcessState::CallableFrameState& context);
+        const ProcessState::CallableFrameState& context,
+        const std::set<RegisterId>& excluded_packed = { },
+        const std::set<StringRegisterId>& excluded_strings = { },
+        const std::set<ContainerRegisterId>& excluded_containers = { });
 
     [[nodiscard]] std::size_t callable_storage_bytes_in_use(
         const ProcessState& process,
@@ -4851,6 +4862,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void queue_next_delta(
         ProcessId id,
         SignalChangeOrigin origin = { });
+    // Wake the readers of a changed container object without a writable
+    // signal alias: its dynamic fanout, its change signal and the observer.
+    void publish_container_object_change(
+        ContainerObjectId object, SignalChangeOrigin origin);
     void queue_zero_delay_resume(ProcessState& process);
 
     void queue_static_next_delta(

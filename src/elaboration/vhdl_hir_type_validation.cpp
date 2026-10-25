@@ -24,6 +24,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace fsim::elaboration {
@@ -413,13 +414,30 @@ private:
 
     // A subtype written in a nested region (a block's `p'subtype`) names
     // that region's declarations (IEEE 1076-2008 12.1).
+    // The specialization is fixed for this validator, so each subtype and
+    // scope resolves once.
     SubtypeIndication specialized_subtype(SubtypeIndication subtype,
         const semantic::ScopeId scope) const
     {
-        return semantic::CompiledDesignResolver { specialization_ }
-            .effective_vhdl_subtype(subtype,
-                scope.valid() ? scope : specialization_.scope())
-            .value_or(std::move(subtype));
+        const auto use_scope = scope.valid() ? scope : specialization_.scope();
+        auto hash = std::hash<std::string_view> { }(subtype.type_mark.spelling);
+        for (const std::size_t part : { std::size_t { use_scope.value() },
+                 std::size_t { subtype.type_mark.target.value() },
+                 subtype.constraints.size(),
+                 subtype.element_constraints.size() }) {
+            hash ^= part + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+        }
+        auto& bucket = specialized_subtypes_[hash];
+        for (const auto& entry : bucket) {
+            if (entry.scope == use_scope && entry.subtype == subtype) {
+                return entry.result;
+            }
+        }
+        auto result = semantic::CompiledDesignResolver { specialization_ }
+                          .effective_vhdl_subtype(subtype, use_scope)
+                          .value_or(subtype);
+        bucket.push_back({ std::move(subtype), use_scope, result });
+        return result;
     }
 
     bool contextual_result_declaration(
@@ -1523,9 +1541,14 @@ private:
             std::string_view { "sfixed" },
             std::string_view { "unresolved_ufixed" },
             std::string_view { "unresolved_sfixed" },
+            std::string_view { "u_ufixed" },
+            std::string_view { "u_sfixed" },
             std::string_view { "float" },
             std::string_view { "unresolved_float" },
             std::string_view { "u_float" },
+            std::string_view { "float32" },
+            std::string_view { "float64" },
+            std::string_view { "float128" },
         };
         if (std::ranges::any_of(array_names,
                 [&](const auto candidate) {
@@ -1579,10 +1602,69 @@ private:
             == semantic::CompiledResolutionStatus::ambiguous) {
             return { };
         }
-        if (!predefined_array_identity(subtype, scope)) {
+        if (!predefined_array_identity(subtype, scope)
+            && !ieee_fixed_or_float_array(
+                subtype, identity_resolution.type, scope)) {
             return { };
         }
         return result;
+    }
+
+    // Whether a subtype denotes an array type of the IEEE fixed- or
+    // floating-point packages (IEEE 1076-2008 G.3, G.4), such as SFIXED or
+    // FLOAT32's base UNRESOLVED_FLOAT.
+    bool ieee_fixed_or_float_array(const SubtypeIndication& subtype,
+        const std::optional<semantic::TypeId> resolved,
+        const semantic::ScopeId scope) const
+    {
+        // The compiler provides these packages without retained type
+        // declarations; a visible package member names the IEEE type.
+        const auto canonical = lowercase_ascii_copy(
+            simple_name_of(subtype.type_mark.spelling));
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        if (!subtype_type(subtype) && !resolved
+            && std::ranges::any_of(
+                std::array { std::string_view { "fixed_pkg" },
+                    std::string_view { "float_pkg" } },
+                [&](const std::string_view package) {
+                    return resolver.vhdl_builtin_package_member_imported(
+                        "ieee", package, canonical, scope);
+                })) {
+            return true;
+        }
+        const auto ieee_package_type
+            = [&](const std::optional<semantic::TypeId> type) {
+                  const auto* definition
+                      = type ? type_definition(*type) : nullptr;
+                  const auto declaration = definition != nullptr
+                      ? specialization_.find_declaration(
+                            definition->declaration)
+                      : std::nullopt;
+                  const auto* owner
+                      = declaration && declaration->vhdl != nullptr
+                      ? specialization_.design().vhdl_scope_unit(
+                            declaration->vhdl->scope)
+                      : nullptr;
+                  return owner != nullptr
+                      && equal_ignoring_ascii_case(owner->library, "ieee")
+                      && std::ranges::any_of(
+                          std::array {
+                              std::string_view { "fixed_generic_pkg" },
+                              std::string_view { "fixed_pkg" },
+                              std::string_view { "float_generic_pkg" },
+                              std::string_view { "float_pkg" } },
+                          [&](const std::string_view package) {
+                              return equal_ignoring_ascii_case(
+                                  owner->name, package);
+                          });
+              };
+        auto target = subtype_type(subtype);
+        if (!target) {
+            target = resolved;
+        }
+        return target
+            && (ieee_package_type(target)
+                || ieee_package_type(array_root(*target)));
     }
 
     TypeProfile profile(const SubtypeIndication& original,
@@ -13939,6 +14021,13 @@ private:
     std::optional<std::unordered_set<std::uint32_t>> signal_formals_;
     std::optional<std::unordered_set<std::string>> exempt_names_;
     std::unordered_set<std::string> reported_;
+    struct SpecializedSubtype {
+        SubtypeIndication subtype;
+        semantic::ScopeId scope;
+        SubtypeIndication result;
+    };
+    mutable std::unordered_map<std::size_t, std::vector<SpecializedSubtype>>
+        specialized_subtypes_;
     std::vector<VhdlHirTypeValidationIssue> issues_;
 };
 

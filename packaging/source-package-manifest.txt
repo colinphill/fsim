@@ -596,6 +596,7 @@ include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/teardown.hpp
 include/fsim/support/uvm_identity.hpp
+include/fsim/support/vhdl_fixed_bounds.hpp
 include/fsim/support/vhdl_identifier.hpp
 include/fsim/support/vhdl_standard_enumeration.hpp
 include/fsim/support/vhdl_time.hpp
@@ -1067,6 +1068,7 @@ src/elaboration/vhdl_callable_legality.cpp
 src/elaboration/vhdl_callable_legality.hpp
 src/elaboration/vhdl_hir_type_validation.cpp
 src/elaboration/vhdl_hir_type_validation.hpp
+src/elaboration/vhdl_lowering_index.hpp
 src/frontend/class_expression_resolution.cpp
 src/frontend/class_expression_resolution.hpp
 src/frontend/class_expression_resolution_calls.cpp
@@ -1451,6 +1453,7 @@ src/semantic/design_ir.cpp
 src/semantic/hierarchy_path.cpp
 src/semantic/integral_identity_memo.hpp
 src/semantic/model.cpp
+src/semantic/resolution_memo.hpp
 src/semantic/sva_plan.cpp
 src/semantic/systemverilog_class_specialization.cpp
 src/semantic/systemverilog_hir.cpp
@@ -2084,6 +2087,7 @@ tests/fixtures/compliance/sv_array_query_typedef_dimensions_batch57.sv
 tests/fixtures/compliance/sv_array_sizes_and_methods.sv
 tests/fixtures/compliance/sv_automatic_fork_activation_lifetime_batch59.sv
 tests/fixtures/compliance/sv_automatic_fork_frame_batch59.sv
+tests/fixtures/compliance/sv_automatic_fork_join_reuse_batch96.sv
 tests/fixtures/compliance/sv_automatic_fork_mailbox_wake_batch59.sv
 tests/fixtures/compliance/sv_automatic_fork_typed_context_controls_batch59.sv
 tests/fixtures/compliance/sv_bits_anonymous_packed_struct_batch58.sv
@@ -2253,6 +2257,7 @@ tests/fixtures/compliance/vhdl_function_integer_indexed_result_shape_batch59.vhd
 tests/fixtures/compliance/vhdl_function_result_array_of_arrays_indexing_20261013.vhd
 tests/fixtures/compliance/vhdl_function_signal_attributes_batch59.vhd
 tests/fixtures/compliance/vhdl_function_signal_indexed_actual_batch59.vhd
+tests/fixtures/compliance/vhdl_generate_composite_constant_wide_resolved_20261024.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
 tests/fixtures/compliance/vhdl_guarded_and_real_ranges.vhd
 tests/fixtures/compliance/vhdl_guarded_bus_port.vhd
@@ -2270,6 +2275,7 @@ tests/fixtures/compliance/vhdl_nested_component_configuration_batch56.vhd
 tests/fixtures/compliance/vhdl_nested_open_array_aggregate_batch59.vhd
 tests/fixtures/compliance/vhdl_nested_unconstrained_actual_batch57.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
+tests/fixtures/compliance/vhdl_numeric_std_function_result_shape_20261024.vhd
 tests/fixtures/compliance/vhdl_numeric_std_size_conversion_bodyless_batch59.vhd
 tests/fixtures/compliance/vhdl_numeric_std_user_to_signed_shadow_batch59.vhd
 tests/fixtures/compliance/vhdl_operator_overloads.vhd

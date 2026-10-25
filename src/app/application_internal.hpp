@@ -143,6 +143,16 @@ struct SystemVerilogVpiDriverBinding {
     std::optional<runtime::SystemVerilogVpiDriveStrength> strength;
 };
 
+// A published unpacked array whose word count follows the live container: a
+// dynamic array or a queue grows and shrinks at run time, and its words
+// are created and released to match (IEEE 1800-2023 7.5, 7.10, 37.17).
+struct SystemVerilogVpiLiveMemory {
+    fsim_vpi_handle_v1 memory { };
+    std::string path;
+    runtime::SystemVerilogVpiTypeInfo word_type;
+    std::vector<fsim_vpi_handle_v1> words;
+};
+
 struct SystemVerilogVpiPublishedDesign {
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> registry;
     std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>>
@@ -171,7 +181,23 @@ struct SystemVerilogVpiPublishedDesign {
     std::map<runtime::simir::ContainerObjectId,
         runtime::SystemVerilogVpiValueCategory>
         container_categories;
+    std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
+        live_memories;
 };
+
+// The word of a live memory at `ordinal`, created under its memory with the
+// word name `[ordinal]`.
+[[nodiscard]] fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const SystemVerilogVpiLiveMemory& memory, std::size_t ordinal);
+
+// The stored VPI value of one element of a container value: a string, or
+// packed bits under the container's scalar profile.
+[[nodiscard]] runtime::SystemVerilogVpiStoredValue
+systemverilog_vpi_container_word_value(
+    const runtime::simir::ContainerValue& value, std::size_t ordinal,
+    runtime::SystemVerilogScalarKind scalar_kind,
+    runtime::SystemVerilogVpiValueCategory category);
 
 [[nodiscard]] SystemVerilogVpiPublishedDesign
 make_systemverilog_vpi_design(
@@ -368,7 +394,8 @@ void configure_systemverilog_class_constraints(
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled = { },
-    std::string_view identity_prefix = { });
+    std::string_view identity_prefix = { },
+    const std::map<std::string, std::string, std::less<>>& string_state = { });
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,

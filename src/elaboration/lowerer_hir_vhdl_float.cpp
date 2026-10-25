@@ -32,7 +32,8 @@ bool float_result_name(const std::string_view name)
         || name == "qnanfp" || name == "pos_inffp"
         || name == "neg_inffp" || name == "add"
         || name == "subtract" || name == "multiply"
-        || name == "divide" || name == "sqrt" || name == "abs";
+        || name == "divide" || name == "sqrt" || name == "abs"
+        || name == "resize";
 }
 
 bool boolean_result_name(const std::string_view name)
@@ -62,6 +63,12 @@ bool float_relational_operator(const std::string_view text)
 }
 
 } // namespace
+
+bool Lowerer::hir_vhdl_float_subtype(
+    const semantic::vhdl::SubtypeIndication& subtype)
+{
+    return float_subtype_name(subtype);
+}
 
 bool Lowerer::hir_vhdl_intrinsic_member_present(
     const std::string_view member) const
@@ -176,7 +183,8 @@ bool Lowerer::is_hir_vhdl_float_operator(
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_float_as_real(
-    const semantic::ExpressionId expression_id)
+    const semantic::ExpressionId expression_id,
+    std::optional<RegisterId>* const unknown)
 {
     using Kind = frontend::SystemVerilogScalarKind;
     if (hir_vhdl_float_valued(expression_id)) {
@@ -184,13 +192,35 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_float_as_real(
         if (!bits) {
             return std::nullopt;
         }
+        // A metavalue makes the operand class isx (float_generic_pkg
+        // classfp); its payload converts as +0.0 and callers give the
+        // class's result.
+        const auto parity = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Reduction {
+            ReductionOperator::bit_xor, parity, *bits });
+        const auto unknown_x = load_constant(
+            PackedLogic4(1U, Logic4::x), frontend::ValueDomain::Logic4);
+        const auto metavalue = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, metavalue, parity, unknown_x });
+        const auto domain = register_domain(*bits);
+        const auto zero = load_constant(
+            PackedLogic4(32U, Logic4::zero), domain);
+        const auto known = allocate_register(32U, domain);
+        process_.operations.emplace_back(ConditionalSelect {
+            known, metavalue, zero, *bits });
         const auto payload = allocate_register(
             32U, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(CopyRegister { payload, *bits });
+        process_.operations.emplace_back(CopyRegister { payload, known });
         const auto real = allocate_register(64U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(SystemVerilogScalarBinary {
             runtime::SystemVerilogScalarBinaryOperator::Convert, real,
             payload, payload, Kind::ShortReal, Kind::ShortReal, Kind::Real });
+        if (unknown != nullptr) {
+            *unknown = metavalue;
+        }
         return real;
     }
     if (hir_vhdl_expression_is_real(expression_id)) {
@@ -424,17 +454,53 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         if (!operation || source.operands.size() < 2U) {
             return std::nullopt;
         }
-        const auto lhs = lower_hir_vhdl_float_as_real(source.operands[0]);
+        std::optional<RegisterId> lhs_unknown;
+        std::optional<RegisterId> rhs_unknown;
+        const auto lhs = lower_hir_vhdl_float_as_real(
+            source.operands[0], &lhs_unknown);
         const auto rhs = lhs
-            ? lower_hir_vhdl_float_as_real(source.operands[1])
+            ? lower_hir_vhdl_float_as_real(source.operands[1], &rhs_unknown)
             : std::nullopt;
         if (!lhs || !rhs) {
             return std::nullopt;
         }
         const auto value = real_operation(*operation, *lhs, *rhs);
-        return *operation >= ScalarOperator::Equal
-            ? value
-            : hir_vhdl_real_to_float_bits(value);
+        const bool compare = *operation >= ScalarOperator::Equal;
+        const auto known_result
+            = compare ? value : hir_vhdl_real_to_float_bits(value);
+        if (!lhs_unknown && !rhs_unknown) {
+            return known_result;
+        }
+        auto unknown = lhs_unknown ? *lhs_unknown : *rhs_unknown;
+        if (lhs_unknown && rhs_unknown) {
+            unknown = allocate_register(1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_or, unknown, *lhs_unknown,
+                *rhs_unknown });
+        }
+        // An operand with a metavalue is unordered: only "/=" holds
+        // (float_generic_pkg eq, ne, Unordered).
+        if (compare) {
+            const auto unordered = load_constant(
+                PackedLogic4(1U,
+                    *operation == ScalarOperator::NotEqual ? Logic4::one
+                                                          : Logic4::zero),
+                frontend::ValueDomain::Boolean);
+            const auto result = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(ConditionalSelect {
+                result, unknown, unordered, value });
+            return result;
+        }
+        // Arithmetic gives an all-'X' result (class isx).
+        const auto bits = known_result;
+        const auto all_x = load_constant(
+            PackedLogic4(32U, Logic4::x), frontend::ValueDomain::Logic9);
+        const auto result = allocate_register(
+            32U, frontend::ValueDomain::Logic9);
+        process_.operations.emplace_back(ConditionalSelect {
+            result, unknown, all_x, bits });
+        return result;
     };
     if (source.kind == semantic::vhdl::ExpressionKind::binary) {
         const auto value = runtime_binary(source.text);
@@ -447,6 +513,7 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         return { true, value };
     }
     if (root_name == "to_real") {
+        // A metavalue converts to 0.0 (float_generic_pkg to_real, isx).
         const auto value = source.operands.size() == 1U
             ? lower_hir_vhdl_float_as_real(source.operands.front())
             : std::nullopt;
@@ -576,6 +643,18 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_float_function(
         if (root_name == "add" || root_name == "subtract"
             || root_name == "multiply" || root_name == "divide") {
             return runtime_binary(root_name);
+        }
+        // RESIZE to the binary32 sizes keeps a binary32 value.
+        if (root_name == "resize" && !source.operands.empty()
+            && hir_vhdl_float_valued(source.operands.front())
+            && ((source.operands.size() == 2U
+                    && hir_vhdl_float_valued(source.operands[1]))
+                || (source.operands.size() >= 3U
+                    && hir_constant_integer(source.operands[1])
+                        == std::optional<std::int64_t> { 8 }
+                    && hir_constant_integer(source.operands[2])
+                        == std::optional<std::int64_t> { 23 }))) {
+            return lower_hir_expression(source.operands.front(), 32U);
         }
         if (root_name == "abs" && source.operands.size() == 1U) {
             const auto real = lower_hir_vhdl_float_as_real(

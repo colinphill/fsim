@@ -2095,7 +2095,21 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         // at time zero before any procedure (IEEE 1800-2017 6.8); a
         // constant one is applied at elaboration and stored again.
         std::optional<Expression> container_initializer;
-        if (initializer && declaration_type.systemverilog_container
+        // So does a string initialized by a system function call, such as
+        // `$sformatf("%m")`, whose value only the running design knows.
+        const bool string_runtime_initializer = initializer
+            && !declaration_type.systemverilog_container
+            && (declaration_type.domain == ValueDomain::String
+                || declaration_type.spelling == "string")
+            && initializer->kind == ExpressionKind::Call
+            && initializer->text.starts_with('$');
+        if (string_runtime_initializer && !package_variable
+            && !systemverilog_const
+            && (unit.kind == UnitKind::VerilogModule
+                || unit.kind == UnitKind::SystemVerilogProgram
+                || unit.kind == UnitKind::SystemVerilogInterface)) {
+          container_initializer = *initializer;
+        } else if (initializer && declaration_type.systemverilog_container
             && !package_variable && !systemverilog_const
             && (unit.kind == UnitKind::VerilogModule
                 || unit.kind == UnitKind::SystemVerilogProgram

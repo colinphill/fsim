@@ -5,6 +5,7 @@
 #include "hierarchy_sv_generate_internal.hpp"
 #include "scoped_bindings.hpp"
 #include "systemverilog_template_bindings.hpp"
+#include "vhdl_lowering_index.hpp"
 #include "../runtime/simir_process_program.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -14,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <tuple>
@@ -660,9 +662,20 @@ private:
     // the initial value of `destination`; nullopt when it cannot run.
     // `generic_bindings` binds the generics of a package instance whose
     // member the expression belongs to.
-    // Keeps the shared-variable state an elaboration-time evaluation left.
+    // Runs `process`, a one-shot program lowered against the design's
+    // signals, in `interpreter` with the objects elaborated so far, and keeps
+    // the shared-variable state it leaves. Returns the interpreter's id of
+    // design signal `result`.
+    std::optional<SignalId> run_compiled_vhdl_elaboration_program(
+        runtime::simir::Interpreter& interpreter,
+        runtime::simir::Process process,
+        std::optional<SignalId> result);
+    // Keeps the shared-variable state an elaboration-time evaluation left;
+    // `images` gives the interpreter's ids of the design signals it holds,
+    // all of them under their own ids when null.
     void keep_compiled_vhdl_elaboration_state(
-        const runtime::simir::Interpreter& interpreter);
+        const runtime::simir::Interpreter& interpreter,
+        const std::map<SignalId, SignalId>* images);
     std::optional<PackedLogic4> evaluate_compiled_vhdl_value(
         const semantic::SpecializedHirUnit& specialization,
         semantic::ExpressionId expression,
@@ -898,7 +911,7 @@ private:
     // and whether a source span encloses one of them (IEEE 1076-2008 8.7).
     [[nodiscard]] std::vector<const semantic::SourceSpan*>
     compiled_vhdl_external_name_spans(
-        const semantic::vhdl::Unit& architecture) const;
+        const semantic::vhdl::Unit& architecture);
     [[nodiscard]] bool compiled_source_encloses(
         semantic::SourceSpanId outer,
         std::span<const semantic::SourceSpan* const> inner) const;
@@ -1037,7 +1050,9 @@ private:
         const semantic::vhdl::Instance& record,
         const semantic::SpecializedHirAssociationResult& generic_bindings,
         const semantic::SpecializedHirUnit& working_specialization,
-        const CompiledVhdlGenericEvaluationScope* evaluation = nullptr);
+        const CompiledVhdlGenericEvaluationScope* evaluation = nullptr,
+        std::optional<semantic::UnitId> target_unit = std::nullopt,
+        const semantic::vhdl::Unit* target_entity = nullptr);
 
     bool validate_compiled_vhdl_port_actual_compatibility(
         CompiledVhdlPortCompatibilityContext context);
@@ -1139,7 +1154,8 @@ private:
         StringMap& string_objects,
         ReadOnlyStringSet& read_only_strings,
         frontend::PortDirection direction,
-        const frontend::SourceSpan& declaration_span);
+        const frontend::SourceSpan& declaration_span,
+        bool procedural_initializer);
 
     // The `parameter` named `name` declared in the named block, task or
     // function of `child` at `scope_path` (IEEE 1800-2017 23.10.1).
@@ -1176,7 +1192,12 @@ private:
 
     void append_selected_systemverilog_classes(
         const semantic::SpecializedHirUnit& specialized,
-        std::span<const semantic::DeclarationId> selected_generates);
+        std::span<const semantic::DeclarationId> selected_generates,
+        std::span<const hierarchy_sv_generate_detail::Occurrence>
+            occurrences);
+    void register_generated_class_specializations(
+        std::span<const hierarchy_sv_generate_detail::Occurrence>
+            occurrences);
 
     bool connect_compiled_systemverilog_interface_member(
         const std::string& source_name,
@@ -1500,7 +1521,6 @@ private:
         concurrent_process_template_index_;
 
     struct SystemVerilogConcurrentProcessTemplate {
-        semantic::SpecializedHirOverlay overlay;
         std::string language_standard;
         std::string compatibility_profile;
         std::string hierarchy;
@@ -1514,7 +1534,6 @@ private:
     };
 
     struct SystemVerilogProcessTemplate {
-        semantic::SpecializedHirOverlay overlay;
         semantic::sv::Process source;
         std::string language_standard;
         std::string compatibility_profile;
@@ -1664,7 +1683,10 @@ private:
         const SystemVerilogPackedDefaultResolver& packed_default_resolver,
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver,
         std::vector<SystemVerilogHirMaterialization>&
-            generated_materializations);
+            generated_materializations,
+        std::vector<Process>& clocking_processes,
+        const std::function<std::optional<SignalId>(
+            semantic::DeclarationId)>& package_signal);
 
     [[nodiscard]] hierarchy_sv_generate_detail::CollectionResult
     collect_generate_occurrences(const semantic::sv::Unit& unit,
@@ -1793,6 +1815,15 @@ private:
     bool report_vhdl_unspecified_inference(
         std::optional<semantic::SourceSpanId> failure);
 
+    // Collects the bare names a process passes to foreign system tasks; an
+    // unnamed block that declares one publishes its storage so the foreign
+    // service can reach it (IEEE 1800-2023 38.3.3).
+    // Returns the scope path of the process body's own storage: empty
+    // unless the body declares such a variable.
+    std::string collect_user_system_task_arguments(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::sv::Process& process);
+
     bool materialize_compiled_systemverilog_static_storage(
         const semantic::sv::Unit& unit,
         SystemVerilogHirMaterialization& materialization,
@@ -1866,8 +1897,11 @@ private:
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
     void finalize_systemverilog_whole_aliases(
         SystemVerilogHirMaterialization& materialization);
+    // The clocking blocks `blocks` of the unit or of one of its generated
+    // scopes, materialized beneath `path`.
     void materialize_systemverilog_clocking_blocks(
         const semantic::sv::Unit& unit,
+        std::span<const semantic::sv::ClockingBlock> blocks,
         const semantic::SpecializedHirUnit& specialization,
         const std::string& path,
         SignalMap& signals,
@@ -2095,6 +2129,7 @@ private:
     // Static storage of SystemVerilog task and function locals and formals:
     // every caller writes it procedurally, whatever the calling context.
     std::unordered_set<SignalId> static_callable_signals_;
+    std::set<std::string, std::less<>> user_system_task_arguments_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
@@ -2270,6 +2305,8 @@ private:
     // (same_systemverilog_template_overlay); overlay_class gives a
     // specialization's class, or no_overlay_class when it matches nothing.
     static constexpr std::uint32_t no_overlay_class = 0xffffffffU;
+    // Shared by the VHDL lowerers this builder creates.
+    VhdlLoweringIndex vhdl_lowering_index_;
     std::vector<semantic::SpecializedHirOverlay> overlay_classes_;
     // Per class, the constant results its specializations share when their
     // overlay determines them (null otherwise).

@@ -98,10 +98,17 @@ template <typename Container>
     return container.begin() + static_cast<Difference>(offset);
 }
 
+// Dense storage offsets; a sparse array is addressed by ordinal through
+// read_sparse_container_element and write_sparse_container_element.
 [[nodiscard]] inline std::size_t fixed_offset(
     const ContainerType& type,
     const std::int32_t index)
 {
+    if (type.sparse) {
+        throw std::logic_error {
+            "this operation does not support a sparse static array"
+        };
+    }
     return static_cast<std::size_t>(
         type.index_left >= type.index_right
             ? static_cast<std::int64_t>(type.index_left) - index
@@ -209,6 +216,10 @@ template <typename Container>
     const ContainerType& type,
     const PackedLogic4& value)
 {
+    if (type.sparse) {
+        container_error(process, instruction,
+            "this operation does not support a sparse static array");
+    }
     const auto index = known_fixed_index(process, instruction, value);
     const auto low = std::min(type.index_left, type.index_right);
     const auto high = std::max(type.index_left, type.index_right);
@@ -218,6 +229,27 @@ template <typename Container>
             "static-array index is out of range");
     }
     return static_cast<std::size_t>(
+        type.index_left >= type.index_right
+            ? static_cast<std::int64_t>(type.index_left) - index
+            : static_cast<std::int64_t>(index) - type.index_left);
+}
+
+// The ordinal of a known, in-range index of a sparse static array.
+[[nodiscard]] inline std::uint64_t sparse_offset(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const ContainerType& type,
+    const PackedLogic4& value)
+{
+    const auto index = known_fixed_index(process, instruction, value);
+    const auto low = std::min(type.index_left, type.index_right);
+    const auto high = std::max(type.index_left, type.index_right);
+    if (index < low || index > high) {
+        container_error(
+            process, instruction,
+            "static-array index is out of range");
+    }
+    return static_cast<std::uint64_t>(
         type.index_left >= type.index_right
             ? static_cast<std::int64_t>(type.index_left) - index
             : static_cast<std::int64_t>(index) - type.index_left);

@@ -1496,6 +1496,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 span);
             return std::nullopt;
         }
+        if (const auto* designated
+            = hir_vhdl_designated_protected_type(*type)) {
+            return lower_hir_vhdl_protected_allocator(*designated, span);
+        }
         std::vector<semantic::vhdl::RangeConstraint> allocator_constraints;
         const auto allocator_subtype = !source.operands.empty()
             ? specialized_hir_unit_->find_expression(
@@ -2377,6 +2381,17 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                   *statement->vhdl->value, 32U,
                   subtype ? &*subtype : nullptr)
             : lower_hir_expression(*statement->vhdl->value, 32U);
+        // An access value of a protected type keys that type's pool, which
+        // keeps every object it allocates.
+        if (type != nullptr
+            && hir_vhdl_designated_protected_type(*type) != nullptr) {
+            if (!binding || !binding->local || !assigned) {
+                return false;
+            }
+            process_.operations.emplace_back(CopyRegister {
+                *binding->local, *assigned });
+            return true;
+        }
         auto* heap = type != nullptr
             ? hir_vhdl_access_heap(
                   *type, hir_source_span(target->vhdl->source),
@@ -2677,6 +2692,13 @@ bool Lowerer::lower_hir_vhdl_access_deallocation(
             "FSIM-ELAB-VHACCESS-022",
             "VHDL access deallocation requires a writable access variable",
             hir_source_span(statement->vhdl->source));
+        return true;
+    }
+    if (hir_vhdl_designated_protected_type(*type) != nullptr) {
+        // The designated object ceases to exist and the variable becomes
+        // null (IEEE 1076-2008 5.4.3); a stale access value is erroneous.
+        process_.operations.emplace_back(LoadConstant {
+            *binding->local, unsigned_value(0U, 32U) });
         return true;
     }
     // Deallocating a null handle is legal before any allocation has occurred

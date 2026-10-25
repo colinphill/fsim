@@ -831,6 +831,59 @@ hierarchy_sv_type_layout_detail::systemverilog_constant_container_initializer(
         specialization, type, initializer, element_type);
 }
 
+std::string HierarchyBuilder::collect_user_system_task_arguments(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Process& process)
+{
+    user_system_task_arguments_.clear();
+    const auto visit = [&](const auto& self,
+                           const std::span<const semantic::StatementId> list)
+        -> void {
+        for (const auto id : list) {
+            const auto record = specialization.find_statement(id);
+            if (!record || record->systemverilog == nullptr) {
+                continue;
+            }
+            const auto& statement = *record->systemverilog;
+            if (statement.kind == semantic::sv::StatementKind::task_call) {
+                if (design_.user_system_task(statement.task.spelling)
+                    == nullptr) {
+                    continue;
+                }
+                for (const auto& argument : statement.task_arguments) {
+                    const auto expression = argument.actual
+                        ? specialization.find_expression(*argument.actual)
+                        : std::nullopt;
+                    if (expression && expression->systemverilog != nullptr
+                        && expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::name) {
+                        user_system_task_arguments_.insert(
+                            expression->systemverilog->text);
+                    }
+                }
+                continue;
+            }
+            self(self, statement.statements);
+            self(self, statement.else_statements);
+            for (const auto& alternative : statement.case_alternatives) {
+                self(self, alternative.statements);
+            }
+        }
+    };
+    visit(visit, process.statements);
+    // The process body is the outermost block: it publishes under its
+    // generated name when it declares one of those variables.
+    for (const auto declaration_id : process.declarations) {
+        const auto declaration = specialization.find_declaration(declaration_id);
+        if (declaration && declaration->systemverilog != nullptr
+            && user_system_task_arguments_.contains(
+                declaration->systemverilog->name)) {
+            return "$block_" + std::to_string(process.scope.value());
+        }
+    }
+    return { };
+}
+
 bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
     const semantic::sv::Unit& unit,
     SystemVerilogHirMaterialization& materialization,
@@ -958,8 +1011,36 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
             continue;
         }
         auto nested_path = scope_path;
+        // An unnamed block of a process publishes under its generated name
+        // when it, or a block nested in it, declares a variable that a
+        // foreign system task takes as an argument.
+        const auto declares_task_argument = [&](const auto& self,
+                                                const auto& block) -> bool {
+            for (const auto declaration_id : block.declarations) {
+                const auto declaration
+                    = specialization.find_declaration(declaration_id);
+                if (declaration && declaration->systemverilog != nullptr
+                    && user_system_task_arguments_.contains(
+                        declaration->systemverilog->name)) {
+                    return true;
+                }
+            }
+            for (const auto nested_id : block.statements) {
+                const auto nested = specialization.find_statement(nested_id);
+                if (nested && nested->systemverilog != nullptr
+                    && nested->systemverilog->kind
+                        != semantic::sv::StatementKind::task_call
+                    && self(self, *nested->systemverilog)) {
+                    return true;
+                }
+            }
+            return false;
+        };
         if (statement.nested_scope
-            && (!statement.label.empty() || !scope_path.empty())) {
+            && (!statement.label.empty() || !scope_path.empty()
+                || (!user_system_task_arguments_.empty()
+                    && declares_task_argument(declares_task_argument,
+                        statement)))) {
             const auto name = !statement.label.empty()
                 ? statement.label
                 : "$block_" + std::to_string(statement.nested_scope->value());
@@ -1248,6 +1329,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     if (is_covergroup_object(declaration)) {
         return true;
     }
+    // A variable's initializer that is not a constant runs as its
+    // time-zero declaration initializer process (6.8).
+    const bool declaration_initializer_process = declaration.initializer
+        && declaration.form == Form::variable
+        && std::ranges::any_of(unit.processes,
+            [&](const semantic::ProcessId process_id) {
+                const auto process = compiled_->find_process(process_id);
+                return process && process->systemverilog != nullptr
+                    && process->systemverilog->name
+                    == "$declaration_initializer_" + declaration.name;
+            });
     if (compiled_systemverilog_string_declaration(
             working_specialization, declaration)) {
         return materialize_compiled_systemverilog_string_declaration(
@@ -1257,7 +1349,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             string_objects,
             read_only_strings,
             compiled_port_direction(declaration),
-            compiled_source_span(*compiled_, declaration.source));
+            compiled_source_span(*compiled_, declaration.source),
+            declaration_initializer_process);
     }
     const auto builtin_net_kind = declaration.type
         ? net_type_for(declaration, *declaration.type)
@@ -1740,17 +1833,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 working_specialization, *executable_container_type,
                 *declaration.initializer, &element_type, &initializer_failure);
         }
-        // A variable's initializer that is not a constant runs as its
-        // time-zero declaration initializer process (6.8).
-        const bool procedural_initializer = declaration.initializer
-            && !initial_container && declaration.form == Form::variable
-            && std::ranges::any_of(unit.processes,
-                [&](const semantic::ProcessId process_id) {
-                    const auto process = compiled_->find_process(process_id);
-                    return process && process->systemverilog != nullptr
-                        && process->systemverilog->name
-                        == "$declaration_initializer_" + declaration.name;
-                });
+        const bool procedural_initializer = !initial_container
+            && declaration_initializer_process;
         if (declaration.initializer && !initial_container
             && !procedural_initializer) {
             report(

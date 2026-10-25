@@ -1587,7 +1587,14 @@ def verilator_cases(root: Path) -> list[Case]:
         declared = SV_MODULE_RE.findall(SV_COMMENT_RE.sub(" ", top_text))
         # The driver's shell wraps module t; tests with their own top or no
         # module t run as written.
+        # `--binary` (`--main`) has Verilator generate the main: module t is
+        # the root (`%m` begins at `t`) and nothing drives its clocks.
+        verilator_main = any(
+            token in ("--binary", "--main")
+            for value in python_literal_list(source, "verilator_flags2") or []
+            for token in value.split())
         use_shell = "t" in declared and "top" not in declared \
+            and not verilator_main \
             and not re.search(r"make_top_shell\s*=\s*False", source)
         # `--top-module X` (or `--top X`, which may name a configuration)
         # selects the root the driver elaborates.

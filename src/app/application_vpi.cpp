@@ -882,6 +882,9 @@ namespace {
     [[nodiscard]] runtime::SystemVerilogVpiValueCategory container_category(
         const runtime::simir::ContainerType& type)
     {
+        if (type.element_kind == runtime::simir::ContainerElementKind::String) {
+            return runtime::SystemVerilogVpiValueCategory::String;
+        }
         switch (type.scalar_kind) {
         case runtime::SystemVerilogScalarKind::ShortReal:
             return runtime::SystemVerilogVpiValueCategory::ShortReal;
@@ -905,6 +908,11 @@ namespace {
     {
         runtime::SystemVerilogVpiTypeDescriptor result;
         result.category = container_category(type);
+        if (result.category == runtime::SystemVerilogVpiValueCategory::String) {
+            result.kind = runtime::SystemVerilogVpiDescriptorKind::String;
+            result.width = 0U;
+            return result;
+        }
         result.width = type.element_width;
         result.is_signed
             = type.scalar_kind == runtime::SystemVerilogScalarKind::None
@@ -919,10 +927,14 @@ namespace {
         runtime::SystemVerilogVpiTypeInfo result;
         result.language = vpi_profile_language(language);
         result.category = container_category(type);
-        result.width = type.element_width;
+        result.width
+            = result.category == runtime::SystemVerilogVpiValueCategory::String
+            ? 0U
+            : type.element_width;
         result.is_signed
             = type.scalar_kind == runtime::SystemVerilogScalarKind::None
-            && type.signed_elements;
+            && type.signed_elements
+            && result.category != runtime::SystemVerilogVpiValueCategory::String;
         result.descriptor
             = std::make_shared<runtime::SystemVerilogVpiTypeDescriptor>(
                 container_element_descriptor(type));
@@ -1009,6 +1021,18 @@ namespace {
         const runtime::simir::ContainerType& type)
     {
         auto descriptor = container_element_descriptor(type);
+        if (!type.fixed) {
+            // A dynamic array or a queue holds its elements without a fixed
+            // range (IEEE 1800-2023 7.5, 7.10).
+            runtime::SystemVerilogVpiTypeDescriptor array;
+            array.kind = type.queue
+                ? runtime::SystemVerilogVpiDescriptorKind::Queue
+                : runtime::SystemVerilogVpiDescriptorKind::DynamicArray;
+            array.category = runtime::SystemVerilogVpiValueCategory::None;
+            array.width = 0U;
+            array.children.push_back(std::move(descriptor));
+            descriptor = std::move(array);
+        }
         for (auto dimension = type.dimensions.rbegin();
             dimension != type.dimensions.rend(); ++dimension) {
             runtime::SystemVerilogVpiTypeDescriptor array;
@@ -1029,10 +1053,30 @@ namespace {
         return result;
     }
 
+    // A container VPI publishes as an array: a fixed unpacked array, a
+    // dynamic array or a queue of packed, scalar or string elements
+    // (IEEE 1800-2023 37.17).
+    [[nodiscard]] bool vpi_memory_container(
+        const runtime::simir::ContainerType& type)
+    {
+        using Kind = runtime::simir::ContainerElementKind;
+        if (type.associative
+            || (type.element_kind != Kind::Packed
+                && type.element_kind != Kind::Scalar
+                && type.element_kind != Kind::String)) {
+            return false;
+        }
+        return type.fixed ? !type.dimensions.empty()
+                          : type.dimensions.empty() && !type.vhdl_shaped;
+    }
+
     [[nodiscard]] std::string memory_word_name(
         const runtime::simir::ContainerType& type,
         const std::size_t ordinal)
     {
+        if (!type.fixed) {
+            return "[" + std::to_string(ordinal) + "]";
+        }
         auto remaining = ordinal;
         std::string result;
         for (std::size_t dimension = 0;
@@ -1643,7 +1687,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (relative_name.starts_with(unit_prefix)) {
             relative_name.erase(0U, unit_prefix.size());
         }
-        const auto class_separator = relative_name.rfind('.');
+        // A generate block's class is identified `scope::scope::name`.
+        const auto class_separator = relative_name.rfind("::");
         const auto generate_scope = class_separator == std::string::npos
             ? std::string { }
             : relative_name.substr(0U, class_separator);
@@ -1652,7 +1697,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             auto scope_path = instance_path;
             std::size_t begin = 0U;
             while (begin < generate_scope.size()) {
-                const auto separator = generate_scope.find('.', begin);
+                const auto separator = generate_scope.find("::", begin);
                 const auto end = separator == std::string::npos
                     ? generate_scope.size()
                     : separator;
@@ -1680,7 +1725,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 if (separator == std::string::npos) {
                     break;
                 }
-                begin = separator + 1U;
+                begin = separator + 2U;
             }
             published_classes[declaration_identity].push_back(
                 publish_class(parent));
@@ -1833,12 +1878,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& info = project.design.container_objects().at(container);
         const auto& type = info.type;
         if (info.is_port || info.slice_alias || object.parent_object
-            || !type.fixed || type.dimensions.empty() || type.queue
-            || type.associative
-            || (type.element_kind
-                    != runtime::simir::ContainerElementKind::Packed
-                && type.element_kind
-                    != runtime::simir::ContainerElementKind::Scalar)) {
+            || !vpi_memory_container(type)) {
             continue;
         }
         const auto& specialization = project.design_ir.specializations().at(
@@ -2113,12 +2153,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto& info = project.design.container_objects().at(container);
         const auto& type = info.type;
         if (info.is_port || info.slice_alias || object.parent_object
-            || !type.fixed || type.dimensions.empty() || type.queue
-            || type.associative
-            || (type.element_kind
-                    != runtime::simir::ContainerElementKind::Packed
-                && type.element_kind
-                    != runtime::simir::ContainerElementKind::Scalar)) {
+            || !vpi_memory_container(type)) {
             continue;
         }
         const auto& specialization = project.design_ir.specializations().at(
@@ -2205,8 +2240,23 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         const auto value
             = interpreter.container_object_value_snapshot(container);
         const auto category = container_category(type);
-        for (std::size_t ordinal = 0; ordinal < value.elements.size();
-            ++ordinal) {
+        auto word_type = container_word_type(specialization.language, type);
+        if (const auto unit = std::ranges::find(
+                project.systemverilog_hir.units(), specialization.unit,
+                &semantic::sv::Unit::id);
+            specialization.language == semantic::Language::system_verilog
+            && unit != project.systemverilog_hir.units().end()) {
+            apply_packed_word_dimensions(word_type,
+                project.systemverilog_hir, *unit, object.name);
+        }
+        word_type.language = vpi_profile_language(project, specialization);
+        apply_vpi_specialization_provenance(
+            word_type, project, specialization);
+        apply_vpi_source(word_type, project, object.source);
+        std::vector<fsim_vpi_handle_v1> live_words;
+        const auto word_count
+            = runtime::simir::container_value_size(value);
+        for (std::size_t ordinal = 0; ordinal < word_count; ++ordinal) {
             const auto word_name = memory_word_name(type, ordinal);
             const auto element_alias = container_element_aliases.find(
                 { container, ordinal });
@@ -2227,37 +2277,19 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             word.kind = runtime::SystemVerilogVpiObjectKind::Variable;
             word.parent = memory;
             word.name = word_name;
-            word.type = container_word_type(
-                specialization.language, type);
-            if (const auto unit = std::ranges::find(
-                    project.systemverilog_hir.units(), specialization.unit,
-                    &semantic::sv::Unit::id);
-                specialization.language
-                    == semantic::Language::system_verilog
-                && unit != project.systemverilog_hir.units().end()) {
-                apply_packed_word_dimensions(*word.type,
-                    project.systemverilog_hir, *unit, object.name);
-            }
-            word.type->language
-                = vpi_profile_language(project, specialization);
-            apply_vpi_specialization_provenance(
-                *word.type, project, specialization);
-            apply_vpi_source(*word.type, project, object.source);
+            word.type = word_type;
             const auto word_path = path + word_name;
             const auto word_handle = create_checked(*result.registry,
                 std::move(word), word_path);
-            const auto& word_value
-                = element_alias == container_element_aliases.end()
-                ? value.elements[ordinal]
-                : interpreter.signal_value_snapshot(
-                      element_alias->second.signal);
             const auto bound = result.registry->bind_value(word_handle,
-                systemverilog_vpi_signal_value(
-                    word_value,
-                    element_signal_info == nullptr
-                        ? type.scalar_kind
-                        : element_signal_info->systemverilog_scalar,
-                    word_category));
+                element_alias == container_element_aliases.end()
+                    ? systemverilog_vpi_container_word_value(
+                          value, ordinal, type.scalar_kind, word_category)
+                    : systemverilog_vpi_signal_value(
+                          interpreter.signal_value_snapshot(
+                              element_alias->second.signal),
+                          element_signal_info->systemverilog_scalar,
+                          word_category));
             if (bound != runtime::SystemVerilogVpiValueError::None) {
                 throw std::logic_error {
                     "failed to bind live VPI memory word '" + path
@@ -2273,6 +2305,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             if (element_alias == container_element_aliases.end()) {
                 result.container_words[container].push_back(
                     { word_handle, ordinal });
+                live_words.push_back(word_handle);
                 continue;
             }
 
@@ -2312,6 +2345,11 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         result.container_scalar_kinds.emplace(container, type.scalar_kind);
         result.container_categories.emplace(container, category);
+        if (!type.fixed) {
+            result.live_memories.emplace(container,
+                SystemVerilogVpiLiveMemory { memory, path,
+                    std::move(word_type), std::move(live_words) });
+        }
     }
 
     for (const auto& process : project.design_ir.processes()) {
@@ -2491,6 +2529,33 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             { handle, process.runtime_index, strength });
     }
     return result;
+}
+
+fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const SystemVerilogVpiLiveMemory& memory, const std::size_t ordinal)
+{
+    runtime::SystemVerilogVpiObjectDescriptor word;
+    word.kind = runtime::SystemVerilogVpiObjectKind::Variable;
+    word.parent = memory.memory;
+    word.name = "[" + std::to_string(ordinal) + "]";
+    word.type = memory.word_type;
+    const auto identity = memory.path + word.name;
+    return create_checked(registry, std::move(word), identity);
+}
+
+runtime::SystemVerilogVpiStoredValue systemverilog_vpi_container_word_value(
+    const runtime::simir::ContainerValue& value, const std::size_t ordinal,
+    const runtime::SystemVerilogScalarKind scalar_kind,
+    const runtime::SystemVerilogVpiValueCategory category)
+{
+    if (category == runtime::SystemVerilogVpiValueCategory::String) {
+        runtime::SystemVerilogVpiStoredValue result;
+        result.payload = value.string_elements.at(ordinal);
+        return result;
+    }
+    return systemverilog_vpi_signal_value(
+        value.elements.at(ordinal), scalar_kind, category);
 }
 
 runtime::SystemVerilogVpiStoredValue systemverilog_vpi_signal_value(

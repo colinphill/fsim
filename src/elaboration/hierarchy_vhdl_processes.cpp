@@ -100,6 +100,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             read_only_containers,
             diagnostics_,
         };
+        generated_lowerer.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         generated_lowerer.set_specialized_hir_unit(
             &materialization.specialization);
         if (materialization.region->kind

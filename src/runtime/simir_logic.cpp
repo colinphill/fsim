@@ -224,44 +224,28 @@ namespace fsim::runtime::simir {
   if (amount >= value.width()) {
     return result;
   }
-  for (std::size_t index = 0; index < value.width(); ++index) {
-    if (operation == ShiftOperator::rotate_left) {
-      const auto source_index =
-          (index + value.width() - amount) % value.width();
-      if (value.is_logic9()) {
-        result.set_logic9(
-            index, value.get_logic9(source_index));
-      } else {
-        result.set(index, value.get(source_index));
-      }
-    } else if (operation == ShiftOperator::rotate_right) {
-      const auto source_index =
-          (index + amount) % value.width();
-      if (value.is_logic9()) {
-        result.set_logic9(
-            index, value.get_logic9(source_index));
-      } else {
-        result.set(index, value.get(source_index));
-      }
-    } else if (
-        operation == ShiftOperator::logical_left
-        || operation == ShiftOperator::arithmetic_left) {
-      if (index >= amount) {
-        if (value.is_logic9()) {
-          result.set_logic9(
-              index, value.get_logic9(index - amount));
-        } else {
-          result.set(index, value.get(index - amount));
-        }
-      }
-    } else if (index + amount < value.width()) {
-      if (value.is_logic9()) {
-        result.set_logic9(
-            index, value.get_logic9(index + amount));
-      } else {
-        result.set(index, value.get(index + amount));
-      }
-    }
+  if (amount == 0U) {
+    return value;
+  }
+  // Whole ranges move at once: [low, low + width) of the value lands at
+  // `offset` of the result.
+  const auto move = [&](const std::size_t low, const std::size_t width,
+                        const std::size_t offset) {
+    result.insert_bits(value.extract_bits(low, width), offset);
+  };
+  const auto kept = value.width() - amount;
+  if (operation == ShiftOperator::rotate_left) {
+    move(0U, kept, amount);
+    move(kept, amount, 0U);
+  } else if (operation == ShiftOperator::rotate_right) {
+    move(amount, kept, 0U);
+    move(0U, amount, kept);
+  } else if (
+      operation == ShiftOperator::logical_left
+      || operation == ShiftOperator::arithmetic_left) {
+    move(0U, kept, amount);
+  } else {
+    move(amount, kept, 0U);
   }
   return result;
 }
@@ -528,13 +512,8 @@ dynamic_part_write_value(
   std::size_t offset = 0;
   for (auto operand = operands.rbegin();
        operand != operands.rend(); ++operand) {
-    for (std::size_t bit = 0; bit < operand->width(); ++bit) {
-      if (result.is_logic9()) {
-        result.set_logic9(
-            offset + bit, operand->get_logic9(bit));
-      } else {
-        result.set(offset + bit, operand->get(bit));
-      }
+    if (operand->width() != 0U) {
+      result.insert_bits(*operand, offset);
     }
     offset += operand->width();
   }

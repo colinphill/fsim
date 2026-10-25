@@ -60,6 +60,23 @@ template <typename Callable>
   });
 }
 
+// The case-folded parameter and result type marks of a subprogram, which
+// distinguish overloaded homographs (IEEE 1076-2008 4.5.1).
+template <typename Argument>
+[[nodiscard]] std::string vhdl_subprogram_type_profile(
+    const std::vector<Argument>& arguments, const Type* result)
+{
+  std::string profile;
+  for (const auto& argument : arguments) {
+    profile += detail::ascii_lower(argument.type.spelling);
+    profile.push_back('\x1f');
+  }
+  if (result != nullptr) {
+    profile += "return\x1f" + detail::ascii_lower(result->spelling);
+  }
+  return profile;
+}
+
 } // namespace
 
 
@@ -147,6 +164,9 @@ VhdlParser::parse_vhdl_subprogram_instantiation(
   result.template_name =
       parse_vhdl_selected_name(
           "generic subprogram template name");
+  if (match(TokenKind::LeftBracket)) {
+    result.template_signature = parse_vhdl_alias_signature();
+  }
   if (match_keyword("generic", true)) {
     parse_vhdl_subprogram_generic_map(
         result.generic_map,
@@ -305,12 +325,18 @@ void VhdlParser::parse_vhdl_generic_subprogram(
     const auto function_start = previous();
     auto function = parse_vhdl_function(
         function_start, pure, allow_declaration);
+    // Generic functions overload by parameter and result type profile
+    // (IEEE 1076-2008 4.5.1).
     const auto duplicate = std::ranges::any_of(
         unit.generic_function_templates,
         [&](const auto& existing) {
           return existing.function.name == function.name
               && existing.function.defined
-                  == function.defined;
+                  == function.defined
+              && vhdl_subprogram_type_profile(existing.function.arguments,
+                     &existing.function.return_type)
+                  == vhdl_subprogram_type_profile(function.arguments,
+                      &function.return_type);
         });
     if (duplicate) {
       error(
@@ -336,7 +362,11 @@ void VhdlParser::parse_vhdl_generic_subprogram(
         [&](const auto& existing) {
           return existing.procedure.name == procedure.name
               && existing.procedure.defined
-                  == procedure.defined;
+                  == procedure.defined
+              && vhdl_subprogram_type_profile(existing.procedure.arguments,
+                     nullptr)
+                  == vhdl_subprogram_type_profile(procedure.arguments,
+                      nullptr);
         });
     if (duplicate) {
       error(

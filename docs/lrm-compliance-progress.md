@@ -253,6 +253,87 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 1: pool closures, elaboration regression fixes
+
+Batch 96 was to close the remaining closure pool. Eight of its ten cases
+now pass with the frozen binary `b96z` (targeted rerun):
+- verilator 5: t_clocking_drive_cycle, t_mod_interface_array3,
+  t_interface_bind_public, t_gen_class, t_constraint_global_arr_nested;
+- ivtest 1: vpi_display_array;
+- nvc 2: protected10, issue843.
+
+nvc issue620 and issue810 remain open. The six-suite sweep with `b96z`
+against `b95c` (VHDL) and `b95a` (SystemVerilog) is in progress; its table
+follows in the next note.
+
+Part 1 also reverses a large elaboration slowdown that built up during the
+LRM closure. It was measured on the rs codec suite (8 testbenches, VHDL
+`rtl_vhdl` and Verilog `rtl`) against the pre-closure tree `dd00f78e`.
+
+Root causes and fixes:
+- **Quadratic design scans per lowerer.** Each Lowerer scanned the whole
+  design for VHDL character-literal contexts and for SystemVerilog
+  statements that wait on events. Both are now design-wide indexes built
+  once (`VhdlLoweringIndex`).
+- **Leaked evaluation interpreters.** Elaboration-time evaluation
+  interpreters were kept by fast-exit retention (5.6 GB on one case).
+  Retention is now opt-in.
+- **Unmemoized semantic queries.** VHDL expression subtypes, function-call
+  resolution, effective subtypes, type identities, integral values and
+  named declarations are now memoized per specialization
+  (`ResolutionMemo`), keyed by the frames they read. The SystemVerilog
+  constant evaluator keeps literals, declaration types, expression widths,
+  real-valuedness and binary-operator plans per specialization.
+- **Repeated constant functions.** The default-convergence pass of parameter
+  association re-evaluated every actual written on the instance in a
+  temporary specialization. Only the child's own defaults read the child's
+  formals, so only they converge now (IEEE 1800-2017 23.10). This had
+  doubled `gen_table(0)` on the encoder.
+- **Shared values across occurrences.** A unit-scope SystemVerilog
+  expression whose value reads no hierarchy identity is now shared with the
+  generate occurrences derived from its specialization, as unit-scope
+  declaration values already were. Copies of a `SpecializedHirUnit` now
+  share caches built after the copy (`SharedCacheSlot`).
+- **Evaluation programs copied every signal.** The signal renumbering
+  rejected signal-free operations without a hierarchy and fell back to all
+  ~7,700 signals per run.
+- **Memory.** `SpecializedHirOverlay::actual_identities` is copy-on-write
+  (`SpecializedHirActualIdentities`). Generate occurrences, template caches
+  and overlay classes had each held a full copy. Two unused template
+  overlay copies are removed.
+- **Interpreter.** Register value kinds are read in one transition per write.
+
+Two correctness bugs were found while chasing timings:
+- NUMERIC_STD `unsigned`/`signed` subtypes had no dimension in shape
+  queries (16.8.5.1). codec and param VHDL simulated wrongly since Batch 93
+  (codec 46/37 checks, param 248/88); both now pass all checks (75/0,
+  336/0).
+- Generate-local composite constants wider than 64 bits were rejected, so
+  symsize VHDL did not elaborate. It now elaborates and passes 24/0.
+
+Fixtures: `vhdl_numeric_std_function_result_shape_20261024.vhd`,
+`vhdl_generate_composite_constant_wide_resolved_20261024.vhd`.
+
+Elaboration user CPU (interleaved runs, seconds) and peak RSS:
+
+| Testbench | pre-closure | before fixes | now | RSS pre | RSS before | RSS now |
+|---|---:|---:|---:|---:|---:|---:|
+| param VHDL | 10.1 | >60 | 16.6 | 1.07 GB | — | 1.15 GB |
+| codec VHDL | 3.0 | — | 4.7 | 414 MB | — | 446 MB |
+| codec Verilog | 4.3 | — | 6.3 | 1.20 GB | 1.59 GB | 1.27 GB |
+| symsize Verilog | 7.6 | — | 9.4 | 1.08 GB | 1.69 GB | 0.98 GB |
+| param Verilog (fails early in both) | 19.0 | 26.0 | 21.5 | 3.21 GB | 4.54 GB | 3.06 GB |
+| encoder Verilog | 0.84 | 1.5 | 1.07 | 267 MB | 294 MB | 300 MB |
+| thru VHDL | 1.1 | 1.6 | 1.5 | 272 MB | 324 MB | 295 MB |
+| thru Verilog | 1.6 | — | 2.15 | 638 MB | 685 MB | 671 MB |
+
+"Before fixes" is the earliest measured state in this batch. The
+param VHDL slowdown had made it run for more than a minute. Every rs
+simulation is byte-identical to the first corrected build. The remaining
+gap is spread across lowering and evaluation. About 1.5 s of param VHDL
+is new, LRM-required evaluation of composite constants (IEEE 1076-2008
+14.4.2.1) in the SimIR interpreter. Closing it is the next step.
+
 ### Batch 95: shaped records, shaped function results, formal shapes
 
 Batch 95 closes the three nvc cases that need VHDL values whose index

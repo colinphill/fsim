@@ -143,6 +143,8 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
             diagnostics_,
         };
         lowerer.set_specialized_hir_unit(pending.specialization.get());
+        lowerer.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         const auto& name = design_.signal_info_.at(signal).name;
         const auto separator = name.find_last_of('.');
         const auto hierarchy = separator == std::string::npos

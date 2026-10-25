@@ -4,10 +4,12 @@
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_fixed_bounds.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "resolution_memo.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 #include "integral_identity_memo.hpp"
 
@@ -412,6 +414,17 @@ private:
     std::uint64_t misses_ { };
     std::uint64_t admitted_entries_ { };
     std::uint64_t replayed_work_ { };
+};
+
+struct VhdlOperatorSelection {
+    /// The one user operator that applies.
+    std::optional<DeclarationId> body;
+    /// No user operator can apply, so the predefined one does.
+    bool predefined_only { };
+};
+
+struct VhdlOperatorSelectionMemo {
+    std::unordered_map<std::uint32_t, VhdlOperatorSelection> selections;
 };
 
 std::shared_ptr<VhdlInitializerMemoContext>
@@ -986,6 +999,17 @@ const Record* find_replacement(
         return matched ? &*found : nullptr;
     }
 
+    // Records are sorted by id and usually dense: an id outside their range
+    // misses, and one at its dense position needs no search.
+    if (records.empty() || id < records.front().id
+        || records.back().id < id) {
+        return nullptr;
+    }
+    if (const auto offset = static_cast<std::size_t>(
+            id.value() - records.front().id.value());
+        offset < records.size() && records[offset].id == id) {
+        return &records[offset];
+    }
     const auto found = std::ranges::lower_bound(
         records, id, { }, &Record::id);
     return found != records.end() && found->id == id
@@ -5163,12 +5187,32 @@ private:
         if (arity == 0U || expression.operands.size() != arity) {
             return std::nullopt;
         }
+        // Outside a subprogram body the operand types, and so the
+        // selection, are fixed for this specialization (IEEE 1076-2008
+        // 12.5); a binding supplies actual values of the same types.
+        const bool memoized = call_frames_.empty() && class_frames_.empty()
+            && expression.id.valid();
+        if (memoized) {
+            const auto& selections = unit_.vhdl_operator_selections()
+                                         .selections;
+            if (const auto found = selections.find(expression.id.value());
+                found != selections.end()) {
+                predefined_only = found->second.predefined_only;
+                return found->second.body
+                    ? evaluate_vhdl_callable(expression, *found->second.body)
+                    : std::nullopt;
+            }
+        }
 
         const auto resolver = CompiledDesignResolver { unit_ };
         const auto name = vhdl_operator_name(expression);
         const auto visible = resolver.resolve_vhdl_callables(
             name, expression.scope);
         if (visible.candidates.empty()) {
+            if (memoized) {
+                unit_.vhdl_operator_selections().selections.insert_or_assign(
+                    expression.id.value(), detail::VhdlOperatorSelection { });
+            }
             return std::nullopt;
         }
         const auto same_candidate = [](const auto& left, const auto& right) {
@@ -5342,9 +5386,9 @@ private:
                             && record.callable->function
                             && record.callable->return_type.has_value());
                 };
-            const auto declaration_id
-                = resolve_vhdl_expression_declaration(
-                    actual_id, typed_value);
+            const auto declaration_id = named_declaration(
+                detail::ResolutionMemo::NamedDeclaration::typed_value,
+                actual_id, typed_value);
             const auto declaration = declaration_id
                 ? unit_.find_declaration(*declaration_id)
                 : std::nullopt;
@@ -5532,9 +5576,16 @@ private:
         // No user operator can apply: the predefined operator does (IEEE
         // 1076-2008 9.2.1, 12.5).
         predefined_only = candidates.empty() && every_candidate_excluded;
-        return candidates.size() == 1U
-            ? evaluate_vhdl_callable(expression, candidates.front().body)
+        const auto selected = candidates.size() == 1U
+            ? std::optional { candidates.front().body }
             : std::nullopt;
+        if (memoized) {
+            unit_.vhdl_operator_selections().selections.insert_or_assign(
+                expression.id.value(),
+                detail::VhdlOperatorSelection { selected, predefined_only });
+        }
+        return selected ? evaluate_vhdl_callable(expression, *selected)
+                        : std::nullopt;
     }
 
     [[nodiscard]] std::optional<VhdlConstantValue>
@@ -5676,17 +5727,12 @@ private:
                     return evaluate_vhdl_callable(source);
                 }
             }
-            // Loop bodies evaluate the same names repeatedly.
-            auto [cached, inserted] = vhdl_value_declarations_.try_emplace(
-                expression_id.value());
-            if (inserted) {
-                cached->second = resolve_vhdl_expression_declaration(
+            if (const auto declaration = named_declaration(
+                    detail::ResolutionMemo::NamedDeclaration::evaluable_value,
                     expression_id, [](const CompiledDeclarationView& view) {
                         return view.vhdl != nullptr
                             && vhdl_evaluable_value_form(view.vhdl->form);
-                    });
-            }
-            if (const auto declaration = cached->second) {
+                    })) {
                 return evaluate_vhdl_declaration(*declaration);
             }
             return std::nullopt;
@@ -6901,6 +6947,70 @@ private:
         return std::nullopt;
     }
 
+    // UFIXED_HIGH, SFIXED_LOW and their relatives of the compiler's
+    // IEEE.FIXED_PKG: (LEFT, RIGHT [, OPERATION [, LEFT2, RIGHT2]]) give an
+    // operation's result bounds (IEEE 1076-2019 G.4). Nothing when the call
+    // is not one of them; an empty value when its operands do not fold.
+    [[nodiscard]] std::optional<std::optional<std::int64_t>>
+    evaluate_vhdl_fixed_bound(
+        const vhdl::Expression& expression, const std::string_view name)
+    {
+        // A reference analysis bound to the IEEE fixed-point package's own
+        // declarations denotes the same functions.
+        const auto fixed_package_callable = [&](const DeclarationId id) {
+            const auto declaration = unit_.find_declaration(id);
+            const auto& design = unit_.design();
+            return declaration && declaration->vhdl != nullptr
+                && (design.vhdl_scope_in_package(
+                        declaration->vhdl->scope, "ieee", "fixed_pkg")
+                    || design.vhdl_scope_in_package(
+                        declaration->vhdl->scope, "ieee",
+                        "fixed_generic_pkg"));
+        };
+        if ((name == "ufixedhigh" || name == "ufixedlow"
+                || name == "sfixedhigh" || name == "sfixedlow")
+            && expression.referenced_name
+            && (!expression.referenced_name->selected
+                || fixed_package_callable(
+                    *expression.referenced_name->selected))
+            && std::ranges::all_of(expression.referenced_name->overloads,
+                fixed_package_callable)
+            && expression.operands.size() >= 2U
+            && expression.operands.size() <= 5U
+            && expression.operands.size() != 4U
+            && CompiledDesignResolver { unit_ }
+                   .vhdl_standard_package_member_visible(
+                       *expression.referenced_name, expression.scope)) {
+            std::array<std::int64_t, 4> bounds { };
+            auto operation = 'X';
+            for (std::size_t index { }; index < expression.operands.size();
+                 ++index) {
+                if (index == 2U) {
+                    const auto literal = unit_.find_expression(
+                        expression.operands[index]);
+                    if (!literal || literal->vhdl == nullptr
+                        || literal->vhdl->text.size() != 3U
+                        || literal->vhdl->text.front() != '\'') {
+                        return std::optional<std::int64_t> { };
+                    }
+                    operation = literal->vhdl->text[1];
+                    continue;
+                }
+                const auto value = evaluate(expression.operands[index]);
+                if (!value) {
+                    return std::optional<std::int64_t> { };
+                }
+                bounds[index < 2U ? index : index - 1U] = *value;
+            }
+            const auto [left, right, left2, right2] = bounds;
+            return std::optional { std::optional {
+                support::vhdl_fixed_bound(name.ends_with("high"),
+                    name.starts_with("s"), left, right, operation, left2,
+                    right2) } };
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<VhdlConstantValue> evaluate_vhdl_call(
         const vhdl::Expression& expression)
     {
@@ -6936,6 +7046,13 @@ private:
         if (const auto separator = name.find_last_of(".:");
             separator != std::string::npos) {
             name.erase(0U, separator + 1U);
+        }
+        // UFIXED_HIGH, SFIXED_LOW and their relatives of the compiler's
+        // IEEE.FIXED_PKG give an operation's result bounds (IEEE 1076-2019
+        // G.4).
+        if (const auto bound = evaluate_vhdl_fixed_bound(expression, name)) {
+            return *bound ? std::optional { vhdl_integer_value(**bound) }
+                          : std::nullopt;
         }
         // INTEGER(x) of a REAL value rounds to the nearest integer
         // (IEEE 1076-2008 9.3.6).
@@ -8113,6 +8230,25 @@ private:
         }
         return signed_bits(
             bits, static_cast<std::size_t>(*width), is_signed);
+    }
+
+    // The declaration of `kind` an expression names: it depends only on the
+    // unit, so loop bodies and instances of one specialization resolve it
+    // once.
+    [[nodiscard]] std::optional<DeclarationId> named_declaration(
+        const detail::ResolutionMemo::NamedDeclaration kind,
+        const ExpressionId expression,
+        const CompiledDeclarationPredicate& predicate) const
+    {
+        auto& known = unit_.resolution_memo().named_declarations;
+        const auto key = detail::ResolutionMemo::named_key(kind, expression);
+        if (const auto found = known.find(key); found != known.end()) {
+            return found->second;
+        }
+        const auto declaration
+            = resolve_vhdl_expression_declaration(expression, predicate);
+        known.emplace(key, declaration);
+        return declaration;
     }
 
     [[nodiscard]] std::optional<DeclarationId>
@@ -11876,7 +12012,8 @@ private:
         }
         const CompiledDesignResolver resolver { unit_ };
         if (source->vhdl->kind == vhdl::ExpressionKind::name) {
-            const auto declaration_id = resolve_vhdl_expression_declaration(id,
+            const auto declaration_id = named_declaration(
+                detail::ResolutionMemo::NamedDeclaration::value_object, id,
                 [](const CompiledDeclarationView& candidate) {
                     return candidate.vhdl != nullptr
                         && vhdl::is_value_object_form(candidate.vhdl->form);
@@ -11974,8 +12111,19 @@ private:
                       && vhdl_attribute_prefix_form(
                           candidate.vhdl->form);
               };
-        auto declaration_id = resolve_vhdl_expression_declaration(
+        auto declaration_id = named_declaration(
+            detail::ResolutionMemo::NamedDeclaration::attribute_prefix,
             expression.operands.front(), attribute_prefix);
+        // `obj(i)'attr`: the indexed or sliced object is the named prefix
+        // (IEEE 1076-2008 8.4, 8.5).
+        if (!declaration_id
+            && (prefix->vhdl->kind == vhdl::ExpressionKind::index
+                || prefix->vhdl->kind == vhdl::ExpressionKind::slice)
+            && !prefix->vhdl->operands.empty()) {
+            declaration_id = named_declaration(
+                detail::ResolutionMemo::NamedDeclaration::attribute_prefix,
+                prefix->vhdl->operands.front(), attribute_prefix);
+        }
         // `obj.elem'attr`: the object is the longest leading part of the
         // selected name that denotes one (IEEE 1076-2008 8.3).
         if (!declaration_id && prefix->vhdl->kind == vhdl::ExpressionKind::name
@@ -12443,14 +12591,17 @@ private:
                         || candidate.kind == vhdl::RangeKind::enumeration
                         || candidate.kind == vhdl::RangeKind::discrete;
                 });
-            if (constraint != subtype->constraints.end()) {
+            // A subtype's own range whose bounds do not fold leaves the
+            // attribute unknown; it is not the base type's range.
+            const bool own_range = constraint != subtype->constraints.end();
+            if (own_range) {
                 range = concrete_range(*constraint);
             }
-            if (!range && definition != nullptr
+            if (!range && !own_range && definition != nullptr
                 && definition->scalar_range) {
                 range = concrete_range(*definition->scalar_range);
             }
-            if (!range && definition != nullptr
+            if (!range && !own_range && definition != nullptr
                 && !definition->enumeration_literals.empty()
                 && definition->enumeration_literals.size() - 1U
                     <= static_cast<std::size_t>(
@@ -12987,9 +13138,9 @@ private:
                                   candidate.vhdl->form);
                       };
                 const CompiledDesignResolver resolver { unit_ };
-                const auto declaration
-                    = resolve_vhdl_expression_declaration(
-                        expression.id, value_declaration);
+                const auto declaration = named_declaration(
+                    detail::ResolutionMemo::NamedDeclaration::evaluable_value,
+                    expression.id, value_declaration);
                 if (declaration) {
                     if (expression.referenced_name) {
                         const auto& reference
@@ -13029,7 +13180,8 @@ private:
                               && candidate.vhdl->form
                               == vhdl::DeclarationForm::alias;
                       };
-                if (const auto alias = resolve_vhdl_expression_declaration(
+                if (const auto alias = named_declaration(
+                        detail::ResolutionMemo::NamedDeclaration::alias,
                         expression.id, alias_declaration)) {
                     const auto view = unit_.find_declaration(*alias);
                     if (view && view->vhdl != nullptr) {
@@ -13054,7 +13206,8 @@ private:
                               && candidate.vhdl->form
                               == vhdl::DeclarationForm::function;
                       };
-                if (resolve_vhdl_expression_declaration(
+                if (named_declaration(
+                        detail::ResolutionMemo::NamedDeclaration::function,
                         expression.id, function_declaration)) {
                     if (const auto value = evaluate_vhdl_value(expression.id);
                         value
@@ -13565,9 +13718,9 @@ private:
                               && vhdl_type_declaration_form(
                                   candidate.vhdl->form);
                       };
-                const auto conversion
-                    = resolve_vhdl_expression_declaration(
-                        expression.id, type_declaration);
+                const auto conversion = named_declaration(
+                    detail::ResolutionMemo::NamedDeclaration::type,
+                    expression.id, type_declaration);
                 auto conversion_name
                     = std::string_view { expression.text };
                 if (conversion_name.starts_with(qualified_prefix)) {
@@ -13592,6 +13745,10 @@ private:
                         || expression.text.starts_with(
                             qualified_prefix))) {
                     return evaluate(expression.operands.front());
+                }
+                if (const auto bound = evaluate_vhdl_fixed_bound(expression,
+                        normalized_token(conversion_name))) {
+                    return *bound;
                 }
                 return evaluate_callable(expression);
             }
@@ -13860,9 +14017,9 @@ private:
                                   candidate.vhdl->form);
                       };
                 const CompiledDesignResolver resolver { unit_ };
-                const auto declaration
-                    = resolve_vhdl_expression_declaration(
-                        expression.id, value_declaration);
+                const auto declaration = named_declaration(
+                    detail::ResolutionMemo::NamedDeclaration::evaluable_value,
+                    expression.id, value_declaration);
                 if (!declaration) {
                     return std::nullopt;
                 }
@@ -14149,9 +14306,6 @@ private:
     std::map<ExpressionId, bool> vhdl_bitwise_callable_candidates_;
     std::map<ExpressionId, std::optional<DeclarationId>>
         vhdl_callable_declarations_;
-    /// Value declarations named by expressions, by expression.
-    std::unordered_map<std::uint32_t, std::optional<DeclarationId>>
-        vhdl_value_declarations_;
     std::optional<bool> actuals_supply_no_callable_;
     std::map<DeclarationId, std::optional<vhdl::SubtypeIndication>>
         vhdl_callable_return_subtypes_;
@@ -17794,7 +17948,23 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
         // Build a temporary child-formal overlay and converge identities in
         // declaration order. This remains an in-memory specialization view;
         // it neither copies HIR nor creates a persistent recipe/cache layer.
-        for (std::size_t pass { }; pass < result.bindings.size(); ++pass) {
+        // An actual written on the instance is an expression of the parent,
+        // which the child's formals cannot change (IEEE 1800-2017 23.10);
+        // only the child's own defaults converge.
+        const auto child_default
+            = [&](const SpecializedHirAssociationBinding& binding) {
+                  if (!binding.expression) {
+                      return false;
+                  }
+                  const auto view = design.find_expression(*binding.expression);
+                  return view && view->systemverilog != nullptr
+                      && scope_belongs_to(design, view->systemverilog->scope,
+                          { target_unit });
+              };
+        const auto passes = std::ranges::any_of(result.bindings, child_default)
+            ? result.bindings.size()
+            : std::size_t { };
+        for (std::size_t pass { }; pass < passes; ++pass) {
             std::vector<SpecializedHirActualIdentity> local_actuals;
             local_actuals.reserve(result.bindings.size());
             for (const auto& binding : result.bindings) {
@@ -17812,7 +17982,7 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                 = parent->with_local_actual_identities(local_actuals);
             bool changed { };
             for (auto& binding : result.bindings) {
-                if (!binding.expression) {
+                if (!child_default(binding)) {
                     continue;
                 }
                 const auto formal = design.find_declaration(binding.formal);
@@ -18043,6 +18213,25 @@ ScopeId SpecializedHirUnit::scope() const noexcept
     return specialization_.scope;
 }
 
+detail::VhdlOperatorSelectionMemo&
+SpecializedHirUnit::vhdl_operator_selections() const
+{
+    auto& selections = vhdl_operator_selections_.get();
+    if (!selections) {
+        selections = std::make_shared<detail::VhdlOperatorSelectionMemo>();
+    }
+    return *selections;
+}
+
+detail::ResolutionMemo& SpecializedHirUnit::resolution_memo() const
+{
+    auto& memo = resolution_memo_.get();
+    if (!memo) {
+        memo = std::make_shared<detail::ResolutionMemo>();
+    }
+    return *memo;
+}
+
 Language SpecializedHirUnit::language() const noexcept
 {
     return specialization_.language;
@@ -18052,6 +18241,13 @@ std::optional<std::int64_t>
 SpecializedHirUnit::evaluate_integral_expression(
     const ExpressionId expression) const
 {
+    // A value reads only this specialization. A failure is not kept: inside
+    // the shared constant evaluator its fallback is unavailable.
+    auto& values = resolution_memo().integral_values;
+    if (const auto found = values.find(expression.value());
+        found != values.end()) {
+        return found->second;
+    }
     if (systemverilog_multiplication_exceeds_work_limit(
             *this, expression)) {
         return std::nullopt;
@@ -18060,10 +18256,15 @@ SpecializedHirUnit::evaluate_integral_expression(
         *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
         nullptr, initializer_memo_context_
     };
-    if (const auto value = evaluator.evaluate(expression)) {
-        return value;
+    auto value = evaluator.evaluate(expression);
+    if (!value) {
+        value = shared_constant_integral(*this, expression);
     }
-    return shared_constant_integral(*this, expression);
+    if (value) {
+        resolution_memo().integral_values.emplace(
+            expression.value(), *value);
+    }
+    return value;
 }
 
 std::optional<std::int64_t>
@@ -18861,6 +19062,8 @@ bool SpecializedHirUnit::select_generate(
         return false;
     }
     selected_generates_.insert(found, declaration);
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     const auto generated = generate_instance_ids(declaration);
     selected_generate_instance_ids_.insert(
         selected_generate_instance_ids_.end(),
@@ -18874,7 +19077,9 @@ bool SpecializedHirUnit::select_generate(
 
 bool SpecializedHirUnit::replace(sv::Declaration replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -18890,7 +19095,9 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -18906,7 +19113,9 @@ bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
 
 bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -18921,7 +19130,9 @@ bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
 
 bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -18935,7 +19146,9 @@ bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
 
 bool SpecializedHirUnit::replace(sv::Expression replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -18951,7 +19164,9 @@ bool SpecializedHirUnit::replace(sv::Expression replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Expression replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -18967,7 +19182,9 @@ bool SpecializedHirUnit::replace(vhdl::Expression replacement)
 
 bool SpecializedHirUnit::replace(sv::Statement replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -18983,7 +19200,9 @@ bool SpecializedHirUnit::replace(sv::Statement replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Statement replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -18999,7 +19218,9 @@ bool SpecializedHirUnit::replace(vhdl::Statement replacement)
 
 bool SpecializedHirUnit::replace(sv::Process replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19015,7 +19236,9 @@ bool SpecializedHirUnit::replace(sv::Process replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Process replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19030,7 +19253,9 @@ bool SpecializedHirUnit::replace(vhdl::Process replacement)
 
 bool SpecializedHirUnit::replace(sv::Instance replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19046,7 +19271,9 @@ bool SpecializedHirUnit::replace(sv::Instance replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Instance replacement)
 {
-    client_cache_.reset();
+    client_cache_.detach();
+    vhdl_operator_selections_.detach();
+    resolution_memo_.detach();
     if (specialization_.language != Language::vhdl) {
         return false;
     }

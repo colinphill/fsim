@@ -980,6 +980,13 @@ bool Interpreter::Impl::read_container_object_element(
     require_container_signal_role_materialized(*this, id);
     const auto& object = get_container_object(id);
     const auto& value = object.initial_value;
+    if (value.type.sparse && !object.slice_alias) {
+        if (ordinal >= sparse_container_element_count(value.type)) {
+            return false;
+        }
+        result = read_sparse_container_element(value, ordinal);
+        return true;
+    }
     if ((value.type.element_kind != ContainerElementKind::Packed
             && value.type.element_kind != ContainerElementKind::Scalar)
         || ordinal >= value.elements.size()) {
@@ -2034,6 +2041,27 @@ void Interpreter::Impl::write_container_alias_driver_family(
     finalize_container_alias_driver_family(prepared);
 }
 
+void Interpreter::Impl::publish_container_object_change(
+    const ContainerObjectId object,
+    const SignalChangeOrigin origin)
+{
+    const auto waiters = container_dynamic_fanout.at(object);
+    for (const auto waiter : waiters) {
+        queue_next_delta(waiter, origin);
+    }
+    // Readers outside the dynamic fanout, such as continuous assignments,
+    // are sensitive to the object's change signal.
+    if (const auto signal = container_objects[object].change_signal) {
+        auto value = get_signal(*signal).initial_value;
+        value.set(0U,
+            value.get(0U) == Logic4::one ? Logic4::zero : Logic4::one);
+        commit(*signal, std::move(value), origin);
+    }
+    if (container_object_change_hook) {
+        container_object_change_hook(object, scheduler.now());
+    }
+}
+
 bool Interpreter::Impl::container_has_signal_alias(
     const ContainerObjectId object) const noexcept
 {
@@ -2324,14 +2352,7 @@ void Interpreter::Impl::write_container_object_value(
             }
         }
         if (changed && (!alias || !alias->writable)) {
-            const auto waiters = container_dynamic_fanout.at(id);
-            for (const auto process : waiters) {
-                queue_next_delta(process, origin);
-            }
-        }
-        if (changed && (!alias || !alias->writable)
-            && container_object_change_hook) {
-            container_object_change_hook(id, scheduler.now());
+            publish_container_object_change(id, origin);
         }
         return;
     }
@@ -2451,6 +2472,27 @@ void Interpreter::Impl::write_container_object_element_value(
             return;
         }
     }
+    if (target.type.sparse) {
+        // A sparse array has no signal aliases (its dense image exceeds the
+        // signal width limit).
+        const auto ordinal = linear_index
+            ? known_index(
+                  process, instruction, index, true,
+                  "multidimensional linear index")
+            : sparse_offset(process, instruction, target.type, index);
+        if (ordinal >= sparse_container_element_count(target.type)) {
+            container_error(
+                process, instruction,
+                "container index is out of range");
+        }
+        if (write_sparse_container_element(target, ordinal, value)) {
+            if (container_value_reference_exposed[id] != 0U) {
+                synchronize_container_value_references_from_object(id);
+            }
+            publish_container_object_change(id, origin);
+        }
+        return;
+    }
     if (object.slice_alias) {
         // Slice aliases need a coherent aggregate replacement. Ordinary
         // signal-backed element writes use the direct packed slice below and
@@ -2554,13 +2596,7 @@ void Interpreter::Impl::write_container_object_element_value(
         if (container_value_reference_exposed[id] != 0U) {
             synchronize_container_value_references_from_object(id);
         }
-        const auto waiters = container_dynamic_fanout.at(id);
-        for (const auto waiter : waiters) {
-            queue_next_delta(waiter, origin);
-        }
-        if (container_object_change_hook) {
-            container_object_change_hook(id, scheduler.now());
-        }
+        publish_container_object_change(id, origin);
     }
 }
 
@@ -3144,6 +3180,29 @@ void Interpreter::Impl::execute_container(
     if (source.type.fixed) {
         const auto& index_value = get_register(
             process, operation.index);
+        if (source.type.sparse) {
+            const auto index = index_value.known_signed_value();
+            const auto low = std::min(
+                source.type.index_left, source.type.index_right);
+            const auto high = std::max(
+                source.type.index_left, source.type.index_right);
+            const auto ordinal = !index ? std::nullopt
+                : operation.linear_index
+                ? *index >= 0 ? std::optional { static_cast<std::uint64_t>(*index) }
+                              : std::nullopt
+                : *index >= low && *index <= high
+                ? std::optional { sparse_offset(process.id, process.pc,
+                      source.type, index_value) }
+                : std::nullopt;
+            get_register(process, operation.destination)
+                = ordinal
+                    && *ordinal < sparse_container_element_count(source.type)
+                ? read_sparse_container_element(source, *ordinal)
+                : PackedLogic4(source.type.element_width,
+                      source.type.two_state ? Logic4::zero : Logic4::x);
+            ++process.pc;
+            return;
+        }
         if (operation.linear_index) {
             const auto index = index_value.known_signed_value();
             if (!index || *index < 0
@@ -3258,6 +3317,24 @@ void Interpreter::Impl::execute_container(
             target.keys.insert(iterator_at(target.keys, at), key);
             target.elements.insert(iterator_at(target.elements, at), source);
         }
+        ++process.pc;
+        return;
+    }
+    if (target.type.sparse) {
+        const auto ordinal = operation.linear_index
+            ? known_index(
+                  process.id, process.pc,
+                  get_register(process, operation.index),
+                  true, "multidimensional linear index")
+            : sparse_offset(process.id, process.pc, target.type,
+                  get_register(process, operation.index));
+        if (ordinal >= sparse_container_element_count(target.type)) {
+            container_error(
+                process.id, process.pc,
+                "multidimensional linear index is out of range");
+        }
+        static_cast<void>(
+            write_sparse_container_element(target, ordinal, source));
         ++process.pc;
         return;
     }

@@ -351,8 +351,10 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_modport(DesignUnit& unit, const Token& start);
 
+  // A clocking block of a generate block is kept by `generated_body`.
   void parse_clocking_block(
-      DesignUnit& unit, const Token& start, bool global = false);
+      DesignUnit& unit, const Token& start, bool global = false,
+      GenerateBody* generated_body = nullptr);
 
   void parse_default_clocking(
       DesignUnit& unit,

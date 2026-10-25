@@ -658,6 +658,69 @@ make_specialization_cache_keys(
         jit_optimization(config.build.optimization))
                                                   .fingerprint;
 #endif
+    // The SystemC runtime mapping is the same for every specialization, so
+    // its key fields are derived once.
+    std::vector<std::pair<std::string_view, std::string>> systemc_fields;
+    const auto add_systemc_field
+        = [&](const std::string_view label, const std::string_view value) {
+              systemc_fields.emplace_back(label, std::string { value });
+          };
+    add_systemc_field("systemc-runtime-schema", "fsim-systemc-runtime-v2");
+    add_systemc_field("systemc-plugin", systemc_plugin_key);
+    add_systemc_field(
+        "systemc-instance-count",
+        std::to_string(std::ranges::count_if(
+            design.specializations(), [](const auto& item) {
+                return item.language == semantic::Language::systemc;
+            })));
+    for (const auto& systemc : design.specializations()) {
+        if (systemc.language != semantic::Language::systemc) {
+            continue;
+        }
+        const auto& instance = design.instances()[systemc.instance.value()];
+        add_systemc_field("systemc-instance-id", std::to_string(systemc.id.value()));
+        add_systemc_field("systemc-factory-target", systemc.name);
+        add_systemc_field("systemc-instance-path", design.path(instance.path));
+        add_systemc_field(
+            "systemc-construction-count",
+            std::to_string(systemc.parameters.size()));
+        for (const auto& parameter : systemc.parameters) {
+            add_systemc_field("systemc-construction-name", parameter.name);
+            add_systemc_field("systemc-construction-value", parameter.identity);
+        }
+    }
+    add_systemc_field("systemc-boundary-count", std::to_string(std::ranges::count_if(design.boundaries(), [](const auto& boundary) {
+        return boundary.kind
+            != semantic::design::BoundaryKind::language_conversion;
+    })));
+    for (const auto& boundary : design.boundaries()) {
+        if (boundary.kind
+            == semantic::design::BoundaryKind::language_conversion) {
+            continue;
+        }
+        add_systemc_field("systemc-boundary-kind", std::to_string(static_cast<unsigned>(boundary.kind)));
+        add_systemc_field("systemc-boundary-id", std::to_string(boundary.id.value()));
+        add_systemc_field("systemc-boundary-path", design.path(boundary.path));
+        add_systemc_field("systemc-boundary-object", boundary.object ? std::to_string(boundary.object->value()) : "none");
+        add_systemc_field("systemc-boundary-process", boundary.process ? std::to_string(design.processes()[boundary.process->value()].runtime_index) : "none");
+        add_systemc_field("systemc-boundary-port-writable",
+            boundary.port && design.ports()[boundary.port->value()].writable
+                ? "true"
+                : "false");
+    }
+    add_systemc_field("systemc-object-count", std::to_string(std::ranges::count_if(design.objects(), [](const auto& object) {
+        return object.kind >= semantic::design::ObjectKind::systemc_module;
+    })));
+    for (const auto& object : design.objects()) {
+        if (object.kind < semantic::design::ObjectKind::systemc_module) {
+            continue;
+        }
+        add_systemc_field("systemc-object-kind", std::to_string(static_cast<unsigned>(object.kind)));
+        add_systemc_field("systemc-object-id", std::to_string(object.id.value()));
+        add_systemc_field("systemc-object-path", design.path(object.path));
+        add_systemc_field("systemc-object-type", object.external_type);
+        add_systemc_field("systemc-object-runtime", std::to_string(object.runtime_index));
+    }
     std::vector<std::string> result;
     result.reserve(design.specializations().size());
     for (const auto& specialization : design.specializations()) {
@@ -918,61 +981,8 @@ make_specialization_cache_keys(
         // pointers and native handles out of the key (they are rebound into each
         // fresh interpreter), but compose every stable runtime mapping into the
         // specialization provenance used by LLVM's persistent object cache.
-        key.add("systemc-runtime-schema", "fsim-systemc-runtime-v2");
-        key.add("systemc-plugin", systemc_plugin_key);
-        key.add(
-            "systemc-instance-count",
-            std::to_string(std::ranges::count_if(
-                design.specializations(), [](const auto& item) {
-                    return item.language == semantic::Language::systemc;
-                })));
-        for (const auto& systemc : design.specializations()) {
-            if (systemc.language != semantic::Language::systemc) {
-                continue;
-            }
-            const auto& instance = design.instances()[systemc.instance.value()];
-            key.add("systemc-instance-id", std::to_string(systemc.id.value()));
-            key.add("systemc-factory-target", systemc.name);
-            key.add("systemc-instance-path", design.path(instance.path));
-            key.add(
-                "systemc-construction-count",
-                std::to_string(systemc.parameters.size()));
-            for (const auto& parameter : systemc.parameters) {
-                key.add("systemc-construction-name", parameter.name);
-                key.add("systemc-construction-value", parameter.identity);
-            }
-        }
-        key.add("systemc-boundary-count", std::to_string(std::ranges::count_if(design.boundaries(), [](const auto& boundary) {
-            return boundary.kind
-                != semantic::design::BoundaryKind::language_conversion;
-        })));
-        for (const auto& boundary : design.boundaries()) {
-            if (boundary.kind
-                == semantic::design::BoundaryKind::language_conversion) {
-                continue;
-            }
-            key.add("systemc-boundary-kind", std::to_string(static_cast<unsigned>(boundary.kind)));
-            key.add("systemc-boundary-id", std::to_string(boundary.id.value()));
-            key.add("systemc-boundary-path", design.path(boundary.path));
-            key.add("systemc-boundary-object", boundary.object ? std::to_string(boundary.object->value()) : "none");
-            key.add("systemc-boundary-process", boundary.process ? std::to_string(design.processes()[boundary.process->value()].runtime_index) : "none");
-            key.add("systemc-boundary-port-writable",
-                boundary.port && design.ports()[boundary.port->value()].writable
-                    ? "true"
-                    : "false");
-        }
-        key.add("systemc-object-count", std::to_string(std::ranges::count_if(design.objects(), [](const auto& object) {
-            return object.kind >= semantic::design::ObjectKind::systemc_module;
-        })));
-        for (const auto& object : design.objects()) {
-            if (object.kind < semantic::design::ObjectKind::systemc_module) {
-                continue;
-            }
-            key.add("systemc-object-kind", std::to_string(static_cast<unsigned>(object.kind)));
-            key.add("systemc-object-id", std::to_string(object.id.value()));
-            key.add("systemc-object-path", design.path(object.path));
-            key.add("systemc-object-type", object.external_type);
-            key.add("systemc-object-runtime", std::to_string(object.runtime_index));
+        for (const auto& [label, value] : systemc_fields) {
+            key.add(label, value);
         }
         result.push_back(key.finish());
     }

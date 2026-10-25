@@ -259,6 +259,44 @@ void Simulation::Impl::validate_external_value(
     }
 }
 
+const semantic::sv::ClassSpecialization*
+Simulation::Impl::generated_class_specialization(
+    const std::string_view identity) const
+{
+    const auto find = [&]() -> const semantic::sv::ClassSpecialization* {
+        const auto found = std::ranges::find(
+            generated_class_specializations, identity,
+            &semantic::sv::ClassSpecialization::specialization_identity);
+        return found == generated_class_specializations.end() ? nullptr
+                                                              : &*found;
+    };
+    if (const auto* existing = find()) {
+        return existing;
+    }
+    if (identity.find("#gen{") == std::string_view::npos) {
+        return nullptr;
+    }
+    if (!generated_class_index) {
+        generated_class_index
+            = std::make_unique<semantic::sv::ClassSpecializationIndex>(
+                built.semantics, built.systemverilog_hir);
+    }
+    if (!generated_class_index->specialize_generated_identity(identity)) {
+        return nullptr;
+    }
+    for (const auto& specialization :
+        generated_class_index->result().specializations) {
+        if (!specialization.generate_environment.empty()
+            && std::ranges::find(generated_class_specializations,
+                   specialization.specialization_identity,
+                   &semantic::sv::ClassSpecialization::specialization_identity)
+                == generated_class_specializations.end()) {
+            generated_class_specializations.push_back(specialization);
+        }
+    }
+    return find();
+}
+
 [[nodiscard]] const semantic::sv::ClassSpecialization&
 Simulation::Impl::class_specialization(const std::string_view identity) const
 {
@@ -266,6 +304,9 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         built.compiled_systemverilog_class_specializations, identity,
         &semantic::sv::ClassSpecialization::specialization_identity);
     if (found == built.compiled_systemverilog_class_specializations.end()) {
+        if (const auto* generated = generated_class_specialization(identity)) {
+            return *generated;
+        }
         const auto matches = std::ranges::count(
             built.compiled_systemverilog_class_specializations, identity,
             &semantic::sv::ClassSpecialization::declaration_identity);
@@ -658,11 +699,34 @@ void Simulation::Impl::add_constraint_state_variables(
         }
         return domains;
     };
-    const auto class_constraints_of = [this](
+    // The string properties of an object are state its constraints read,
+    // as the keys of a string-indexed array (IEEE 1800-2017 7.8, 18.5).
+    const auto string_state = [this](
+        const runtime::SystemVerilogClassHandle target,
+        const std::string& specialization) {
+        std::map<std::string, std::string, std::less<>> values;
+        for (const auto& property :
+            class_specialization(specialization).properties) {
+            if (property.static_storage
+                || property.type.value_form != semantic::sv::TypeForm::string
+                || property.type.container_form) {
+                continue;
+            }
+            try {
+                values.emplace(property.canonical_identity,
+                    class_heap.property(target, property.canonical_identity)
+                        .string);
+            } catch (const std::out_of_range&) {
+            }
+        }
+        return values;
+    };
+    const auto class_constraints_of = [this, string_state](
         const runtime::SystemVerilogClassHandle target,
         std::string specialization, std::string path) {
         return runtime::SystemVerilogClassConstraintConfigurator {
-            [this, target, specialization = std::move(specialization),
+            [this, target, string_state,
+                specialization = std::move(specialization),
                 path = std::move(path)](
                 auto& solver, const auto& variables) {
                 // Unit-scope variables the constraints read join the solve
@@ -683,7 +747,7 @@ void Simulation::Impl::add_constraint_state_variables(
                         }
                         return class_heap.constraint_mode(target, identity);
                     },
-                    path);
+                    path, string_state(target, specialization));
             }
         };
     };
@@ -1207,7 +1271,9 @@ void Simulation::Impl::add_constraint_state_variables(
                 continue;
             }
             if (property.static_storage || !property.type.container_form
-                || property.type.container_element_types.size() != 1U) {
+                || property.type.container_element_types.size() != 1U
+                || semantic::sv::nested_class_handle_container(
+                    property.type)) {
                 continue;
             }
             const auto* leaf_type = &property.type;
@@ -1904,6 +1970,13 @@ std::string Simulation::Impl::static_property_specialization(
     while (current != nullptr) {
         descriptor.assignable_declared_types.push_back(
             current->declaration_identity);
+        // The class of one generated scope is a type of its own, which a
+        // lowered override dispatch tests the receiver against (IEEE
+        // 1800-2017 27.4, 8.20).
+        if (!current->generate_environment.empty()) {
+            descriptor.assignable_declared_types.push_back(
+                current->specialization_identity);
+        }
         for (const auto& implemented : current->interfaces) {
             interfaces.push_back(&implemented);
         }
@@ -2636,6 +2709,24 @@ void Simulation::Impl::require_vpi_value(
             }
             auto value = interpreter->container_object_value_snapshot(
                 word->second.first);
+            // A word of a string container takes a string (IEEE 1800-2023
+            // 38.35).
+            if (vpi_container_categories.at(word->second.first)
+                == runtime::SystemVerilogVpiValueCategory::String) {
+                const auto* text
+                    = std::get_if<std::string>(&update.value.payload);
+                if (text == nullptr) {
+                    return runtime::SystemVerilogVpiValueError::TypeMismatch;
+                }
+                auto& element
+                    = value.string_elements.at(word->second.second);
+                if (element != *text) {
+                    element = *text;
+                    interpreter->deposit_container_object(
+                        word->second.first, std::move(value));
+                }
+                return runtime::SystemVerilogVpiValueError::None;
+            }
             auto& element = value.elements.at(word->second.second);
             const auto replacement = systemverilog_vpi_packed_value(
                 update.value,
@@ -2824,20 +2915,61 @@ void Simulation::Impl::publish_vpi_container(
         return;
     }
     std::scoped_lock bridge_lock { vpi_bridge_mutex };
-    const auto words = vpi_container_words.find(object);
-    if (words == vpi_container_words.end()) {
+    const auto live = vpi_live_memories.find(object);
+    if (!vpi_container_words.contains(object) && live == vpi_live_memories.end()) {
         return;
     }
     const auto value
         = interpreter->container_object_value_snapshot(object);
+    if (live != vpi_live_memories.end()) {
+        sync_vpi_live_memory(object, value);
+    }
+    const auto words = vpi_container_words.find(object);
+    if (words == vpi_container_words.end()) {
+        return;
+    }
     for (const auto& [handle, ordinal] : words->second) {
         require_vpi_value(
             vpi_registry->update_bound_value(handle,
-                systemverilog_vpi_signal_value(
-                    value.elements.at(ordinal),
+                systemverilog_vpi_container_word_value(value, ordinal,
                     vpi_container_scalar_kinds.at(object),
                     vpi_container_categories.at(object))),
             "memory-word publication");
+    }
+}
+
+void Simulation::Impl::sync_vpi_live_memory(
+    const runtime::simir::ContainerObjectId object,
+    const runtime::simir::ContainerValue& value)
+{
+    auto& memory = vpi_live_memories.at(object);
+    auto& words = vpi_container_words[object];
+    const auto size = runtime::simir::container_value_size(value);
+    while (memory.words.size() > size) {
+        const auto handle = memory.words.back();
+        if (vpi_registry->release(handle)
+            != runtime::SystemVerilogVpiObjectError::None) {
+            throw std::logic_error {
+                "live VPI memory cannot release a removed word"
+            };
+        }
+        vpi_word_handles.erase(handle);
+        words.pop_back();
+        memory.words.pop_back();
+    }
+    while (memory.words.size() < size) {
+        const auto ordinal = memory.words.size();
+        const auto handle = create_systemverilog_vpi_live_word(
+            *vpi_registry, memory, ordinal);
+        require_vpi_value(
+            vpi_registry->bind_value(handle,
+                systemverilog_vpi_container_word_value(value, ordinal,
+                    vpi_container_scalar_kinds.at(object),
+                    vpi_container_categories.at(object))),
+            "memory-word creation");
+        vpi_word_handles.emplace(handle, std::pair { object, ordinal });
+        words.push_back({ handle, ordinal });
+        memory.words.push_back(handle);
     }
 }
 

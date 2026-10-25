@@ -69,6 +69,8 @@ namespace {
         = 64U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_entry_bytes
         = 64U * 1024U;
+    constexpr std::size_t maximum_vhdl_callable_cache_bytes
+        = 32U * 1024U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_bytes
         = 8U * 1024U * 1024U;
     constexpr std::size_t maximum_effective_subtype_cache_type_depth = 16U;
@@ -4420,7 +4422,15 @@ std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
                                  .specialization_identity.c_str()
                            : "-");
     }
-    if (!specialization || index.binding_frame(*specialization).empty()) {
+    // A class of a loop generate runs in the generated scope's
+    // specialization (IEEE 1800-2017 27.4).
+    if (specialization) {
+        if (const auto generated
+            = hir_generate_class_specialization(*specialization)) {
+            specialization = generated;
+        }
+    }
+    if (!specialization || !index.bound(*specialization)) {
         return std::nullopt;
     }
     return specialization;
@@ -6346,6 +6356,44 @@ Lowerer::hir_class_container_place(const semantic::ExpressionId expression_id) c
         std::move(identity) };
 }
 
+std::optional<Lowerer::HirClassThisValueProperty>
+Lowerer::hir_class_this_value_property(
+    const semantic::ExpressionId expression_id) const
+{
+    // A value-container property of `this` named by its simple name in a
+    // method (IEEE 1800-2023 8.11).
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name
+        || expression->systemverilog->text.find('.') != std::string::npos) {
+        return std::nullopt;
+    }
+    const auto declaration = hir_referenced_declaration(expression_id);
+    if (!declaration) {
+        return std::nullopt;
+    }
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& property : candidate.properties) {
+            if (property.declaration != *declaration
+                || property.static_storage) {
+                continue;
+            }
+            auto type = hir_class_value_container_type(
+                property.canonical_identity);
+            if (!type) {
+                return std::nullopt;
+            }
+            return HirClassThisValueProperty { property.canonical_identity,
+                property.declaration, std::move(*type) };
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<ContainerType> Lowerer::hir_class_value_container_type(
     const std::string_view identity) const
 {
@@ -6353,7 +6401,8 @@ std::optional<ContainerType> Lowerer::hir_class_value_container_type(
     const auto* property = resolver.resolve_systemverilog_class_property(
         std::string { identity }, false).unique();
     if (property == nullptr || property->static_storage
-        || !property->type.class_identity.empty()) {
+        || (!property->type.class_identity.empty()
+            && !semantic::sv::nested_class_handle_container(property->type))) {
         return std::nullopt;
     }
     // A typedef can name the array type (`int_arr_t arr`); a structure
@@ -6408,6 +6457,7 @@ std::optional<ContainerType> Lowerer::hir_class_handle_container_type(
     if (property == nullptr || property->static_storage
         || property->type.class_identity.empty()
         || !property->type.container_form
+        || semantic::sv::nested_class_handle_container(property->type)
         || property->type.unpacked_dimensions.size() > 1U) {
         return std::nullopt;
     }
@@ -6677,6 +6727,10 @@ Lowerer::lower_hir_class_function_call(
         for (const auto& item : overrides) {
             const auto owner = hir_method_owner_identity(
                 design, item.declaration);
+            if (item.specialization) {
+                override_specializations.emplace_back(item.specialization);
+                continue;
+            }
             std::set<std::uint32_t> candidates;
             if (base && owner) {
                 for (const auto derived : index.derived(*base)) {
@@ -7930,7 +7984,7 @@ bool Lowerer::lower_hir_class_task_call(
                     && !method.static_method && formals() == 1U) {
                     writers.push_back({ depth(candidate),
                         { candidate.canonical_identity, method.declaration,
-                            method.canonical_identity } });
+                            method.canonical_identity, std::nullopt } });
                 }
             }
         }
@@ -8293,6 +8347,7 @@ bool Lowerer::lower_hir_class_task_call(
             auto override_profile = *profile;
             override_profile.declaration = item.declaration;
             override_profile.identity = item.identity;
+            override_profile.specialization = item.specialization;
             if (!lower_hir_class_task_invocation(statement_id, override_profile, receiver)) {
                 return false;
             }
@@ -8439,6 +8494,7 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
     struct Ranked {
         HirClassOverride item;
         std::size_t depth;
+        std::string declaration_identity;
     };
     std::vector<Ranked> overrides;
     for (const auto& candidate : classes) {
@@ -8468,13 +8524,29 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
             });
         if (method != candidate.methods.end()) {
             overrides.push_back({ { candidate.canonical_identity,
-                method->declaration, method->canonical_identity }, depth });
+                method->declaration, method->canonical_identity,
+                std::nullopt }, depth,
+                semantic::sv::class_declaration_identity(candidate) });
         }
     }
     std::ranges::stable_sort(overrides, std::greater { }, &Ranked::depth);
     std::vector<HirClassOverride> result;
     result.reserve(overrides.size());
+    auto& index = class_specializations();
     for (auto& item : overrides) {
+        // Each generated scope of a loop generate has a class of its own
+        // (IEEE 1800-2017 27.4): the override of every one is tested.
+        if (!index.generate_iterators(item.declaration_identity).empty()) {
+            for (const auto id : index.generated_specializations(
+                     item.declaration_identity)) {
+                auto generated = item.item;
+                generated.owner_identity
+                    = index.at(id).specialization_identity;
+                generated.specialization = id;
+                result.push_back(std::move(generated));
+            }
+            continue;
+        }
         result.push_back(std::move(item.item));
     }
     return result;
@@ -8753,9 +8825,12 @@ Lowerer::lower_hir_class_callable_invocation(
             hir_generic_binding_frames_
         };
         // A task called through an interface instance has that instance's
-        // types (IEEE 1800-2017 25.7).
+        // types (IEEE 1800-2017 25.7); a class of a generated scope runs
+        // in that scope.
         const auto* const callee_unit = profile.interface_receiver
             ? hir_callee_unit(*profile.interface_receiver)
+            : profile.specialization
+            ? hir_generate_class_unit(*profile.specialization)
             : nullptr;
         const HirUnitSwap callee_swap { *this, callee_unit };
         HirCallableFrame frame;
@@ -9373,6 +9448,21 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
         || hir_local_container_registers_.contains(selected->value())) {
         return std::nullopt;
     }
+    // `f.e` with `f` a formal denotes an element of the formal, not the
+    // formal (IEEE 1076-2008 8.3); only a name of the formal itself (or an
+    // expanded name ending in it) stands for its actual.
+    if (expression && expression->vhdl != nullptr
+        && expression->vhdl->referenced_name) {
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(*selected);
+        const auto& spelling = expression->vhdl->referenced_name->canonical;
+        if (declaration && declaration->vhdl != nullptr
+            && spelling.find('.') != std::string::npos
+            && !same_hir_identifier(simple_name_of(spelling),
+                declaration->vhdl->name, true)) {
+            return std::nullopt;
+        }
+    }
     for (auto frame = hir_generic_binding_frames_.rbegin();
         frame != hir_generic_binding_frames_.rend(); ++frame) {
         const auto binding = std::ranges::find(
@@ -9871,9 +9961,18 @@ std::optional<std::int64_t> Lowerer::hir_pure_integral_attempt(
     return result;
 }
 
+void Lowerer::clear_hir_vhdl_query_caches() const noexcept
+{
+    hir_vhdl_expression_subtype_cache_.clear();
+    hir_vhdl_expression_subtype_cache_entries_ = 0U;
+    hir_vhdl_function_call_cache_.clear();
+    hir_vhdl_function_call_cache_entries_ = 0U;
+}
+
 void Lowerer::clear_hir_pure_integral_attempt_cache() const noexcept
 {
     hir_pure_integral_attempt_cache_.clear();
+    clear_hir_vhdl_query_caches();
     hir_pure_integral_attempt_hits_ = 0U;
     hir_pure_integral_attempt_misses_ = 0U;
     hir_pure_integral_attempt_cap_drops_ = 0U;
@@ -10047,12 +10146,35 @@ Lowerer::hir_vhdl_callable_resolutions(
         .resolve_vhdl_callables(name, use_scope)
         .candidates;
     constexpr std::size_t maximum_entries { 1U << 16U };
-    if (hir_boundary_fallback_calls_ == fallback_calls
-        && hir_vhdl_callable_cache_entries_ < maximum_entries) {
-        hir_vhdl_callable_cache_[key].push_back({
-            name, use_scope, hir_generic_binding_frames_, candidates });
-        ++hir_vhdl_callable_cache_entries_;
+    if (hir_boundary_fallback_calls_ != fallback_calls
+        || hir_vhdl_callable_cache_entries_ >= maximum_entries
+        || hir_vhdl_callable_cache_bytes_ >= maximum_vhdl_callable_cache_bytes) {
+        return candidates;
     }
+    // Each entry keeps copies of the binding frames, which grow with the
+    // design's generics, so the cache is bounded by the bytes it retains.
+    auto retained_bytes = sizeof(HirVhdlCallableCacheEntry) + key.size();
+    const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
+    if (!add_effective_subtype_cache_name(retained_bytes, name, entry_limit)
+        || !add_effective_subtype_cache_bindings(
+            retained_bytes, hir_generic_binding_frames_, entry_limit)
+        || !add_effective_subtype_cache_sequence(retained_bytes,
+            candidates.size(), sizeof(semantic::CompiledVhdlCallableResolution),
+            entry_limit)
+        || !std::ranges::all_of(candidates,
+            [&](const semantic::CompiledVhdlCallableResolution& candidate) {
+                return add_effective_subtype_cache_bindings(retained_bytes,
+                    std::span { &candidate.generic_bindings, 1U },
+                    entry_limit);
+            })
+        || !cache_bytes_fit(hir_vhdl_callable_cache_bytes_, retained_bytes,
+            maximum_vhdl_callable_cache_bytes)) {
+        return candidates;
+    }
+    hir_vhdl_callable_cache_[key].push_back({
+        name, use_scope, hir_generic_binding_frames_, candidates });
+    ++hir_vhdl_callable_cache_entries_;
+    hir_vhdl_callable_cache_bytes_ += retained_bytes;
     return candidates;
 }
 
@@ -10060,6 +10182,7 @@ void Lowerer::clear_hir_vhdl_callable_cache() const noexcept
 {
     hir_vhdl_callable_cache_.clear();
     hir_vhdl_callable_cache_entries_ = 0U;
+    hir_vhdl_callable_cache_bytes_ = 0U;
 }
 
 std::optional<Lowerer::HirCallableResolution>
@@ -10971,6 +11094,21 @@ Lowerer::hir_callable_formal_binding(
                         vhdl_standard_)
           }
         : std::nullopt;
+    // A partially constrained record formal has the element bounds of its
+    // actual's shape, a function result's included (IEEE 1076-2008
+    // 4.2.2.2, 10.13).
+    if (partially_constrained_record) {
+        if (const auto shape = hir_vhdl_shape(actual);
+            shape && shape->ranges.empty()
+            && !shape->element_constraints.empty()) {
+            auto shaped = *subtype;
+            apply_hir_vhdl_shape(shaped, *shape, declaration->vhdl->scope);
+            if (const auto shaped_width = vhdl_subtype_width(shaped);
+                shaped_width && *shaped_width != 0U) {
+                width = *shaped_width;
+            }
+        }
+    }
     // An empty string literal is a null array of the formal's type (IEEE
     // 1076-2008 9.3.2); it has no storage.
     const bool empty_string_literal = contextual_string_literal
@@ -11025,7 +11163,13 @@ Lowerer::hir_callable_formal_binding(
     }
     if (partially_constrained_record
         && (!domain || !callable_scalar_domain(*domain))) {
-        domain = frontend::ValueDomain::Bit2;
+        // The record takes its packed representation from the actual,
+        // whose elements may hold STD_ULOGIC values.
+        const auto actual_domain = hir_expression_domain(actual, actual_scope);
+        domain = actual_domain && callable_scalar_domain(*actual_domain)
+                && *actual_domain != frontend::ValueDomain::Integer
+            ? actual_domain
+            : std::optional { frontend::ValueDomain::Bit2 };
     }
     auto function_result_signed = std::optional<bool> { };
     const bool parameterless_function_name = contextual
@@ -11416,6 +11560,49 @@ Lowerer::hir_vhdl_function_result_shape(
     return result;
 }
 
+std::optional<semantic::CompiledBindingFrame>
+Lowerer::hir_vhdl_call_binding_frame(
+    const std::span<const semantic::DeclarationId> formals,
+    const std::span<const semantic::ExpressionId> actuals) const
+{
+    if (actuals.size() != formals.size()) {
+        return std::nullopt;
+    }
+    semantic::CompiledBindingFrame bindings;
+    bindings.reserve(formals.size());
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (!actuals[index].valid()) {
+            return std::nullopt;
+        }
+        semantic::CompiledActualBinding binding;
+        binding.formal = formals[index];
+        binding.expression = actuals[index];
+        // An unconstrained formal has its actual's subtype (IEEE 1076-2008
+        // 4.2.2.2), so the body's names see this call's shapes.
+        const auto formal = specialized_hir_unit_->find_declaration(
+            binding.formal);
+        const auto formal_subtype = formal && formal->vhdl != nullptr
+                && formal->vhdl->subtype
+            ? hir_effective_vhdl_subtype(*formal->vhdl->subtype)
+            : std::nullopt;
+        if (formal_subtype && formal_subtype->constraints.empty()
+            && formal_subtype->element_constraints.empty()) {
+            const auto actual_subtype
+                = hir_vhdl_expression_subtype(actuals[index]);
+            auto effective_actual = actual_subtype
+                ? hir_effective_vhdl_subtype(*actual_subtype)
+                : std::nullopt;
+            if (effective_actual
+                && (!effective_actual->constraints.empty()
+                    || !effective_actual->element_constraints.empty())) {
+                binding.vhdl_type = std::move(effective_actual);
+            }
+        }
+        bindings.push_back(std::move(binding));
+    }
+    return bindings;
+}
+
 std::optional<Lowerer::HirVhdlFunctionResultShape>
 Lowerer::hir_vhdl_function_result_proof(
     const semantic::ExpressionId expression_id,
@@ -11487,9 +11674,12 @@ Lowerer::hir_vhdl_function_result_proof(
         index + 1U < declaration->vhdl->statements.size(); ++index) {
         const auto statement = specialized_hir_unit_->find_statement(
             declaration->vhdl->statements[index]);
+        // Assertions and reports cannot change what the function returns.
         if (!statement || statement->vhdl == nullptr
-            || statement->vhdl->kind
-                != semantic::vhdl::StatementKind::assertion) {
+            || (statement->vhdl->kind
+                    != semantic::vhdl::StatementKind::assertion
+                && statement->vhdl->kind
+                    != semantic::vhdl::StatementKind::report)) {
             assertion_prefix = false;
             break;
         }
@@ -11505,18 +11695,12 @@ Lowerer::hir_vhdl_function_result_proof(
         return std::nullopt;
     }
 
-    semantic::CompiledBindingFrame actual_bindings;
-    actual_bindings.reserve(callable.formals.size());
-    for (std::size_t index { }; index < callable.formals.size(); ++index) {
-        if (!(*actuals)[index].valid()) {
-            return std::nullopt;
-        }
-        semantic::CompiledActualBinding binding;
-        binding.formal = callable.formals[index];
-        binding.expression = (*actuals)[index];
-        actual_bindings.push_back(std::move(binding));
+    auto actual_bindings = hir_vhdl_call_binding_frame(
+        callable.formals, *actuals);
+    if (!actual_bindings) {
+        return std::nullopt;
     }
-    hir_generic_binding_frames_.push_back(std::move(actual_bindings));
+    hir_generic_binding_frames_.push_back(std::move(*actual_bindings));
     const PopBackGuard actual_scope { hir_generic_binding_frames_ };
 
     const auto declared_return = callable.return_type
@@ -12465,6 +12649,33 @@ Lowerer::hir_vhdl_function_result_proof(
         return local_numeric_vector_result_shape;
     }
 
+    // An unconstrained IEEE fixed-point result returned directly has the
+    // range of its returned value (IEEE 1076-2019 G.4).
+    if (only_formal_children && terminal_return && assertion_prefix
+        && hir_vhdl_fixed_subtype(*return_subtype)
+        && return_subtype->constraints.empty()) {
+        const auto range = hir_vhdl_fixed_range(
+            *final_statement->vhdl->value);
+        if (!range || range->left < range->right) {
+            return std::nullopt;
+        }
+        const auto width = static_cast<std::size_t>(
+            range->left - range->right + 1);
+        const auto type = hir_callable_type(body, width);
+        if (!type || type->string || type->container
+            || type->width != width
+            || !callable_scalar_domain(type->domain)) {
+            return std::nullopt;
+        }
+        return HirVhdlFunctionResultShape {
+            width,
+            type->domain,
+            HirPackedRange { range->left, range->right, true },
+            1U,
+            {},
+            false,
+        };
+    }
     if (!direct_return_shape || !return_subtype->unconstrained
         || !hir_vhdl_array_type_family(*return_subtype)) {
         return std::nullopt;
@@ -13980,18 +14191,12 @@ Lowerer::hir_vhdl_returned_result_shape(
     if (!actuals || actuals->size() != callable.formals.size()) {
         return std::nullopt;
     }
-    semantic::CompiledBindingFrame actual_bindings;
-    actual_bindings.reserve(callable.formals.size());
-    for (std::size_t index { }; index < callable.formals.size(); ++index) {
-        if (!(*actuals)[index].valid()) {
-            return std::nullopt;
-        }
-        semantic::CompiledActualBinding binding;
-        binding.formal = callable.formals[index];
-        binding.expression = (*actuals)[index];
-        actual_bindings.push_back(std::move(binding));
+    auto actual_bindings = hir_vhdl_call_binding_frame(
+        callable.formals, *actuals);
+    if (!actual_bindings) {
+        return std::nullopt;
     }
-    hir_generic_binding_frames_.push_back(std::move(actual_bindings));
+    hir_generic_binding_frames_.push_back(std::move(*actual_bindings));
     const PopBackGuard actual_scope { hir_generic_binding_frames_ };
     auto return_subtype = hir_resolver().effective_vhdl_subtype(
         *declared_return, declaration->vhdl->scope);
@@ -14891,6 +15096,69 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             && generic_declaration->vhdl->form
                 == semantic::vhdl::DeclarationForm::generic_type;
     };
+    // A generic type of an instance denotes its actual type (IEEE 1076-2008
+    // 6.5.3, 6.5.6.2): its base type when this call's instance or an
+    // enclosing one binds it, otherwise an open type matching any actual.
+    const auto bound_generic_base = [&](const semantic::TypeId candidate_type)
+        -> std::optional<semantic::TypeId> {
+        auto current = base_type(candidate_type);
+        bool bound_once { };
+        // An actual that is itself a generic type (`t => t` in a generic
+        // body, or an enclosing instance's formal) denotes what binds that.
+        for (std::size_t depth { }; depth < 8U && generic_type(current);
+             ++depth) {
+            const auto definition = specialized_hir_unit_->find_type(current);
+            if (!definition || definition->vhdl == nullptr) {
+                break;
+            }
+            const auto declaration = definition->vhdl->declaration;
+            const semantic::CompiledActualBinding* bound { };
+            const auto find = [&](const semantic::CompiledBindingFrame& frame) {
+                const auto found = std::ranges::find(frame, declaration,
+                    &semantic::CompiledActualBinding::formal);
+                if (found != frame.end() && found->vhdl_type) {
+                    bound = &*found;
+                }
+            };
+            find(resolution.generic_bindings);
+            for (auto frame = hir_generic_binding_frames_.rbegin();
+                 bound == nullptr
+                 && frame != hir_generic_binding_frames_.rend();
+                 ++frame) {
+                find(*frame);
+            }
+            if (bound == nullptr) {
+                break;
+            }
+            const auto actual = hir_effective_vhdl_subtype(*bound->vhdl_type)
+                                    .value_or(*bound->vhdl_type);
+            if (!actual.type_mark.target.valid()) {
+                break;
+            }
+            const auto next = base_type(actual.type_mark.target);
+            bound_once = true;
+            if (next == current) {
+                break;
+            }
+            current = next;
+        }
+        return bound_once ? std::optional { current } : std::nullopt;
+    };
+    const auto generic_types_match = [&](const semantic::TypeId formal_type,
+                                         const semantic::TypeId actual_type) {
+        const bool formal_generic = generic_type(formal_type);
+        const bool actual_generic = generic_type(actual_type);
+        if (!formal_generic && !actual_generic) {
+            return false;
+        }
+        const auto formal_base = formal_generic
+            ? bound_generic_base(formal_type)
+            : std::optional { base_type(formal_type) };
+        const auto actual_base = actual_generic
+            ? bound_generic_base(actual_type)
+            : std::optional { base_type(actual_type) };
+        return !formal_base || !actual_base || *formal_base == *actual_base;
+    };
     const auto formal_declaration
         = specialized_hir_unit_->find_declaration(formal_id);
     const auto formal_subtype = formal_declaration
@@ -15517,9 +15785,6 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         && formal->domain == frontend::ValueDomain::Bit2
         && actual_domain
         && *actual_domain == frontend::ValueDomain::Integer;
-    const bool domain_matches
-        = (actual_domain && *actual_domain == formal->domain)
-        || same_nominal_packed_array_domain;
     const auto record_type_identity = [&](const auto& subtype)
         -> std::optional<semantic::TypeId> {
         if (!subtype || !subtype->type_mark.target.valid()) {
@@ -15539,6 +15804,17 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
     const auto actual_record_identity
         = record_type_identity(effective_actual_subtype);
     const bool formal_record = formal_record_identity.has_value();
+    // Overload resolution compares base types (IEEE 1076-2008 12.5). A record
+    // actual of the formal's own record type matches whatever storage domain
+    // its subtype carries; a generic package's record whose elements have a
+    // generic type takes the instance's element domain only in the formal.
+    const bool same_nominal_record = formal_record
+        && actual_record_identity
+        && *actual_record_identity == *formal_record_identity;
+    const bool domain_matches
+        = (actual_domain && *actual_domain == formal->domain)
+        || same_nominal_packed_array_domain
+        || same_nominal_record;
     // Packed domain and width do not make a scalar physical value applicable
     // to a record overload. Record actuals need exact nominal identity; an
     // aggregate is the sole context-typed exception and is validated against
@@ -15571,8 +15847,8 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             == base_type(effective_actual_subtype->type_mark.target)
         || same_nominal_array
         || (!resolution.generic_bindings.empty()
-            && (generic_type(formal_subtype->type_mark.target)
-                || generic_type(effective_actual_subtype->type_mark.target)));
+            && generic_types_match(formal_subtype->type_mark.target,
+                effective_actual_subtype->type_mark.target));
     const bool unresolved_function_array_profile = actual_is_function_name
         && formal_subtype
         && hir_vhdl_array_type_family(*formal_subtype).has_value()
@@ -15615,8 +15891,10 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             && actual_subtype->constraints.empty()
             && (scalar_name == "std_ulogic" || scalar_name == "std_logic"
                 || scalar_name == "bit");
+        // A record value is not an array (IEEE 1076-2008 5.3.1).
         if ((formal_family && actual_family && *formal_family != *actual_family)
             || (formal_family && !actual_family && scalar_logic_actual)
+            || (formal_family && actual_record_identity)
             || (actual_family && !formal_family
                 && formal_subtype->unspecified_class
                     == semantic::vhdl::UnspecifiedTypeClass::none)) {
@@ -15659,6 +15937,8 @@ bool Lowerer::hir_vhdl_overload_profile_applies(
         });
 }
 
+// Overload resolution of a call depends on its actuals' subtypes, the
+// context width, the scopes and the generic bindings (IEEE 1076-2008 12.5).
 std::optional<Lowerer::HirCallableResolution>
 Lowerer::resolve_hir_vhdl_function_call(
     const semantic::ExpressionId expression_id,
@@ -15668,6 +15948,48 @@ Lowerer::resolve_hir_vhdl_function_call(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (!hir_vhdl_expression_subtype_cacheable()) {
+        return compute_hir_vhdl_function_call(
+            expression_id, process_scope, contextual_width);
+    }
+    const auto scope = hir_process_scope_;
+    if (const auto found
+        = hir_vhdl_function_call_cache_.find(expression_id.value());
+        found != hir_vhdl_function_call_cache_.end()) {
+        for (const auto& entry : found->second) {
+            if (entry.scope == scope && entry.process_scope == process_scope
+                && entry.contextual_width == contextual_width
+                && entry.callable == active_hir_callable_
+                && entry.binding_frames == hir_generic_binding_frames_) {
+                return entry.result;
+            }
+        }
+    }
+    const auto fallback_calls = hir_boundary_fallback_calls_;
+    auto result = compute_hir_vhdl_function_call(
+        expression_id, process_scope, contextual_width);
+    constexpr std::size_t maximum_entries { 1U << 16U };
+    if (hir_boundary_fallback_calls_ != fallback_calls
+        || hir_vhdl_function_call_cache_entries_ >= maximum_entries
+        || !hir_vhdl_expression_subtype_cacheable()) {
+        return result;
+    }
+    try {
+        hir_vhdl_function_call_cache_[expression_id.value()].push_back({
+            scope, process_scope, contextual_width, active_hir_callable_,
+            hir_generic_binding_frames_, result });
+        ++hir_vhdl_function_call_cache_entries_;
+    } catch (const std::bad_alloc&) {
+    }
+    return result;
+}
+
+std::optional<Lowerer::HirCallableResolution>
+Lowerer::compute_hir_vhdl_function_call(
+    const semantic::ExpressionId expression_id,
+    const semantic::ScopeId process_scope,
+    const std::size_t contextual_width) const
+{
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     const auto callable_expression = expression
@@ -15793,9 +16115,11 @@ Lowerer::resolve_hir_vhdl_function_call(
                 ? hir_effective_vhdl_subtype(*declaration->vhdl->subtype)
                 : std::optional<semantic::vhdl::SubtypeIndication> { };
         }();
+        // A result whose bounds come from the call's actuals or context has
+        // no width of its own here; overload resolution still decides it by
+        // profile (IEEE 1076-2008 12.5).
         const bool context_dependent_result = unconstrained_result
-            && hir_vhdl_context_sized(*unconstrained_result)
-            && contextual_width == 0U;
+            && hir_vhdl_context_sized(*unconstrained_result);
         if (!declaration || declaration->vhdl == nullptr
             || !declaration->vhdl->callable
             || !declaration->vhdl->callable->function
@@ -15830,9 +16154,19 @@ Lowerer::resolve_hir_vhdl_function_call(
                 || type->width == contextual_width
             ? selected
             : contextual_fallback;
-        if (destination
-            && (destination->key != resolution.key
-                || destination->body != resolution.body)) {
+        // One subprogram visible both as a generic package's declaration and
+        // through an instance of it is not a homograph of itself (IEEE
+        // 1076-2008 12.3); the instance's view carries its generic actuals.
+        if (destination && destination->body == resolution.body
+            && (destination->key == resolution.key
+                || destination->generic_bindings.empty()
+                || resolution.generic_bindings.empty())) {
+            if (destination->generic_bindings.empty()) {
+                destination = resolution;
+            }
+            continue;
+        }
+        if (destination) {
             ambiguous = true;
             continue;
         }
@@ -15952,9 +16286,18 @@ Lowerer::resolve_hir_vhdl_procedure_call(
             continue;
         }
         applicable.push_back(resolution);
-        if (selected
-            && (selected->key != resolution.key
-                || selected->body != resolution.body)) {
+        // The same procedure seen through its generic package and an
+        // instance of it is one declaration (IEEE 1076-2008 12.3).
+        if (selected && selected->body == resolution.body
+            && (selected->key == resolution.key
+                || selected->generic_bindings.empty()
+                || resolution.generic_bindings.empty())) {
+            if (selected->generic_bindings.empty()) {
+                selected = resolution;
+            }
+            continue;
+        }
+        if (selected) {
             ambiguous = true;
             continue;
         }
@@ -17113,6 +17456,23 @@ Lowerer::HirVhdlFunctionActualShapes Lowerer::hir_vhdl_function_actual_shapes(
         case BuiltinType::ieee_std_logic_1164_std_ulogic_vector:
             break;
         }
+        // The IEEE fixed- and floating-point types are one-dimensional
+        // std_ulogic arrays (IEEE 1076-2019 G.4, G.5).
+        if (hir_vhdl_fixed_subtype(subtype)) {
+            return std::pair {
+                lowercase_vhdl_simple_name(subtype.type_mark.spelling)
+                        .ends_with("sfixed")
+                    ? std::string_view { "sfixed" }
+                    : std::string_view { "ufixed" },
+                frontend::ValueDomain::Logic9,
+            };
+        }
+        if (hir_vhdl_float_subtype(subtype)) {
+            return std::pair {
+                std::string_view { "float" },
+                frontend::ValueDomain::Logic9,
+            };
+        }
         const auto spelling
             = std::string_view { subtype.type_mark.spelling };
         const auto separator = spelling.find_last_of(":.");
@@ -17986,6 +18346,13 @@ Lowerer::lower_hir_function_call_value(
               expression->vhdl->referenced_name->text(),
               expression->vhdl->scope, resolution->body)
         : std::nullopt;
+    // A method of an allocated object runs on the one its access value
+    // designates (IEEE 1076-2019 5.4.1).
+    const auto protected_receiver = protected_members
+        ? hir_vhdl_protected_call_receiver(
+              expression->vhdl->referenced_name->text(),
+              expression->vhdl->scope)
+        : std::nullopt;
     if (protected_members
         && !check_hir_vhdl_protected_call(resolution->body,
             expression->vhdl->referenced_name->text(),
@@ -17995,8 +18362,15 @@ Lowerer::lower_hir_function_call_value(
     hir_generic_binding_frames_.push_back(
         resolution->generic_bindings);
     const PopBackGuard generic_scope { hir_generic_binding_frames_ };
-    const auto result_shape = hir_vhdl_function_result_shape(
+    auto result_shape = hir_vhdl_function_result_shape(
         expression_id, hir_process_scope_, resolution->body);
+    // A partially constrained record result has the element bounds of the
+    // values its return statements give, whatever the context (IEEE
+    // 1076-2008 10.13).
+    if (!result_shape) {
+        result_shape = hir_vhdl_returned_result_shape(
+            expression_id, hir_process_scope_, resolution->body, true);
+    }
     const auto result_width = result_shape
         ? result_shape->width : expected_width;
     // A function called through an interface instance has that instance's
@@ -18043,7 +18417,20 @@ Lowerer::lower_hir_function_call_value(
     // The subtype the call's context gives an open result type (IEEE
     // 1076-2019 4.2.1), when it fixes the result width.
     std::optional<semantic::vhdl::SubtypeIndication> result_context;
-    if (const auto found = hir_vhdl_call_contexts_.find(expression_id.value());
+    if (result_shape && result_shape->record && declaration->vhdl != nullptr
+        && declaration->vhdl->callable
+        && declaration->vhdl->callable->return_type) {
+        result_context = hir_effective_vhdl_subtype(
+            *declaration->vhdl->callable->return_type);
+        if (result_context) {
+            HirVhdlShape shape;
+            shape.element_constraints = result_shape->element_constraints;
+            apply_hir_vhdl_shape(
+                *result_context, shape, declaration->vhdl->scope);
+            result_context->executable_width = result_shape->width;
+        }
+    } else if (const auto found
+        = hir_vhdl_call_contexts_.find(expression_id.value());
         found != hir_vhdl_call_contexts_.end() && declaration->vhdl != nullptr
         && declaration->vhdl->callable
         && declaration->vhdl->callable->return_type) {
@@ -18425,6 +18812,11 @@ Lowerer::lower_hir_function_call_value(
         frame.scope = *scope;
         if (protected_members) {
             frame.vhdl_protected_members = *protected_members;
+            if (hir_vhdl_protected_pool_anchor(
+                    protected_members->front().storage)) {
+                frame.vhdl_protected_receiver = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+            }
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
@@ -18866,6 +19258,17 @@ Lowerer::lower_hir_function_call_value(
         }
     }
     transfer_hir_static_formals(frame, true);
+    if (frame.vhdl_protected_receiver) {
+        if (!protected_receiver) {
+            report("FSIM-ELAB-VHPROTECTED-024",
+                "a method of an allocated protected object requires an "
+                "access variable prefix",
+                hir_source_span(expression->vhdl->source));
+            return std::nullopt;
+        }
+        process_.operations.emplace_back(CopyRegister {
+            *frame.vhdl_protected_receiver, *protected_receiver });
+    }
     // The callee may run a method on this protected object.
     flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
@@ -19606,9 +20009,24 @@ std::optional<RegisterId> Lowerer::lower_hir_user_system_call(
     // the foreign service presents the argument (IEEE 1800-2023 38.3.3):
     // `n:` an object named in scope, `s:` a string literal, `e:` an
     // expression whose value is the actual, `-` an omitted argument.
+    // The scope names the block the call sits in, so an argument resolves
+    // to the variable of the nearest enclosing block (IEEE 1800-2023
+    // 38.3.3, 37.4); unnamed blocks use the generated names their static
+    // storage is published under.
+    auto call_scope = hierarchy_;
+    if (!active_hir_callable_) {
+        if (!hir_process_static_scope_.empty()) {
+            call_scope += '.' + hir_process_static_scope_;
+        }
+        for (const auto& scope_name : local_scope_) {
+            if (scope_name != "$block") {
+                call_scope += '.' + scope_name;
+            }
+        }
+    }
     auto identity = std::string { systemverilog_dpi_function_prefix }
         + std::string { user_system_call_identity_prefix } + task.name
-        + '|' + hierarchy_ + '|' + span.source_name.str() + '|'
+        + '|' + call_scope + '|' + span.source_name.str() + '|'
         + std::to_string(span.begin.line) + '|'
         + std::to_string(span.begin.column);
     std::vector<RegisterId> actuals;
@@ -20183,6 +20601,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
               expression->vhdl->referenced_name->text(),
               expression->vhdl->scope, resolution->body)
         : std::nullopt;
+    // A method of an allocated object runs on the one its access value
+    // designates (IEEE 1076-2019 5.4.1).
+    const auto protected_receiver = protected_members
+        ? hir_vhdl_protected_call_receiver(
+              expression->vhdl->referenced_name->text(),
+              expression->vhdl->scope)
+        : std::nullopt;
     if (protected_members
         && !check_hir_vhdl_protected_call(resolution->body,
             expression->vhdl->referenced_name->text(),
@@ -20395,6 +20820,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         frame.scope = *scope;
         if (protected_members) {
             frame.vhdl_protected_members = *protected_members;
+            if (hir_vhdl_protected_pool_anchor(
+                    protected_members->front().storage)) {
+                frame.vhdl_protected_receiver = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+            }
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
@@ -20699,6 +21129,17 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         }
     }
     transfer_hir_static_formals(frame, true);
+    if (frame.vhdl_protected_receiver) {
+        if (!protected_receiver) {
+            report("FSIM-ELAB-VHPROTECTED-024",
+                "a method of an allocated protected object requires an "
+                "access variable prefix",
+                hir_source_span(expression->vhdl->source));
+            return std::nullopt;
+        }
+        process_.operations.emplace_back(CopyRegister {
+            *frame.vhdl_protected_receiver, *protected_receiver });
+    }
     // The callee may run a method on this protected object.
     flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
@@ -20824,6 +21265,13 @@ frontend::VhdlSimulatorApi Lowerer::hir_vhdl_simulator_api(
             && source.kind != semantic::vhdl::ExpressionKind::call)
         || source.text.empty() || source.text.starts_with('@')
         || source.text.find_first_of(".:'") != std::string::npos) {
+        return frontend::VhdlSimulatorApi::none;
+    }
+    // Only a name of an STD.ENV subprogram can denote one; any other name
+    // needs no resolution.
+    if (frontend::vhdl_simulator_api(
+            "std.env." + support::ascii_lower(source.text))
+        == frontend::VhdlSimulatorApi::none) {
         return frontend::VhdlSimulatorApi::none;
     }
     semantic::vhdl::Name name;
@@ -21851,6 +22299,12 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     const auto protected_members = hir_vhdl_protected_call_members(
         statement->vhdl->procedure.text(), statement->vhdl->scope,
         resolution->body);
+    // A method of an allocated object runs on the one its access value
+    // designates (IEEE 1076-2019 5.4.1).
+    const auto protected_receiver = protected_members
+        ? hir_vhdl_protected_call_receiver(
+              statement->vhdl->procedure.text(), statement->vhdl->scope)
+        : std::nullopt;
     if (protected_members) {
         if (!check_hir_vhdl_protected_call(resolution->body,
                 statement->vhdl->procedure.text(),
@@ -21887,6 +22341,11 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         frame.scope = scope;
         if (protected_members) {
             frame.vhdl_protected_members = *protected_members;
+            if (hir_vhdl_protected_pool_anchor(
+                    protected_members->front().storage)) {
+                frame.vhdl_protected_receiver = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+            }
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
@@ -22158,6 +22617,17 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             callable_default_value(formal->width, formal->domain),
         });
     }
+    if (frame.vhdl_protected_receiver) {
+        if (!protected_receiver) {
+            report("FSIM-ELAB-VHPROTECTED-024",
+                "a method of an allocated protected object requires an "
+                "access variable prefix",
+                hir_source_span(statement->vhdl->source));
+            return true;
+        }
+        process_.operations.emplace_back(CopyRegister {
+            *frame.vhdl_protected_receiver, *protected_receiver });
+    }
     // The callee may run a method on this protected object.
     flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
@@ -22400,7 +22870,34 @@ bool Lowerer::lower_hir_callable_return(
         process_.operations.emplace_back(Jump { });
         return true;
     }
-    const auto expression = specialized_hir_unit_->find_expression(*value);
+    // A qualified aggregate whose type mark is indefinite, such as an open
+    // record, is its aggregate in the result's context: the type mark only
+    // names the result's type (IEEE 1076-2008 9.3.5).
+    auto returned_value = *value;
+    if (const auto qualified
+        = specialized_hir_unit_->find_expression(returned_value);
+        qualified && qualified->vhdl != nullptr
+        && qualified->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && qualified->vhdl->operands.size() == 1U
+        && qualified->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix)
+        && (!hir_vhdl_conversion_profile(returned_value, type.width)
+            || [&] {
+                   const auto root
+                       = hir_vhdl_composite_root_type(returned_value);
+                   return root
+                       && root->first == semantic::vhdl::TypeForm::record;
+               }())) {
+        if (const auto operand = specialized_hir_unit_->find_expression(
+                qualified->vhdl->operands.front());
+            operand && operand->vhdl != nullptr
+            && operand->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+            returned_value = qualified->vhdl->operands.front();
+        }
+    }
+    const auto expression
+        = specialized_hir_unit_->find_expression(returned_value);
     const auto declaration = specialized_hir_unit_->find_declaration(
         hir_callable_frames_[index].declaration);
     // An open result type takes the subtype the call's context gave it.
@@ -22419,7 +22916,7 @@ bool Lowerer::lower_hir_callable_return(
             == semantic::vhdl::ExpressionKind::aggregate
         && hir_vhdl_partially_constrained_record(*result_subtype)) {
         if (auto completed = hir_vhdl_initialized_object_subtype(
-                *value, *result_subtype, hir_process_scope_)) {
+                returned_value, *result_subtype, hir_process_scope_)) {
             result_subtype = std::move(completed);
         }
     }
@@ -22448,7 +22945,7 @@ bool Lowerer::lower_hir_callable_return(
             || kind == ScalarKind::ShortReal;
     };
     const auto value_kind = expression && expression->systemverilog != nullptr
-        ? hir_systemverilog_scalar_kind(*value)
+        ? hir_systemverilog_scalar_kind(returned_value)
         : ScalarKind::None;
     const bool real_to_integral = expression
         && expression->systemverilog != nullptr
@@ -22460,20 +22957,20 @@ bool Lowerer::lower_hir_callable_return(
                 == semantic::vhdl::ExpressionKind::aggregate
             && result_subtype
         ? lower_hir_vhdl_aggregate(
-              *value, type.width, &*result_subtype)
+              returned_value, type.width, &*result_subtype)
         : expression && expression->vhdl != nullptr && result_subtype
             && (expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::concatenation
                 || (expression->vhdl->kind
                         == semantic::vhdl::ExpressionKind::binary
                     && expression->vhdl->text == "&"))
-        ? lower_hir_expression(*value, type.width,
+        ? lower_hir_expression(returned_value, type.width,
               frontend::SystemVerilogScalarKind::None, &*result_subtype)
         : real_to_integral
         ? lower_hir_expression(
-              *value, value_kind == ScalarKind::ShortReal ? 32U : 64U,
+              returned_value, value_kind == ScalarKind::ShortReal ? 32U : 64U,
               value_kind)
-        : lower_hir_expression(*value, type.width);
+        : lower_hir_expression(returned_value, type.width);
     if (!lowered) {
         return false;
     }
@@ -22482,14 +22979,14 @@ bool Lowerer::lower_hir_callable_return(
     } else if (real_kind(return_kind) && !real_kind(value_kind)
         && expression && expression->systemverilog != nullptr) {
         lowered = convert_hir_integral_to_real(
-            *lowered, hir_expression_signed(*value), return_kind);
+            *lowered, hir_expression_signed(returned_value), return_kind);
     }
     if (register_width(*lowered) != type.width) {
         // A return value widens like an assignment source: by its own
         // signedness, not the function's (IEEE 1800-2017 10.7, 13.4.1).
         lowered = resize_register(*lowered, type.width,
             expression && expression->systemverilog != nullptr
-                ? hir_expression_signed(*value)
+                ? hir_expression_signed(returned_value)
                 : type.signed_value);
     }
     const auto& frame = hir_callable_frames_[index];
@@ -23524,7 +24021,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             .vhdl_protected_members.empty()) {
         const auto members
             = hir_callable_frames_[callable_index].vhdl_protected_members;
-        load_hir_vhdl_protected_caches(members);
+        load_hir_vhdl_protected_caches(members,
+            hir_callable_frames_[callable_index].vhdl_protected_receiver);
     }
     const auto declarations_ready = initialize_hir_declarations(variables);
     initial_frame = &hir_callable_frames_[callable_index];

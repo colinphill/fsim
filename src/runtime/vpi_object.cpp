@@ -531,9 +531,14 @@ std::vector<Observer> snapshot_observers(
             return kind == SystemVerilogVpiObjectKind::Class
                 && descriptor_kind == SystemVerilogVpiDescriptorKind::Class;
         }
+        // A memory is a fixed unpacked array, or a dynamic array or queue
+        // whose words follow its size (IEEE 1800-2023 37.17).
         if (kind == SystemVerilogVpiObjectKind::Memory) {
             return descriptor_kind
-                == SystemVerilogVpiDescriptorKind::UnpackedArray;
+                == SystemVerilogVpiDescriptorKind::UnpackedArray
+                || descriptor_kind
+                == SystemVerilogVpiDescriptorKind::DynamicArray
+                || descriptor_kind == SystemVerilogVpiDescriptorKind::Queue;
         }
         if (kind == SystemVerilogVpiObjectKind::Array) {
             return descriptor_kind == SystemVerilogVpiDescriptorKind::PackedArray

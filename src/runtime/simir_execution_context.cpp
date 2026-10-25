@@ -310,7 +310,7 @@ void Interpreter::Impl::ExecutionContext::read_signal_planes(
 
 [[nodiscard]] std::string
 Interpreter::Impl::ExecutionContext::read_string_object(const StringObjectId object) const{
-    return owner.get_string_object(object).initial_value;
+    return owner.string_object_storage(object);
 }
 
 void Interpreter::Impl::ExecutionContext::write_string_object(
@@ -327,7 +327,7 @@ void Interpreter::Impl::ExecutionContext::write_string_object(
         };
     }
     (void)systemverilog_string_length(value);
-    owner.get_string_object(object).initial_value = value;
+    owner.string_object_storage(object) = value;
 }
 
 [[nodiscard]] ContainerValue Interpreter::Impl::ExecutionContext::read_container_object(

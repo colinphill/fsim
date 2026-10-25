@@ -1503,6 +1503,14 @@ void SystemVerilogHirBuilder::add_class(
     if (enclosing_class != hir_.classes().end()) {
         output.enclosing_identity
             = sv::class_declaration_identity(*enclosing_class);
+    } else if (generate_owner) {
+        // A class of a generate block is identified under the block's scope
+        // path; its enclosing declaration is the unit (IEEE 1800-2017 27.3).
+        const auto& unit = model_.units().at(
+            scope_unit(parent_scope).value());
+        output.enclosing_identity = (unit.library.empty() ? "work"
+                                                          : unit.library)
+            + "::" + unit.name;
     } else if (const auto separator
         = output.canonical_identity.rfind("::");
         separator != std::string::npos) {

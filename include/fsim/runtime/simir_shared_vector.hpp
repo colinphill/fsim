@@ -124,6 +124,12 @@ struct ProcessLayoutAccess {
         return view(values).at(index);
     }
 
+    /// The element at `index`, or `fallback` when `values` is empty, read
+    /// under one transition without pinning a snapshot.
+    template <typename T>
+    [[nodiscard]] static T copy_at_or(const CopyOnWriteVector<T>& values,
+        std::size_t index, T fallback);
+
     template <typename T>
     [[nodiscard]] static bool can_share(
         const CopyOnWriteVector<T>& left,
@@ -866,6 +872,28 @@ process_layout_detail::ProcessLayoutReadView<T> process_layout_detail::ProcessLa
     }
     std::shared_ptr<const std::vector<T>> snapshot(current, &current->values);
     return ProcessLayoutReadView<T> { std::move(snapshot) };
+}
+
+template <typename T>
+T process_layout_detail::ProcessLayoutAccess::copy_at_or(
+    const CopyOnWriteVector<T>& values, const std::size_t index, T fallback)
+{
+    if (values.exposed_.load(std::memory_order_acquire)) {
+        return values.exposed_values_.empty()
+            ? fallback : values.exposed_values_.at(index);
+    }
+    typename CopyOnWriteVector<T>::TransitionGuard guard {
+        values.transition_lock_
+    };
+    if (values.exposed_.load(std::memory_order_acquire)) {
+        return values.exposed_values_.empty()
+            ? fallback : values.exposed_values_.at(index);
+    }
+    const auto current = values.storage_.load(std::memory_order_acquire);
+    if (current == nullptr || current->values.empty()) {
+        return fallback;
+    }
+    return current->values.at(index);
 }
 
 template <typename T>

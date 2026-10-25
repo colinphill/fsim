@@ -8,7 +8,9 @@
 #include <iostream>
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -309,28 +311,30 @@ bool same_systemverilog_process_source(
         && first.concurrent_assertion == second.concurrent_assertion;
 }
 
-bool remap_concurrent_operation(
+} // namespace
+
+bool remap_operation_signals(
     Operation& operation,
-    const std::map<SignalId, SignalId>& signals,
-    const std::string_view from_hierarchy,
-    const std::string_view to_hierarchy,
-    bool* const operation_changed = nullptr)
+    const std::function<bool(SignalId&)>& rename,
+    const std::optional<std::pair<std::string_view, std::string_view>>
+        hierarchy,
+    bool* const operation_changed)
 {
     bool changed { };
     const auto map_signal = [&](SignalId& signal) {
-        const auto found = signals.find(signal);
-        if (found == signals.end()) {
+        const auto previous = signal;
+        if (!rename(signal)) {
             return false;
         }
-        changed = changed || signal != found->second;
-        signal = found->second;
+        changed = changed || signal != previous;
         return true;
     };
     bool accepted { };
     visit_operation([&](auto& value) {
         using Type = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<Type, DebugPoint>) {
-            if (!value.scope.empty()) {
+            if (hierarchy && !value.scope.empty()) {
+                const auto [from_hierarchy, to_hierarchy] = *hierarchy;
                 const auto scope = std::string_view { value.scope };
                 if (!scope.starts_with(from_hierarchy)
                     || (scope.size() > from_hierarchy.size()
@@ -368,8 +372,37 @@ bool remap_concurrent_operation(
             || std::is_same_v<Type, WriteBlockingDynamicSlice>
             || std::is_same_v<Type, WriteUpdateDynamicSlice>) {
             accepted = map_signal(value.signal);
+        } else if constexpr (std::is_same_v<Type, WriteAfter>
+            || std::is_same_v<Type, WriteInertial>
+            || std::is_same_v<Type, WriteProjectedWaveform>
+            || std::is_same_v<Type, WriteAfterSlice>
+            || std::is_same_v<Type, WriteInertialSlice>
+            || std::is_same_v<Type, WriteAfterDynamicSlice>
+            || std::is_same_v<Type, WriteBlockingDynamicPartSlice>
+            || std::is_same_v<Type, WriteAfterDynamicPartSlice>
+            || std::is_same_v<Type, WriteInertialDynamicSlice>
+            || std::is_same_v<Type, WriteInertialDynamicPartSlice>
+            || std::is_same_v<Type, WriteDelayed>
+            || std::is_same_v<Type, ForceSignalSlice>
+            || std::is_same_v<Type, ReleaseSignalSlice>
+            || std::is_same_v<Type, VitalTimingCheck>
+            || std::is_same_v<Type, VitalDelay>
+            || std::is_same_v<Type, SignalStrengthText>
+            || std::is_same_v<Type, WriteContainerObject>
+            || std::is_same_v<Type, WriteContainerObjectElement>
+            || std::is_same_v<Type, WaitOn>
+            || std::is_same_v<Type, WaitPla>
+            || std::is_same_v<Type, WaitOrder>
+            || std::is_same_v<Type, EventTriggered>
+            || std::is_same_v<Type, EventAlias>) {
+            // Names signals in ways this renaming does not cover.
+            accepted = false;
         } else {
-            accepted = std::is_same_v<Type, WaitSensitivity>
+            // In place (no hierarchy), an operation that names no signal
+            // keeps its meaning; a template moved to another hierarchy
+            // takes only these.
+            accepted = !hierarchy
+                || std::is_same_v<Type, WaitSensitivity>
                 || std::is_same_v<Type, CopyRegister>
                 || std::is_same_v<Type, IntegerCheck>
                 // A source location, a message and a condition register.
@@ -404,6 +437,27 @@ bool remap_concurrent_operation(
         *operation_changed = changed;
     }
     return accepted;
+}
+
+namespace {
+
+bool remap_concurrent_operation(
+    Operation& operation,
+    const std::map<SignalId, SignalId>& signals,
+    const std::string_view from_hierarchy,
+    const std::string_view to_hierarchy,
+    bool* const operation_changed = nullptr)
+{
+    return remap_operation_signals(operation,
+        [&](SignalId& signal) {
+            const auto found = signals.find(signal);
+            if (found == signals.end()) {
+                return false;
+            }
+            signal = found->second;
+            return true;
+        },
+        std::pair { from_hierarchy, to_hierarchy }, operation_changed);
 }
 
 std::optional<std::vector<SystemVerilogTemplateSignalRole>>
@@ -1498,7 +1552,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     };
     systemverilog_concurrent_process_templates_[key].push_back(
         SystemVerilogConcurrentProcessTemplate {
-            specialized.specialization(), unit.standard,
+            unit.standard,
             unit.compatibility_profile, std::string { path },
             common, instance, std::move(signal_roles)
         });
@@ -1862,7 +1916,6 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
         ProcessProgramView { process });
     ProcessInstanceProgram instance { ProcessProgramView { process } };
     templates.push_back(SystemVerilogProcessTemplate {
-        specialized.specialization(),
         source,
         unit.standard,
         unit.compatibility_profile,

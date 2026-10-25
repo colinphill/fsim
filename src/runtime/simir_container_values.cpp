@@ -3,6 +3,8 @@
 #include "simir_container_helpers.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <utility>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -70,6 +72,93 @@ bool associative_index_key_less(
 
 std::size_t container_value_size(const ContainerValue& value) noexcept {
   return active_element_count(value);
+}
+
+bool sparse_container_eligible(const ContainerType& type) noexcept {
+  return type.fixed && type.dimensions.size() <= 1U
+      && (type.element_kind == ContainerElementKind::Packed
+          || type.element_kind == ContainerElementKind::Scalar)
+      && !type.aggregate_value && !type.vhdl_shaped;
+}
+
+std::uint64_t sparse_container_element_count(
+    const ContainerType& type) noexcept {
+  const auto [left, right] = type.dimensions.empty()
+      ? std::pair { type.index_left, type.index_right }
+      : type.dimensions.front();
+  const auto distance = left >= right
+      ? static_cast<std::int64_t>(left) - right
+      : static_cast<std::int64_t>(right) - left;
+  return static_cast<std::uint64_t>(distance) + 1U;
+}
+
+namespace {
+
+[[nodiscard]] auto sparse_key_position(
+    const ContainerValue& value, const std::uint64_t ordinal) {
+  return std::ranges::lower_bound(
+      value.keys, ordinal, std::less<> { },
+      [](const PackedLogic4& key) {
+        return key.known_unsigned_value().value_or(0U);
+      });
+}
+
+}  // namespace
+
+PackedLogic4 read_sparse_container_element(
+    const ContainerValue& value, const std::uint64_t ordinal) {
+  if (!value.type.sparse
+      || ordinal >= sparse_container_element_count(value.type)) {
+    throw std::out_of_range{"sparse SimIR array ordinal is out of range"};
+  }
+  const auto key = sparse_key_position(value, ordinal);
+  if (key != value.keys.end() && key->known_unsigned_value() == ordinal) {
+    return value.elements[static_cast<std::size_t>(
+        key - value.keys.begin())];
+  }
+  return initial_packed_element(value.type);
+}
+
+bool write_sparse_container_element(
+    ContainerValue& value, const std::uint64_t ordinal,
+    PackedLogic4 element) {
+  if (!value.type.sparse
+      || ordinal >= sparse_container_element_count(value.type)) {
+    throw std::out_of_range{"sparse SimIR array ordinal is out of range"};
+  }
+  if (element.width() != value.type.element_width) {
+    throw std::invalid_argument{
+        "sparse SimIR array element does not match its type"};
+  }
+  const auto key = sparse_key_position(value, ordinal);
+  const auto position = key - value.keys.begin();
+  const auto stored = value.elements.begin() + position;
+  const bool present
+      = key != value.keys.end() && key->known_unsigned_value() == ordinal;
+  // Only elements that differ from the initial value are stored, so equal
+  // values have one representation.
+  if (element == initial_packed_element(value.type)) {
+    if (!present) {
+      return false;
+    }
+    value.keys.erase(key);
+    value.elements.erase(stored);
+    return true;
+  }
+  if (present) {
+    if (*stored == element) {
+      return false;
+    }
+    *stored = std::move(element);
+    return true;
+  }
+  if (value.elements.size() >= maximum_container_elements(value.type)) {
+    throw std::length_error{
+        "sparse SimIR array exceeds its owning-storage budget"};
+  }
+  value.keys.insert(key, PackedLogic4::from_aval_bval(32U, ordinal, 0U));
+  value.elements.insert(stored, std::move(element));
+  return true;
 }
 
 std::size_t container_value_storage_bytes(const ContainerValue& value) {
@@ -154,7 +243,28 @@ void validate_container_value(const ContainerValue& value) {
     throw std::invalid_argument{
         "a SimIR container kind must be unambiguous"};
   }
-  if (value.type.fixed) {
+  if (value.type.sparse) {
+    const auto count = sparse_container_element_count(value.type);
+    if (!sparse_container_eligible(value.type)
+        || count > (std::uint64_t { 1 } << 32U)
+        || value.keys.size() != size) {
+      throw std::invalid_argument{"SimIR sparse array storage is invalid"};
+    }
+    for (std::size_t index = 0; index < value.keys.size(); ++index) {
+      const auto& key = value.keys[index];
+      const auto ordinal = key.known_unsigned_value();
+      if (key.width() != 32U || key.is_logic9() || !ordinal
+          || std::ranges::any_of(key.bval_words(),
+                 [](const std::uint64_t word) { return word != 0; })
+          || *ordinal >= count
+          || (index != 0
+              && value.keys[index - 1].known_unsigned_value() >= ordinal)) {
+        throw std::invalid_argument{
+            "SimIR sparse array ordinals must be known, ordered, and in "
+            "range"};
+      }
+    }
+  } else if (value.type.fixed) {
     const auto count = fixed_element_count(value.type);
     if (count == 0) {
       throw std::length_error{"SimIR static array has no materialized elements"};
@@ -217,7 +327,8 @@ void validate_container_value(const ContainerValue& value) {
         }
       }
     }
-  } else if (!value.keys.empty() || !value.string_keys.empty()) {
+  } else if ((!value.keys.empty() && !value.type.sparse)
+             || !value.string_keys.empty()) {
     throw std::invalid_argument{
         "non-associative SimIR containers cannot contain keys"};
   }
@@ -325,7 +436,7 @@ ContainerValue default_container_value(const ContainerType& type) {
     for (const auto& member : type.element_types) {
       result.nested_elements.push_back(default_container_value(member));
     }
-  } else if (type.fixed) {
+  } else if (type.fixed && !type.sparse) {
     const auto count = fixed_element_count(type);
     switch (type.element_kind) {
     case ContainerElementKind::Packed:

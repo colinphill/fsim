@@ -1320,6 +1320,13 @@ private:
 
     // --- selects and constants ----------------------------------------------
 
+    [[nodiscard]] static bool dynamic_array_kind(
+        const runtime::SystemVerilogVpiDescriptorKind kind)
+    {
+        return kind == runtime::SystemVerilogVpiDescriptorKind::DynamicArray
+            || kind == runtime::SystemVerilogVpiDescriptorKind::Queue;
+    }
+
     // The declared range of a vector, or the unpacked range of an array,
     // left bound first.
     [[nodiscard]] std::optional<std::pair<std::int64_t, std::int64_t>> declared_range(
@@ -1330,6 +1337,13 @@ private:
             return std::nullopt;
         }
         const auto& descriptor = object->type->descriptor;
+        // A dynamic array or a queue is indexed from zero over its live
+        // words (IEEE 1800-2023 7.5, 7.10).
+        if (object->kind == SystemVerilogVpiObjectKind::Memory
+            && descriptor && dynamic_array_kind(descriptor->kind)) {
+            return std::pair { std::int64_t { 0 },
+                std::int64_t { object->live_children } - 1 };
+        }
         const auto wanted = object->kind == SystemVerilogVpiObjectKind::Memory
             ? runtime::SystemVerilogVpiDescriptorKind::UnpackedArray
             : runtime::SystemVerilogVpiDescriptorKind::PackedArray;
@@ -1356,6 +1370,12 @@ private:
         }
         if (object->kind == SystemVerilogVpiObjectKind::Memory) {
             const auto* level = object->type->descriptor.get();
+            if (level != nullptr && dynamic_array_kind(level->kind)) {
+                if (const auto range = declared_range(handle)) {
+                    result.push_back(*range);
+                }
+                return result;
+            }
             while (level != nullptr
                 && level->kind
                     == runtime::SystemVerilogVpiDescriptorKind::UnpackedArray) {
@@ -2520,7 +2540,7 @@ private:
         }
         auto scope = handle;
         if (const auto* site = call_of(handle)) {
-            scope = find_hierarchy_path(site->scope);
+            scope = find_call_scope(site->scope);
         } else {
             const auto reference = resolve(handle);
             const auto* select = select_of(reference);
@@ -2544,7 +2564,7 @@ private:
         }
         if (const auto* site = call_of(request.handle)) {
             if (type == vpiScope || type == vpiModule) {
-                const auto handle = find_hierarchy_path(site->scope);
+                const auto handle = find_call_scope(site->scope);
                 return succeed(result,
                     type == vpiModule ? enclosing_module(handle) : handle);
             }
@@ -2724,6 +2744,24 @@ private:
             return 0U;
         }
         return find_escaped_path(path, std::string { });
+    }
+
+    // The scope of a call: its block when that block is published, else
+    // the nearest enclosing scope that is (IEEE 1800-2023 37.4).
+    [[nodiscard]] fsim_vpi_handle_v1 find_call_scope(
+        const std::string& path) const
+    {
+        auto prefix = path;
+        while (true) {
+            if (const auto found = find_hierarchy_path(prefix)) {
+                return found;
+            }
+            const auto separator = prefix.rfind('.');
+            if (separator == std::string::npos) {
+                return 0U;
+            }
+            prefix.resize(separator);
+        }
     }
 
     [[nodiscard]] fsim_vpi_handle_v1 find_escaped_path(
@@ -3040,6 +3078,23 @@ private:
             return integer(object->kind == SystemVerilogVpiObjectKind::Memory
                     ? 1
                     : 0);
+        // The kind of an array: static, dynamic, associative or queue
+        // (IEEE 1800-2023 37.17).
+        case vpiArrayType:
+            if (object->kind != SystemVerilogVpiObjectKind::Memory
+                || !object->type || !object->type->descriptor) {
+                return succeed(result, 0U, undefined);
+            }
+            switch (object->type->descriptor->kind) {
+            case runtime::SystemVerilogVpiDescriptorKind::DynamicArray:
+                return integer(vpiDynamicArray);
+            case runtime::SystemVerilogVpiDescriptorKind::AssociativeArray:
+                return integer(vpiAssocArray);
+            case runtime::SystemVerilogVpiDescriptorKind::Queue:
+                return integer(vpiQueueArray);
+            default:
+                return integer(vpiStaticArray);
+            }
         default:
             return succeed(result, 0U, undefined);
         }
@@ -3406,6 +3461,10 @@ private:
         }
         const auto value = object_value(request.handle);
         if (!value || !write_value(*value, *out)) {
+            // A value that cannot be read leaves no stale data in the
+            // caller's structure.
+            out->format = vpiSuppressVal;
+            std::memset(&out->value, 0, sizeof(out->value));
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
         return succeed(result);

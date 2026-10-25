@@ -278,7 +278,11 @@ void VerilogParser::parse_default_disable(
 void VerilogParser::parse_clocking_block(
     DesignUnit& unit,
     const Token& start,
-    const bool global) {
+    const bool global,
+    GenerateBody* const generated_body) {
+  auto& blocks = generated_body != nullptr
+      ? generated_body->systemverilog_clocking_blocks
+      : unit.systemverilog_clocking_blocks;
   // A global clocking block may be unnamed (IEEE 1800-2017 14.14).
   const bool unnamed = global && at(TokenKind::At);
   auto name = unnamed ? start : expect_identifier("clocking block name");
@@ -292,6 +296,54 @@ void VerilogParser::parse_clocking_block(
       "'@' before a clocking event",
       "FSIM-SV-PARSE-283");
   block.event = parse_sensitivity();
+  // `@(e iff g)`: the clocking event occurs at the occurrences of e at which
+  // g holds (IEEE 1800-2023 14.3, 9.4.2.3). A hidden variable toggles at
+  // each such occurrence, `always @(e) if ((|g) === 1'b1) tick = !tick;`,
+  // and the block's event is a change of it.
+  if (auto guard = std::exchange(event_guard_, std::nullopt)) {
+    const auto tick_name = "$clocking$" + block.name + "$tick";
+    const auto guard_span = guard->span;
+    Type tick_type;
+    tick_type.domain = ValueDomain::Bit2;
+    tick_type.spelling = "bit";
+    auto& signals = generated_body != nullptr
+        ? generated_body->signals
+        : unit.signals;
+    signals.push_back(SignalDeclaration{
+        tick_name, std::move(tick_type), PortDirection::Unknown, false,
+        guard_span});
+    const Expression tick{
+        ExpressionKind::Identifier, tick_name, {}, guard_span};
+    Statement toggle;
+    toggle.kind = StatementKind::Assignment;
+    toggle.assignment_kind = AssignmentKind::Blocking;
+    toggle.target = tick;
+    toggle.value = Expression{ExpressionKind::Unary, "!", {tick}, guard_span};
+    toggle.span = guard_span;
+    Statement qualified;
+    qualified.kind = StatementKind::If;
+    qualified.condition = Expression{ExpressionKind::Binary, "===",
+        {Expression{ExpressionKind::Unary, "|", {std::move(*guard)},
+             guard_span},
+            Expression{ExpressionKind::LogicLiteral, "1'b1", {},
+                guard_span}},
+        guard_span};
+    qualified.statements.push_back(std::move(toggle));
+    qualified.span = guard_span;
+    Process process;
+    process.kind = ProcessKind::VerilogAlways;
+    process.name = tick_name;
+    process.sensitivities = std::move(block.event);
+    process.statements.push_back(std::move(qualified));
+    process.span = guard_span;
+    auto& processes = generated_body != nullptr
+        ? generated_body->processes
+        : unit.processes;
+    processes.push_back(std::move(process));
+    Sensitivity qualified_event{EdgeKind::Any, tick_name, guard_span, {}};
+    qualified_event.systemverilog_source_order = systemverilog_source_order();
+    block.event = {std::move(qualified_event)};
+  }
   expect(
       TokenKind::Semicolon,
       "';' after a clocking event",
@@ -414,6 +466,14 @@ void VerilogParser::parse_clocking_block(
         // expression's type stands for it, continuously assigned from the
         // expression or to the lvalue.
         if (declaration.expression->kind != ExpressionKind::Identifier
+            && direction != PortDirection::Inout
+            && generated_body != nullptr) {
+          error(
+              signal,
+              "FSIM-SV-UNSUPPORTED-021",
+              "a clockvar expression in a generated clocking block is "
+              "unsupported");
+        } else if (declaration.expression->kind != ExpressionKind::Identifier
             && direction != PortDirection::Inout) {
           const std::vector<Token> expression_tokens(
               tokens_.begin() + static_cast<std::ptrdiff_t>(expression_begin),
@@ -462,8 +522,11 @@ void VerilogParser::parse_clocking_block(
             "duplicate clocking signal declaration '"
                 + signal.text + "'");
       } else {
+        // A generated scope's clockvar names a signal of that scope or an
+        // enclosing one; elaboration resolves it (IEEE 1800-2023 14.3).
         const bool signal_declared =
             declaration.expression.has_value()
+            || generated_body != nullptr
             || std::ranges::any_of(
                 unit.signals,
                 [&](const SignalDeclaration& candidate) {
@@ -514,7 +577,7 @@ void VerilogParser::parse_clocking_block(
   }
   block.span = span_from(start, previous());
   if (std::ranges::any_of(
-          unit.systemverilog_clocking_blocks,
+          blocks,
           [&](const SystemVerilogClockingBlock& existing) {
             return existing.name == block.name;
           })) {
@@ -524,8 +587,7 @@ void VerilogParser::parse_clocking_block(
         "duplicate clocking block declaration '"
             + block.name + "'");
   } else {
-    unit.systemverilog_clocking_blocks.push_back(
-        std::move(block));
+    blocks.push_back(std::move(block));
   }
 }
 

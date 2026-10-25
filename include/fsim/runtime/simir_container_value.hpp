@@ -68,6 +68,12 @@ struct ContainerType {
   // shape.
   bool vhdl_shaped{};
   std::uint32_t vhdl_rank{};
+  // A fixed one-dimensional packed or scalar array whose dense storage
+  // exceeds the owning-storage budget: the value's `keys` hold the 32-bit
+  // ordinals of the stored elements in increasing order, paired with
+  // `elements`, and every other element holds the element type's initial
+  // value.
+  bool sparse{};
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
 };
@@ -130,6 +136,24 @@ maximum_container_elements(const ContainerType& type) noexcept {
 
 [[nodiscard]] std::size_t
 container_value_size(const ContainerValue& value) noexcept;
+
+/// Whether a fixed array type may use sparse storage: one dimension of
+/// packed or scalar elements.
+[[nodiscard]] bool sparse_container_eligible(const ContainerType& type) noexcept;
+
+/// The declared element count of a sparse fixed array.
+[[nodiscard]] std::uint64_t
+sparse_container_element_count(const ContainerType& type) noexcept;
+
+/// Element `ordinal` of a sparse fixed array; an element never stored holds
+/// the element type's initial value.
+[[nodiscard]] PackedLogic4 read_sparse_container_element(
+    const ContainerValue& value, std::uint64_t ordinal);
+
+/// Store element `ordinal` of a sparse fixed array, keeping only elements
+/// that differ from the initial value. Returns whether the element changed.
+bool write_sparse_container_element(
+    ContainerValue& value, std::uint64_t ordinal, PackedLogic4 element);
 
 /// Approximate recursively owned capacity used to enforce the per-value
 /// resource budget independently of host allocator behavior.

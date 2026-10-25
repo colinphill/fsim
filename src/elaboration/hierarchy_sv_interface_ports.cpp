@@ -290,6 +290,25 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
             design_.signal_by_name_.insert_or_assign(
                 qualified_name, signal_id);
         }
+        // String and unpacked-array members are objects of the instance,
+        // named through the port the same way (IEEE 1800-2023 25.3).
+        const auto forward_objects = [&](auto& objects) {
+            std::vector<std::pair<std::string,
+                typename std::decay_t<decltype(objects)>::mapped_type>>
+                forwarded;
+            for (const auto& [name, object] : objects) {
+                if (name.starts_with(prefix)) {
+                    forwarded.emplace_back(child_path + "." + formal.name
+                            + "." + name.substr(prefix.size()),
+                        object);
+                }
+            }
+            for (auto& [name, object] : forwarded) {
+                objects.insert_or_assign(std::move(name), object);
+            }
+        };
+        forward_objects(design_.string_by_name_);
+        forward_objects(design_.container_by_name_);
         return true;
     }
 

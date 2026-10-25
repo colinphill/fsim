@@ -480,6 +480,13 @@ public:
     [[nodiscard]] CompiledVhdlCallableResolutionResult
     resolve_vhdl_callables(const vhdl::Name&, ScopeId use_scope) const;
 
+    /// Whether `callable`'s parameter and result base types are those of
+    /// `signature`, whose type marks are named in `signature_scope` (IEEE
+    /// 1076-2008 4.5.3).
+    [[nodiscard]] bool vhdl_callable_matches_signature(
+        const vhdl::AliasSignature& signature, ScopeId signature_scope,
+        DeclarationId callable) const;
+
     [[nodiscard]] CompiledVhdlCallableResolutionResult
     resolve_vhdl_callable(DeclarationId requested) const;
 
@@ -542,6 +549,20 @@ private:
     // on first use while the design's indexes are stale.
     [[nodiscard]] std::vector<const sv::Statement*>
     systemverilog_import_statements(ScopeId scope) const;
+
+    // effective_vhdl_subtype without the specialization's memo.
+    [[nodiscard]] std::optional<vhdl::SubtypeIndication>
+    compute_effective_vhdl_subtype(
+        const vhdl::SubtypeIndication&, ScopeId use_scope) const;
+
+    // Whether results read only the design, the specialization and the
+    // binding frames, so the specialization's memo can keep them.
+    [[nodiscard]] bool resolutions_memoizable() const noexcept;
+
+    // resolve_vhdl_type_identity without the specialization's memo.
+    [[nodiscard]] CompiledVhdlTypeIdentityResolution
+    compute_vhdl_type_identity(
+        std::string_view spelling, std::optional<ScopeId> owner_scope) const;
 
     const CompiledDesign* design_ { };
     const SpecializedHirUnit* effective_ { };

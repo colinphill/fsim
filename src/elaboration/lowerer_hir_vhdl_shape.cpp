@@ -184,11 +184,16 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_subtype_shape(
         [](const RangeConstraint& range) {
             return range.kind == RangeKind::array_index;
         });
-    // Every predefined array type is one-dimensional.
+    // Every predefined array type is one-dimensional, including NUMERIC_STD's
+    // SIGNED and UNSIGNED, which are known by their names rather than by a
+    // retained type record (IEEE 1076-2008 16.8.5.1).
+    const bool predefined_vector = array == nullptr
+        && (chain.builtin != semantic::vhdl::BuiltinTypeIdentity::none
+            || subtype.builtin_type
+                != semantic::vhdl::BuiltinTypeIdentity::none
+            || hir_vhdl_array_type_family(subtype).has_value());
     std::size_t dimensions = array != nullptr ? array->array_dimensions.size()
-        : (chain.builtin != semantic::vhdl::BuiltinTypeIdentity::none
-              || subtype.builtin_type
-                  != semantic::vhdl::BuiltinTypeIdentity::none)
+        : predefined_vector
             && constrained <= 1
         ? 1U
         : static_cast<std::size_t>(constrained);
@@ -459,6 +464,33 @@ bool Lowerer::hir_vhdl_contextual_result_local(
     return false;
 }
 
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_bound_formal_subtype(
+    const semantic::DeclarationId formal) const
+{
+    for (auto frame = hir_generic_binding_frames_.rbegin();
+         frame != hir_generic_binding_frames_.rend(); ++frame) {
+        const auto bound = std::ranges::find(*frame, formal,
+            &semantic::CompiledActualBinding::formal);
+        if (bound == frame->end()) {
+            continue;
+        }
+        const auto declaration = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_declaration(formal)
+            : std::nullopt;
+        // Only an object's binding carries its actual's subtype; a generic
+        // type's carries the type it denotes.
+        if (!bound->vhdl_type || !declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_type) {
+            return std::nullopt;
+        }
+        return hir_effective_vhdl_subtype(*bound->vhdl_type)
+            .value_or(*bound->vhdl_type);
+    }
+    return std::nullopt;
+}
+
 std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
     const semantic::DeclarationId declaration,
     const std::size_t dimensions) const
@@ -491,6 +523,18 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_object_facts(
         = hir_vhdl_callable_formal_element_constraints(declaration)) {
         formal = true;
         object.element_constraints = *constraints;
+    }
+    // A formal a shape proof binds to a call's actual has that actual's
+    // subtype (IEEE 1076-2008 4.2.2.2).
+    if (!formal) {
+        if (const auto bound = hir_vhdl_bound_formal_subtype(declaration)) {
+            auto shape = hir_vhdl_subtype_shape(*bound, hir_process_scope_);
+            if (shape && shape->complete()
+                && (!shape->ranges.empty()
+                    || !shape->element_constraints.empty())) {
+                return shape;
+            }
+        }
     }
     // An object alias whose subtype indication leaves index ranges or
     // element bounds open takes them from the aliased object
@@ -859,8 +903,12 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
         ? hir_vhdl_function_result_shape(expression_id, hir_process_scope_)
         : std::nullopt;
     // A partially constrained record result has the element bounds of the
-    // values its return statements give (IEEE 1076-2008 10.13).
-    const auto record_result = function_call && !function_result
+    // values its return statements give (IEEE 1076-2008 10.13), an
+    // operator a user function overloads included (4.5.2).
+    const bool operator_call
+        = source.kind == Kind::binary || source.kind == Kind::unary;
+    const auto record_result
+        = ((function_call && !function_result) || operator_call)
             && declared_subtype
             && hir_vhdl_partially_constrained_record(
                 hir_effective_vhdl_subtype(*declared_subtype)
@@ -896,12 +944,14 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
                 *declaration);
             // A composite generic constant of a package instance, or one
             // left to its default, has the shape of that actual (IEEE
-            // 1076-2008 6.5.6.2, 4.9).
+            // 1076-2008 6.5.6.2, 4.9); so does an unconstrained subprogram
+            // formal of a call whose binding is in scope (4.2.2.2).
+            using Form = semantic::vhdl::DeclarationForm;
             if ((!facts || !facts->complete() || facts->ranges.empty())
                 && declared
                 && declared->vhdl != nullptr
-                && declared->vhdl->form
-                    == semantic::vhdl::DeclarationForm::generic_constant
+                && (declared->vhdl->form == Form::generic_constant
+                    || declared->vhdl->form == Form::port)
                 && declared->vhdl->subtype) {
                 if (const auto actual = hir_generic_actual(expression_id)) {
                     if (auto shape = hir_vhdl_contextual_shape(*actual,
@@ -1086,8 +1136,16 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
                 || operand->vhdl->kind == Kind::string_literal)) {
             if (const auto declared
                 = hir_vhdl_expression_subtype(expression_id)) {
-                facts = hir_vhdl_contextual_shape(
-                    source.operands.front(), *declared, scope);
+                // A record whose element bounds are open takes them from
+                // the values its elements associate (9.3.3.2).
+                const auto record = hir_effective_vhdl_subtype(*declared)
+                                        .value_or(*declared);
+                facts = operand->vhdl->kind == Kind::aggregate
+                        && hir_vhdl_partially_constrained_record(record)
+                    ? hir_vhdl_record_value_shape(
+                          source.operands.front(), record, scope)
+                    : hir_vhdl_contextual_shape(
+                          source.operands.front(), *declared, scope);
             }
         }
     } else if (concatenation && !result) {
@@ -1121,6 +1179,23 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
         result = std::move(facts);
     } else if (facts) {
         complete_shape(*result, *facts);
+    }
+    // An IEEE fixed-point operation or conversion has the index range its
+    // package defines for the result (IEEE 1076-2019 G.4).
+    if ((!result || (result->ranges.size() == 1U && !result->ranges.front()))
+        && (source.kind == Kind::binary
+            || (source.kind == Kind::call
+                && ((declared_subtype
+                        && hir_vhdl_fixed_subtype(
+                            hir_effective_vhdl_subtype(*declared_subtype)
+                                .value_or(*declared_subtype)))
+                    || is_hir_vhdl_fixed_function(expression_id))))) {
+        if (const auto fixed = hir_vhdl_fixed_range(expression_id)) {
+            HirVhdlShape operation;
+            operation.ranges.push_back(
+                HirPackedRange { fixed->left, fixed->right, true });
+            result = std::move(operation);
+        }
     }
     // A one-dimensional value whose range the expression itself proves.
     if (result && result->ranges.size() == 1U && !result->ranges.front()) {
@@ -1556,6 +1631,30 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_record_value_shape(
         : std::nullopt;
     if (!expression || expression->vhdl == nullptr) {
         return std::nullopt;
+    }
+    // `T'(aggregate)` with T leaving element bounds open is shaped as its
+    // aggregate (IEEE 1076-2008 9.3.5).
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->operands.size() == 1U
+        && expression->vhdl->text.starts_with(
+            semantic::vhdl::qualified_expression_prefix)) {
+        const auto operand = specialized_hir_unit_->find_expression(
+            expression->vhdl->operands.front());
+        // The type mark alone says whether bounds stay open; the
+        // expression's own subtype may carry a placeholder width.
+        auto qualifier = hir_vhdl_expression_subtype(value);
+        if (qualifier) {
+            semantic::vhdl::SubtypeIndication mark;
+            mark.type_mark = qualifier->type_mark;
+            qualifier = hir_effective_vhdl_subtype(mark).value_or(mark);
+        }
+        if (operand && operand->vhdl != nullptr
+            && operand->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+            && qualifier
+            && hir_vhdl_partially_constrained_record(*qualifier)) {
+            return hir_vhdl_record_value_shape(
+                expression->vhdl->operands.front(), record, scope, targets);
+        }
     }
     const auto& aggregate = *expression->vhdl;
     if (aggregate.kind != semantic::vhdl::ExpressionKind::aggregate) {

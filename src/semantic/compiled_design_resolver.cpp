@@ -3,8 +3,10 @@
 #include "fsim/semantic/systemverilog_type_descriptor.hpp"
 #include "fsim/support/design_library.hpp"
 #include "fsim/support/index_distance.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/vhdl_time.hpp"
+#include "resolution_memo.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +20,7 @@
 #include <limits>
 #include <ranges>
 #include <set>
+#include <span>
 #include <tuple>
 #include <unordered_set>
 
@@ -1537,6 +1540,28 @@ bool builtin_standard_package_exports(const std::string_view library,
             });
     }
     if (same_vhdl_identifier(library, "ieee")
+        && (same_vhdl_identifier(package, "fixed_pkg")
+            || same_vhdl_identifier(package, "float_pkg"))) {
+        // The compiler provides the fixed- and floating-point packages
+        // (IEEE 1076-2008 G.3, G.4); their vector types stay visible
+        // through an IEEE use clause without retained declarations.
+        constexpr auto fixed_members = std::to_array<std::string_view>({
+            "ufixed", "sfixed", "unresolved_ufixed", "unresolved_sfixed",
+            "u_ufixed", "u_sfixed",
+        });
+        constexpr auto float_members = std::to_array<std::string_view>({
+            "float", "unresolved_float", "u_float", "float32", "float64",
+            "float128",
+        });
+        const auto& members = same_vhdl_identifier(package, "fixed_pkg")
+            ? std::span<const std::string_view> { fixed_members }
+            : std::span<const std::string_view> { float_members };
+        return std::ranges::any_of(members,
+            [&](const std::string_view candidate) {
+                return same_vhdl_identifier(candidate, member);
+            });
+    }
+    if (same_vhdl_identifier(library, "ieee")
         && (same_vhdl_identifier(package, "std_logic_arith")
             || same_vhdl_identifier(package, "std_logic_signed")
             || same_vhdl_identifier(package, "std_logic_unsigned")
@@ -1846,6 +1871,22 @@ CompiledDesignResolver::actual_declaration(
                             == 1U) {
                         next = view->vhdl->referenced_name
                                    ->overloads.front();
+                    }
+                    // `f => r.e` associates an element of `r`, not `r`
+                    // (IEEE 1076-2008 8.3): the formal does not alias the
+                    // root object the name retains.
+                    const std::string_view spelling
+                        = view->vhdl->referenced_name->canonical;
+                    const auto separator = spelling.find_last_of('.');
+                    const auto root = next
+                        ? find_declaration(*design_, effective_, *next)
+                        : std::nullopt;
+                    if (separator != std::string_view::npos && root
+                        && root->vhdl != nullptr
+                        && !support::same_vhdl_identifier(
+                            spelling.substr(separator + 1U),
+                            root->vhdl->name)) {
+                        next.reset();
                     }
                 }
             }
@@ -3233,8 +3274,53 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     return ambiguous ? std::nullopt : selected;
 }
 
+bool CompiledDesignResolver::resolutions_memoizable() const noexcept
+{
+    return design_ != nullptr && effective_ != nullptr
+        && &effective_->design() == design_
+        && selected_unit_ == effective_->unit()
+        && (boundary_fallback_ == nullptr || !*boundary_fallback_)
+        // A name resolution in progress hides its own expression.
+        && resolving_expression_names_.empty();
+}
+
 CompiledVhdlTypeIdentityResolution
 CompiledDesignResolver::resolve_vhdl_type_identity(
+    std::string_view spelling,
+    const std::optional<ScopeId> owner_scope) const
+{
+    if (!owner_scope || !resolutions_memoizable()) {
+        return compute_vhdl_type_identity(spelling, owner_scope);
+    }
+    spelling = vhdl::without_builtin_prefix(spelling);
+    auto& by_spelling = effective_->resolution_memo()
+                            .type_identities[owner_scope->value()];
+    if (const auto found = by_spelling.find(spelling);
+        found != by_spelling.end()) {
+        for (const auto& entry : found->second) {
+            if (std::ranges::equal(entry.binding_frames, binding_frames_)) {
+                return entry.result;
+            }
+        }
+    }
+    auto result = compute_vhdl_type_identity(spelling, owner_scope);
+    // The computation can resolve other names and rehash the table.
+    auto& entries = by_spelling.try_emplace(std::string { spelling })
+                        .first->second;
+    if (entries.size()
+        < detail::ResolutionMemo::maximum_type_identity_contexts) {
+        entries.push_back({
+            std::vector<CompiledBindingFrame> {
+                binding_frames_.begin(), binding_frames_.end()
+            },
+            result,
+        });
+    }
+    return result;
+}
+
+CompiledVhdlTypeIdentityResolution
+CompiledDesignResolver::compute_vhdl_type_identity(
     std::string_view spelling,
     const std::optional<ScopeId> owner_scope) const
 {
@@ -3811,6 +3897,35 @@ std::optional<vhdl::SubtypeIndication>
 CompiledDesignResolver::effective_vhdl_subtype(
     const vhdl::SubtypeIndication& input, const ScopeId use_scope) const
 {
+    if (!binding_frames_.empty() || !resolutions_memoizable()) {
+        return compute_effective_vhdl_subtype(input, use_scope);
+    }
+    auto key = std::hash<std::string_view> { }(input.type_mark.spelling);
+    key = key * 31U + use_scope.value();
+    key = key * 31U + input.type_mark.target.value();
+    auto& memo = effective_->resolution_memo();
+    if (const auto found = memo.effective_subtypes.find(key);
+        found != memo.effective_subtypes.end()) {
+        for (const auto& entry : found->second) {
+            if (entry.scope == use_scope && entry.input == input) {
+                return entry.result;
+            }
+        }
+    }
+    auto result = compute_effective_vhdl_subtype(input, use_scope);
+    if (memo.effective_subtype_count
+        < detail::ResolutionMemo::maximum_effective_subtypes) {
+        // The computation can resolve other subtypes and rehash the table.
+        memo.effective_subtypes[key].push_back({ use_scope, input, result });
+        ++memo.effective_subtype_count;
+    }
+    return result;
+}
+
+std::optional<vhdl::SubtypeIndication>
+CompiledDesignResolver::compute_effective_vhdl_subtype(
+    const vhdl::SubtypeIndication& input, const ScopeId use_scope) const
+{
     if (design_ == nullptr) {
         return std::nullopt;
     }
@@ -4132,12 +4247,24 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 result.domain = element_domain;
             }
             stamp_builtin_vector_identity();
+            // The IEEE fixed_pkg and float_pkg array types are compiler
+            // owned as well, with no retained declaration.
+            const bool compiler_owned_fixed_or_float
+                = result.builtin_type == vhdl::BuiltinTypeIdentity::none
+                && (same_vhdl_identifier(name, "ufixed")
+                    || same_vhdl_identifier(name, "sfixed")
+                    || same_vhdl_identifier(name, "unresolved_ufixed")
+                    || same_vhdl_identifier(name, "unresolved_sfixed")
+                    || same_vhdl_identifier(name, "float")
+                    || same_vhdl_identifier(name, "unresolved_float")
+                    || same_vhdl_identifier(name, "u_float"));
             const bool compiler_owned_unconstrained_logic_vector
                 = !result.type_mark.target.valid()
                 && (result.builtin_type
                         == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector
                     || result.builtin_type
-                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector)
+                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector
+                    || compiler_owned_fixed_or_float)
                 && result.constraints.empty();
             if (compiler_owned_unconstrained_logic_vector
                 && result.executable_width
@@ -4307,7 +4434,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (binding->actual_declaration) {
                 return declaration_type(*binding->actual_declaration);
             }
-            if (binding->expression) {
+            // An actual expression's own subtype, when the binding carries
+            // it, is the shape a name of it would only approximate.
+            if (binding->expression && !binding->vhdl_type) {
                 const auto resolution = CompiledDesignResolver {
                     *design_, selected_unit_, effective_, active
                 }.resolve_expression_name(*binding->expression);
@@ -5465,7 +5594,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
                             && (candidate.vhdl->form
                                     == vhdl::DeclarationForm::type
                                 || candidate.vhdl->form
-                                    == vhdl::DeclarationForm::subtype);
+                                    == vhdl::DeclarationForm::subtype
+                                || candidate.vhdl->form
+                                    == vhdl::DeclarationForm::generic_type);
                     }).unique();
                 if (package && package->member == *declaration_id
                     && !package->generic_bindings.empty()) {
@@ -5533,6 +5664,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 && definition_declaration->vhdl != nullptr
             ? definition_declaration->vhdl->scope
             : scope;
+        std::optional<decltype(result.type_mark)> compiler_owned_mark;
         if (definition.form == vhdl::TypeForm::subtype
             || definition.form == vhdl::TypeForm::alias
             || definition.form == vhdl::TypeForm::scalar) {
@@ -5558,6 +5690,28 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 inherited, definition_scope, active_frames);
             if (effective) {
                 merge_inherited(result, *effective);
+                // The compiler-owned fixed_pkg and float_pkg types have no
+                // retained declaration: their name is their identity, which
+                // a subtype of one shares (IEEE 1076-2008 6.3).
+                if (!effective->type_mark.target.valid()
+                    && std::ranges::any_of(
+                        std::array { std::string_view { "ufixed" },
+                            std::string_view { "sfixed" },
+                            std::string_view { "unresolved_ufixed" },
+                            std::string_view { "unresolved_sfixed" },
+                            std::string_view { "u_ufixed" },
+                            std::string_view { "u_sfixed" },
+                            std::string_view { "float" },
+                            std::string_view { "unresolved_float" },
+                            std::string_view { "u_float" } },
+                        [&](const std::string_view name) {
+                            return same_vhdl_identifier(
+                                vhdl::without_builtin_prefix(
+                                    effective->type_mark.spelling),
+                                name);
+                        })) {
+                    compiler_owned_mark = effective->type_mark;
+                }
             }
         }
         if (definition.form == vhdl::TypeForm::enumeration
@@ -6407,6 +6561,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
             }
         }
         active_types.erase(result.type_mark.target);
+        if (compiler_owned_mark) {
+            result.type_mark = *compiler_owned_mark;
+        }
         complete_predefined(result, active_frames, scope);
         return result;
     };
@@ -8935,6 +9092,40 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
         std::size_t& depth;
         ~DepthGuard() { --depth; }
     } depth_guard { alias_depth };
+    const auto signature_matches = [&](const vhdl::Declaration& alias,
+                                       const DeclarationId target_id) {
+        return vhdl_callable_matches_signature(
+            *alias.alias_signature, alias.scope, target_id);
+    };
+    std::vector<DeclarationId> expanded;
+    for (const auto candidate : visible.candidates) {
+        if (!is_alias(candidate)) {
+            expanded.push_back(candidate);
+            continue;
+        }
+        const auto alias = find_declaration(*design_, effective_, candidate);
+        auto target_name = *alias->vhdl->alias_target;
+        target_name.selected.reset();
+        target_name.overloads.clear();
+        const auto targets = resolve_vhdl_callable_candidates(
+            target_name, alias->vhdl->scope);
+        for (const auto target : targets.candidates) {
+            if (signature_matches(*alias->vhdl, target)
+                && std::ranges::find(expanded, target) == expanded.end()) {
+                expanded.push_back(target);
+            }
+        }
+    }
+    return declaration_result(std::move(expanded));
+}
+
+bool CompiledDesignResolver::vhdl_callable_matches_signature(
+    const vhdl::AliasSignature& signature, const ScopeId signature_scope,
+    const DeclarationId target_id) const
+{
+    if (design_ == nullptr) {
+        return false;
+    }
     // Signature type marks and formal subtypes match by base type.
     const auto type_key = [&](const vhdl::SubtypeIndication& subtype,
                               const ScopeId scope)
@@ -8983,66 +9174,42 @@ CompiledDesignResolver::resolve_vhdl_callable_candidates(
         }
         return std::nullopt;
     };
-    const auto signature_matches = [&](const vhdl::Declaration& alias,
-                                       const DeclarationId target_id) {
-        const auto target = find_declaration(*design_, effective_, target_id);
-        if (!target || target->vhdl == nullptr || !target->vhdl->callable) {
+    const auto target = find_declaration(*design_, effective_, target_id);
+    if (!target || target->vhdl == nullptr || !target->vhdl->callable) {
+        return false;
+    }
+    const auto& profile = *target->vhdl->callable;
+    if (profile.function != signature.result.has_value()
+        || profile.formals.size() != signature.parameters.size()) {
+        return false;
+    }
+    for (std::size_t index { }; index < profile.formals.size(); ++index) {
+        const auto formal = find_declaration(
+            *design_, effective_, profile.formals[index]);
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
             return false;
         }
-        const auto& signature = *alias.alias_signature;
-        const auto& profile = *target->vhdl->callable;
-        if (profile.function != signature.result.has_value()
-            || profile.formals.size() != signature.parameters.size()) {
+        const auto formal_key = type_key(
+            *formal->vhdl->subtype, formal->vhdl->scope);
+        if (!formal_key
+            || formal_key
+                != type_key(signature.parameters[index], signature_scope)) {
             return false;
-        }
-        for (std::size_t index { }; index < profile.formals.size(); ++index) {
-            const auto formal = find_declaration(
-                *design_, effective_, profile.formals[index]);
-            if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
-                return false;
-            }
-            const auto formal_key = type_key(
-                *formal->vhdl->subtype, formal->vhdl->scope);
-            if (!formal_key
-                || formal_key
-                    != type_key(signature.parameters[index], alias.scope)) {
-                return false;
-            }
-        }
-        if (signature.result) {
-            const auto& result = profile.return_type
-                ? profile.return_type
-                : target->vhdl->subtype;
-            const auto result_key = result
-                ? type_key(*result, target->vhdl->scope)
-                : std::nullopt;
-            if (!result_key
-                || result_key != type_key(*signature.result, alias.scope)) {
-                return false;
-            }
-        }
-        return true;
-    };
-    std::vector<DeclarationId> expanded;
-    for (const auto candidate : visible.candidates) {
-        if (!is_alias(candidate)) {
-            expanded.push_back(candidate);
-            continue;
-        }
-        const auto alias = find_declaration(*design_, effective_, candidate);
-        auto target_name = *alias->vhdl->alias_target;
-        target_name.selected.reset();
-        target_name.overloads.clear();
-        const auto targets = resolve_vhdl_callable_candidates(
-            target_name, alias->vhdl->scope);
-        for (const auto target : targets.candidates) {
-            if (signature_matches(*alias->vhdl, target)
-                && std::ranges::find(expanded, target) == expanded.end()) {
-                expanded.push_back(target);
-            }
         }
     }
-    return declaration_result(std::move(expanded));
+    if (signature.result) {
+        const auto& result = profile.return_type
+            ? profile.return_type
+            : target->vhdl->subtype;
+        const auto result_key = result
+            ? type_key(*result, target->vhdl->scope)
+            : std::nullopt;
+        if (!result_key
+            || result_key != type_key(*signature.result, signature_scope)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 CompiledVhdlCallableResolutionResult
@@ -9457,6 +9624,75 @@ CompiledDesignResolver::resolve_vhdl_callable(
                 }
             }
             sort_unique(templates);
+            // The template's subprogram, whose type marks distinguish
+            // overloaded templates (IEEE 1076-2008 4.5.1) and pair a
+            // declaration with its body (4.10).
+            const auto template_subprogram
+                = [&](const vhdl::Declaration& candidate)
+                -> std::optional<DeclarationId> {
+                for (const auto child : candidate.children) {
+                    const auto record = find_declaration(
+                        *design_, effective_, child);
+                    if (record && record->vhdl != nullptr
+                        && record->vhdl->callable
+                        && (record->vhdl->form
+                                == vhdl::DeclarationForm::function
+                            || record->vhdl->form
+                                == vhdl::DeclarationForm::procedure)) {
+                        return child;
+                    }
+                }
+                return std::nullopt;
+            };
+            const auto template_profile
+                = [&](const vhdl::Declaration& candidate) {
+                std::string profile;
+                const auto subprogram = template_subprogram(candidate);
+                const auto record = subprogram
+                    ? find_declaration(*design_, effective_, *subprogram)
+                    : std::nullopt;
+                if (!record || record->vhdl == nullptr) {
+                    return profile;
+                }
+                const auto spelling
+                    = [](const vhdl::SubtypeIndication& subtype) {
+                    std::string text { subtype.type_mark.spelling };
+                    for (auto& character : text) {
+                        character = static_cast<char>(std::tolower(
+                            static_cast<unsigned char>(character)));
+                    }
+                    return text;
+                };
+                for (const auto formal_id : record->vhdl->callable->formals) {
+                    const auto formal = find_declaration(
+                        *design_, effective_, formal_id);
+                    if (formal && formal->vhdl != nullptr
+                        && formal->vhdl->subtype) {
+                        profile += spelling(*formal->vhdl->subtype);
+                    }
+                    profile.push_back(',');
+                }
+                if (record->vhdl->callable->return_type) {
+                    profile += "return "
+                        + spelling(*record->vhdl->callable->return_type);
+                }
+                return profile;
+            };
+            // `f is new g [real, integer return integer]` selects one of
+            // overloaded templates by its signature (IEEE 1076-2019 4.4).
+            if (declaration->vhdl->alias_signature) {
+                std::erase_if(templates, [&](const DeclarationId id) {
+                    const auto view = find_declaration(
+                        *design_, effective_, id);
+                    const auto subprogram = view && view->vhdl != nullptr
+                        ? template_subprogram(*view->vhdl)
+                        : std::nullopt;
+                    return !subprogram
+                        || !vhdl_callable_matches_signature(
+                            *declaration->vhdl->alias_signature,
+                            declaration->vhdl->scope, *subprogram);
+                });
+            }
             std::vector<CompiledVhdlCallableResolution> results;
             for (const auto template_id : templates) {
                 auto template_view = find_declaration(
@@ -9464,6 +9700,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
                 if (!template_view || template_view->vhdl == nullptr) {
                     continue;
                 }
+                const auto profile = template_profile(*template_view->vhdl);
                 std::vector<DeclarationId> completions { template_id };
                 const auto* template_scope = find_scope(
                     *design_, template_view->vhdl->scope);
@@ -9506,7 +9743,8 @@ CompiledDesignResolver::resolve_vhdl_callable(
                                 && same_vhdl_identifier(
                                     template_owner->vhdl->name,
                                     candidate_owner->vhdl->name)));
-                    if (same_unit_family) {
+                    if (same_unit_family
+                        && template_profile(candidate) == profile) {
                         completions.push_back(candidate.id);
                     }
                 }

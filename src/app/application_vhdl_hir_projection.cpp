@@ -966,6 +966,23 @@ predefined_subtype_attribute(
 }
 } // namespace
 
+[[nodiscard]] vh::AliasSignature VhdlHirBuilder::signature(
+    const frontend::VhdlAliasSignature& input,
+    const frontend::SourceSpan& fallback,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent)
+{
+    vh::AliasSignature result;
+    for (const auto& parameter : input.parameters) {
+        result.parameters.push_back(
+            subtype(parameter, fallback, scope, parent));
+    }
+    if (input.result) {
+        result.result = subtype(*input.result, fallback, scope, parent);
+    }
+    return result;
+}
+
 [[nodiscard]] vh::SubtypeIndication VhdlHirBuilder::subtype(
     const frontend::Type& type,
     const frontend::SourceSpan& fallback,

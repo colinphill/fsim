@@ -11,7 +11,11 @@
 #include <exception>
 #include <stdexcept>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::elaboration {
 namespace {
@@ -21,6 +25,24 @@ void trace_evaluation(const std::string_view stage, const std::string_view detai
     if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
         std::cerr << "[fsim-hir-lower] vhdl-elaboration-evaluation " << stage
                   << ": " << detail << '\n';
+    }
+}
+
+// The one-shot program reads the values elaborated so far. A resolved or
+// converted signal's resolver and conversion programs run in the design's
+// own processes, which this interpreter does not have.
+void add_elaboration_signals(runtime::simir::Interpreter& interpreter,
+    const std::vector<runtime::simir::Signal>& signals)
+{
+    for (const auto& signal : signals) {
+        if (!signal.vhdl_resolver && signal.vhdl_conversion_drivers.empty()) {
+            static_cast<void>(interpreter.add_signal(signal));
+            continue;
+        }
+        auto value = signal;
+        value.vhdl_resolver.reset();
+        value.vhdl_conversion_drivers.clear();
+        static_cast<void>(interpreter.add_signal(std::move(value)));
     }
 }
 
@@ -57,6 +79,8 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
         diagnostics_,
     };
     lowerer.set_specialized_hir_unit(&specialization);
+    lowerer.set_vhdl_lowering_index(
+        &vhdl_lowering_index_);
     lowerer.set_package_constant_signal(
         [&](const semantic::DeclarationId constant) {
             return compiled_vhdl_package_constant_signal(
@@ -81,23 +105,10 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     }
     try {
         runtime::simir::Interpreter interpreter;
-        for (const auto& signal : design_.signals_) {
-            static_cast<void>(interpreter.add_signal(signal));
-        }
-        for (const auto& object : design_.string_objects_) {
-            static_cast<void>(interpreter.add_string_object(object));
-        }
-        for (const auto& object : design_.container_objects_) {
-            static_cast<void>(interpreter.add_container_object(object));
-        }
-        process->id = 0U;
-        process->initialize = true;
-        static_cast<void>(interpreter.add_process(std::move(*process)));
-        interpreter.start();
-        static_cast<void>(interpreter.run());
-        auto value = interpreter.signal_value_snapshot(destination);
+        const auto result = run_compiled_vhdl_elaboration_program(
+            interpreter, std::move(*process), destination);
+        auto value = interpreter.signal_value_snapshot(*result);
         diagnostics_.resize(diagnostics_before);
-        keep_compiled_vhdl_elaboration_state(interpreter);
         return value;
     } catch (const std::exception& error) {
         trace_evaluation("run", error.what());
@@ -106,8 +117,92 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     }
 }
 
+std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
+    runtime::simir::Interpreter& interpreter,
+    runtime::simir::Process process,
+    const std::optional<SignalId> result)
+{
+    process.id = 0U;
+    process.initialize = true;
+    // The program usually names a few of the elaborated signals: number
+    // those densely so the interpreter holds only them. An operation that
+    // can name signals in ways the renumbering does not cover keeps every
+    // signal under its own id.
+    std::map<SignalId, SignalId> images;
+    std::vector<SignalId> sources;
+    const auto rename = [&](SignalId& signal) {
+        if (signal >= design_.signals_.size()) {
+            return false;
+        }
+        const auto [found, inserted] = images.try_emplace(
+            signal, static_cast<SignalId>(sources.size()));
+        if (inserted) {
+            sources.push_back(signal);
+        }
+        signal = found->second;
+        return true;
+    };
+    auto compacted = process;
+    auto containers = design_.container_objects_;
+    bool compact = !compacted.switch_source && !compacted.switch_target
+        && !compacted.switch_control;
+    for (std::size_t index = 0;
+         compact && index < compacted.operations.size(); ++index) {
+        auto operation = compacted.operations.expanded(index);
+        bool changed { };
+        compact = remap_operation_signals(
+            operation, rename, std::nullopt, &changed);
+        if (compact && changed) {
+            compacted.operations.replace(index, std::move(operation));
+        }
+    }
+    for (auto& sensitivity : compacted.static_sensitivity) {
+        compact = compact && rename(sensitivity.signal);
+    }
+    for (auto& driver : compacted.driver_regions) {
+        compact = compact && rename(driver.signal);
+    }
+    for (auto& object : containers) {
+        compact = compact
+            && (!object.change_signal || rename(*object.change_signal));
+    }
+    auto result_image = result;
+    compact = compact && (!result_image || rename(*result_image));
+    if (compact) {
+        runtime::simir::normalize_sensitivities(
+            compacted.static_sensitivity);
+        // A hint indexed by the sorted sensitivities; the interpreter
+        // ignores it.
+        compacted.static_trigger_regions = { };
+        std::vector<runtime::simir::Signal> signals;
+        signals.reserve(sources.size());
+        for (const auto source : sources) {
+            signals.push_back(design_.signals_[source]);
+        }
+        add_elaboration_signals(interpreter, signals);
+        process = std::move(compacted);
+    } else {
+        add_elaboration_signals(interpreter, design_.signals_);
+        containers = design_.container_objects_;
+        result_image = result;
+    }
+    for (const auto& object : design_.string_objects_) {
+        static_cast<void>(interpreter.add_string_object(object));
+    }
+    for (auto& object : containers) {
+        static_cast<void>(interpreter.add_container_object(std::move(object)));
+    }
+    static_cast<void>(interpreter.add_process(std::move(process)));
+    interpreter.start();
+    static_cast<void>(interpreter.run());
+    keep_compiled_vhdl_elaboration_state(
+        interpreter, compact ? &images : nullptr);
+    return result_image;
+}
+
 void HierarchyBuilder::keep_compiled_vhdl_elaboration_state(
-    const runtime::simir::Interpreter& interpreter)
+    const runtime::simir::Interpreter& interpreter,
+    const std::map<SignalId, SignalId>* const images)
 {
     // Elaboration calls a function once for each evaluation; the state an
     // impure function leaves in a shared variable is seen by later
@@ -122,9 +217,18 @@ void HierarchyBuilder::keep_compiled_vhdl_elaboration_state(
         }
     }
     for (const auto signal : vhdl_unprotected_shared_signals_) {
-        if (signal < design_.signals_.size()) {
+        if (signal >= design_.signals_.size()) {
+            continue;
+        }
+        // A signal the program does not name keeps its value.
+        const auto image = images == nullptr
+            ? std::optional { signal }
+            : images->contains(signal)
+            ? std::optional { images->at(signal) }
+            : std::nullopt;
+        if (image) {
             design_.signals_[signal].initial_value
-                = interpreter.signal_value_snapshot(signal);
+                = interpreter.signal_value_snapshot(*image);
         }
     }
 }
@@ -232,6 +336,8 @@ std::optional<std::string> HierarchyBuilder::evaluate_compiled_vhdl_string(
         diagnostics_,
     };
     lowerer.set_specialized_hir_unit(&specialization);
+    lowerer.set_vhdl_lowering_index(
+        &vhdl_lowering_index_);
     lowerer.set_package_constant_signal(
         [&](const semantic::DeclarationId constant) {
             return compiled_vhdl_package_constant_signal(
@@ -252,22 +358,9 @@ std::optional<std::string> HierarchyBuilder::evaluate_compiled_vhdl_string(
     std::optional<std::string> value;
     try {
         runtime::simir::Interpreter interpreter;
-        for (const auto& signal : design_.signals_) {
-            static_cast<void>(interpreter.add_signal(signal));
-        }
-        for (const auto& object : design_.string_objects_) {
-            static_cast<void>(interpreter.add_string_object(object));
-        }
-        for (const auto& object : design_.container_objects_) {
-            static_cast<void>(interpreter.add_container_object(object));
-        }
-        process->id = 0U;
-        process->initialize = true;
-        static_cast<void>(interpreter.add_process(std::move(*process)));
-        interpreter.start();
-        static_cast<void>(interpreter.run());
+        static_cast<void>(run_compiled_vhdl_elaboration_program(
+            interpreter, std::move(*process), std::nullopt));
         value = interpreter.string_object_value(scratch);
-        keep_compiled_vhdl_elaboration_state(interpreter);
     } catch (const std::exception& error) {
         trace_evaluation("string run", error.what());
     }
@@ -301,6 +394,8 @@ HierarchyBuilder::compiled_vhdl_initialized_object_subtype(
         diagnostics_,
     };
     lowerer.set_specialized_hir_unit(&specialization);
+    lowerer.set_vhdl_lowering_index(
+        &vhdl_lowering_index_);
     lowerer.set_package_constant_signal(
         [&](const semantic::DeclarationId constant) {
             return compiled_vhdl_package_constant_signal(

@@ -1168,6 +1168,9 @@ struct ParameterOverride {
 struct GenericSubprogramInstantiation {
     std::string name;
     std::string template_name;
+    // The signature that selects one of overloaded templates (IEEE
+    // 1076-2019 4.4).
+    std::optional<VhdlAliasSignature> template_signature;
     std::vector<ParameterOverride> generic_map;
     bool generic_map_box { };
     SourceSpan span;

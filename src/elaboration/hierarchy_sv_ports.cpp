@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -60,6 +61,31 @@ PortActualResult normalize_port_actual(
         const bool interface_formal = !formal.interface_type.empty()
             || (formal.type
                 && formal.type->target.spelling == "interface");
+        // An element of a multidimensional interface array, `ifc[i][j]`,
+        // named by its constant index chain (IEEE 1800-2017 23.3.3.5).
+        std::function<std::optional<std::string>(semantic::ExpressionId)>
+            element_name;
+        element_name = [&](const semantic::ExpressionId id)
+            -> std::optional<std::string> {
+            const auto element = specialization.find_expression(id);
+            if (!element || element->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& source = *element->systemverilog;
+            if (source.kind != semantic::sv::ExpressionKind::index) {
+                return source.text;
+            }
+            if (source.operands.size() != 2U) {
+                return std::nullopt;
+            }
+            auto base = element_name(source.operands.front());
+            const auto index = specialization.evaluate_integral_expression(
+                source.operands.back());
+            if (!base || !index) {
+                return std::nullopt;
+            }
+            return *base + "[" + std::to_string(*index) + "]";
+        };
         if (actual_expression.kind
             == semantic::sv::ExpressionKind::name) {
             actual_name = actual_expression.text;
@@ -67,13 +93,11 @@ PortActualResult normalize_port_actual(
             && actual_expression.kind
                 == semantic::sv::ExpressionKind::index
             && actual_expression.operands.size() == 2U) {
-            const auto base = specialization.find_expression(
-                actual_expression.operands.front());
+            const auto base = element_name(actual_expression.operands.front());
             const auto index = specialization.evaluate_integral_expression(
                 actual_expression.operands.back());
-            if (base && base->systemverilog != nullptr && index) {
-                actual_name = base->systemverilog->text + "["
-                    + std::to_string(*index) + "]";
+            if (base && index) {
+                actual_name = *base + "[" + std::to_string(*index) + "]";
                 // `ifc[i].mp` selects a modport of the element; the
                 // instance is the element (IEEE 1800-2017 25.5.3).
                 const auto& text = actual_expression.text;
@@ -91,17 +115,13 @@ PortActualResult normalize_port_actual(
                 || actual_expression.text == "+:"
                 || actual_expression.text == "-:")
             && actual_expression.operands.size() == 3U) {
-            const auto base = specialization.find_expression(
-                actual_expression.operands.front());
+            const auto base = element_name(actual_expression.operands.front());
             const auto left = specialization.evaluate_integral_expression(
                 actual_expression.operands[1]);
             const auto right = specialization.evaluate_integral_expression(
                 actual_expression.operands[2]);
-            if (base && base->systemverilog != nullptr
-                && base->systemverilog->kind
-                    == semantic::sv::ExpressionKind::name
-                && left && right) {
-                actual_name = base->systemverilog->text + "["
+            if (base && left && right) {
+                actual_name = *base + "["
                     + std::to_string(*left) + actual_expression.text
                     + std::to_string(*right) + "]";
             }
@@ -325,6 +345,79 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 compiled_source_span(*compiled_, diagnostic.source));
         }
         return forwarded;
+    };
+    // The elements of an interface instance array of this unit, or of an
+    // interface port array forwarded into it, below the constant selects
+    // `leading` (`irow[1]` of `irow[1:0][0:2]`): the array's path and the
+    // remaining element suffixes, leftmost first (IEEE 1800-2017 23.3.3.5).
+    const auto interface_array_elements = [&](const std::string& name,
+                                              const std::string& leading)
+        -> std::pair<std::optional<std::vector<std::string>>, std::string> {
+        std::optional<std::vector<std::string>> actual_suffixes;
+        std::string actual_base;
+        for (const auto instance_id : unit.instances) {
+            const auto candidate = compiled_->find_instance(instance_id);
+            if (candidate && candidate->systemverilog != nullptr
+                && candidate->systemverilog->name == name
+                && (!candidate->systemverilog->array_indices.empty()
+                    || candidate->systemverilog->array_left)) {
+                std::vector<std::string> suffixes;
+                const auto inner = compiled_instance_array_indices(
+                    *candidate->systemverilog, working_specialization);
+                for (const auto& outer : compiled_instance_outer_indices(
+                         *candidate->systemverilog,
+                         working_specialization)) {
+                    std::string prefix;
+                    for (const auto index : outer) {
+                        prefix += "[" + std::to_string(index) + "]";
+                    }
+                    for (const auto index : inner) {
+                        suffixes.push_back(
+                            prefix + "[" + std::to_string(index) + "]");
+                    }
+                }
+                actual_suffixes = std::move(suffixes);
+                break;
+            }
+        }
+        for (auto lexical = std::string { working_path };;) {
+            const auto candidate = lexical + "." + name;
+            if (!actual_suffixes) {
+                if (const auto forwarded
+                    = systemverilog_interface_array_indices_.find(
+                        candidate);
+                    forwarded
+                    != systemverilog_interface_array_indices_.end()) {
+                    actual_suffixes = forwarded->second;
+                }
+            }
+            if (actual_suffixes && !leading.empty()) {
+                std::vector<std::string> selected;
+                for (const auto& suffix : *actual_suffixes) {
+                    if (suffix.size() > leading.size()
+                        && suffix.starts_with(leading)) {
+                        selected.push_back(
+                            suffix.substr(leading.size()));
+                    }
+                }
+                actual_suffixes = std::move(selected);
+            }
+            if (actual_suffixes && !actual_suffixes->empty()
+                && systemverilog_interface_handles_.contains(
+                    candidate + leading
+                    + actual_suffixes->front())) {
+                actual_base = candidate + leading;
+                break;
+            }
+            if (!leading.empty()) {
+                actual_suffixes.reset();
+            }
+            if (lexical.find('.') == std::string::npos) {
+                break;
+            }
+            lexical.resize(lexical.rfind('.'));
+        }
+        return { std::move(actual_suffixes), std::move(actual_base) };
     };
     for (const auto& binding : port_bindings.bindings) {
         const auto formal = compiled_->find_declaration(
@@ -790,7 +883,86 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 || formal_declaration.type->target.spelling
                     == "string");
         if (string_port) {
-            const auto actual = working_strings.find(actual_name);
+            auto actual = working_strings.find(actual_name);
+            // An instance array's string port connected to a fixed string
+            // array takes one element per instance, row-major and leftmost
+            // first (IEEE 1800-2023 23.3.3.5): the port's object is that
+            // element's storage.
+            std::optional<StringObjectId> element_object;
+            if (actual == working_strings.end() && context.array_position) {
+                const auto container = working_containers.find(actual_name);
+                const auto [ordinal, instance_count]
+                    = *context.array_position;
+                if (container != working_containers.end()
+                    && container->second < design_.container_objects_.size()) {
+                    const auto& value
+                        = design_.container_objects_[container->second]
+                              .initial_value;
+                    const bool writable_port
+                        = direction == frontend::PortDirection::Output
+                        || direction == frontend::PortDirection::Inout
+                        || direction == frontend::PortDirection::Ref;
+                    if (value.type.fixed && !value.type.queue
+                        && !value.type.associative
+                        && value.type.element_kind
+                            == ContainerElementKind::String
+                        && value.string_elements.size() == instance_count
+                        && ordinal < instance_count
+                        && !design_.container_objects_[container->second]
+                                .slice_alias) {
+                        if (writable_port
+                            && working_read_only_containers.contains(
+                                actual_name)) {
+                            report(
+                                "FSIM-ELAB-SVPORT-011",
+                                "an input mutable string port cannot be "
+                                "connected to a descendant output or inout "
+                                "port",
+                                compiled_source_span(
+                                    *compiled_, binding.source));
+                            return false;
+                        }
+                        const auto index = design_.string_objects_.size();
+                        const auto id = static_cast<StringObjectId>(index);
+                        if (static_cast<std::size_t>(id) != index) {
+                            throw std::length_error(
+                                "too many elaborated string objects");
+                        }
+                        const auto full_name
+                            = child_path + "." + formal_declaration.name;
+                        design_.string_object_info_.push_back(
+                            StringObjectInfo {
+                                id,
+                                full_name,
+                                compiled_source_span(
+                                    *compiled_, binding.source),
+                                true,
+                                direction,
+                            });
+                        StringObject object { full_name, { } };
+                        object.element_alias = StringElementAlias {
+                            container->second,
+                            static_cast<std::uint32_t>(ordinal) };
+                        design_.string_objects_.push_back(std::move(object));
+                        element_object = id;
+                    }
+                }
+            }
+            if (element_object) {
+                if (!child_string_aliases.emplace(
+                                             formal_declaration.name,
+                                             *element_object)
+                        .second) {
+                    report(
+                        "FSIM-ELAB-HIR-001",
+                        "duplicate compiled string port binding for '"
+                            + formal_declaration.name + "'",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                continue;
+            }
             if (actual == working_strings.end()) {
                 report(
                     "FSIM-ELAB-SVPORT-010",
@@ -952,55 +1124,16 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     }
                 }
             }
-            std::optional<std::vector<std::string>> actual_suffixes;
-            std::string actual_base;
-            for (const auto instance_id : unit.instances) {
-                const auto candidate = compiled_->find_instance(instance_id);
-                if (candidate && candidate->systemverilog != nullptr
-                    && candidate->systemverilog->name == actual_name
-                    && (!candidate->systemverilog->array_indices.empty()
-                        || candidate->systemverilog->array_left)) {
-                    std::vector<std::string> suffixes;
-                    const auto inner = compiled_instance_array_indices(
-                        *candidate->systemverilog, working_specialization);
-                    for (const auto& outer : compiled_instance_outer_indices(
-                             *candidate->systemverilog,
-                             working_specialization)) {
-                        std::string prefix;
-                        for (const auto index : outer) {
-                            prefix += "[" + std::to_string(index) + "]";
-                        }
-                        for (const auto index : inner) {
-                            suffixes.push_back(
-                                prefix + "[" + std::to_string(index) + "]");
-                        }
-                    }
-                    actual_suffixes = std::move(suffixes);
-                    break;
-                }
+            // Leading constant selects, `irow[1]` of `irow[1:0][0:2]`,
+            // choose a subarray: its elements keep the remaining suffixes.
+            std::string selected_prefix;
+            if (const auto open = actual_name.find('[');
+                open != std::string::npos) {
+                selected_prefix = actual_name.substr(open);
+                actual_name.resize(open);
             }
-            for (auto lexical = std::string { working_path };;) {
-                const auto candidate = lexical + "." + actual_name;
-                if (!actual_suffixes) {
-                    if (const auto forwarded
-                        = systemverilog_interface_array_indices_.find(
-                            candidate);
-                        forwarded
-                        != systemverilog_interface_array_indices_.end()) {
-                        actual_suffixes = forwarded->second;
-                    }
-                }
-                if (actual_suffixes && !actual_suffixes->empty()
-                    && systemverilog_interface_handles_.contains(
-                        candidate + actual_suffixes->front())) {
-                    actual_base = candidate;
-                    break;
-                }
-                if (lexical.find('.') == std::string::npos) {
-                    break;
-                }
-                lexical.resize(lexical.rfind('.'));
-            }
+            auto [actual_suffixes, actual_base]
+                = interface_array_elements(actual_name, selected_prefix);
             if (part_select && actual_suffixes
                 && !actual_suffixes->empty() && part_select->second > 0) {
                 // The declared direction: whether the leftmost element has
@@ -1042,6 +1175,23 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     }
                 }
                 actual_suffixes = std::move(selected);
+            }
+            // An instance array whose actual has one formal's worth of
+            // elements per instance connects each instance to its own
+            // contiguous run, in row-major order (IEEE 1800-2017 23.3.3.5).
+            if (actual_suffixes && context.array_position
+                && !formal_suffixes.empty()
+                && context.array_position->second > 1U
+                && actual_suffixes->size()
+                    == formal_suffixes.size()
+                        * context.array_position->second) {
+                const auto first = static_cast<std::ptrdiff_t>(
+                    context.array_position->first * formal_suffixes.size());
+                actual_suffixes = std::vector<std::string> {
+                    actual_suffixes->begin() + first,
+                    actual_suffixes->begin() + first
+                        + static_cast<std::ptrdiff_t>(
+                            formal_suffixes.size()) };
             }
             if (formal_suffixes.empty() || !actual_suffixes
                 || actual_base.empty()
@@ -1091,6 +1241,19 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     interface_path = std::move(instance_path);
                     viewed_formal.modport = modport;
                 }
+            }
+        }
+        // An instance array's interface port connected to an interface
+        // array of as many elements takes its own element, row-major and
+        // leftmost first (IEEE 1800-2017 23.3.3.5).
+        if (interface_port && !interface_path && context.array_position
+            && actual_name.find_first_of(".[") == std::string::npos) {
+            const auto [suffixes, base]
+                = interface_array_elements(actual_name, { });
+            const auto [ordinal, count] = *context.array_position;
+            if (suffixes && !base.empty() && suffixes->size() == count
+                && ordinal < count) {
+                interface_path = base + (*suffixes)[ordinal];
             }
         }
         if (interface_port && !interface_path) {
@@ -1252,6 +1415,9 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
         struct ScalarArrayOutputElement {
             ContainerObjectId object { };
             std::int32_t index { };
+            // A multidimensional actual is addressed by its row-major
+            // element ordinal.
+            bool linear { };
         };
         std::optional<ScalarArrayOutputElement>
             scalar_array_output_element;
@@ -1294,9 +1460,15 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 const auto& actual_type = actual_info->type;
                 const auto& actual_object
                     = design_.container_objects_[actual_container->second];
+                // Every element of every dimension: an instance array of
+                // any shape connects in row-major order, leftmost first
+                // (IEEE 1800-2023 23.3.3.5).
                 const auto element_count = [](const ContainerType& type) {
-                    return index_distance(type.index_left, type.index_right)
-                        + 1U;
+                    std::uint64_t count = 1U;
+                    for (const auto& [left, right] : type.dimensions) {
+                        count *= index_distance(left, right) + 1U;
+                    }
+                    return count;
                 };
                 const bool supported_array
                     = actual_type.fixed && !actual_type.queue
@@ -1306,7 +1478,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     && actual_type.element_kind
                         == ContainerElementKind::Packed
                     && actual_type.element_width != 0U
-                    && actual_type.dimensions.size() == 1U
+                    && !actual_type.dimensions.empty()
                     && actual_type.index_left
                         == actual_type.dimensions.front().first
                     && actual_type.index_right
@@ -1316,7 +1488,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     report(
                         "FSIM-ELAB-SVPORT-007",
                         "an instance-array scalar output requires a fixed "
-                        "one-dimensional packed array actual",
+                        "packed array actual",
                         compiled_source_span(
                             *compiled_, binding.source));
                     return false;
@@ -1475,13 +1647,14 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 // This bridge writes variable-array storage only. A
                 // signal-backed array needs per-element driver regions.
                 if (!has_signal_backing()) {
+                    const bool linear = actual_type.dimensions.size() > 1U;
                     const auto left
                         = static_cast<std::int64_t>(
                             actual_type.index_left);
                     const auto ordinal_offset
                         = static_cast<std::int64_t>(ordinal);
-                    const auto index = actual_type.index_left
-                            >= actual_type.index_right
+                    const auto index = linear ? ordinal_offset
+                        : actual_type.index_left >= actual_type.index_right
                         ? left - ordinal_offset
                         : left + ordinal_offset;
                     if (index
@@ -1499,6 +1672,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         = ScalarArrayOutputElement {
                             actual_container->second,
                             static_cast<std::int32_t>(index),
+                            linear,
                         };
                 }
             }
@@ -1908,8 +2082,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             scalar_array_output_element->object,
                             1U,
                             0U,
-                            true,
-                            false,
+                            !scalar_array_output_element->linear,
+                            scalar_array_output_element->linear,
                             false,
                             std::nullopt,
                             std::nullopt,

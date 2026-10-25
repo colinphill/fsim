@@ -23,6 +23,14 @@ namespace detail {
 [[nodiscard]] std::optional<std::uint64_t> decimal_physical_magnitude(
     std::string_view text, std::uint64_t scale);
 
+/// Overload selections of VHDL operators in constant evaluation, by
+/// expression, for one specialization (defined with the evaluator).
+struct VhdlOperatorSelectionMemo;
+
+/// Resolutions and constant values of one specialization that read only the
+/// compiled design and its overlay (src/semantic/resolution_memo.hpp).
+struct ResolutionMemo;
+
 } // namespace detail
 
 /// A fully known VHDL packed vector produced by bounded constant evaluation.
@@ -240,6 +248,87 @@ struct SpecializedVhdlGenerateResult {
     }
 };
 
+/// The actual identities of a specialization overlay. Every derived
+/// specialization (generate occurrences, with_overlay results, template and
+/// class caches) copies its overlay while the actuals rarely change, so
+/// copies share one vector and a mutation detaches it.
+class SpecializedHirActualIdentities {
+public:
+    using value_type = SpecializedHirActualIdentity;
+    using size_type = std::size_t;
+    using iterator = std::vector<value_type>::iterator;
+    using const_iterator = std::vector<value_type>::const_iterator;
+
+    SpecializedHirActualIdentities() = default;
+
+    [[nodiscard]] bool empty() const noexcept { return values().empty(); }
+    [[nodiscard]] size_type size() const noexcept { return values().size(); }
+    [[nodiscard]] const value_type* data() const noexcept
+    {
+        return values().data();
+    }
+    [[nodiscard]] const value_type& operator[](
+        const size_type index) const noexcept
+    {
+        return values()[index];
+    }
+    [[nodiscard]] const value_type& front() const { return values().front(); }
+    [[nodiscard]] const value_type& back() const { return values().back(); }
+    [[nodiscard]] const_iterator begin() const noexcept
+    {
+        return values().begin();
+    }
+    [[nodiscard]] const_iterator end() const noexcept
+    {
+        return values().end();
+    }
+    [[nodiscard]] operator const std::vector<value_type>&() const noexcept
+    {
+        return values();
+    }
+
+    [[nodiscard]] value_type& operator[](const size_type index)
+    {
+        return writable()[index];
+    }
+    [[nodiscard]] iterator begin() { return writable().begin(); }
+    [[nodiscard]] iterator end() { return writable().end(); }
+    void push_back(value_type value)
+    {
+        writable().push_back(std::move(value));
+    }
+    template <typename Iterator>
+    void assign(const Iterator first, const Iterator last)
+    {
+        writable().assign(first, last);
+    }
+
+    friend bool operator==(const SpecializedHirActualIdentities& first,
+        const SpecializedHirActualIdentities& second)
+    {
+        return first.values_ == second.values_
+            || first.values() == second.values();
+    }
+
+private:
+    [[nodiscard]] const std::vector<value_type>& values() const noexcept
+    {
+        static const std::vector<value_type> empty_values;
+        return values_ == nullptr ? empty_values : *values_;
+    }
+    [[nodiscard]] std::vector<value_type>& writable()
+    {
+        if (values_ == nullptr) {
+            values_ = std::make_shared<std::vector<value_type>>();
+        } else if (values_.use_count() != 1) {
+            values_ = std::make_shared<std::vector<value_type>>(*values_);
+        }
+        return *values_;
+    }
+
+    std::shared_ptr<std::vector<value_type>> values_;
+};
+
 /// Unit-scoped specialization inputs and the residual HIR records affected by
 /// them. This overlay owns only canonical actual identities and semantic IDs;
 /// the selected unit and its HIR remain owned by CompiledDesign.
@@ -247,7 +336,7 @@ struct SpecializedHirOverlay {
     UnitId unit;
     ScopeId scope;
     Language language { Language::system_verilog };
-    std::vector<SpecializedHirActualIdentity> actual_identities;
+    SpecializedHirActualIdentities actual_identities;
     // Hierarchy-local constants, such as an iterative-generate variable, are
     // named because they intentionally have no declaration identity in the
     // immutable compiled HIR. They are an in-memory specialization input and
@@ -318,6 +407,43 @@ using SystemVerilogConstantIntegral = std::optional<std::int64_t> (*)(
 void set_systemverilog_constant_integral(
     SystemVerilogConstantIntegral evaluator) noexcept;
 
+namespace detail {
+
+/// A lazily built cache that a SpecializedHirUnit and all its copies share,
+/// including copies taken before the cache is built: copying allocates the
+/// slot the copies then hold in common. detach() gives this unit a fresh,
+/// empty slot and leaves its copies the old one.
+template <typename T>
+class SharedCacheSlot {
+public:
+    SharedCacheSlot() = default;
+    SharedCacheSlot(const SharedCacheSlot& other) : slot_(other.shared()) { }
+    SharedCacheSlot(SharedCacheSlot&&) noexcept = default;
+    SharedCacheSlot& operator=(const SharedCacheSlot& other)
+    {
+        slot_ = other.shared();
+        return *this;
+    }
+    SharedCacheSlot& operator=(SharedCacheSlot&&) noexcept = default;
+    ~SharedCacheSlot() = default;
+
+    [[nodiscard]] std::shared_ptr<T>& get() const { return *shared(); }
+    void detach() noexcept { slot_.reset(); }
+
+private:
+    [[nodiscard]] const std::shared_ptr<std::shared_ptr<T>>& shared() const
+    {
+        if (!slot_) {
+            slot_ = std::make_shared<std::shared_ptr<T>>();
+        }
+        return slot_;
+    }
+
+    mutable std::shared_ptr<std::shared_ptr<T>> slot_;
+};
+
+} // namespace detail
+
 /// Mutable, unit-scoped HIR replacements for one specialization. Records not
 /// replaced here remain owned by, and are resolved through, the immutable
 /// CompiledDesign supplied at construction. Replacements never allocate new
@@ -325,12 +451,23 @@ void set_systemverilog_constant_integral(
 class SpecializedHirUnit {
 public:
     /// Derived data a client caches for this exact specialization (for
-    /// example elaboration's constant memo). Copies share it; replace()
-    /// detaches it. It is not part of the specialization's value.
-    [[nodiscard]] std::shared_ptr<void>& client_cache() const noexcept
+    /// example elaboration's constant memo). Copies share it, even when it is
+    /// built after the copy; replace() detaches it. It is not part of the
+    /// specialization's value.
+    [[nodiscard]] std::shared_ptr<void>& client_cache() const
     {
-        return client_cache_;
+        return client_cache_.get();
     }
+
+    /// The constant evaluator's operator overload selections for this exact
+    /// specialization. Copies share them; replace() and select_generate()
+    /// detach them.
+    [[nodiscard]] detail::VhdlOperatorSelectionMemo&
+    vhdl_operator_selections() const;
+
+    /// Resolutions and constant values of this exact specialization. Copies
+    /// share them; replace() and select_generate() detach them.
+    [[nodiscard]] detail::ResolutionMemo& resolution_memo() const;
 
     [[nodiscard]] const CompiledDesign& design() const noexcept;
     [[nodiscard]] const SpecializedHirOverlay& specialization() const noexcept;
@@ -656,7 +793,10 @@ private:
     const CompiledDesign* design_ { };
     std::shared_ptr<detail::VhdlInitializerMemoContext>
         initializer_memo_context_;
-    mutable std::shared_ptr<void> client_cache_;
+    detail::SharedCacheSlot<void> client_cache_;
+    detail::SharedCacheSlot<detail::VhdlOperatorSelectionMemo>
+        vhdl_operator_selections_;
+    detail::SharedCacheSlot<detail::ResolutionMemo> resolution_memo_;
     // True only when construction received ValidatedCompiledDesign's proof
     // that the immutable design's non-owning indexes are current.
     bool validated_lookup_indexes_ { };

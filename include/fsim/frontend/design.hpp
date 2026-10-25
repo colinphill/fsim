@@ -518,6 +518,33 @@ struct VerilogDefparamDeclaration {
 struct SystemVerilogAssertionDeclaration;
 struct SystemVerilogConcurrentAssertion;
 
+struct SystemVerilogClockingSkew {
+    EdgeKind edge { EdgeKind::Any };
+    std::optional<Delay> delay;
+    bool one_step { };
+    SourceSpan span;
+};
+
+struct SystemVerilogClockingSignal {
+    std::string name;
+    PortDirection direction { PortDirection::Unknown };
+    std::optional<SystemVerilogClockingSkew> skew;
+    // `input [skew] output [skew]` declares an inout clockvar whose output
+    // skew is held here; `skew` is then its input skew (IEEE 1800-2017 14.3).
+    std::optional<SystemVerilogClockingSkew> output_skew;
+    std::optional<Expression> expression;
+    SourceSpan span;
+};
+
+struct SystemVerilogClockingBlock {
+    std::string name;
+    std::vector<Sensitivity> event;
+    std::optional<SystemVerilogClockingSkew> default_input_skew;
+    std::optional<SystemVerilogClockingSkew> default_output_skew;
+    std::vector<SystemVerilogClockingSignal> signals;
+    SourceSpan span;
+};
+
 struct GenerateBody {
     // Locally static VHDL constants and SystemVerilog parameters/localparams.
     // These are evaluated in declaration order during generate expansion and
@@ -553,6 +580,9 @@ struct GenerateBody {
         systemverilog_assertion_declarations;
     std::vector<SystemVerilogConcurrentAssertion>
         systemverilog_concurrent_assertions;
+    // Clocking blocks of a SystemVerilog generate block (IEEE 1800-2023
+    // 14.3, 27.3), one set per generated scope.
+    std::vector<SystemVerilogClockingBlock> systemverilog_clocking_blocks;
     // The innermost `default disable iff` condition of this block (16.15).
     std::vector<Token> systemverilog_default_disable_tokens;
 };
@@ -634,33 +664,6 @@ struct SystemVerilogModportMember {
 struct SystemVerilogModport {
     std::string name;
     std::vector<SystemVerilogModportMember> members;
-    SourceSpan span;
-};
-
-struct SystemVerilogClockingSkew {
-    EdgeKind edge { EdgeKind::Any };
-    std::optional<Delay> delay;
-    bool one_step { };
-    SourceSpan span;
-};
-
-struct SystemVerilogClockingSignal {
-    std::string name;
-    PortDirection direction { PortDirection::Unknown };
-    std::optional<SystemVerilogClockingSkew> skew;
-    // `input [skew] output [skew]` declares an inout clockvar whose output
-    // skew is held here; `skew` is then its input skew (IEEE 1800-2017 14.3).
-    std::optional<SystemVerilogClockingSkew> output_skew;
-    std::optional<Expression> expression;
-    SourceSpan span;
-};
-
-struct SystemVerilogClockingBlock {
-    std::string name;
-    std::vector<Sensitivity> event;
-    std::optional<SystemVerilogClockingSkew> default_input_skew;
-    std::optional<SystemVerilogClockingSkew> default_output_skew;
-    std::vector<SystemVerilogClockingSignal> signals;
     SourceSpan span;
 };
 

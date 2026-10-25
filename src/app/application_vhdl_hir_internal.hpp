@@ -152,6 +152,12 @@ private:
         const semantic::ScopeId scope,
         const semantic::OriginId parent);
 
+    [[nodiscard]] vh::AliasSignature signature(
+        const frontend::VhdlAliasSignature& input,
+        const frontend::SourceSpan& fallback,
+        const semantic::ScopeId scope,
+        const semantic::OriginId parent);
+
     [[nodiscard]] semantic::DeclarationId add_declaration_record(
         const semantic::ScopeId scope,
         const vh::DeclarationForm form,

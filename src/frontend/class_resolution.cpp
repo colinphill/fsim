@@ -697,6 +697,7 @@ void resolve_process_types(
 
 void resolve_generate_body_types(
     GenerateBody& body,
+    const std::string& scope_path,
     ClassEntry& owner,
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& inherited_shadowed_types,
@@ -705,34 +706,53 @@ void resolve_generate_body_types(
 template <typename Regions>
 void resolve_generate_region_types(
     Regions& regions,
+    const std::string& scope_path,
     ClassEntry& owner,
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
+  using generate_class_detail::join_scope;
   for (auto& region : regions) {
     resolve_generate_body_types(
-        region.then_body, owner, entries, shadowed_types, diagnostics);
+        region.then_body, join_scope(scope_path, region.then_scope), owner,
+        entries, shadowed_types, diagnostics);
     resolve_generate_body_types(
-        region.else_body, owner, entries, shadowed_types, diagnostics);
+        region.else_body, join_scope(scope_path, region.else_scope), owner,
+        entries, shadowed_types, diagnostics);
     for (auto& alternative : region.alternatives) {
       resolve_generate_body_types(
-          alternative.body, owner, entries, shadowed_types, diagnostics);
+          alternative.body, join_scope(scope_path, alternative.scope),
+          owner, entries, shadowed_types, diagnostics);
     }
   }
 }
 
 void resolve_generate_body_types(
     GenerateBody& body,
-    ClassEntry& owner,
+    const std::string& scope_path,
+    ClassEntry& unit_owner,
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& inherited_shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
-    const auto shadowed_types
-        = resolve_declared_types(body.constants, body.type_aliases,
-            inherited_shadowed_types, owner, entries, diagnostics);
-    for (auto& signal : body.signals) {
-        resolve_type(signal.type, owner, entries, shadowed_types, diagnostics);
-    }
+  // Names in a generate block are looked up from the block's scope outward
+  // through its enclosing generate blocks to the unit (IEEE 1800-2017
+  // 27.3); the block's classes are identified under that scope path.
+  SystemVerilogClassDeclaration lexical_owner;
+  lexical_owner.canonical_identity = unit_owner.declaration->canonical_identity;
+  if (!scope_path.empty()) {
+    lexical_owner.canonical_identity += "::" + scope_path;
+  }
+  ClassEntry owner{
+      &lexical_owner,
+      unit_owner.imports,
+      unit_owner.library,
+      unit_owner.compilation_unit_identity};
+  const auto shadowed_types
+      = resolve_declared_types(body.constants, body.type_aliases,
+          inherited_shadowed_types, owner, entries, diagnostics);
+  for (auto& signal : body.signals) {
+    resolve_type(signal.type, owner, entries, shadowed_types, diagnostics);
+  }
   for (auto& variable : body.variables) {
     resolve_type(variable.type, owner, entries, shadowed_types, diagnostics);
   }
@@ -749,8 +769,8 @@ void resolve_generate_body_types(
   }
   migrate_class_signals(body.signals, body.variables, diagnostics);
   resolve_generate_region_types(
-      body.generate_regions, owner, entries, shadowed_types,
-      diagnostics);
+      body.generate_regions, scope_path, unit_owner, entries,
+      shadowed_types, diagnostics);
 }
 
 void resolve_unit_types(
@@ -793,7 +813,7 @@ void resolve_unit_types(
   }
   migrate_class_signals(unit.signals, unit.variables, diagnostics);
   resolve_generate_region_types(
-      unit.generate_regions, owner, entries, shadowed_types,
+      unit.generate_regions, std::string{}, owner, entries, shadowed_types,
       diagnostics);
 }
 
@@ -827,6 +847,20 @@ bool resolve_systemverilog_classes(
           &unit.systemverilog_imports,
           entries);
     }
+    // A class declared in a generate block belongs to that block's scope
+    // (IEEE 1800-2017 27.3, 8.2).
+    for_each_generate_class(
+        unit,
+        [&](SystemVerilogClassDeclaration& declaration,
+            const std::string& scope_path) {
+          assign_class_identities(
+              declaration,
+              scope_path.empty() ? prefix : prefix + "::" + scope_path,
+              library,
+              unit.compilation_unit_identity,
+              &unit.systemverilog_imports,
+              entries);
+        });
   }
   for (auto& declaration : design.systemverilog_classes) {
     const auto library = effective_library(declaration.library);

@@ -8,6 +8,7 @@
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -35,9 +36,60 @@ struct SpecializationConstants {
     std::shared_ptr<std::unordered_map<std::uint32_t, HirSystemVerilogConstant>>
         unit_declarations { std::make_shared<std::unordered_map<std::uint32_t,
             HirSystemVerilogConstant>>() };
+    /// Values of expressions whose evaluation reads no hierarchy identity,
+    /// shared with derived occurrence specializations like
+    /// unit_declarations.
+    std::shared_ptr<std::unordered_map<std::uint32_t, HirSystemVerilogConstant>>
+        unit_expressions { std::make_shared<std::unordered_map<std::uint32_t,
+            HirSystemVerilogConstant>>() };
     /// Resolved widths of declaration and callable types, by type record.
     std::unordered_map<const void*, std::optional<std::uint64_t>>
         record_type_widths;
+    /// Whether declaration types without unpacked dimensions are unpacked
+    /// aggregates, by type record; with no dimension bounds to evaluate the
+    /// answer reads no constant-function frame.
+    std::unordered_map<const void*, bool> record_unpacked_aggregates;
+    /// Parsed integer and logic literals and their errors, by expression
+    /// record; index 1 holds parses as integer literals.
+    std::array<std::unordered_map<const void*,
+        std::pair<std::optional<HirSystemVerilogConstant>, std::string>>, 2>
+        literals;
+    /// HirConstantEvaluator::declaration_type results, by declaration.
+    std::unordered_map<std::uint32_t,
+        std::optional<semantic::sv::TypeReference>> declaration_types;
+    /// Whether a named packed array base can hold packed structures, by
+    /// name expression record.
+    std::unordered_map<const void*, bool> structure_array_names;
+    /// Self-determined widths of expressions (HirConstantEvaluator), by
+    /// expression.
+    std::unordered_map<std::uint32_t, std::optional<std::uint32_t>>
+        expression_widths;
+    /// Whether expressions are real-valued (HirConstantEvaluator), by
+    /// expression.
+    std::unordered_map<std::uint32_t, bool> real_valued;
+    /// The facts HirConstantEvaluator::evaluate_binary reads from a binary
+    /// expression's operator and declared operands.
+    struct BinaryPlan {
+        bool real_operator { };
+        bool logical_operator { };
+        bool arithmetic_context { };
+        bool relational_context { };
+        bool left_context { };
+        bool contextual { };
+        bool real_operand { };
+        bool chandle_operand { };
+        bool left_context_determined { };
+        bool right_context_determined { };
+        std::optional<std::uint32_t> left_width;
+        std::optional<std::uint32_t> right_width;
+    };
+    /// By expression.
+    std::unordered_map<std::uint32_t, BinaryPlan> binary_plans;
+    /// Fixed one-dimensional unpacked array types through typedefs, by type
+    /// record, with the scope they were resolved in.
+    std::unordered_map<const void*, std::pair<semantic::ScopeId,
+        std::optional<semantic::sv::TypeReference>>>
+        unpacked_array_types;
     /// systemverilog_constant_name_declaration results, by expression record.
     std::unordered_map<const void*, std::optional<semantic::DeclarationId>>
         name_declarations;
@@ -65,16 +117,18 @@ struct SpecializationCache {
 }
 
 /// `parent` with other hierarchy identities (with_hierarchy_identities). The
-/// result keeps the parent's unit-scope declaration values, which read no
-/// hierarchy identity.
+/// result keeps the parent's unit-scope declaration and expression values,
+/// which read no hierarchy identity.
 [[nodiscard]] inline semantic::SpecializedHirUnit
 derive_occurrence_specialization(
     const semantic::SpecializedHirUnit& parent,
     const std::span<const semantic::SpecializedHirNamedIdentity> identities)
 {
     auto derived = parent.with_hierarchy_identities(identities);
-    specialization_cache(derived).constants->unit_declarations
-        = specialization_cache(parent).constants->unit_declarations;
+    auto& derived_constants = *specialization_cache(derived).constants;
+    const auto& parent_constants = *specialization_cache(parent).constants;
+    derived_constants.unit_declarations = parent_constants.unit_declarations;
+    derived_constants.unit_expressions = parent_constants.unit_expressions;
     return derived;
 }
 

@@ -855,6 +855,9 @@ Simulation::Impl::Impl(
           class_heap)
     , interpreter(create_simulation_interpreter(built, max_deltas))
 {
+    if (interpreter) {
+        interpreter->retain_state_until_exit();
+    }
     // A trusted artifact's startup metadata is not re-derived from HIR;
     // FSIM_VERIFY_ARTIFACT=1 keeps the check.
     if (!built.trusted_artifact) {
@@ -2045,6 +2048,7 @@ Simulation::Impl::Impl(
         vpi_read_only_container_words
             = std::move(published_vpi.read_only_container_words);
         vpi_word_handles = std::move(published_vpi.word_handles);
+        vpi_live_memories = std::move(published_vpi.live_memories);
         vpi_container_scalar_kinds
             = std::move(published_vpi.container_scalar_kinds);
         vpi_container_categories

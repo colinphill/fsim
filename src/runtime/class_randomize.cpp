@@ -300,6 +300,202 @@ using PropertyDomains
       resource, 0, 0};
 }
 
+/// The objects an array, queue or associative array of class handles holds,
+/// by position: sequential elements in order, associative elements in key
+/// order, nested containers level by level (IEEE 1800-2017 7.4.5, 7.8,
+/// 18.5.9). A container is a `level` (its element count and shape, named
+/// by `path` from the property) and a handle is a `leaf` at `path`
+/// (`[1]`, `[1][0]`).
+struct HandleLevel {
+  std::string path;
+  std::size_t size{};
+  SystemVerilogConstraintContainerShape shape;
+};
+
+struct HandleLeaf {
+  std::string path;
+  SystemVerilogClassHandle handle{};
+};
+
+struct HandleLayout {
+  std::vector<HandleLevel> levels;
+  std::vector<HandleLeaf> leaves;
+};
+
+[[nodiscard]] std::size_t extent(
+    const std::int64_t left, const std::int64_t right) {
+  return static_cast<std::size_t>(left >= right ? left - right : right - left)
+      + 1U;
+}
+
+SystemVerilogConstraintContainerShape fixed_handle_shape(
+    const std::int64_t left, const std::int64_t right) {
+  SystemVerilogConstraintContainerShape shape;
+  shape.fixed = true;
+  shape.left = left;
+  shape.descending = left > right;
+  return shape;
+}
+
+/// The levels and leaves of a multidimensional fixed-size array stored
+/// flat, the rightmost dimension varying fastest (IEEE 1800-2017 7.4.5);
+/// `handle_at` gives the handle at a flat position.
+template <typename HandleAt>
+void fixed_handle_layout(
+    const std::span<const std::pair<std::int64_t, std::int64_t>> dimensions,
+    const std::size_t stored, const std::string& path, HandleAt&& handle_at,
+    HandleLayout& layout) {
+  const auto rank = dimensions.size();
+  std::vector<std::size_t> strides(rank, 1U);
+  for (std::size_t k = rank - 1U; k-- > 0U;) {
+    strides[k] = strides[k + 1U]
+        * extent(dimensions[k + 1U].first, dimensions[k + 1U].second);
+  }
+  const auto dimension = [&](auto&& next, const std::size_t k,
+                             const std::size_t offset,
+                             const std::string& prefix) -> void {
+    const auto [left, right] = dimensions[k];
+    const auto count = extent(left, right);
+    layout.levels.push_back({prefix, count, fixed_handle_shape(left, right)});
+    for (std::size_t position = 0; position < count; ++position) {
+      const auto child = prefix + "[" + std::to_string(position) + "]";
+      const auto at = offset + position * strides[k];
+      if (k + 1U != rank) {
+        next(next, k + 1U, at, child);
+      } else if (at < stored) {
+        layout.leaves.push_back({child, handle_at(at)});
+      }
+    }
+  };
+  dimension(dimension, 0U, 0U, path);
+}
+
+void handle_value_layout(const simir::ContainerValue& value,
+                         const std::string& path, HandleLayout& layout) {
+  const auto& type = value.type;
+  if (type.fixed && type.dimensions.size() > 1U) {
+    std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
+    for (const auto& [left, right] : type.dimensions) {
+      dimensions.emplace_back(left, right);
+    }
+    fixed_handle_layout(dimensions, value.elements.size(), path,
+        [&](const std::size_t at) {
+          return static_cast<SystemVerilogClassHandle>(
+              value.elements[at].low_word().aval);
+        },
+        layout);
+    return;
+  }
+  SystemVerilogConstraintContainerShape shape;
+  if (type.fixed) {
+    shape = fixed_handle_shape(type.index_left, type.index_right);
+  }
+  if (type.associative) {
+    shape.associative = true;
+    shape.string_keys = type.string_indices;
+    shape.keys = value.keys;
+    shape.string_key_values = value.string_keys;
+  }
+  if (type.element_kind == simir::ContainerElementKind::Container) {
+    layout.levels.push_back({path, value.nested_elements.size(), shape});
+    for (std::size_t index = 0; index < value.nested_elements.size();
+         ++index) {
+      handle_value_layout(value.nested_elements[index],
+          path + "[" + std::to_string(index) + "]", layout);
+    }
+    return;
+  }
+  layout.levels.push_back({path, value.elements.size(), shape});
+  for (std::size_t index = 0; index < value.elements.size(); ++index) {
+    layout.leaves.push_back({path + "[" + std::to_string(index) + "]",
+        static_cast<SystemVerilogClassHandle>(
+            value.elements[index].low_word().aval)});
+  }
+}
+
+/// The layout of a property holding class handles; nothing for another
+/// property.
+[[nodiscard]] std::optional<HandleLayout> handle_layout(
+    const SystemVerilogClassPropertyValue& property) {
+  HandleLayout layout;
+  if (property.nested_handles && property.container) {
+    handle_value_layout(*property.container, std::string{}, layout);
+    return layout;
+  }
+  if (!property.handle_container) return std::nullopt;
+  const auto& held = *property.handle_container;
+  if (held.descriptor().dimensions.size() > 1U) {
+    const auto elements = held.sequential_values();
+    fixed_handle_layout(held.descriptor().dimensions, elements.size(),
+        std::string{}, [&](const std::size_t at) { return elements[at]; },
+        layout);
+    return layout;
+  }
+  if (held.kind() != SystemVerilogClassContainerKind::AssociativeArray) {
+    layout.levels.push_back({std::string{}, held.size(), {}});
+    const auto elements = held.sequential_values();
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+      layout.leaves.push_back({"[" + std::to_string(index) + "]",
+          elements[index]});
+    }
+    return layout;
+  }
+  const auto& description = held.descriptor();
+  SystemVerilogConstraintContainerShape shape;
+  shape.associative = true;
+  shape.string_keys = description.string_keys;
+  if (description.string_keys) {
+    // std::map keeps string keys in the order of their bytes (7.8.2).
+    for (const auto& [key, handle] : held.keyed_values()) {
+      shape.string_key_values.push_back(key);
+      layout.leaves.push_back({
+          "[" + std::to_string(layout.leaves.size()) + "]", handle});
+    }
+  } else {
+    // Integral keys are named by their decimal text; they order as
+    // numbers of the key type (7.8.3).
+    const auto width = std::max<std::size_t>(description.key_width, 1U);
+    std::vector<std::pair<PackedLogic4, SystemVerilogClassHandle>> keyed;
+    for (const auto& [key, handle] : held.keyed_values()) {
+      std::int64_t number{};
+      const auto parsed = std::from_chars(
+          key.data(), key.data() + key.size(), number);
+      if (parsed.ec != std::errc{} || parsed.ptr != key.data() + key.size()) {
+        std::uint64_t unsigned_number{};
+        const auto retried = std::from_chars(
+            key.data(), key.data() + key.size(), unsigned_number);
+        if (retried.ec != std::errc{}
+            || retried.ptr != key.data() + key.size()) {
+          return std::nullopt;
+        }
+        number = static_cast<std::int64_t>(unsigned_number);
+      }
+      keyed.emplace_back(PackedLogic4::from_aval_bval(
+                             width, static_cast<std::uint64_t>(number), 0),
+          handle);
+    }
+    const auto signed_value = [&](const PackedLogic4& key) {
+      auto word = key.low_word().aval;
+      if (width < 64U && (word & (UINT64_C(1) << (width - 1U))) != 0U) {
+        word |= ~UINT64_C(0) << width;
+      }
+      return static_cast<std::int64_t>(word);
+    };
+    std::ranges::sort(keyed, [&](const auto& left, const auto& right) {
+      return description.signed_keys
+          ? signed_value(left.first) < signed_value(right.first)
+          : left.first.low_word().aval < right.first.low_word().aval;
+    });
+    for (auto& [key, handle] : keyed) {
+      shape.keys.push_back(std::move(key));
+      layout.leaves.push_back({
+          "[" + std::to_string(layout.leaves.size()) + "]", handle});
+    }
+  }
+  layout.levels.push_back({std::string{}, layout.leaves.size(), shape});
+  return layout;
+}
+
 }  // namespace
 
 SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
@@ -334,7 +530,7 @@ systemverilog_class_randomize_members(
     for (std::size_t index = 0; index < object.properties.size(); ++index) {
       const auto& property = object.properties[index];
       if (property.kind != SystemVerilogClassPropertyKind::ClassHandle
-          && !property.handle_container) {
+          && !property.handle_container && !property.nested_handles) {
         continue;
       }
       // Only rand handles extend randomization to their objects
@@ -342,23 +538,19 @@ systemverilog_class_randomize_members(
       const bool rand_handle = property.random_state
           && property.random_state->enabled
           && property.random_state->kind == SystemVerilogClassRandomKind::Rand;
-      if (property.handle_container) {
-        // The objects of an array or queue of handles join element by
-        // element as `name[i].` (IEEE 1800-2017 18.4, 18.5.9).
-        if (property.handle_container->kind()
-            == SystemVerilogClassContainerKind::AssociativeArray) {
-          continue;
-        }
-        const auto elements = property.handle_container->sequential_values();
-        for (std::size_t element = 0; element < elements.size(); ++element) {
-          if (elements[element] == 0
-              || !visited.insert(elements[element]).second) {
-            continue;
+      if (property.handle_container || property.nested_handles) {
+        // The objects of an array, queue or associative array of handles
+        // join position by position as `name[i].` (IEEE 1800-2017 7.8,
+        // 18.4, 18.5.9).
+        if (const auto layout = handle_layout(property)) {
+          for (const auto& leaf : layout->leaves) {
+            if (leaf.handle == 0 || !visited.insert(leaf.handle).second) {
+              continue;
+            }
+            children.push_back({leaf.handle,
+                current.path + object.property_names[index] + leaf.path + ".",
+                current.randomized && rand_handle});
           }
-          children.push_back({elements[element],
-              current.path + object.property_names[index] + "["
-                  + std::to_string(element) + "].",
-              current.randomized && rand_handle});
         }
         continue;
       }
@@ -540,6 +732,21 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
             shape.shape);
       }
     }
+    // The shapes of the arrays of handles: the keys of an associative array
+    // and the bounds of a fixed-size one (IEEE 1800-2017 7.4, 7.8).
+    for (const auto& node : nodes) {
+      for (std::size_t index = 0; index < node.object->properties.size();
+           ++index) {
+        const auto layout = handle_layout(node.object->properties[index]);
+        if (!layout) continue;
+        for (const auto& level : layout->levels) {
+          if (!level.shape.fixed && !level.shape.associative) continue;
+          solver.set_container_shape(node.path
+                  + node.object->property_names[index] + level.path,
+              level.shape);
+        }
+      }
+    }
     // Soft constraints added later take priority; a containing object's
     // soft constraints outrank those of its rand member objects (IEEE
     // 1800-2017 18.5.14.1), so the members (in reverse preorder) come
@@ -613,6 +820,8 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     std::size_t count{};
     bool random{};
     bool resizable{};
+    /// The containers of the property, outermost first.
+    std::vector<HandleLevel> levels;
   };
   std::vector<HandleContainer> handle_containers;
   for (std::size_t n = 0; n < nodes.size(); ++n) {
@@ -620,20 +829,20 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
     for (std::size_t index = 0; index < node.object->properties.size();
          ++index) {
       const auto& property = node.object->properties[index];
-      if (!property.handle_container
-          || property.handle_container->kind()
-              == SystemVerilogClassContainerKind::AssociativeArray) {
-        continue;
-      }
-      const auto kind = property.handle_container->kind();
+      auto layout = handle_layout(property);
+      if (!layout) continue;
+      const auto kind = property.handle_container
+          ? property.handle_container->kind()
+          : SystemVerilogClassContainerKind::UnpackedAggregate;
       const bool rand = property.random_state
           && property.random_state->enabled
           && property.random_state->kind == SystemVerilogClassRandomKind::Rand;
       handle_containers.push_back({n, index, node.object->property_names[index],
-          property.handle_container->size(),
+          layout->levels.front().size,
           rand && node.selected.contains(index),
           kind == SystemVerilogClassContainerKind::DynamicArray
-              || kind == SystemVerilogClassContainerKind::Queue});
+              || kind == SystemVerilogClassContainerKind::Queue,
+          std::move(layout->levels)});
     }
   }
   std::vector<std::set<std::size_t>> base_selected;
@@ -731,11 +940,18 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
   };
   // Phase one gives each random resizable container a size; phase two
   // materializes every container's elements.
+  // Each container of a property of handles has its element count `[]`.
+  const auto add_levels = [&](const HandleContainer& held,
+                              const std::size_t outer) {
+    for (std::size_t level = 0; level < held.levels.size(); ++level) {
+      (void)synthetic(held.node, held.name + held.levels[level].path + "[]",
+          count_property(level == 0U ? outer : held.levels[level].size, false),
+          false);
+    }
+  };
   const auto add_handle_counts = [&](const std::vector<std::size_t>& sizes) {
     for (std::size_t h = 0; h < handle_containers.size(); ++h) {
-      (void)synthetic(handle_containers[h].node,
-          handle_containers[h].name + "[]",
-          count_property(sizes[h], false), false);
+      add_levels(handle_containers[h], sizes[h]);
     }
   };
   const auto add_sizes = [&] {
@@ -749,8 +965,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_graph(
             count_property(held.count, true), true);
         preserved.emplace(held.node, index);
       } else {
-        (void)synthetic(held.node, held.name + "[]",
-            count_property(held.count, false), false);
+        add_levels(held, held.count);
       }
     }
     for (std::size_t c = 0; c < containers.size(); ++c) {

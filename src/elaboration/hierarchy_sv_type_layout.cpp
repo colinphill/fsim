@@ -993,6 +993,18 @@ std::optional<ContainerType> systemverilog_container_type(
     }
     try {
         static_cast<void>(default_container_value(*result));
+    } catch (const std::length_error&) {
+        // A one-dimensional packed array beyond the dense budget stores only
+        // its written elements.
+        if (!runtime::simir::sparse_container_eligible(*result)) {
+            return std::nullopt;
+        }
+        result->sparse = true;
+        try {
+            static_cast<void>(default_container_value(*result));
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
     } catch (const std::exception&) {
         return std::nullopt;
     }

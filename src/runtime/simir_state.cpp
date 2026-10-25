@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
+#include <utility>
 
 namespace fsim::runtime::simir {
 
@@ -965,6 +966,30 @@ Interpreter::Impl::ensure_process_frame(ProcessState& process)
     return string_objects[id];
 }
 
+[[nodiscard]] std::string& Interpreter::Impl::string_object_storage(
+    const StringObjectId id)
+{
+    return const_cast<std::string&>(
+        std::as_const(*this).string_object_storage(id));
+}
+
+[[nodiscard]] const std::string& Interpreter::Impl::string_object_storage(
+    const StringObjectId id) const
+{
+    const auto& object = get_string_object(id);
+    if (!object.element_alias) {
+        return object.initial_value;
+    }
+    const auto& alias = *object.element_alias;
+    if (alias.object >= container_objects.size()
+        || alias.ordinal >= container_objects[alias.object]
+                                .initial_value.string_elements.size()) {
+        throw std::out_of_range { "invalid SimIR string element alias" };
+    }
+    return container_objects[alias.object]
+        .initial_value.string_elements[alias.ordinal];
+}
+
 [[nodiscard]] ContainerValue&
 Interpreter::Impl::get_container_register(
     ProcessState& process,
@@ -1064,12 +1089,8 @@ Interpreter::Impl::get_container_object(
     const ProcessState& process,
     const RegisterId id)
 {
-    const auto program = process.program();
-    const auto& kinds = program.register_value_kinds();
-    if (kinds.empty()) {
-        return ValueKind::logic4;
-    }
-    return process_layout_detail::ProcessLayoutAccess::copy_at(kinds, id);
+    return process_layout_detail::ProcessLayoutAccess::copy_at_or(
+        process.program().register_value_kinds(), id, ValueKind::logic4);
 }
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::coerce_value_kind(

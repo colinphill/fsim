@@ -1402,6 +1402,30 @@ ElaboratedDesign::from_state_with_process_rows(
         || state.container_object_info.size() != state.container_objects.size()) {
         return std::nullopt;
     }
+    for (const auto& object : state.container_objects) {
+        if (object.change_signal
+            && (*object.change_signal >= state.signals.size()
+                || state.signals[*object.change_signal].initial_value.width()
+                    != 1U)) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& object : state.string_objects) {
+        const auto& alias = object.element_alias;
+        if (!alias) {
+            continue;
+        }
+        if (alias->object >= state.container_objects.size()) {
+            return std::nullopt;
+        }
+        const auto& value = state.container_objects[alias->object].initial_value;
+        if (value.type.element_kind
+                != runtime::simir::ContainerElementKind::String
+            || !value.type.fixed
+            || alias->ordinal >= value.string_elements.size()) {
+            return std::nullopt;
+        }
+    }
     const auto valid_ids = [](const auto& ids, const std::size_t limit) {
         std::optional<std::uint32_t> previous;
         for (const auto id : ids) {

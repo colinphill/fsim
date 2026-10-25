@@ -18,6 +18,7 @@
 #include <future>
 #include <limits>
 #include <map>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <set>
@@ -474,6 +475,10 @@ struct Simulation::Impl {
         const runtime::simir::ProcessId process,
         const SignalId signal);
 
+    // Creates and releases the words of a published dynamic array or queue
+    // to match its current size (IEEE 1800-2023 37.17).
+    void sync_vpi_live_memory(runtime::simir::ContainerObjectId object,
+        const runtime::simir::ContainerValue& value);
     void publish_vpi_container(
         const runtime::simir::ContainerObjectId object);
 
@@ -529,6 +534,15 @@ struct Simulation::Impl {
     }
 
     BuiltProject built;
+
+    // The classes of loop-generate iterations a loaded design names: rebuilt
+    // from their identities on first use (IEEE 1800-2017 27.4).
+    mutable std::deque<semantic::sv::ClassSpecialization>
+        generated_class_specializations;
+    mutable std::unique_ptr<semantic::sv::ClassSpecializationIndex>
+        generated_class_index;
+    [[nodiscard]] const semantic::sv::ClassSpecialization*
+    generated_class_specialization(std::string_view identity) const;
 
     // Package class allocations are evaluated after the class heap and its
     // construction services are configured, so retain their exact signal and
@@ -780,6 +794,9 @@ struct Simulation::Impl {
         vpi_container_words;
 
     std::set<fsim_vpi_handle_v1> vpi_read_only_container_words;
+
+    std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
+        vpi_live_memories;
 
     std::map<fsim_vpi_handle_v1,
         std::pair<runtime::simir::ContainerObjectId, std::size_t>>

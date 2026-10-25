@@ -1422,6 +1422,20 @@ std::optional<Type> Resolver::resolve_expression(
           expression, scope, expected_class, expected_scalar);
     }
   }
+  // An element of a nested container of handles already resolved
+  // (`q[i][j]` over `@sv-container-index:q(o, i)`) is the object its
+  // handles name (IEEE 1800-2017 7.4.5, 8.9).
+  if (expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2U
+      && !expression.nominal_type.empty()
+      && expression.operands[0].kind == ExpressionKind::Call
+      && expression.operands[0].text.starts_with("@sv-container-index:")) {
+    if (const auto* declaration = find_class(expression.nominal_type)) {
+      auto type = class_type(*declaration);
+      retain_result_type(expression, type);
+      return type;
+    }
+  }
   if (expression.kind == ExpressionKind::Index
       && expression.operands.size() == 2U) {
     auto container = resolve_expression(expression.operands[0], scope);
@@ -1459,7 +1473,25 @@ std::optional<Type> Resolver::resolve_expression(
     constexpr std::string_view indexed_property_prefix {
         "@sv-container-index:" };
     auto& base_expression = expression.operands.front();
-    if (base_expression.kind == ExpressionKind::Call
+    // A fixed-size array nested in a dynamic, queue or associative array is
+    // a container element of the property, not another dimension of it
+    // (IEEE 1800-2017 7.4.5).
+    const auto outer_static = [&]() {
+      if (base_expression.kind != ExpressionKind::Call
+          || !base_expression.text.starts_with(indexed_property_prefix)) {
+        return true;
+      }
+      const std::string_view identity{base_expression.text};
+      const auto qualified = identity.substr(indexed_property_prefix.size());
+      const auto split = qualified.rfind("::");
+      if (split == std::string_view::npos) return true;
+      const auto match = find_property(
+          qualified.substr(0, split), qualified.substr(split + 2U));
+      if (match.property == nullptr) return true;
+      const auto& outer = match.property->declaration.type.systemverilog_container;
+      return !outer || outer->kind == SystemVerilogContainerKind::StaticArray;
+    }();
+    if (outer_static && base_expression.kind == ExpressionKind::Call
         && base_expression.text.starts_with(indexed_property_prefix)
         && base_expression.operands.size() >= 2U
         && container->systemverilog_container->kind

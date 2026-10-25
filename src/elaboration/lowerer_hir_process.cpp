@@ -2646,6 +2646,10 @@ std::optional<Process> Lowerer::lower_hir_process(
         for (const auto& sensitivity : input.sensitivities) {
             if (sensitivity.signal == "*") {
                 description.wildcard_sensitivity = true;
+                // Every process runs once at initialization, including a
+                // process(all) that reads no signal (IEEE 1076-2008
+                // 14.7.5.2).
+                description.require_wildcard_dependency = false;
                 continue;
             }
             std::optional<SignalId> signal;
@@ -3795,6 +3799,22 @@ bool Lowerer::lower_hir_output_actual_write(
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, hir_process_scope_, true)
         : std::nullopt;
+    // An output port connected to a packed place inside an unpacked
+    // structure or array (`.o(vst.f)`) writes through its value path
+    // (IEEE 1800-2023 23.3.3, 7.2).
+    const auto write_value_path = [&] {
+        const auto path = hir_sv_value_path(target);
+        if (!path || !path->leaf || path->string_leaf) {
+            return false;
+        }
+        const auto width = path->packed_tail
+            ? path->packed_tail->width
+            : path->type.element_width;
+        if (register_width(source) != width) {
+            source = resize_register(source, width, false);
+        }
+        return lower_hir_sv_value_path_write(*path, source, std::nullopt);
+    };
     // An output port connected to a member of an interface instance
     // (`.dout(dif.dout)`, IEEE 1800-2017 23.3.3).
     if (expression && !binding && expression->systemverilog != nullptr
@@ -3803,7 +3823,7 @@ bool Lowerer::lower_hir_output_actual_write(
         const auto signal = hir_named_signal(
             expression->systemverilog->text, hir_process_scope_);
         if (!signal || *signal >= design_.signals_.size()) {
-            return false;
+            return write_value_path();
         }
         const auto width = design_.signals_[*signal].initial_value.width();
         if (register_width(source) != width) {
@@ -4236,6 +4256,8 @@ void Lowerer::reset_hir_process_state()
     hir_local_container_registers_.clear();
     hir_local_container_types_.clear();
     hir_callable_frames_.clear();
+    // Memoized queries are keyed by the active frame's index.
+    clear_hir_vhdl_query_caches();
     hir_vhdl_captured_scalar_ranges_.clear();
     hir_callable_indices_.clear();
     hir_interface_callable_indices_.clear();
@@ -4279,10 +4301,13 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     readonly_signal_write_operations_.clear();
     process_.id = static_cast<ProcessId>(design_.process_count());
     hir_process_scope_ = description.scope;
-    // Context-typed character literals are classified before any expression
-    // view is held; the scan may grow the specialization.
-    if (language == frontend::Language::Vhdl2008) {
-        collect_hir_vhdl_character_contexts();
+    hir_process_static_scope_.clear();
+    for (const auto declaration_id : description.declarations) {
+        if (hir_static_storage(declaration_id)) {
+            hir_process_static_scope_
+                = "$block_" + std::to_string(description.scope.value());
+            break;
+        }
     }
     process_.scheduling_domain
         = (language == frontend::Language::SystemVerilog2017
@@ -5083,22 +5108,49 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 }
             }
             const auto [offset, width] = *description.actual_slice;
-            if (!target || width != signal.width
-                || offset + width > actual_width
-                || actual_offset + actual_width
-                    > design_.signal_info_[*target].width) {
-                process_ = { };
-                return std::nullopt;
+            bool path_written { };
+            // A packed place inside an unpacked structure or array
+            // (`.o(vst.f)`) takes the slice through its value path
+            // (IEEE 1800-2023 23.3.3.5, 7.2).
+            if (const auto path = target
+                    ? std::optional<HirSvValuePath> { }
+                    : hir_sv_value_path(*description.output_actual);
+                path && path->leaf && !path->string_leaf
+                && width == signal.width
+                && register_width(value) == width) {
+                const auto current = lower_hir_sv_value_path_value(*path);
+                if (current && offset + width <= register_width(*current)) {
+                    const auto updated = allocate_register(
+                        register_width(*current), register_domain(*current));
+                    process_.operations.emplace_back(Insert {
+                        updated, *current, value,
+                        static_cast<std::uint32_t>(offset) });
+                    path_written = lower_hir_sv_value_path_write(
+                        *path, updated, std::nullopt);
+                }
+                if (!path_written) {
+                    process_ = { };
+                    return std::nullopt;
+                }
             }
-            process_.operations.emplace_back(WriteUpdateSlice {
-                *target,
-                value,
-                static_cast<std::uint32_t>(actual_offset + offset),
-                process_.scheduling_domain
-                        == ProcessSchedulingDomain::systemverilog
-                    ? SignalUpdateDomain::systemverilog_active
-                    : SignalUpdateDomain::generic,
-            });
+            if (!path_written) {
+                if (!target || width != signal.width
+                    || offset + width > actual_width
+                    || actual_offset + actual_width
+                        > design_.signal_info_[*target].width) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(WriteUpdateSlice {
+                    *target,
+                    value,
+                    static_cast<std::uint32_t>(actual_offset + offset),
+                    process_.scheduling_domain
+                            == ProcessSchedulingDomain::systemverilog
+                        ? SignalUpdateDomain::systemverilog_active
+                        : SignalUpdateDomain::generic,
+                });
+            }
         } else if (const auto subelements = specialized_hir_unit_->find_expression(
                        *description.output_actual);
             subelements && subelements->vhdl != nullptr
@@ -5493,6 +5545,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         process_ = { };
         hir_local_registers_.clear();
         hir_callable_frames_.clear();
+        clear_hir_vhdl_query_caches();
         hir_callable_indices_.clear();
         hir_interface_callable_indices_.clear();
         pending_hir_callables_.clear();

@@ -1687,7 +1687,16 @@ namespace {
         if (context.built) {
             const auto state = context.built->design.state();
             if (object.runtime_index < state.string_objects.size()) {
-                return state.string_objects[object.runtime_index].initial_value;
+                const auto& string = state.string_objects[object.runtime_index];
+                if (const auto& alias = string.element_alias;
+                    alias && alias->object < state.container_objects.size()) {
+                    const auto& elements = state.container_objects[alias->object]
+                                               .initial_value.string_elements;
+                    return alias->ordinal < elements.size()
+                        ? std::optional<std::string> { elements[alias->ordinal] }
+                        : std::nullopt;
+                }
+                return string.initial_value;
             }
         }
         return std::nullopt;

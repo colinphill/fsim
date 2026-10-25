@@ -545,6 +545,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             materialization.read_only_containers,
             diagnostics_,
         };
+        generated_lowerer.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         generated_lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
@@ -820,6 +822,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             materialization.read_only_containers,
             diagnostics_,
         };
+        generated_lowerer.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         generated_lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
@@ -1003,6 +1007,8 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
             materialization.read_only_containers,
             diagnostics_,
         };
+        lowerer.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         lowerer.set_specialized_hir_unit(materialization.specialization);
         lowerer.set_ancestor_systemverilog_specializations(
             &materialization.type_owner_contexts);

@@ -1158,6 +1158,11 @@ namespace systemverilog_hir_detail {
                 output.defparams.push_back(std::move(*defparam));
             }
         }
+        for (const auto& input_clocking :
+            input.systemverilog_clocking_blocks) {
+            output.clocking_blocks.push_back(clocking_block(
+                input_clocking, output.scope, output.origin));
+        }
         for (const auto& nested : input.generate_regions) {
             output.nested.push_back(add_generate(
                 nested, output.scope, output.origin,
@@ -1239,7 +1244,8 @@ namespace systemverilog_hir_detail {
             || !input.else_body.processes.empty()
             || !input.else_body.instances.empty()
             || !input.else_body.generate_regions.empty()
-            || !input.else_body.verilog_defparams.empty()) {
+            || !input.else_body.verilog_defparams.empty()
+            || !input.else_body.systemverilog_clocking_blocks.empty()) {
             frontend::GenerateRegion synthetic;
             synthetic.kind = frontend::GenerateKind::StaticBlock;
             const auto alternative_scope = input.else_scope.empty()

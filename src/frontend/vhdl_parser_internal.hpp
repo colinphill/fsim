@@ -495,6 +495,11 @@ private:
   // such an object followed by an index or a record element selects from
   // the designated object (IEEE 1076-2008 8.3, implicit dereference).
   std::unordered_set<std::string> vhdl_access_type_names_;
+  // Access types designating a protected type, and objects of them: a
+  // name selected from such an object (`p.m`, `p.all.m`) is a method of
+  // the designated object (IEEE 1076-2019 5.4.1), not a record element.
+  std::unordered_set<std::string> vhdl_protected_access_type_names_;
+  std::unordered_set<std::string> vhdl_protected_access_object_names_;
   // Names of signals declared guarded (bus or register, IEEE 1076-2008
   // 6.4.2.3), for the guarded-target rule of 11.6.
   std::unordered_set<std::string> vhdl_guarded_signal_names_;

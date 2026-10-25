@@ -117,6 +117,7 @@ container_packed_element_width(const ContainerType& type) {
 
 std::optional<std::size_t>
 container_signal_bridge_width(const ContainerType& type) {
+  if (type.sparse) return std::nullopt;
   const auto width = element_width(type);
   if (!width) return std::nullopt;
   if (type.aggregate_value) return width;

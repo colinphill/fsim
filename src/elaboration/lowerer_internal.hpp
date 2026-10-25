@@ -5,6 +5,7 @@
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "scoped_bindings.hpp"
 #include "systemverilog_template_bindings.hpp"
+#include "vhdl_lowering_index.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
@@ -252,6 +253,12 @@ public:
         const HirInstanceUnits* instance_units = nullptr,
         const std::unordered_map<std::string, std::string>* exports = nullptr)
         noexcept;
+    // The design's VHDL lowering index, which the caller owns and this
+    // lowerer fills on first use.
+    void set_vhdl_lowering_index(VhdlLoweringIndex* index) noexcept
+    {
+        shared_vhdl_lowering_index_ = index;
+    }
     // Design-wide disable target labels (named blocks and tasks that a
     // disable statement may name from another process) and the labels a
     // disable may legally name.
@@ -589,6 +596,7 @@ private:
         std::vector<HirVhdlCallableCacheEntry>>
         hir_vhdl_callable_cache_;
     mutable std::size_t hir_vhdl_callable_cache_entries_ { };
+    mutable std::size_t hir_vhdl_callable_cache_bytes_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_bytes_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_entries_ { };
     mutable std::size_t hir_vhdl_subtype_name_cache_hits_ { };
@@ -599,6 +607,20 @@ private:
         hir_vhdl_subtype_name_cache_;
     mutable std::map<semantic::ExpressionId, std::optional<std::int64_t>>
         hir_pure_integral_attempt_cache_;
+    // hir_vhdl_expression_subtype results, by expression; entries are told
+    // apart by process scope, active callable frame and generic bindings.
+    // Frames are not changed once their body is lowered, and the process
+    // state reset clears these caches with the frames.
+    struct HirVhdlExpressionSubtypeCacheEntry {
+        semantic::ScopeId scope;
+        std::optional<std::size_t> callable;
+        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::optional<semantic::vhdl::SubtypeIndication> result;
+    };
+    mutable std::unordered_map<std::uint32_t,
+        std::vector<HirVhdlExpressionSubtypeCacheEntry>>
+        hir_vhdl_expression_subtype_cache_;
+    mutable std::size_t hir_vhdl_expression_subtype_cache_entries_ { };
     mutable std::size_t hir_pure_integral_attempt_hits_ { };
     mutable std::size_t hir_pure_integral_attempt_misses_ { };
     mutable std::size_t hir_pure_integral_attempt_cap_drops_ { };
@@ -1150,6 +1172,12 @@ private:
     [[nodiscard]] std::optional<std::int64_t>
     hir_vhdl_elaborated_slice_constant_element(
         semantic::ExpressionId expression) const;
+    // The frame binding a call's formals to its actuals for a shape proof
+    // of the called body.
+    [[nodiscard]] std::optional<semantic::CompiledBindingFrame>
+    hir_vhdl_call_binding_frame(
+        std::span<const semantic::DeclarationId> formals,
+        std::span<const semantic::ExpressionId> actuals) const;
     [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
     hir_vhdl_function_result_proof(semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -1204,6 +1232,10 @@ private:
         semantic::ScopeId scope) const;
     // What an object supplies beyond its declared subtype: a formal's
     // actual, a signal's elaborated layout.
+    // The subtype of its actual a shape proof or a formal-shape frame binds
+    // to an unconstrained formal (IEEE 1076-2008 4.2.2.2).
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_bound_formal_subtype(semantic::DeclarationId formal) const;
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_object_facts(
         semantic::DeclarationId declaration, std::size_t dimensions) const;
     // The shape of an object: its declared subtype completed by its facts.
@@ -1438,6 +1470,8 @@ private:
     hir_hierarchical_virtual_interface(std::string_view path) const;
     [[nodiscard]] std::optional<HirVirtualInterfaceMember>
     hir_virtual_interface_member(semantic::ExpressionId expression_id) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_class_virtual_interface_element(semantic::ExpressionId selection);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_virtual_interface_member_handle(
         const HirVirtualInterfaceMember& member);
@@ -1698,6 +1732,9 @@ private:
         ContainerObjectId storage { };
         ContainerRegisterId container { };
         RegisterId value { };
+        // The object's key in its storage: zero for a declared object, the
+        // access value for one in a protected pool.
+        RegisterId index { };
     };
     // The protected type of the object a method call is selected from.
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
@@ -1801,7 +1838,36 @@ private:
     hir_vhdl_generic_environment(
         const semantic::CompiledBindingFrame& bindings) const;
     void load_hir_vhdl_protected_caches(
-        std::span<const HirVhdlProtectedMember> members);
+        std::span<const HirVhdlProtectedMember> members,
+        std::optional<RegisterId> receiver = std::nullopt);
+    // The protected type an access variable (`p`, `p.all`) designates
+    // (IEEE 1076-2019 5.4.1).
+    [[nodiscard]] const semantic::vhdl::TypeDefinition*
+    hir_vhdl_access_protected_type(semantic::ScopeId scope,
+        std::string_view object) const;
+    // The protected type an access type designates, if any.
+    [[nodiscard]] const semantic::vhdl::TypeDefinition*
+    hir_vhdl_designated_protected_type(
+        const semantic::vhdl::TypeDefinition& access_type) const;
+    // The pool holding every object allocated for a protected type: an
+    // associative anchor keyed by access value, one associative store per
+    // private variable, and the last access value issued.
+    ContainerObjectId hir_vhdl_protected_pool(
+        const semantic::vhdl::TypeDefinition& protected_type,
+        const frontend::SourceSpan& source);
+    [[nodiscard]] std::optional<ContainerObjectId>
+    find_hir_vhdl_protected_pool(
+        const semantic::vhdl::TypeDefinition& protected_type) const;
+    [[nodiscard]] bool hir_vhdl_protected_pool_anchor(
+        ContainerObjectId anchor) const;
+    // The access value a method call on a pool object runs on: the
+    // prefix's access variable, or the calling method's own object.
+    [[nodiscard]] std::optional<RegisterId> hir_vhdl_protected_call_receiver(
+        std::string_view call_name, semantic::ScopeId scope) const;
+    // `new T` for a protected T: a fresh access value into T's pool.
+    [[nodiscard]] RegisterId lower_hir_vhdl_protected_allocator(
+        const semantic::vhdl::TypeDefinition& protected_type,
+        const frontend::SourceSpan& source);
     void flush_hir_vhdl_protected_caches();
     [[nodiscard]] RegisterId hir_vhdl_protected_storage_value(
         RegisterId value);
@@ -1889,25 +1955,48 @@ private:
     [[nodiscard]] bool hir_vhdl_predefined_character_subtype(
         const semantic::vhdl::SubtypeIndication& subtype,
         semantic::ScopeId use_scope) const;
-    // Collects the logic character literals of the current unit whose
-    // context (assignment target, initialized object, comparison operand,
-    // case selector, or attribute prefix) is CHARACTER.
-    void collect_hir_vhdl_character_contexts() const;
+    // Classifies a logic character literal by the items naming it: whether
+    // its context (assignment target, initialized object, comparison
+    // operand, case selector, or attribute prefix) is CHARACTER, and whether
+    // that context excludes a visible user enumeration literal.
+    void classify_hir_vhdl_character_literal(
+        semantic::ExpressionId literal) const;
     // Whether a scope is a class body: its declarations are object or class
     // storage, never storage of the instance that names them (8.5, 8.9).
     [[nodiscard]] bool hir_class_body_scope(semantic::ScopeId scope) const;
     mutable const semantic::sv::Hir* hir_class_body_scope_hir_ { };
     mutable std::uint64_t hir_class_body_scope_revision_ { };
     mutable std::unordered_set<std::uint32_t> hir_class_body_scopes_;
-    mutable const semantic::vhdl::Hir* hir_vhdl_character_context_hir_ { };
-    mutable std::uint64_t hir_vhdl_character_context_revision_ { };
-    mutable std::unordered_set<std::uint32_t>
-        hir_vhdl_character_context_literals_;
-    // Character literals with a visible user enumeration literal whose known
-    // context type (target, other operand, selector) is a different type:
-    // they denote the predefined type's literal (IEEE 1076-2008 9.3.2).
-    mutable std::unordered_set<std::uint32_t>
-        hir_vhdl_foreign_context_literals_;
+    // The classification so far, for one HIR revision: the evaluated items
+    // (kind and position) and the literals they marked.
+    struct HirVhdlCharacterContexts {
+        const semantic::vhdl::Hir* hir { };
+        std::uint64_t revision { };
+        std::unordered_set<std::uint64_t> evaluated;
+        std::unordered_set<std::uint32_t> character;
+        // Character literals with a visible user enumeration literal whose
+        // known context type (target, other operand, selector) is a
+        // different type: they denote the predefined type's literal (IEEE
+        // 1076-2008 9.3.2).
+        std::unordered_set<std::uint32_t> foreign;
+    };
+    mutable HirVhdlCharacterContexts hir_vhdl_character_contexts_;
+    // The lowering index for the design's VHDL HIR as of its revision.
+    [[nodiscard]] VhdlLoweringIndex& vhdl_lowering_index() const;
+    [[nodiscard]] const std::vector<VhdlLoweringIndex::CharacterLiteralItem>&
+    vhdl_character_literal_items() const;
+    // Whether the design declares a protected type (IEEE 1076-2008 5.6.2).
+    [[nodiscard]] bool hir_vhdl_design_has_protected_types() const;
+    [[nodiscard]] bool hir_vhdl_design_has_record_types() const;
+    [[nodiscard]] bool hir_vhdl_design_has_access_types() const;
+    // The VHDL callables whose nested scope is `scope`.
+    [[nodiscard]] std::span<const semantic::DeclarationId>
+    hir_vhdl_callables_by_nested_scope(semantic::ScopeId scope) const;
+    // The design's VHDL package instantiation declarations.
+    [[nodiscard]] std::span<const semantic::DeclarationId>
+    hir_vhdl_package_instances() const;
+    VhdlLoweringIndex* shared_vhdl_lowering_index_ { };
+    mutable VhdlLoweringIndex local_vhdl_lowering_index_;
     [[nodiscard]] std::optional<std::size_t>
     hir_vhdl_null_concatenation_operand(
         std::span<const semantic::ExpressionId> operands) const;
@@ -2020,6 +2109,32 @@ private:
     };
     [[nodiscard]] std::optional<HirVhdlFixedRange> hir_vhdl_fixed_range(
         semantic::ExpressionId expression, std::size_t depth = 0U) const;
+    // An IEEE ufixed or sfixed subtype (resolved or not).
+    [[nodiscard]] static bool hir_vhdl_fixed_subtype(
+        const semantic::vhdl::SubtypeIndication& subtype);
+    // An IEEE float subtype (FLOAT, FLOAT32 and their unresolved forms).
+    [[nodiscard]] static bool hir_vhdl_float_subtype(
+        const semantic::vhdl::SubtypeIndication& subtype);
+    // The result range of a fixed_generic_pkg call: its static
+    // (left, right) bounds, its size_res argument's range, or its
+    // operand's for a shift.
+    [[nodiscard]] std::optional<HirVhdlFixedRange> hir_vhdl_fixed_call_range(
+        semantic::ExpressionId expression, std::size_t depth) const;
+    // The range of a fixed operator's operand. A REAL operand takes the
+    // other operand's range and an INTEGER one its integer part, as the
+    // mixed fixed_generic_pkg operators convert them.
+    [[nodiscard]] std::optional<HirVhdlFixedRange>
+    hir_vhdl_fixed_operand_range(semantic::ExpressionId operand,
+        semantic::ExpressionId other, std::size_t depth = 0U) const;
+    // The operand at `range`, converting a REAL or INTEGER operand.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_fixed_operand(
+        semantic::ExpressionId operand, const HirVhdlFixedRange& range);
+    // RESIZE with fixed_round and fixed_saturate, the fixed_pkg styles.
+    [[nodiscard]] RegisterId lower_hir_vhdl_fixed_resize(RegisterId value,
+        const HirVhdlFixedRange& from, std::int64_t left, std::int64_t right);
+    // A run-time REAL rounded to the nearest value of `range`, saturated.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_real_to_fixed(
+        RegisterId real, const HirVhdlFixedRange& range);
     // A fixed_generic_pkg arithmetic or relational operator on two fixed
     // operands, which aligns their binary points.
     [[nodiscard]] bool is_hir_vhdl_fixed_operator(
@@ -2057,9 +2172,12 @@ private:
     // G.5).
     [[nodiscard]] bool is_hir_vhdl_float_operator(
         semantic::ExpressionId expression) const;
-    // A FLOAT, REAL or INTEGER operand as a REAL payload.
+    // A FLOAT, REAL or INTEGER operand as a REAL payload. A FLOAT holding a
+    // metavalue is a 0.0 payload; `unknown`, when given, receives a one-bit
+    // register that is 1 exactly then (and stays unset for other operands).
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_float_as_real(
-        semantic::ExpressionId expression);
+        semantic::ExpressionId expression,
+        std::optional<RegisterId>* unknown = nullptr);
     // A REAL payload rounded to the nearest binary32 FLOAT.
     [[nodiscard]] RegisterId hir_vhdl_real_to_float_bits(RegisterId real);
     struct HirVhdlSynopsysNumericContext {
@@ -2205,6 +2323,14 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_expression_subtype(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    compute_hir_vhdl_expression_subtype(
+        semantic::ExpressionId expression) const;
+    // Whether hir_vhdl_expression_subtype may keep its result: inside a
+    // subtype cache scope, outside let frames, recursion guards, unrolled
+    // loop shapes and shaped or access-dependent lowering.
+    [[nodiscard]] bool hir_vhdl_expression_subtype_cacheable() const;
+    void clear_hir_vhdl_query_caches() const noexcept;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_original_integer_generic_subtype(
         semantic::ExpressionId expression) const;
@@ -3812,6 +3938,10 @@ private:
         std::string owner_identity;
         semantic::DeclarationId declaration;
         std::string identity;
+        // The generated scope's class specialization the override belongs
+        // to, when its class is declared in a loop generate (IEEE 1800-2017
+        // 27.4); `owner_identity` then names that specialization.
+        std::optional<std::uint32_t> specialization;
     };
     [[nodiscard]] std::vector<HirClassOverride> hir_class_method_overrides(
         semantic::DeclarationId declaration) const;
@@ -3899,6 +4029,13 @@ private:
     };
     [[nodiscard]] std::optional<HirClassContainerPlace>
     hir_class_container_place(semantic::ExpressionId expression) const;
+    struct HirClassThisValueProperty {
+        std::string identity;
+        semantic::DeclarationId declaration;
+        runtime::simir::ContainerType type;
+    };
+    [[nodiscard]] std::optional<HirClassThisValueProperty>
+    hir_class_this_value_property(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirClassContainerAccess>
     lower_hir_class_value_container(
         semantic::ExpressionId receiver, std::string_view identity);
@@ -3979,6 +4116,25 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         std::size_t contextual_width) const;
+    [[nodiscard]] std::optional<HirCallableResolution>
+    compute_hir_vhdl_function_call(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        std::size_t contextual_width) const;
+    // resolve_hir_vhdl_function_call results, kept with
+    // hir_vhdl_expression_subtype's and under its conditions.
+    struct HirVhdlFunctionCallCacheEntry {
+        semantic::ScopeId scope;
+        semantic::ScopeId process_scope;
+        std::size_t contextual_width { };
+        std::optional<std::size_t> callable;
+        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::optional<HirCallableResolution> result;
+    };
+    mutable std::unordered_map<std::uint32_t,
+        std::vector<HirVhdlFunctionCallCacheEntry>>
+        hir_vhdl_function_call_cache_;
+    mutable std::size_t hir_vhdl_function_call_cache_entries_ { };
     [[nodiscard]] std::optional<HirCallableResolution>
     resolve_hir_vhdl_procedure_call(
         semantic::StatementId statement,
@@ -4403,6 +4559,21 @@ private:
     [[nodiscard]] std::optional<std::uint32_t>
     hir_declaration_class_specialization(
         semantic::DeclarationId declaration) const;
+    // The specialization of a class declared in a loop generate that the
+    // generated scope being lowered selects: each iteration's class is a
+    // distinct type whose members see that iteration's genvars (IEEE
+    // 1800-2017 27.4). None for any other class.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_generate_class_specialization(std::uint32_t specialization) const;
+    // The unit a class body of an iteration-specific specialization is
+    // lowered in: the current one with the iteration's genvars; null when
+    // the specialization has none.
+    [[nodiscard]] const semantic::SpecializedHirUnit*
+    hir_generate_class_unit(std::uint32_t specialization) const;
+    mutable std::map<
+        std::pair<const semantic::SpecializedHirUnit*, std::uint32_t>,
+        std::unique_ptr<semantic::SpecializedHirUnit>>
+        hir_generate_class_units_;
     // The same for an access to class member `member`. `selected`, when
     // given, receives the specialization the access selects before the
     // member's declaring class is sought in its base chain.
@@ -4787,6 +4958,9 @@ private:
     const ContainerDeclarationBindings*
         container_declaration_bindings_ { };
     semantic::ScopeId hir_process_scope_;
+    // The generated scope name a process body's own static storage is
+    // published under, when it is; empty otherwise.
+    std::string hir_process_static_scope_;
     std::map<std::size_t, SignalId>
         readonly_signal_write_operations_;
     std::unordered_map<std::uint32_t, RegisterId> hir_local_registers_;
@@ -4835,6 +5009,10 @@ private:
         // Protected-type formals and the anchors of their actual objects.
         std::unordered_map<std::uint32_t, ContainerObjectId>
             vhdl_protected_formals;
+        // A method on a pool object: the access value each call site
+        // passes, and the body's own copy of it.
+        std::optional<RegisterId> vhdl_protected_receiver;
+        std::optional<RegisterId> vhdl_protected_index;
         std::vector<semantic::DeclarationId> formals;
         std::vector<semantic::DeclarationId> profile_formals;
         std::vector<RegisterId> arguments;
@@ -5007,6 +5185,14 @@ private:
     std::optional<semantic::CompiledBindingFrame> base_generic_binding_frame_;
     mutable std::unordered_set<std::uint32_t>
         hir_vhdl_function_shape_frames_;
+    // Expressions whose width hir_expression_width is taking from a record
+    // function result.
+    // Whether a call or operator can have a record result, by its resolved
+    // function's return type.
+    [[nodiscard]] bool hir_vhdl_record_result_possible(
+        const semantic::vhdl::Expression& source) const;
+    mutable std::unordered_set<std::uint32_t>
+        hir_vhdl_record_result_width_frames_;
     Process process_;
     bool sample_concurrent_assertion_reads_ { };
     struct DeferredAssertionActionHandoff {

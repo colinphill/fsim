@@ -913,6 +913,21 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
             };
         }
         std::size_t selected { };
+        // A sparse array stores only its written elements.
+        const auto publish_sparse
+            = [&](const runtime::simir::ContainerValue& value) {
+                  if (!value.type.sparse) {
+                      return false;
+                  }
+                  if (selected >= runtime::simir::
+                              sparse_container_element_count(value.type)) {
+                      publish_default();
+                  } else {
+                      publish(runtime::simir::read_sparse_container_element(
+                          value, selected));
+                  }
+                  return true;
+              };
         if (source.type.fixed && !linear_index) {
             const auto sought = index64
                 ? std::bit_cast<std::int64_t>(index_aval)
@@ -994,6 +1009,9 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
             }
         }
         if (borrowed_object != nullptr) {
+            if (publish_sparse(*borrowed_object)) {
+                return 0;
+            }
             if (selected >= borrowed_object->elements.size()) {
                 if (source.type.fixed) {
                     publish_default();
@@ -1024,6 +1042,9 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
             const auto& materialized
                 = state.executor->container_register_value(
                     container, *state.context);
+            if (publish_sparse(materialized)) {
+                return 0;
+            }
             if (selected >= materialized.elements.size()) {
                 if (source.type.fixed) {
                     publish_default();
@@ -1035,6 +1056,9 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
                 };
             }
             publish(materialized.elements[selected]);
+            return 0;
+        }
+        if (publish_sparse(source)) {
             return 0;
         }
         if (selected >= source.elements.size()) {
@@ -1169,7 +1193,10 @@ std::uint32_t LlvmProcessExecutor::container_write_packed(
                 "queue exceeds the per-container owning-storage budget"
             };
         }
-        if (!append && selected >= target.elements.size()) {
+        const auto stored_count = target.type.sparse
+            ? runtime::simir::sparse_container_element_count(target.type)
+            : target.elements.size();
+        if (!append && selected >= stored_count) {
             throw runtime::simir::InterpreterError {
                 process, instruction,
                 "container index is out of range"
@@ -1191,7 +1218,10 @@ std::uint32_t LlvmProcessExecutor::container_write_packed(
         }
         auto value = PackedLogic4::from_word_planes(
             target.type.element_width, aval, bval);
-        if (append) {
+        if (target.type.sparse) {
+            static_cast<void>(runtime::simir::write_sparse_container_element(
+                target, selected, std::move(value)));
+        } else if (append) {
             target.elements.push_back(std::move(value));
         } else {
             target.elements[selected] = std::move(value);

@@ -5651,6 +5651,21 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
     if (definition != nullptr
         && definition->form == semantic::vhdl::TypeForm::record) {
         const auto& elements = definition->record_elements;
+        // A record type that leaves element bounds open takes them from the
+        // aggregate's element values (IEEE 1076-2008 9.3.3.3).
+        const bool open_element = std::ranges::any_of(elements,
+            [&](const semantic::vhdl::RecordElement& element) {
+                const auto subtype = hir_effective_vhdl_subtype(
+                    semantic::vhdl::constrained_element_subtype(
+                        *effective, element.name, element.subtype));
+                return !subtype || !vhdl_subtype_width(*subtype);
+            });
+        if (open_element) {
+            if (const auto shape = hir_vhdl_record_value_shape(
+                    expression_id, *effective, aggregate.scope, false)) {
+                apply_hir_vhdl_shape(*effective, *shape, aggregate.scope);
+            }
+        }
         std::vector<std::optional<RegisterId>> values(elements.size());
         // A null array element has no bits (IEEE 1076-2008 5.3.2.1).
         std::vector<bool> null_element(elements.size());
@@ -12985,13 +13000,71 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
     return result;
 }
 
+std::optional<RegisterId> Lowerer::lower_hir_class_virtual_interface_element(
+    const semantic::ExpressionId selection)
+{
+    // `vifs[i].m` in a fork branch: the handle array is read through the
+    // object, which has no cached register there (IEEE 1800-2023 9.3.2).
+    const auto expression = specialized_hir_unit_->find_expression(selection);
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto base = expression->systemverilog->operands.front();
+    const auto place = hir_class_container_place(base);
+    auto access = place
+        ? lower_hir_class_value_container(place->receiver, place->identity)
+        : std::nullopt;
+    if (!place && hir_class_receiver_register_) {
+        if (auto property = hir_class_this_value_property(base)) {
+            const auto value = allocate_container_register(property->type);
+            process_.operations.emplace_back(ClassPropertyContainerRead {
+                value, *hir_class_receiver_register_, property->identity });
+            access = HirClassContainerAccess { { value, property->type },
+                *hir_class_receiver_register_, property->identity,
+                property->declaration };
+        }
+    }
+    if (!access || access->container.type.element_width != 64U
+        || access->container.type.dimensions.size() > 1U) {
+        return std::nullopt;
+    }
+    const auto& type = access->container.type;
+    HirContainerElementBinding element {
+        access->declaration,
+        access->identity,
+        { },
+        access->container.value,
+        &type,
+        &type,
+        { expression->systemverilog->operands.back() },
+        type.element_width,
+        frontend::ValueDomain::Bit2,
+        false,
+        true,
+        std::nullopt,
+    };
+    const auto index = lower_hir_container_element_index(element);
+    if (!index) {
+        return std::nullopt;
+    }
+    const auto handle = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerRead {
+        handle, access->container.value, *index, type.signed_indices, false,
+        type.string_indices });
+    return handle;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_member_handle(
     const HirVirtualInterfaceMember& member)
 {
     if (member.element) {
         // `vifs[i].m`: the handle the selected element holds (7.4, 25.9).
         auto element = hir_container_element_binding(*member.element, true);
-        if (!element || element->width != 64U) {
+        if (!element) {
+            return lower_hir_class_virtual_interface_element(*member.element);
+        }
+        if (element->width != 64U) {
             return std::nullopt;
         }
         ContainerRegisterId container { };
@@ -14286,6 +14359,50 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
         }
     }
+    // `T'(aggregate)` of a record type T is its aggregate, shaped by its
+    // element values when they give the element bounds T may leave open
+    // (IEEE 1076-2008 9.3.5, 9.3.3.2). With `context_width` an expected
+    // width is the aggregate's, as for a call actual.
+    const auto lower_qualified_record_aggregate
+        = [&](const bool context_width) -> std::optional<RegisterId> {
+        if (expression->vhdl == nullptr
+            || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            || !expression->vhdl->text.starts_with(
+                semantic::vhdl::qualified_expression_prefix)
+            || expression->vhdl->operands.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto operand_id = expression->vhdl->operands.front();
+        const auto operand = specialized_hir_unit_->find_expression(
+            operand_id);
+        const auto root = hir_vhdl_composite_root_type(expression_id);
+        if (!operand || operand->vhdl == nullptr
+            || operand->vhdl->kind != semantic::vhdl::ExpressionKind::aggregate
+            || !root || root->first != semantic::vhdl::TypeForm::record) {
+            return std::nullopt;
+        }
+        semantic::vhdl::SubtypeIndication record;
+        record.type_mark.target = root->second;
+        record.type_mark.spelling = expression->vhdl->text.substr(
+            semantic::vhdl::qualified_expression_prefix.size());
+        const auto completed = hir_vhdl_initialized_object_subtype(
+            operand_id, record, hir_process_scope_);
+        if (!completed) {
+            return std::nullopt;
+        }
+        auto width = vhdl_subtype_width(*completed);
+        if (context_width && expected_width != 0U) {
+            width = expected_width;
+        }
+        if (!width || *width == 0U
+            || (expected_width != 0U && *width != expected_width)) {
+            return std::nullopt;
+        }
+        return lower_hir_vhdl_aggregate(operand_id, *width, &*completed);
+    };
+    if (const auto lowered = lower_qualified_record_aggregate(false)) {
+        return lowered;
+    }
     if (expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text.starts_with(
@@ -14455,6 +14572,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text.starts_with(vhdl_qualified_prefix)
         && !qualified_profile) {
+        if (const auto lowered = lower_qualified_record_aggregate(true)) {
+            return lowered;
+        }
         const auto type_name = std::string_view {
             expression->vhdl->text
         }.substr(vhdl_qualified_prefix.size());
@@ -17474,6 +17594,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         } else {
             specialization = hir_allocation_target_specialization(
                 class_identity);
+        }
+        // A class declared in a loop generate allocates the class of the
+        // generated scope being lowered (IEEE 1800-2017 27.4, 8.2).
+        if (!specialization) {
+            auto& index = class_specializations();
+            if (const auto declared = index.default_for(class_identity)) {
+                if (const auto generated
+                    = hir_generate_class_specialization(*declared)) {
+                    specialization
+                        = index.at(*generated).specialization_identity;
+                }
+            }
         }
         // The object is allocated with its property defaults and the
         // process runs the constructor chain itself when it can (8.7).

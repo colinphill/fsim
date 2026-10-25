@@ -1002,6 +1002,8 @@ bool HierarchyBuilder::instantiate_compiled_udp(
             parent_containers, read_only_containers,
             diagnostics_
         };
+        result.set_vhdl_lowering_index(
+            &vhdl_lowering_index_);
         result.set_specialized_hir_unit(&specialization);
         return result;
     };

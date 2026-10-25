@@ -2823,42 +2823,18 @@ Lowerer::hir_named_clocking_event(
     // `@(buses[1].cb)` names the clocking block of an element of an
     // instance array by a constant select path (IEEE 1800-2023 14.3, 23.6).
     std::string selected_path;
+    // `vifs[0].cb` written as a member of an indexed element: a virtual
+    // interface element is waited on through its handle, below.
+    bool indexed_member { };
     if (sensitivities.front().expression) {
-        const auto path = [&](const auto& self,
-                              const semantic::ExpressionId id)
-            -> std::optional<std::string> {
-            const auto part = specialized_hir_unit_->find_expression(id);
-            if (!part || part->systemverilog == nullptr) {
-                return std::nullopt;
-            }
-            const auto& node = *part->systemverilog;
-            constexpr std::string_view select_prefix { "@sv-select:" };
-            if (node.kind == semantic::sv::ExpressionKind::name) {
-                return node.text;
-            }
-            if (node.kind == semantic::sv::ExpressionKind::call
-                && node.text.starts_with(select_prefix)
-                && node.operands.size() == 1U) {
-                auto prefix = self(self, node.operands.front());
-                return prefix
-                    ? std::optional { *prefix + "."
-                          + node.text.substr(select_prefix.size()) }
-                    : std::nullopt;
-            }
-            if (node.kind == semantic::sv::ExpressionKind::index
-                && node.text == "index" && node.operands.size() == 2U) {
-                auto prefix = self(self, node.operands.front());
-                const auto index
-                    = specialized_hir_unit_->evaluate_integral_expression(
-                        node.operands.back());
-                return prefix && index
-                    ? std::optional { *prefix + "["
-                          + std::to_string(*index) + "]" }
-                    : std::nullopt;
-            }
-            return std::nullopt;
-        };
-        auto resolved = path(path, *sensitivities.front().expression);
+        const auto selected = specialized_hir_unit_->find_expression(
+            *sensitivities.front().expression);
+        indexed_member = selected && selected->systemverilog != nullptr
+            && selected->systemverilog->kind
+                == semantic::sv::ExpressionKind::index
+            && selected->systemverilog->text.starts_with("index.");
+        auto resolved = hir_systemverilog_constant_path(
+            *sensitivities.front().expression);
         if (!resolved || resolved->find('.') == std::string::npos) {
             return std::nullopt;
         }
@@ -2897,6 +2873,13 @@ Lowerer::hir_named_clocking_event(
         event.source_order = sensitivities.front().source_order;
         return std::vector<semantic::sv::Sensitivity> { std::move(event) };
     };
+    // The innermost scope declaring the block keeps its flag: a generated
+    // scope's block hides the unit's (IEEE 1800-2023 14.3, 27.3).
+    if (!sensitivities.front().expression
+        && name.find('.') == std::string::npos
+        && signals_.contains(clocking_flag(name))) {
+        return flag_event(sensitivities.front(), clocking_flag(name));
+    }
     if (block != blocks.end() && !block->event.empty()
         && !sensitivities.front().expression) {
         if (block->event.size() == 1U
@@ -2916,6 +2899,25 @@ Lowerer::hir_named_clocking_event(
     const auto handle_path = std::string_view { name }.substr(0U, separator);
     const auto member_flag = clocking_flag(
         std::string_view { name }.substr(separator + 1U));
+    // A clocking block of an instance or generated scope named
+    // hierarchically (`u.cb`, `s.g[1].cb`) is waited on through its flag
+    // (IEEE 1800-2023 14.3, 23.6, 27.3).
+    for (std::string_view ancestor = hierarchy_;;) {
+        const auto path = ancestor.empty()
+            ? std::string { handle_path }
+            : std::string { ancestor } + "." + std::string { handle_path };
+        if (design_.signal_by_name_.contains(path + "." + member_flag)) {
+            return flag_event(sensitivities.front(),
+                std::string { handle_path } + "." + member_flag);
+        }
+        if (ancestor.empty()) {
+            break;
+        }
+        const auto up = ancestor.find_last_of('.');
+        ancestor = up == std::string_view::npos
+            ? std::string_view { }
+            : ancestor.substr(0U, up);
+    }
     std::optional<semantic::sv::TypeReference> interface_type;
     // Every instance of the interface a virtual handle may name has the
     // block's flag; a named instance is checked.
@@ -2952,13 +2954,26 @@ Lowerer::hir_named_clocking_event(
                     : ancestor.substr(0U, up);
             }
         }
+        // A generated scope of a child instance (`s.g[1].cb`) exists once
+        // the child is elaborated: a miss is retried.
+        if (!interface_type && hierarchical_reference_retry_) {
+            hierarchical_reference_missed_ = true;
+        }
     } else {
+        if (indexed_member) {
+            return std::nullopt;
+        }
+        // An element of a virtual interface array (`vifs[0].cb`) is
+        // declared by the array.
+        const auto handle_name = std::string_view { name }.substr(
+            0U, std::min(separator, name.find('[')));
         const auto handle = hir_resolver().resolve_systemverilog(
-            std::string_view { name }.substr(0U, separator),
+            handle_name,
             scope,
             [](const semantic::CompiledDeclarationView& candidate) {
                 return candidate.systemverilog != nullptr
-                    && candidate.systemverilog->type.has_value();
+                    && (candidate.systemverilog->type.has_value()
+                        || !candidate.systemverilog->interface_type.empty());
             }, false).unique();
         const auto handle_declaration = handle
             ? specialized_hir_unit_->find_declaration(*handle)
@@ -2972,11 +2987,26 @@ Lowerer::hir_named_clocking_event(
         // An interface port names the interface it is declared with
         // (`b.cb`, IEEE 1800-2023 25.5).
         if (!interface_type && handle_declaration
-            && handle_declaration->systemverilog != nullptr
-            && handle_declaration->systemverilog->type
-            && !handle_declaration->systemverilog->type->interface_type
-                    .empty()) {
-            interface_type = *handle_declaration->systemverilog->type;
+            && handle_declaration->systemverilog != nullptr) {
+            const auto& declaration = *handle_declaration->systemverilog;
+            if (!declaration.interface_type.empty()) {
+                semantic::sv::TypeReference type;
+                type.interface_type = declaration.interface_type;
+                interface_type = std::move(type);
+            } else if (declaration.type
+                && !declaration.type->interface_type.empty()) {
+                interface_type = *declaration.type;
+            }
+        }
+        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            std::cerr << "[fsim-hir-lower] clocking-handle " << handle_name
+                      << " found=" << handle.has_value() << " declaration="
+                      << (handle_declaration
+                             && handle_declaration->systemverilog != nullptr)
+                      << " type="
+                      << (interface_type ? interface_type->interface_type
+                                         : std::string { })
+                      << '\n';
         }
     }
     // An instance named from this scope or an enclosing one (`u.cb`,
@@ -2990,9 +3020,16 @@ Lowerer::hir_named_clocking_event(
                 : std::string { ancestor } + "." + std::string { handle_path };
             const auto instance = std::ranges::find(design_.specializations_,
                 path, &SpecializationInfo::instance);
-            if (instance != design_.specializations_.end()) {
+            // The unit's own name: SpecializationInfo::unit is its
+            // library identity.
+            const auto source = instance != design_.specializations_.end()
+                    && instance->source_unit
+                ? specialized_hir_unit_->design().find_unit(
+                      *instance->source_unit)
+                : std::nullopt;
+            if (source && source->systemverilog != nullptr) {
                 semantic::sv::TypeReference type;
-                type.interface_type = instance->unit;
+                type.interface_type = source->systemverilog->name;
                 interface_type = std::move(type);
                 use_flag = design_.signal_by_name_.contains(
                     path + "." + member_flag);
@@ -3012,6 +3049,15 @@ Lowerer::hir_named_clocking_event(
     }
     if (!interface_type) {
         return std::nullopt;
+    }
+    // An interface port (`b.cb`) names its actual's members, the block's
+    // flag among them.
+    use_flag = use_flag
+        || signals_.contains(std::string { handle_path } + "." + member_flag);
+    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        std::cerr << "[fsim-hir-lower] clocking-path " << name << " type="
+                  << interface_type->interface_type << " flag=" << use_flag
+                  << '\n';
     }
     for (const auto& unit :
         specialized_hir_unit_->design().systemverilog_units()) {
@@ -3101,14 +3147,19 @@ bool Lowerer::lower_hir_sensitivity_wait(
 
     // `@(vif.member)`: wait on the member of every instance the handle
     // may name, until the selected member has the event (25.9).
+    // `@(vifs[i].cb)` names the member through an element of an array of
+    // handles (7.4).
     if (sensitivities.size() == 1U
-        && !sensitivities.front().expression
-        && sensitivities.front().signal.find('.') != std::string::npos
-        && !hir_named_signal(
-            sensitivities.front().signal, hir_process_scope_,
-            sensitivities.front().source_order)) {
-        if (const auto member = hir_virtual_interface_member(
-                sensitivities.front().signal, hir_process_scope_)) {
+        && (sensitivities.front().expression
+            || (sensitivities.front().signal.find('.') != std::string::npos
+                && !hir_named_signal(
+                    sensitivities.front().signal, hir_process_scope_,
+                    sensitivities.front().source_order)))) {
+        if (const auto member = sensitivities.front().expression
+                ? hir_virtual_interface_member(
+                      *sensitivities.front().expression)
+                : hir_virtual_interface_member(
+                      sensitivities.front().signal, hir_process_scope_)) {
             const auto edge = sensitivities.front().edge;
             if (edge != semantic::sv::EdgeKind::any && member->width != 1U) {
                 return false;
@@ -10646,12 +10697,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     ? hir_string_binding(*declaration, hir_process_scope_, true)
                     : std::nullopt;
             }()) {
+            // A string member of an element (`ifcs[1].s`) is the whole
+            // string, not a byte of it.
             const auto string_element
                 = target_expression->systemverilog != nullptr
                     && target_expression->systemverilog->kind
                         == semantic::sv::ExpressionKind::index
+                    && target_expression->systemverilog->text == "index"
                     && target_expression->systemverilog->operands.size()
                         == 2U
+                    && declaration
                     && hir_target_declaration(
                         target_expression->systemverilog->operands.front())
                         == declaration
@@ -11192,13 +11247,27 @@ bool Lowerer::lower_hir_statement_unsuspended(
         // and a value with elements fails the length check (IEEE 1076-2008
         // 10.5.2.1, 10.6.2.1).
         const auto null_candidate = [&] {
-            if (!binding || (value && hir_vhdl_null_value(*value))) {
+            if (!binding) {
                 return true;
             }
             const auto subtype = hir_vhdl_expression_subtype(*target);
-            return subtype && !subtype->unconstrained
-                && vhdl_subtype_width(*subtype)
-                    == std::optional<std::size_t> { 0U };
+            const auto target_width = subtype && !subtype->unconstrained
+                ? vhdl_subtype_width(*subtype)
+                : std::nullopt;
+            if (target_width == std::optional<std::size_t> { 0U }) {
+                return true;
+            }
+            // A whole object of a constrained subtype with elements is not
+            // a null array, whatever the value (IEEE 1076-2008 5.3.2.2).
+            const auto target_expression
+                = specialized_hir_unit_->find_expression(*target);
+            if (target_width && target_expression
+                && target_expression->vhdl != nullptr
+                && target_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name) {
+                return false;
+            }
+            return value && hir_vhdl_null_value(*value);
         };
         if (statement->vhdl != nullptr && null_candidate()) {
             const auto target_shape = hir_vhdl_shape(*target);
@@ -25866,17 +25935,18 @@ bool Lowerer::hir_local_event_waited(
                 walk(*sensitivity.expression);
             }
         };
-        for (const auto& statement :
-            specialized_hir_unit_->design().systemverilog_hir.statements()) {
-            scan(statement);
+        const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
+        const auto& events = vhdl_lowering_index().systemverilog_events(hir);
+        for (const auto position : events.statements) {
+            scan(hir.statements()[position]);
         }
         for (const auto& statement :
             specialized_hir_unit_->systemverilog_statements()) {
             scan(statement);
         }
         // A process's own event list (`always @(s)`).
-        for (const auto& process :
-            specialized_hir_unit_->design().systemverilog_hir.processes()) {
+        for (const auto position : events.processes) {
+            const auto& process = hir.processes()[position];
             for (const auto& sensitivity : process.sensitivities) {
                 if (sensitivity.expression) {
                     walk(*sensitivity.expression);

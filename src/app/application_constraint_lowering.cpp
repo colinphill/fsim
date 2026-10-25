@@ -680,25 +680,6 @@ class Lowerer final {
         return builder_.constant(low_value(32, 0), index_profile());
       }
       auto found = variables_.find(*path);
-      if (found == variables_.end()) {
-        // A member of an object in an array of handles is named by its
-        // canonical property identity (`a[0].<class>::m`).
-        const auto dot = path->rfind('.');
-        const auto member = "::" + path->substr(dot + 1U);
-        const auto prefix = path->substr(0, dot + 1U);
-        for (auto candidate = variables_.lower_bound(prefix);
-             candidate != variables_.end()
-             && candidate->first.starts_with(prefix);
-             ++candidate) {
-          const auto rest = std::string_view{candidate->first}.substr(
-              prefix.size());
-          if (rest.ends_with(member)
-              && rest.find_first_of(".[") == std::string_view::npos) {
-            found = candidate;
-            break;
-          }
-        }
-      }
       if (found == variables_.end()
           || found->second >= solver_variables_.size()) {
         error_ = "constraint member '" + *path
@@ -1114,6 +1095,12 @@ class Lowerer final {
       const sv::ConstraintExpression& expression,
       std::vector<Clause>& clauses) {
     return split(expression, clauses, false);
+  }
+
+  /// The current values of the string properties the constraints read.
+  void set_string_state(
+      const std::map<std::string, std::string, std::less<>>* state) {
+    string_state_ = state;
   }
 
   /// The containers whose elements are containers, each with the paths of
@@ -1599,15 +1586,29 @@ class Lowerer final {
       // A foreach iterator over a string-keyed array holds its key.
       const auto* frame = selector.kind == sv::ConstraintExpressionKind::name
           ? iterator(selector.text) : nullptr;
+      // A string state variable holds its value during the call (IEEE
+      // 1800-2017 18.5.1, 7.8).
+      const std::string* state = nullptr;
+      if (frame == nullptr && string_state_ != nullptr
+          && selector.kind == sv::ConstraintExpressionKind::name) {
+        if (const auto* binding = exact_binding(selector)) {
+          if (const auto held_value
+              = string_state_->find(binding->canonical_identity);
+              held_value != string_state_->end()) {
+            state = &held_value->second;
+          }
+        }
+      }
       if (selector.kind != sv::ConstraintExpressionKind::string_literal
-          && (frame == nullptr || !frame->string_key)) {
+          && state == nullptr && (frame == nullptr || !frame->string_key)) {
         return std::nullopt;
       }
       auto text = frame != nullptr && frame->string_key
           ? std::string_view{*frame->string_key}
+          : state != nullptr ? std::string_view{*state}
           : std::string_view{selector.text};
-      if (frame == nullptr && text.size() >= 2U && text.front() == '"'
-          && text.back() == '"') {
+      if (frame == nullptr && state == nullptr && text.size() >= 2U
+          && text.front() == '"' && text.back() == '"') {
         text = text.substr(1U, text.size() - 2U);
       }
       const auto found = std::ranges::find(held->string_key_values, text);
@@ -1842,6 +1843,71 @@ class Lowerer final {
 
   static constexpr std::string_view member_prefix{"@sv-select:"};
 
+  /// The solver's spelling of a spelled member path (`o.a[0].m`): the
+  /// class randomizer names each object a rand handle reaches as
+  /// `<root property>.<owner class>::<property>...`, so every segment of
+  /// the path is matched against the variable names segment by segment,
+  /// a segment naming a property of any class (IEEE 1800-2017 18.5.9,
+  /// 8.18). The path itself when no variable name matches.
+  [[nodiscard]] std::string solver_path(const std::string& spelled) const {
+    if (variables_.contains(spelled)
+        || container_variables_.contains(spelled)) {
+      return spelled;
+    }
+    const auto split = [](std::string_view text) {
+      std::vector<std::string_view> parts;
+      while (true) {
+        const auto dot = text.find('.');
+        if (dot == std::string_view::npos) break;
+        parts.push_back(text.substr(0, dot));
+        text.remove_prefix(dot + 1U);
+      }
+      parts.push_back(text);
+      return parts;
+    };
+    const auto wanted = split(spelled);
+    if (wanted.size() < 2U) return spelled;
+    const auto strip_index = [](std::string_view segment) {
+      const auto open = segment.find('[');
+      return open == std::string_view::npos ? segment
+                                            : segment.substr(0, open);
+    };
+    const auto matches = [&](const std::string_view have,
+                             const std::string_view want, const bool last) {
+      // A container named without an index matches its elements and
+      // count variables.
+      const auto have_name = last && want.find('[') == std::string_view::npos
+          ? strip_index(have) : have;
+      return have_name == want
+          || (have_name.size() > want.size() + 2U
+              && have_name.ends_with(want)
+              && have_name.substr(
+                     have_name.size() - want.size() - 2U, 2U) == "::");
+    };
+    const std::string head{wanted.front()};
+    for (auto candidate = variables_.lower_bound(head);
+         candidate != variables_.end()
+         && candidate->first.starts_with(head); ++candidate) {
+      const auto have = split(candidate->first);
+      if (have.size() < wanted.size()) continue;
+      bool match = true;
+      for (std::size_t index = 0; match && index < wanted.size(); ++index) {
+        match = matches(have[index], wanted[index],
+            index + 1U == wanted.size());
+      }
+      if (!match) continue;
+      std::string result;
+      for (std::size_t index = 0; index < wanted.size(); ++index) {
+        if (index != 0U) result += '.';
+        result += index + 1U == wanted.size()
+                && wanted[index].find('[') == std::string_view::npos
+            ? strip_index(have[index]) : have[index];
+      }
+      return result;
+    }
+    return spelled;
+  }
+
   /// The variable a member selection names: `a[i].m` of an array of
   /// structures, whose elements' members the class randomizer
   /// materializes as `a[i].m`. An empty path is a selection outside the
@@ -1860,8 +1926,8 @@ class Lowerer final {
         && expression.operands.size() == 1U) {
       const auto base = member_path(expression.operands.front());
       if (!base || base->empty()) return base;
-      return *base + "."
-          + expression.text.substr(member_prefix.size());
+      return solver_path(*base + "."
+          + expression.text.substr(member_prefix.size()));
     }
     if (expression.kind != sv::ConstraintExpressionKind::index
         || expression.operands.size() != 2U) {
@@ -2437,6 +2503,7 @@ class Lowerer final {
   bool deferred_{};
   std::span<const runtime::SystemVerilogConstraintVariable> solver_variables_;
   const std::map<std::string, std::vector<std::string>>* nested_{};
+  const std::map<std::string, std::string, std::less<>>* string_state_{};
   const runtime::SystemVerilogConstraintSolver* shapes_{};
   std::string shape_prefix_;
   runtime::SystemVerilogConstraintExpressionBuilder builder_;
@@ -2723,7 +2790,8 @@ void configure_class_constraints(
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled,
-    const std::string_view identity_prefix) {
+    const std::string_view identity_prefix,
+    const std::map<std::string, std::string, std::less<>>& string_state) {
   const auto declaration = std::ranges::find(
       hir.classes(), specialization.declaration_identity,
       &semantic::sv::ClassDeclaration::canonical_identity);
@@ -2843,6 +2911,7 @@ void configure_class_constraints(
           container_variables, dependencies, error, solver.variables()};
       lowerer.set_container_shapes(
           &nested_containers, &solver, identity_prefix);
+      lowerer.set_string_state(&string_state);
       std::vector<Lowerer::Clause> clauses;
       if (!lowerer.lower_clauses(expression, clauses)) {
         throw std::invalid_argument{
@@ -2901,10 +2970,11 @@ void configure_systemverilog_class_constraints(
     const semantic::sv::Hir& hir,
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled,
-    const std::string_view identity_prefix) {
+    const std::string_view identity_prefix,
+    const std::map<std::string, std::string, std::less<>>& string_state) {
   configure_class_constraints(
       solver, variables, hir, specialization, constraint_enabled,
-      identity_prefix);
+      identity_prefix, string_state);
 }
 
 }  // namespace fsim::app::application_detail
