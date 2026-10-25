@@ -2032,9 +2032,41 @@ bool Lowerer::initialize_hir_declarations(
                             type->vhdl->declaration);
                     if (!type_declaration
                         || type_declaration->vhdl == nullptr
-                        || !type_declaration->vhdl->subtype
-                        || !type_declaration->vhdl->subtype
-                                ->type_mark.target.valid()) {
+                        || !type_declaration->vhdl->subtype) {
+                        break;
+                    }
+                    // CHARACTER is an enumeration type whose literals are
+                    // the character literals, in code order (IEEE 1076-2008
+                    // 16.3): a subtype starts at its range's left bound.
+                    if (!type_declaration->vhdl->subtype->type_mark.target
+                             .valid()
+                        && same_hir_identifier(
+                            simple_name_of(type_declaration->vhdl->subtype
+                                               ->type_mark.spelling),
+                            "character", true)
+                        && effective && !effective->constraints.empty()) {
+                        const auto& constraint
+                            = effective->constraints.front();
+                        const auto literal = constraint.left_expression
+                            ? specialized_hir_unit_->find_expression(
+                                  *constraint.left_expression)
+                            : std::nullopt;
+                        if (constraint.left) {
+                            vhdl_enumeration_default = constraint.left;
+                        } else if (literal && literal->vhdl != nullptr
+                            && literal->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::
+                                    logic_literal
+                            && literal->vhdl->text.size() == 3U
+                            && literal->vhdl->text.front() == '\'') {
+                            vhdl_enumeration_default
+                                = static_cast<unsigned char>(
+                                    literal->vhdl->text[1]);
+                        }
+                        break;
+                    }
+                    if (!type_declaration->vhdl->subtype->type_mark.target
+                             .valid()) {
                         break;
                     }
                     type_id = type_declaration->vhdl->subtype

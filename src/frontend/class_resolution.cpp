@@ -832,6 +832,9 @@ bool resolve_systemverilog_classes(
     DesignScope& operator=(const DesignScope&) = delete;
   } design_scope{design};
   std::vector<ClassEntry> entries;
+  // Arm path of each class declared in a generate block.
+  std::map<const SystemVerilogClassDeclaration*, std::string>
+      generate_branches;
   for (auto& unit : design.units) {
     if (unit.language != Language::SystemVerilog2017) {
       continue;
@@ -852,7 +855,9 @@ bool resolve_systemverilog_classes(
     for_each_generate_class(
         unit,
         [&](SystemVerilogClassDeclaration& declaration,
-            const std::string& scope_path) {
+            const std::string& scope_path,
+            const std::string& branch) {
+          const auto first = entries.size();
           assign_class_identities(
               declaration,
               scope_path.empty() ? prefix : prefix + "::" + scope_path,
@@ -860,6 +865,9 @@ bool resolve_systemverilog_classes(
               unit.compilation_unit_identity,
               &unit.systemverilog_imports,
               entries);
+          for (auto index = first; index < entries.size(); ++index) {
+            generate_branches.emplace(entries[index].declaration, branch);
+          }
         });
   }
   for (auto& declaration : design.systemverilog_classes) {
@@ -901,8 +909,15 @@ bool resolve_systemverilog_classes(
               + "' has no defining declaration",
           declaration.span);
     }
+    // Classes under different arms of a generate region are alternatives
+    // that never coexist (IEEE 1800-2017 27.5), so the arm path is part of
+    // the uniqueness key.
+    const auto branch = generate_branches.find(&declaration);
     if (!identities.emplace(
-             declaration.canonical_identity, 1U).second) {
+             declaration.canonical_identity + '\n'
+                 + (branch == generate_branches.end()
+                         ? std::string{} : branch->second),
+             1U).second) {
       diagnose(
           diagnostics,
           "FSIM-SV-CLASS-005",
@@ -912,6 +927,15 @@ bool resolve_systemverilog_classes(
     }
   }
   for (auto& entry : entries) {
+    // Whether a generate block is instantiated depends on parameter values
+    // bound at elaboration, and an unselected block is not elaborated
+    // (IEEE 1800-2017 27.5), so its classes still gain resolved names but
+    // their lookup failures cannot be reported against the design here.
+    if (generate_branches.contains(entry.declaration)) {
+      std::vector<Diagnostic> deferred;
+      resolve_declaration_types(entry, entries, deferred);
+      continue;
+    }
     resolve_declaration_types(entry, entries, diagnostics);
   }
   for (auto& unit : design.units) {

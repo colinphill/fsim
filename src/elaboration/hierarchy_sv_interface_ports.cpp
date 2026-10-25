@@ -127,6 +127,12 @@ HierarchyBuilder::connect_compiled_systemverilog_modport_members(
                 true)) {
             return diagnostic;
         }
+        // The block's event is the flag it toggles after sampling, which
+        // a wait through the port observes (IEEE 1800-2023 14.13, 25.5).
+        const auto flag = "$clocking$" + block->name + "$event";
+        (void)connect_compiled_systemverilog_interface_member(
+            std::string { source_path } + "." + flag, formal_name,
+            child_path, flag, true, false, child_aliases);
         for (const auto& clocking_signal : block->signals) {
             if (auto diagnostic = connect_member(
                     block->name + "." + clocking_signal.name.spelling,

@@ -13894,9 +13894,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             };
             const auto synopsys = hir_vhdl_synopsys_numeric_context(
                 comparison->vhdl->scope);
+            // FIXED_GENERIC_PKG and FLOAT_GENERIC_PKG declare the relations
+            // of their types, comparing values (IEEE 1076-2019 G.4, G.5).
             if (synopsys.signed_visible || synopsys.unsigned_visible
                 || numeric_vector(comparison->vhdl->operands[0])
-                || numeric_vector(comparison->vhdl->operands[1])) {
+                || numeric_vector(comparison->vhdl->operands[1])
+                || is_hir_vhdl_fixed_operator(expression_id)
+                || is_hir_vhdl_float_operator(expression_id)) {
                 return false;
             }
             return !operator_name.selected && operator_name.overloads.empty()

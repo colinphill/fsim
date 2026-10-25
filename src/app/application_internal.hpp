@@ -420,6 +420,8 @@ void complete_systemverilog_executable_hir(
 struct RuntimePathViews {
     std::vector<std::pair<std::string, runtime::simir::SignalId>>
         signal_paths;
+    std::vector<std::pair<std::string, runtime::simir::StringObjectId>>
+        string_paths;
     std::vector<std::pair<
         std::string, runtime::simir::ContainerObjectId>>
         container_paths;

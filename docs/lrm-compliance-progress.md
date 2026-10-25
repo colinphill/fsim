@@ -253,6 +253,66 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 2: sweep losses fixed, catalog entries
+
+The part 1 sweep with the frozen binary `b96z`, against `b95c` (VHDL) and
+`b95a` (SystemVerilog), gained 9 cases and lost 5:
+
+| Suite | Batch95 passes / in scope | b96z passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2634 / 2635 | 2635 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2059 / 2064 | 2064 / 2065 | 350 |
+| vests | 3646 / 3646 | 3643 / 3646 | 2 |
+| nvc | 1257 / 1261 | 1258 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+Gains: ivtest vpi_display_array; verilator t_clocking_drive_cycle,
+t_constraint_global_arr_nested, t_gen_class, t_interface_bind_public,
+t_mod_interface_array3, t_public_flat_rw_large_offset; nvc issue843,
+protected10.
+
+The five losses all pass with the frozen binary `b96w`. Each was caused by
+a part 1 change:
+- **verilator t_mod_interface_clocking_event.** A modport that names a
+  clocking block now also forwards the block's event flag to the child,
+  so `@(port.cb)` sees the clocking event (IEEE 1800-2023 14.13, 25.5).
+- **vests tc15, clifton-labs simple-subtypes.** A CHARACTER subtype with a
+  range constraint starts at the constraint's left bound, not at NUL
+  (IEEE 1076-2019 6.4.2.3, 6.4.2.4). Process variables take it in
+  declaration initialization. Signals take it from packed-type metadata,
+  and composite defaults now follow the constraint chain for characters.
+- **vests tc1073.** The expression-subtype cache stored the result of
+  `f(i)` while a defaulted-call reading `f()(i)` was pending, so the later
+  query got a stale failure. The cache is bypassed while defaulted calls
+  are pending.
+- **nvc ieee7.** Relations between `ufixed`/`sfixed` values of different
+  widths were folded as predefined array equality, and so were constantly
+  false. Fixed-point and floating-point operators are excluded from that
+  fold (IEEE 1076-2019 G.4, G.5).
+
+Other changes:
+- Generate-block classes are checked for duplicates per generate branch,
+  so a class declared once in each arm of an `if` generate is not a
+  duplicate. Declaration-type lookup failures in unselected generate
+  blocks are not reported, because those blocks are not elaborated
+  (IEEE 1800-2017 27.5).
+- String port aliases are design IR objects, like container aliases, so
+  strings connected through ports share storage.
+- A protected-type private variable inside an allocated protected object
+  now reports `FSIM-ELAB-VHPROTECTED-025` instead of reusing `-023`.
+  `-024` (an allocated protected method called without an access-variable
+  prefix) was already emitted, and now has a catalog row too. The
+  production catalog is 2974 codes, and the audit pins move to 2974/2978.
+
+Fixtures: `vhdl_character_subtype_default_20261025.vhd`,
+`vhdl_fixed_relation_widths_20261025.vhd` (both fail on `b95c`), and
+`vhdl_defaulted_call_index_20261025.vhd`.
+
+The labelled ctest has the same 23 known failures as Batch 95. nvc
+issue620 and issue810 remain open. The six-suite sweep with `b96w` is in
+progress.
+
 ### Batch 96 part 1: pool closures, elaboration regression fixes
 
 Batch 96 was to close the remaining closure pool. Eight of its ten cases

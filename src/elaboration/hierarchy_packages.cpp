@@ -3008,6 +3008,30 @@ namespace {
     // The leftmost value of a predefined VHDL scalar subtype named by a
     // record member or element (IEEE 1076-2008 6.4.2.3): NATURAL and
     // POSITIVE start at 0 and 1, INTEGER at its minimum, REAL at REAL'LEFT.
+    // A bound of a CHARACTER range: a character literal's position in
+    // CHARACTER, which lists the 256 characters in code order (IEEE
+    // 1076-2008 16.3).
+    std::optional<std::int64_t> compiled_vhdl_character_bound(
+        const semantic::SpecializedHirUnit& specialization,
+        const std::optional<std::int64_t> folded,
+        const std::optional<semantic::ExpressionId> expression)
+    {
+        if (folded) {
+            return folded;
+        }
+        const auto literal = expression
+            ? specialization.find_expression(*expression)
+            : std::nullopt;
+        if (!literal || literal->vhdl == nullptr
+            || literal->vhdl->kind
+                != semantic::vhdl::ExpressionKind::logic_literal
+            || literal->vhdl->text.size() != 3U
+            || literal->vhdl->text.front() != '\'') {
+            return std::nullopt;
+        }
+        return static_cast<unsigned char>(literal->vhdl->text[1]);
+    }
+
     std::optional<PackedLogic4> compiled_vhdl_predefined_scalar_default(
         std::string_view spelling,
         const frontend::ValueDomain domain,
@@ -4126,6 +4150,23 @@ namespace {
                         *constraint->right,
                         constraint->descending,
                     };
+                }
+            }
+            // A CHARACTER subtype's range is a range of its enumeration
+            // positions (IEEE 1076-2008 5.2.2.1, 16.3).
+            if (!subtype.type_mark.target.valid()
+                && compiled_vhdl_name_equal(
+                    simple_name_of(subtype.type_mark.spelling), "character")
+                && !subtype.constraints.empty()) {
+                const auto& constraint = subtype.constraints.front();
+                const auto left = compiled_vhdl_character_bound(specialization,
+                    constraint.left, constraint.left_expression);
+                const auto right = compiled_vhdl_character_bound(
+                    specialization, constraint.right,
+                    constraint.right_expression);
+                if (left && right) {
+                    result.enumeration_range = frontend::EnumerationRange {
+                        *left, *right, constraint.descending };
                 }
             }
             if (!subtype.type_mark.target.valid()) {
@@ -5655,20 +5696,28 @@ namespace {
                   .type_mark.target;
         std::unordered_set<std::uint32_t> visiting;
         // The leftmost value of the first range constraint along the
-        // subtype chain (`subtype ls is sl range '0' to '1'`).
+        // subtype chain (`subtype ls is sl range '0' to '1'`), or its left
+        // bound expression when that is not folded.
         std::optional<std::int64_t> chain_left;
+        std::optional<semantic::ExpressionId> chain_left_expression;
         const auto note_left = [&](const auto& constraints) {
-            if (chain_left) {
+            if (chain_left || chain_left_expression) {
                 return;
             }
             const auto constraint = std::ranges::find_if(constraints,
                 [](const semantic::vhdl::RangeConstraint& range) {
-                    return range.left.has_value();
+                    return range.left.has_value()
+                        || range.left_expression.has_value();
                 });
             if (constraint != constraints.end()) {
-                chain_left = *constraint->left;
+                chain_left = constraint->left;
+                chain_left_expression = constraint->left_expression;
             }
         };
+        const auto character_name = [](std::string_view name) {
+            return compiled_vhdl_name_equal(simple_name_of(name), "character");
+        };
+        bool character = character_name(subtype.type_mark.spelling);
         note_left(subtype.constraints);
         while (type_id.valid() && visiting.insert(type_id.value()).second) {
             const auto type = specialization.find_type(type_id);
@@ -5678,6 +5727,8 @@ namespace {
             definition = type->vhdl;
             real = real || real_name(definition->name)
                 || real_name(definition->base.type_mark.spelling);
+            character = character
+                || character_name(definition->base.type_mark.spelling);
             if (definition->form != semantic::vhdl::TypeForm::subtype
                 && definition->form != semantic::vhdl::TypeForm::alias) {
                 break;
@@ -5817,6 +5868,13 @@ namespace {
             && !definition->enumeration_literals.empty()) {
             return unsigned_value(
                 static_cast<std::uint64_t>(chain_left.value_or(0)), width);
+        }
+        // A CHARACTER subtype starts at its range's left bound, a character
+        // literal's position (IEEE 1076-2008 6.4.2.3, 16.3).
+        if (character && width == 8U) {
+            return unsigned_value(static_cast<std::uint64_t>(
+                compiled_vhdl_character_bound(specialization, chain_left,
+                    chain_left_expression).value_or(0)), width);
         }
         if (const auto predefined = compiled_vhdl_predefined_scalar_default(
                 subtype.type_mark.spelling, domain, width)) {

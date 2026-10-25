@@ -19199,6 +19199,8 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
     const semantic::vhdl::TypeDefinition* definition = nullptr;
     bool real = same_hir_identifier(
         simple_name_of(subtype.type_mark.spelling), "real", true);
+    bool character = same_hir_identifier(
+        simple_name_of(subtype.type_mark.spelling), "character", true);
     auto type_id = subtype.type_mark.target;
     std::unordered_set<std::uint32_t> visiting;
     while (type_id.valid() && visiting.insert(type_id.value()).second) {
@@ -19210,6 +19212,10 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
         real = real || same_hir_identifier(simple_name_of(definition->name), "real", true)
             || same_hir_identifier(
                 simple_name_of(definition->base.type_mark.spelling), "real", true);
+        character = character
+            || same_hir_identifier(
+                simple_name_of(definition->base.type_mark.spelling),
+                "character", true);
         if (definition->form != semantic::vhdl::TypeForm::subtype
             && definition->form != semantic::vhdl::TypeForm::alias) {
             break;
@@ -19411,14 +19417,26 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
                       std::numeric_limits<std::int32_t>::min()),
             width);
     }
-    if (definition != nullptr && !definition->enumeration_literals.empty()) {
+    // An enumeration subtype, CHARACTER's included, starts at its range
+    // constraint's left bound, a literal's position (IEEE 1076-2008
+    // 6.4.2.3, 5.2.2.1).
+    const bool enumeration = definition != nullptr
+        && !definition->enumeration_literals.empty();
+    if (enumeration || (character && width == 8U)) {
         const auto constraint = std::ranges::find_if(subtype.constraints,
             [](const semantic::vhdl::RangeConstraint& range) {
-                return range.left.has_value();
+                return range.left.has_value()
+                    || range.left_expression.has_value();
             });
-        return unsigned_value(static_cast<std::uint64_t>(
-            constraint != subtype.constraints.end() ? *constraint->left : 0),
-            width);
+        const auto left = constraint == subtype.constraints.end()
+            ? std::optional<std::int64_t> { 0 }
+            : constraint->left
+            ? constraint->left
+            : hir_constant_integer(*constraint->left_expression);
+        if (left || enumeration) {
+            return unsigned_value(
+                static_cast<std::uint64_t>(left.value_or(0)), width);
+        }
     }
     return PackedLogic4 { width,
         domain == frontend::ValueDomain::Logic4 ? Logic4::x : Logic4::zero };
@@ -23646,6 +23664,8 @@ bool Lowerer::hir_vhdl_expression_subtype_cacheable() const
         && !hir_static_loop_shapes_
         && hir_let_frames_.empty() && hir_vhdl_attribute_values_.empty()
         && hir_vhdl_record_result_width_frames_.empty()
+        // `f(i)` read as `f()(i)` resolves and types the call differently.
+        && hir_vhdl_defaulted_calls_.empty()
         && !hir_vhdl_design_has_access_types() && !hir_vhdl_shaped_active();
 }
 

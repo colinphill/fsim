@@ -776,20 +776,22 @@ class DesignIrBuilder final {
     }
   }
 
-  void add_container_aliases() {
-    for (const auto& [path, runtime_object] :
-         runtime_paths_.container_paths) {
+  // Port aliases of bounded runtime objects: another name for the
+  // connected object, owned by it.
+  template <typename Paths, typename ByRuntime>
+  void add_object_aliases(const di::ObjectKind kind, const Paths& paths,
+      const ByRuntime& by_runtime) {
+    for (const auto& [path, runtime_object] : paths) {
       const auto path_id = paths_.find(path);
       const auto existing = path_id
           ? object_by_path_.find(*path_id)
           : object_by_path_.end();
       if (existing != object_by_path_.end()
-          && result_.objects()[existing->second.value()].kind
-              == di::ObjectKind::container) {
+          && result_.objects()[existing->second.value()].kind == kind) {
         continue;
       }
-      const auto base = container_object_by_runtime_.find(runtime_object);
-      if (base == container_object_by_runtime_.end()) {
+      const auto base = by_runtime.find(runtime_object);
+      if (base == by_runtime.end()) {
         continue;
       }
       const auto& base_object = result_.objects()[base->second.value()];
@@ -816,7 +818,7 @@ class DesignIrBuilder final {
           : base_object.source;
       const auto external_type = base_object.external_type;
       const auto object = add_object(
-          di::ObjectKind::container,
+          kind,
           alias_name,
           path,
           specialization,
@@ -866,6 +868,7 @@ class DesignIrBuilder final {
           object_source,
           value);
       object_by_path_[paths_.intern(input.name)] = object;
+      string_object_by_runtime_[input.id] = object;
       if (input.is_port) {
         port_by_path_[paths_.intern(input.name)] = add_port(
             object,
@@ -913,7 +916,10 @@ class DesignIrBuilder final {
             object_source);
       }
     }
-    add_container_aliases();
+    add_object_aliases(di::ObjectKind::string, runtime_paths_.string_paths,
+        string_object_by_runtime_);
+    add_object_aliases(di::ObjectKind::container,
+        runtime_paths_.container_paths, container_object_by_runtime_);
     for (const auto& input : elaborated_.vhdl_protected_objects()) {
       const auto specialization = specialization_for_path(input.name);
       const auto object_source = source(input.declaration_span);
@@ -1507,6 +1513,8 @@ class DesignIrBuilder final {
       systemc_named_object_by_handle_and_name_;
   std::map<runtime::simir::SignalId, di::ObjectId>
       signal_object_by_runtime_;
+  std::map<runtime::simir::StringObjectId, di::ObjectId>
+      string_object_by_runtime_;
   std::map<runtime::simir::ContainerObjectId, di::ObjectId>
       container_object_by_runtime_;
   std::map<semantic::HierarchyPathId, di::ObjectId> object_by_path_;
@@ -1522,6 +1530,7 @@ RuntimePathViews make_runtime_path_views(
 {
     return {
         elaborated.signal_paths(),
+        elaborated.string_paths(),
         elaborated.container_paths(),
     };
 }

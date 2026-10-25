@@ -853,26 +853,37 @@ ElaboratedDesign::find_container(
     return std::nullopt;
 }
 
+namespace {
+
+// The paths of a by-path object index with their objects, in lexical order.
+template <typename Object, typename ByPath>
+std::vector<std::pair<std::string, Object>> sorted_object_paths(
+    const ByPath& by_path, const semantic::HierarchyPathTable& paths)
+{
+    std::vector<std::pair<std::string, Object>> result;
+    result.reserve(by_path.size());
+    for (const auto& [path, object] : by_path) {
+        result.emplace_back(paths.view(path), object);
+    }
+    std::ranges::sort(result);
+    return result;
+}
+
+} // namespace
+
+std::vector<std::pair<std::string, runtime::simir::StringObjectId>>
+ElaboratedDesign::string_paths() const
+{
+    return sorted_object_paths<runtime::simir::StringObjectId>(
+        string_by_path_, hierarchy_paths_);
+}
+
 std::vector<std::pair<
     std::string, runtime::simir::ContainerObjectId>>
 ElaboratedDesign::container_paths() const
 {
-    std::vector<std::pair<
-        std::string, runtime::simir::ContainerObjectId>>
-        result;
-    result.reserve(container_by_path_.size());
-    for (const auto& [path, object] : container_by_path_) {
-        result.emplace_back(hierarchy_paths_.view(path), object);
-    }
-    std::ranges::sort(
-        result,
-        [](const auto& left, const auto& right) {
-            if (left.first != right.first) {
-                return left.first < right.first;
-            }
-            return left.second < right.second;
-        });
-    return result;
+    return sorted_object_paths<runtime::simir::ContainerObjectId>(
+        container_by_path_, hierarchy_paths_);
 }
 
 std::unique_ptr<runtime::simir::Interpreter>

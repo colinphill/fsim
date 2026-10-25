@@ -2397,6 +2397,8 @@ scheduler.
 | `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
 | `FSIM-ELAB-VHPROTECTED-022` | error | A pure VHDL function calls an impure protected function. |
 | `FSIM-ELAB-VHPROTECTED-023` | error | An unprotected shared variable in VHDL-1993 or explicit legacy compatibility mode lacks bounded executable storage or a compatible static initializer. |
+| `FSIM-ELAB-VHPROTECTED-024` | error | A method of a protected object allocated by an allocator is called without an access-variable prefix that designates the object. |
+| `FSIM-ELAB-VHPROTECTED-025` | error | A private variable of protected type inside an allocated protected object has no executable storage. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |

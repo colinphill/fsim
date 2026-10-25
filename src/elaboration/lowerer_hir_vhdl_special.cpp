@@ -1589,7 +1589,7 @@ Lowerer::hir_vhdl_protected_object_storage(const ContainerObjectId anchor,
             const auto name = object_name + "." + member->name;
             if (subtype && hir_vhdl_subtype_protected_type(*subtype)) {
                 if (pooled) {
-                    report("FSIM-ELAB-VHPROTECTED-023",
+                    report("FSIM-ELAB-VHPROTECTED-025",
                         "protected private variable '" + name
                             + "' of an allocated protected object is not "
                               "supported",

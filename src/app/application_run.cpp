@@ -1240,7 +1240,9 @@ std::unique_ptr<TraceState> attach_trace(
         }
         if (*format == project::TraceFormat::fst) {
             for (const auto& object : simulation.design_ir().objects()) {
-                if (object.kind != semantic::design::ObjectKind::string) {
+                // A port alias names its connected object, which owns it.
+                if (object.kind != semantic::design::ObjectKind::string
+                    || object.parent_object) {
                     continue;
                 }
                 if (!fst_string_by_runtime.try_emplace(

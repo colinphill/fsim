@@ -2226,6 +2226,7 @@ tests/fixtures/compliance/vhdl_character_array_context_batch57.vhd
 tests/fixtures/compliance/vhdl_character_arrays_and_bounds.vhd
 tests/fixtures/compliance/vhdl_character_indexed_array_initializer_20261013.vhd
 tests/fixtures/compliance/vhdl_character_literal_alias_context_batch56.vhd
+tests/fixtures/compliance/vhdl_character_subtype_default_20261025.vhd
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_component_binding_bitvector_generic_batch56.vhd
 tests/fixtures/compliance/vhdl_component_binding_character_generic_batch56.vhd
@@ -2242,6 +2243,7 @@ tests/fixtures/compliance/vhdl_constant_bounds_and_file_images.vhd
 tests/fixtures/compliance/vhdl_constant_slice_copyin_batch58.vhd
 tests/fixtures/compliance/vhdl_constrained_constant_range_guard_batch59.vhd
 tests/fixtures/compliance/vhdl_constrained_string_defaults_batch57.vhd
+tests/fixtures/compliance/vhdl_defaulted_call_index_20261025.vhd
 tests/fixtures/compliance/vhdl_deferred_constant_bounds_batch58.vhd
 tests/fixtures/compliance/vhdl_dynamic_string_defaults_batch57.vhd
 tests/fixtures/compliance/vhdl_dynamic_string_range_batch58.vhd
@@ -2251,6 +2253,7 @@ tests/fixtures/compliance/vhdl_enum_index_arrays.vhd
 tests/fixtures/compliance/vhdl_enum_loop_nominal_context_batch58.vhd
 tests/fixtures/compliance/vhdl_environment_tee_and_flush.vhd
 tests/fixtures/compliance/vhdl_exhaustive_selected_assignment_batch59.vhd
+tests/fixtures/compliance/vhdl_fixed_relation_widths_20261025.vhd
 tests/fixtures/compliance/vhdl_formal_element_constraints.vhd
 tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_function_integer_indexed_result_shape_batch59.vhd
