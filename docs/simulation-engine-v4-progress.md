@@ -131,6 +131,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-25: resumption after the LRM closure; corpus census
+
+The migration resumes after the LRM closure (Batch 96, `d7dfa257`). The owner's
+direction:
+- the legacy per-process compiled engine no longer needs to work;
+- at the end, the whole six-suite LRM corpus runs on v4.
+
+The baseline census ran the closure binary (`6803a2de`) over the corpus with
+`FSIM_STATIC_KERNEL=1`, on the runner's default `--engine interpreter`. Kernel
+members run as native code; the remaining processes run on the reference
+evaluator.
+
+| Suite | Pass, kernel off | Pass, kernel on | Kernel planned | Admitted | no_members | vhdl_partial | unknown_dependencies |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2567 | 2194 | 1723 | 215 | 0 | 223 |
+| sv-tests | 1495 | 1495 | 387 | 225 | 40 | 0 | 120 |
+| verilator | 2065 | 2052 | 2033 | 1290 | 82 | 0 | 655 |
+| vests | 3646 | 3646 | 1606 | 24 | 1244 | 164 | 174 |
+| nvc | 1261 | 1259 | 1180 | 219 | 689 | 199 | 73 |
+| vhdl-compliance | 65 | 65 | 65 | 0 | 0 | 0 | 65 |
+
+- **Admission.** 47% of the planned cases admit the kernel; "admitted" still
+  leaves some processes on the host.
+- **Losses.** Switching the kernel on loses 97 passing cases. The largest
+  group is 37 package static initializer failures; the rest are behavioral
+  divergences (31), dynamic-index errors (7), force/release and `$stop`
+  cases (13), and singles.
+- **Gaps.** VHDL has no behavioral tier, so VHDL testbenches are refused
+  (`no_members`, `vhdl_partial`). `unknown_dependencies` refuses 1310 cases.
+- **Plan of record.** The resumption plan sets milestones M0–M4: plumbing and
+  census, kernel-on correctness, admission, full ownership, then switch and
+  retirement. Gates G1–G5 are the definition of done. The plan is in the
+  local handoff `.local-artifacts/v4-migration/HANDOFF.md`.
+
 ### 2026-10-08 (later): exit criteria met — campaign `v4-corpus-1008d`
 
 Candidate 847d6c56, frozen as `v4cand-corpus-1008d`. Configuration `llvm_o2_aot`
