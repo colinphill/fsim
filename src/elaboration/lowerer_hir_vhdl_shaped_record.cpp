@@ -24,7 +24,7 @@ constexpr std::string_view member_prefix { "@vhdl-member:" };
 template <typename Result>
 Result record_rejected(const std::string_view reason, Result result)
 {
-    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+    if (elaboration_detail::trace_lowering_failures()) {
         std::cerr << "[fsim-hir-lower] vhdl-shaped-record-rejected " << reason
                   << '\n';
     }

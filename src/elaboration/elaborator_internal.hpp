@@ -12,6 +12,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -39,6 +40,15 @@ inline constexpr std::uint64_t maximum_compiled_event_array_elements
     = 65'536U;
 
 using support::vhdl_time_units;
+
+// Whether FSIM_HIR_LOWER_TRACE_FAILURES asks for rejected-lowering traces.
+// Read once: rejection paths are taken routinely during elaboration.
+[[nodiscard]] inline bool trace_lowering_failures() noexcept
+{
+    static const bool enabled
+        = std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr;
+    return enabled;
+}
 
 // A resolved subelement of a composite VHDL signal whose own subtype is
 // unresolved: `width` bits at `offset` from the least significant bit,

@@ -945,6 +945,50 @@ void CompiledDesign::refresh_lookup_indexes()
             rebuilt.vhdl_physical_units_by_name[unit.name].push_back(entry);
         }
     }
+    rebuilt.vhdl_unit_items.resize(semantics.units().size());
+    {
+        const auto& scopes = semantics.scopes();
+        const auto unit_items = [&](const ScopeId scope)
+            -> CompiledVhdlUnitItems* {
+            if (!scope.valid() || scope.value() >= scopes.size()) {
+                return nullptr;
+            }
+            const auto unit = scopes[scope.value()].unit;
+            return unit.valid() && unit.value() < rebuilt.vhdl_unit_items.size()
+                ? &rebuilt.vhdl_unit_items[unit.value()]
+                : nullptr;
+        };
+        const auto add = [&](const auto positions, const auto& collection,
+                             const auto scope_of) {
+            for (std::uint32_t position { };
+                 position < collection.size(); ++position) {
+                if (auto* items = unit_items(scope_of(collection[position]))) {
+                    (items->*positions).push_back(position);
+                }
+            }
+        };
+        const auto scope = [](const auto& item) { return item.scope; };
+        add(&CompiledVhdlUnitItems::declarations, vhdl_hir.declarations(),
+            scope);
+        add(&CompiledVhdlUnitItems::expressions, vhdl_hir.expressions(),
+            scope);
+        add(&CompiledVhdlUnitItems::statements, vhdl_hir.statements(),
+            scope);
+        add(&CompiledVhdlUnitItems::processes, vhdl_hir.processes(), scope);
+        add(&CompiledVhdlUnitItems::instances, vhdl_hir.instances(), scope);
+        std::unordered_map<std::uint32_t, ScopeId> declaration_scopes;
+        for (const auto& declaration : vhdl_hir.declarations()) {
+            declaration_scopes.try_emplace(
+                declaration.id.value(), declaration.scope);
+        }
+        add(&CompiledVhdlUnitItems::types, vhdl_hir.types(),
+            [&](const vhdl::TypeDefinition& type) {
+                const auto found
+                    = declaration_scopes.find(type.declaration.value());
+                return found == declaration_scopes.end() ? ScopeId { }
+                                                         : found->second;
+            });
+    }
     rebuilt.vhdl_imports_by_unit.resize(semantics.units().size());
     std::vector<std::vector<const CompiledReference*>>
         package_references_by_owner(rebuilt.vhdl_imports_by_unit.size());
@@ -1500,6 +1544,18 @@ CompiledDesign::vhdl_declarations_in_scope(
     }
     return std::span<const DeclarationId> {
         lookup_indexes_.vhdl_declarations_by_scope[scope.value()] };
+}
+
+const CompiledVhdlUnitItems* CompiledDesign::vhdl_unit_items(
+    const UnitId unit) const noexcept
+{
+    static const CompiledVhdlUnitItems none;
+    if (!lookup_indexes_current()) {
+        return nullptr;
+    }
+    return unit.valid() && unit.value() < lookup_indexes_.vhdl_unit_items.size()
+        ? &lookup_indexes_.vhdl_unit_items[unit.value()]
+        : &none;
 }
 
 std::optional<std::span<const DeclarationId>>

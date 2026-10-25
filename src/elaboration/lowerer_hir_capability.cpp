@@ -13023,7 +13023,7 @@ Lowerer::hir_vhdl_attribute_profile(
     // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the rejecting line.
     const auto fail = [&](const HirVhdlAttributeFailure reason,
                           const unsigned line = __builtin_LINE()) {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] vhdl-attribute-rejected line="
                       << line << '\n';
         }
@@ -13225,7 +13225,7 @@ Lowerer::hir_vhdl_attribute_profile(
     };
     // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the unresolved prefix line.
     const auto no_prefix = [&](const unsigned line = __builtin_LINE()) {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] vhdl-attribute-prefix-rejected line="
                       << line << '\n';
         }
@@ -15648,7 +15648,7 @@ Lowerer::hir_vhdl_signal_attribute_profile(
     // FSIM_HIR_LOWER_TRACE_FAILURES names the rejecting line.
     const auto rejected = [](const int line)
         -> std::optional<HirVhdlSignalAttributeProfile> {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] signal-attribute-rejected line="
                       << line << '\n';
         }
@@ -18845,7 +18845,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
 {
     // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the rejecting line.
     const auto rejected = [](const int line) -> std::optional<RegisterId> {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] vhdl-array-ordering-rejected line="
                       << line << '\n';
         }
@@ -19785,28 +19785,84 @@ std::size_t Lowerer::HirVhdlQueryKeyHash::operator()(
     return hash;
 }
 
-std::optional<std::size_t> Lowerer::hir_binding_frames_snapshot() const
+namespace {
+
+// A hash of generic binding frames that equal frames share; the intern
+// table compares the frames themselves on a match.
+std::size_t binding_frames_hash(
+    const std::vector<semantic::CompiledBindingFrame>& frames) noexcept
 {
-    if (hir_binding_frame_snapshot_last_ < hir_binding_frame_snapshots_.size()
-        && hir_binding_frame_snapshots_[hir_binding_frame_snapshot_last_]
-            == hir_generic_binding_frames_) {
-        return hir_binding_frame_snapshot_last_;
-    }
-    for (std::size_t index { }; index < hir_binding_frame_snapshots_.size();
-         ++index) {
-        if (hir_binding_frame_snapshots_[index]
-            == hir_generic_binding_frames_) {
-            hir_binding_frame_snapshot_last_ = index;
-            return index;
+    std::size_t hash = frames.size();
+    const auto mix = [&](const std::size_t part) {
+        hash ^= part + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    };
+    for (const auto& frame : frames) {
+        mix(frame.size());
+        for (const auto& binding : frame) {
+            mix(binding.formal.value());
+            mix(binding.expression ? binding.expression->value() + 1U : 0U);
+            mix(binding.actual_declaration
+                    ? binding.actual_declaration->value() + 1U
+                    : 0U);
+            mix(binding.systemverilog_type ? 1U : 0U);
+            mix(binding.vhdl_type
+                    ? binding.vhdl_type->type_mark.target.value() + 1U
+                    : 0U);
         }
     }
-    constexpr std::size_t maximum_snapshots { 256U };
+    return hash;
+}
+
+}  // namespace
+
+std::optional<std::size_t> Lowerer::hir_binding_frames_state() const noexcept
+{
+    if (const auto state
+        = hir_generic_binding_frames_.state(hir_binding_frame_generation_)) {
+        return state;
+    }
+    const auto& frames = hir_generic_binding_frames_.frames();
+    const auto hash = binding_frames_hash(frames);
+    const auto [first, last]
+        = hir_binding_frame_snapshot_index_.equal_range(hash);
+    for (auto entry = first; entry != last; ++entry) {
+        const auto& snapshot = hir_binding_frame_snapshots_[entry->second];
+        if (snapshot.frames == frames) {
+            hir_generic_binding_frames_.record_state(
+                hir_binding_frame_generation_, snapshot.state);
+            return snapshot.state;
+        }
+    }
+    // A full table starts over; its states stay retired, so cache entries
+    // keyed by them can no longer match.
+    constexpr std::size_t maximum_snapshots { 4096U };
     if (hir_binding_frame_snapshots_.size() >= maximum_snapshots) {
+        clear_hir_binding_frame_snapshots();
+    }
+    try {
+        hir_binding_frame_snapshots_.push_back(
+            { frames, hir_binding_frame_next_state_ });
+        try {
+            hir_binding_frame_snapshot_index_.emplace(
+                hash, hir_binding_frame_snapshots_.size() - 1U);
+        } catch (...) {
+            hir_binding_frame_snapshots_.pop_back();
+            throw;
+        }
+    } catch (const std::bad_alloc&) {
         return std::nullopt;
     }
-    hir_binding_frame_snapshots_.push_back(hir_generic_binding_frames_);
-    hir_binding_frame_snapshot_last_ = hir_binding_frame_snapshots_.size() - 1U;
-    return hir_binding_frame_snapshot_last_;
+    const auto state = hir_binding_frame_next_state_++;
+    hir_generic_binding_frames_.record_state(
+        hir_binding_frame_generation_, state);
+    return state;
+}
+
+void Lowerer::clear_hir_binding_frame_snapshots() const noexcept
+{
+    hir_binding_frame_snapshots_.clear();
+    hir_binding_frame_snapshot_index_.clear();
+    ++hir_binding_frame_generation_;
 }
 
 std::optional<Lowerer::HirVhdlQueryKey> Lowerer::hir_vhdl_query_key(
@@ -19816,7 +19872,7 @@ std::optional<Lowerer::HirVhdlQueryKey> Lowerer::hir_vhdl_query_key(
     if (!hir_vhdl_expression_subtype_cacheable()) {
         return std::nullopt;
     }
-    const auto frames = hir_binding_frames_snapshot();
+    const auto frames = hir_binding_frames_state();
     if (!frames) {
         return std::nullopt;
     }
@@ -23807,12 +23863,17 @@ Lowerer::hir_vhdl_expression_subtype(
         return compute_hir_vhdl_expression_subtype(expression_id);
     }
     const auto scope = hir_process_scope_;
+    const auto frames = hir_binding_frames_state();
+    if (!frames) {
+        ++hir_vhdl_expression_subtype_uncached_frames_;
+        return compute_hir_vhdl_expression_subtype(expression_id);
+    }
     if (const auto found
         = hir_vhdl_expression_subtype_cache_.find(expression_id.value());
         found != hir_vhdl_expression_subtype_cache_.end()) {
         for (const auto& entry : found->second) {
             if (entry.scope == scope && entry.callable == active_hir_callable_
-                && entry.binding_frames == hir_generic_binding_frames_) {
+                && entry.binding_frames == *frames) {
                 ++hir_vhdl_expression_subtype_cache_hits_;
                 return entry.result;
             }
@@ -23827,10 +23888,14 @@ Lowerer::hir_vhdl_expression_subtype(
         || !hir_vhdl_expression_subtype_cacheable()) {
         return result;
     }
+    // Lowering the expression may have left the frames changed; the
+    // entry is kept only under the frames it was computed for.
+    if (hir_binding_frames_state() != frames) {
+        return result;
+    }
     try {
         hir_vhdl_expression_subtype_cache_[expression_id.value()].push_back(
-            { scope, active_hir_callable_, hir_generic_binding_frames_,
-                result });
+            { scope, active_hir_callable_, *frames, result });
         ++hir_vhdl_expression_subtype_cache_entries_;
     } catch (const std::bad_alloc&) {
     }

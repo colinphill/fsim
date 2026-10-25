@@ -4239,7 +4239,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         if (!narrowed) {
             break;
         }
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             for (auto index = diagnostics_before;
                  index < diagnostics_.size(); ++index) {
                 std::cerr << "[fsim-hir-lower] class-function body left to "
@@ -4251,7 +4251,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         diagnostics_.resize(diagnostics_before);
     }
     hir_interpreted_class_functions_.clear();
-    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+    if (elaboration_detail::trace_lowering_failures()) {
         for (auto index = diagnostics_before; index < diagnostics_.size();
              ++index) {
             std::cerr << "[fsim-hir-lower] class-function retry after "

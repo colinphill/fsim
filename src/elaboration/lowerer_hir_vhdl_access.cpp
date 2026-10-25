@@ -323,9 +323,21 @@ void Lowerer::load_hir_vhdl_shared_access_heaps()
         specialized_hir_unit_->vhdl_declarations()) {
         consider(declaration);
     }
-    for (const auto& declaration :
-        specialized_hir_unit_->design().vhdl_hir.declarations()) {
-        consider(declaration);
+    auto& index = vhdl_lowering_index();
+    const auto& declarations = index.hir->declarations();
+    if (!index.shared_variables) {
+        auto& shared = index.shared_variables.emplace();
+        for (std::size_t position = 0U; position < declarations.size();
+             ++position) {
+            const auto& declaration = declarations[position];
+            if (declaration.form == semantic::vhdl::DeclarationForm::variable
+                && declaration.shared && declaration.subtype) {
+                shared.push_back(position);
+            }
+        }
+    }
+    for (const auto position : *index.shared_variables) {
+        consider(declarations[position]);
     }
 }
 

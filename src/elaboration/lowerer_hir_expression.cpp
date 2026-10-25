@@ -11851,7 +11851,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             }
         }
     }
-    if (!result && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr
+    if (!result && elaboration_detail::trace_lowering_failures()
         && specialized_hir_unit_ != nullptr) {
         const auto record = specialized_hir_unit_->find_expression(
             expression_id);
@@ -16132,7 +16132,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::binary
         && expression->vhdl->operands.size() == 2U
-        && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        && elaboration_detail::trace_lowering_failures()) {
         std::cerr << "[fsim-hir-lower] vhdl-binary text="
                   << expression->vhdl->text
                   << " overloaded=" << overloaded_vhdl_operator
@@ -22749,7 +22749,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 hir_generic_binding_frames_.push_back(
                     resolution->generic_bindings);
                 struct GenericBindingScope {
-                    std::vector<semantic::CompiledBindingFrame>& frames;
+                    HirGenericBindingFrames& frames;
                     ~GenericBindingScope() { frames.pop_back(); }
                 };
                 const GenericBindingScope generic_scope {
@@ -26450,7 +26450,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     *rhs, 0, std::numeric_limits<std::int32_t>::max() });
             }
             if ((!lhs || !rhs)
-                && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                && elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] binary-operand-failure op="
                           << source.text << " width=" << operand_width
                           << " lhs=" << lhs.has_value()
@@ -29405,7 +29405,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             && contextual_subtype != nullptr) {
             // Under FSIM_HIR_LOWER_TRACE_FAILURES, names the rejecting line.
             const auto rejected = [](const unsigned line = __builtin_LINE()) {
-                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                if (elaboration_detail::trace_lowering_failures()) {
                     std::cerr << "[fsim-hir-lower] vhdl-string-aggregate-"
                                  "rejected line="
                               << line << '\n';

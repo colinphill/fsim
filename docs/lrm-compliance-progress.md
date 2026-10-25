@@ -253,6 +253,46 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 5: VHDL lowering caches, per-unit validation
+
+Callgrind on rs_codec VHDL (pre-LRM 43.6 G, before this part 47.7 G)
+showed four structural costs:
+
+- The lowerer's subtype, expression-subtype, function-call, callable and
+  name-resolution caches kept a copy of the generic binding frames in
+  every entry and compared the frames element by element on each lookup
+  (about 2 G per case, against 0.27 G pre-LRM, because frames now carry
+  full subtype indications). The frames are now a stack that only grows
+  and shrinks; each depth records the interned state of its prefix, and
+  the caches compare that state number.
+- The VHDL type validator runs once per specialized entity and
+  architecture (164 times in rs_codec) and 14 of its checks scanned every
+  declaration, type, statement, process, instance or expression of the
+  design to keep those of the unit. The compiled design now indexes VHDL
+  HIR items by design unit, and the validator iterates only the unit's.
+- Every VHDL-2008 process scanned every design declaration for shared
+  access variables; the lowering index keeps their positions.
+- Overload resolution and rejected-lowering paths read trace variables
+  from the environment on every call; they are read once.
+
+| Case | pre-LRM | part 3 | now |
+| --- | ---: | ---: | ---: |
+| rs_param VHDL instructions (G) | 124.0 | 135.4 | 126.9 |
+| rs_param VHDL CPU (s) | 10.3 | 14.3 | 14.0 |
+| rs_codec VHDL instructions (G) | 38.1 | 42.6 | 39.5 |
+| rs_codec VHDL CPU (s) | 3.0 | 4.1 | 4.0 |
+
+Instructions are now within 2 to 4% of the pre-LRM binary, but cycles are
+still about 37% higher. The hardware counters on rs_codec VHDL place the
+difference in instruction fetch: L1 data misses are unchanged (549 M in
+both), while instruction-cache fills from beyond L2 tripled (46 M to
+139 M) and the set of functions taking fetch misses grew from 1232 to
+1658. The hot lowering path now runs through more and larger functions
+(subtype, shape and width queries added for LRM rules), and the code no
+longer fits in L2. The top 30 functions hold only 39% of the added misses,
+so the remaining gap is code layout rather than a single algorithm;
+profile-guided layout is the general remedy and is an owner decision.
+
 ### Batch 96 part 3: elaboration time of the rs suite, nvc issue620
 
 Elaboration of the rs testbenches had grown well past the pre-LRM binary

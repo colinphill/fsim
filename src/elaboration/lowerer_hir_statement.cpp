@@ -2998,7 +2998,7 @@ Lowerer::hir_named_clocking_event(
                 interface_type = *declaration.type;
             }
         }
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] clocking-handle " << handle_name
                       << " found=" << handle.has_value() << " declaration="
                       << (handle_declaration
@@ -3054,7 +3054,7 @@ Lowerer::hir_named_clocking_event(
     // flag among them.
     use_flag = use_flag
         || signals_.contains(std::string { handle_path } + "." + member_flag);
-    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+    if (elaboration_detail::trace_lowering_failures()) {
         std::cerr << "[fsim-hir-lower] clocking-path " << name << " type="
                   << interface_type->interface_type << " flag=" << use_flag
                   << '\n';
@@ -4170,7 +4170,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         auto result = lower_statement_packed_expression(
             expression, width);
         if (!result) {
-            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            if (elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] condition-rejection expression="
                           << expression.value() << " width=" << width
                           << '\n';
@@ -4323,7 +4323,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         // FSIM_HIR_LOWER_TRACE_FAILURES also the lowerer line that rejected
         // it.
         const auto assignment_rejected = [&](const int line) {
-            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            if (elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] assignment-rejected line="
                           << line << '\n';
             }
@@ -4335,8 +4335,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         };
         const auto trace_assignment_failure =
             [&](const std::string_view reason) {
-                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
-                    == nullptr) {
+                if (!elaboration_detail::trace_lowering_failures()) {
                     return;
                 }
                 std::cerr << "[fsim-hir-lower] assignment-failure statement="
@@ -6547,8 +6546,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         > std::numeric_limits<std::uint32_t>::max()
                     || selection->width
                         > std::numeric_limits<std::uint32_t>::max()) {
-                    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
-                        != nullptr) {
+                    if (elaboration_detail::trace_lowering_failures()) {
                         std::cerr
                             << "[fsim-hir-lower] element-target-rejection"
                             << " statement=" << statement_id.value()
@@ -6572,8 +6570,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 auto lowered = lower_hir_expression(
                     *value, selection->width);
                 if (!current || !lowered) {
-                    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
-                        != nullptr) {
+                    if (elaboration_detail::trace_lowering_failures()) {
                         std::cerr
                             << "[fsim-hir-lower] element-value-rejection"
                             << " statement=" << statement_id.value()
@@ -13300,7 +13297,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         // denote the instance's actuals while an aggregate value takes its
         // type from the target.
         struct InstanceGenericScope {
-            std::vector<semantic::CompiledBindingFrame>& frames;
+            HirGenericBindingFrames& frames;
             bool active { };
             ~InstanceGenericScope()
             {
@@ -13590,8 +13587,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         if (binding->kind == HirRuntimeBindingKind::local) {
             if (nonblocking) {
-                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
-                    != nullptr) {
+                if (elaboration_detail::trace_lowering_failures()) {
                     std::cerr
                         << "[fsim-hir-lower] "
                            "local-nonblocking-assignment-rejected\n";
@@ -14279,7 +14275,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
     };
     const auto lower_case = [&](const auto& alternatives) {
         if (!condition) {
-            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            if (elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] case-failure statement="
                           << statement_id.value()
                           << " reason=missing-condition\n";
@@ -14291,7 +14287,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const std::optional<semantic::ExpressionId> choice = std::nullopt,
                 const std::optional<std::size_t> choice_width = std::nullopt,
                 const std::optional<std::size_t> selector_width = std::nullopt) {
-                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") == nullptr) {
+                if (!elaboration_detail::trace_lowering_failures()) {
                     return;
                 }
                 std::cerr << "[fsim-hir-lower] case-failure statement="
@@ -14875,8 +14871,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             : hir_source_span(alternative.source);
                         if (!pattern
                             || pattern->size() != *selector_width) {
-                            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
-                                != nullptr) {
+                            if (elaboration_detail::trace_lowering_failures()) {
                                 std::cerr << "[fsim-hir-lower] matching-choice"
                                           << " selector_width="
                                           << *selector_width << " kind="
@@ -20848,7 +20843,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 input.assignment_kind
                     == semantic::sv::AssignmentKind::nonblocking);
             if (!lowered
-                && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                && elaboration_detail::trace_lowering_failures()) {
                 const auto trace_expression = [&](
                                                    const std::string_view name,
                                                    const std::optional<semantic::ExpressionId>& id) {
@@ -20939,7 +20934,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             const auto lowered = lower_case(input.case_alternatives);
             if (!lowered
-                && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                && elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] failed-selection statement="
                           << statement_id.value()
                           << " source_line=" << span.begin.line

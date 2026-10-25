@@ -20326,7 +20326,7 @@ HierarchyBuilder::add_compiled_vhdl_composite_value_signal(
     const auto value = evaluate_compiled_vhdl_value(specialization,
         *expression, id, subtype, path, signals, read_only_signals,
         container_objects);
-    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+    if (elaboration_detail::trace_lowering_failures()) {
         std::cerr << "[fsim-hir-lower] vhdl-elaborated-constant " << name
                   << " width=" << layout->width << " value="
                   << (value ? value->width() : 0U) << '\n';
@@ -22999,7 +22999,9 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         inherited_port_range = [&] (
         const semantic::vhdl::RangeConstraint& constraint)
         -> std::optional<semantic::vhdl::RangeConstraint> {
-        if (std::getenv("FSIM_VHDL_PORT_RANGE_TRACE") != nullptr) {
+        static const bool trace
+            = std::getenv("FSIM_VHDL_PORT_RANGE_TRACE") != nullptr;
+        if (trace) {
             const auto text = [&](const std::optional<semantic::ExpressionId> id) {
                 const auto found = id
                     ? working_specialization.find_expression(*id)

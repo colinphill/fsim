@@ -27,7 +27,7 @@ namespace {
 
 void trace_evaluation(const std::string_view stage, const std::string_view detail)
 {
-    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+    if (elaboration_detail::trace_lowering_failures()) {
         std::cerr << "[fsim-hir-lower] vhdl-elaboration-evaluation " << stage
                   << ": " << detail << '\n';
     }

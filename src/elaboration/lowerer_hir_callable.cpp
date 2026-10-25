@@ -5279,7 +5279,7 @@ Lowerer::hir_uvm_database_actuals(const std::string_view identity,
             *expressions[index], process_scope);
         if (!domain || (*domain != frontend::ValueDomain::String
                 && (!width || *width == 0U))) {
-            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            if (elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] uvm-database-actual "
                           << identity << " index=" << index
                           << " domain=" << domain.has_value()
@@ -7282,7 +7282,7 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             : lower_hir_packed_copy_out(
                   actual.expression, actuals[index]);
         if (!copied) {
-            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+            if (elaboration_detail::trace_lowering_failures()) {
                 std::cerr << "[fsim-hir-lower] class-call copy-out "
                           << profile->identity << " index=" << index
                           << '\n';
@@ -9703,11 +9703,15 @@ Lowerer::hir_effective_vhdl_subtype(
         }
         return hash;
     }();
+    const auto frames = hir_binding_frames_state();
+    if (!frames) {
+        return resolve();
+    }
     if (const auto bucket = hir_effective_vhdl_subtype_cache_.find(key);
         bucket != hir_effective_vhdl_subtype_cache_.end()) {
         for (const auto& entry : bucket->second) {
-            if (entry.scope == scope && entry.subtype == subtype
-                && entry.binding_frames == hir_generic_binding_frames_) {
+            if (entry.scope == scope && entry.binding_frames == *frames
+                && entry.subtype == subtype) {
                 try {
                     auto cached = std::optional<semantic::vhdl::SubtypeIndication> {
                         entry.result
@@ -9735,10 +9739,9 @@ Lowerer::hir_effective_vhdl_subtype(
     }
     auto retained_bytes = sizeof(HirEffectiveVhdlSubtypeCacheEntry);
     const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
-    if (!add_effective_subtype_cache_vhdl_type(
+    if (hir_binding_frames_state() != frames
+        || !add_effective_subtype_cache_vhdl_type(
             retained_bytes, subtype, entry_limit)
-        || !add_effective_subtype_cache_bindings(
-            retained_bytes, hir_generic_binding_frames_, entry_limit)
         || !add_effective_subtype_cache_vhdl_type(
             retained_bytes, *result, entry_limit)
         || !cache_bytes_fit(hir_effective_vhdl_subtype_cache_bytes_,
@@ -9749,7 +9752,7 @@ Lowerer::hir_effective_vhdl_subtype(
         hir_effective_vhdl_subtype_cache_[key].push_back({
             subtype,
             scope,
-            hir_generic_binding_frames_,
+            *frames,
             *result,
         });
     } catch (const std::bad_alloc&) {
@@ -9769,7 +9772,10 @@ Lowerer::find_hir_expression_resolution_cache(
         return nullptr;
     }
     const auto found = hir_expression_resolution_cache_.find(expression);
-    if (found == hir_expression_resolution_cache_.end()) {
+    const auto frames = found == hir_expression_resolution_cache_.end()
+        ? std::nullopt
+        : hir_binding_frames_state();
+    if (!frames) {
         if (profile_expression_resolution_cache()) {
             ++hir_expression_resolution_cache_misses_;
         }
@@ -9777,7 +9783,7 @@ Lowerer::find_hir_expression_resolution_cache(
     }
     const auto entry = std::ranges::find_if(
         found->second, [&](const auto& candidate) {
-            return candidate.binding_frames == hir_generic_binding_frames_;
+            return candidate.binding_frames == *frames;
         });
     if (profile_expression_resolution_cache()) {
         if (entry == found->second.end()) {
@@ -9813,8 +9819,8 @@ void Lowerer::cache_hir_expression_resolution(
         + sizeof(std::vector<HirExpressionResolutionCacheEntry>)
         + 4U * sizeof(void*);
     const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
-    if (!add_effective_subtype_cache_bindings(
-            retained_bytes, hir_generic_binding_frames_, entry_limit)
+    const auto frames = hir_binding_frames_state();
+    if (!frames
         || !add_effective_subtype_cache_bytes(
             retained_bytes, sizeof(resolution), entry_limit)
         || !add_effective_subtype_cache_sequence(
@@ -9837,7 +9843,7 @@ void Lowerer::cache_hir_expression_resolution(
             = hir_expression_resolution_cache_.try_emplace(expression);
         found = result.first;
         inserted = result.second;
-        found->second.push_back({ hir_generic_binding_frames_, resolution });
+        found->second.push_back({ *frames, resolution });
     } catch (const std::bad_alloc&) {
         if (inserted && found != hir_expression_resolution_cache_.end()
             && found->second.empty()) {
@@ -9993,8 +9999,7 @@ void Lowerer::clear_hir_vhdl_query_caches() const noexcept
     hir_vhdl_expression_subtype_cache_entries_ = 0U;
     hir_vhdl_width_cache_.clear();
     hir_vhdl_shape_cache_.clear();
-    hir_binding_frame_snapshots_.clear();
-    hir_binding_frame_snapshot_last_ = 0U;
+    clear_hir_binding_frame_snapshots();
     hir_vhdl_function_call_cache_.clear();
     hir_vhdl_function_call_cache_entries_ = 0U;
 }
@@ -10162,11 +10167,16 @@ Lowerer::hir_vhdl_callable_resolutions(
     // Overload resolution recomputes the visible homographs' profiles, so
     // the candidates are kept for the unit (cleared when it changes).
     const auto key = std::string { name.text() };
+    const auto frames = hir_binding_frames_state();
+    if (!frames) {
+        return hir_resolver().resolve_vhdl_callables(name, use_scope)
+            .candidates;
+    }
     if (const auto found = hir_vhdl_callable_cache_.find(key);
         found != hir_vhdl_callable_cache_.end()) {
         for (const auto& entry : found->second) {
-            if (entry.scope == use_scope && entry.name == name
-                && entry.binding_frames == hir_generic_binding_frames_) {
+            if (entry.scope == use_scope && entry.binding_frames == *frames
+                && entry.name == name) {
                 return entry.candidates;
             }
         }
@@ -10181,13 +10191,12 @@ Lowerer::hir_vhdl_callable_resolutions(
         || hir_vhdl_callable_cache_bytes_ >= maximum_vhdl_callable_cache_bytes) {
         return candidates;
     }
-    // Each entry keeps copies of the binding frames, which grow with the
+    // Each entry keeps the candidates' binding frames, which grow with the
     // design's generics, so the cache is bounded by the bytes it retains.
     auto retained_bytes = sizeof(HirVhdlCallableCacheEntry) + key.size();
     const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
-    if (!add_effective_subtype_cache_name(retained_bytes, name, entry_limit)
-        || !add_effective_subtype_cache_bindings(
-            retained_bytes, hir_generic_binding_frames_, entry_limit)
+    if (hir_binding_frames_state() != frames
+        || !add_effective_subtype_cache_name(retained_bytes, name, entry_limit)
         || !add_effective_subtype_cache_sequence(retained_bytes,
             candidates.size(), sizeof(semantic::CompiledVhdlCallableResolution),
             entry_limit)
@@ -10202,7 +10211,7 @@ Lowerer::hir_vhdl_callable_resolutions(
         return candidates;
     }
     hir_vhdl_callable_cache_[key].push_back({
-        name, use_scope, hir_generic_binding_frames_, candidates });
+        name, use_scope, *frames, candidates });
     ++hir_vhdl_callable_cache_entries_;
     hir_vhdl_callable_cache_bytes_ += retained_bytes;
     return candidates;
@@ -15985,6 +15994,11 @@ Lowerer::resolve_hir_vhdl_function_call(
             expression_id, process_scope, contextual_width);
     }
     const auto scope = hir_process_scope_;
+    const auto frames = hir_binding_frames_state();
+    if (!frames) {
+        return compute_hir_vhdl_function_call(
+            expression_id, process_scope, contextual_width);
+    }
     if (const auto found
         = hir_vhdl_function_call_cache_.find(expression_id.value());
         found != hir_vhdl_function_call_cache_.end()) {
@@ -15992,7 +16006,7 @@ Lowerer::resolve_hir_vhdl_function_call(
             if (entry.scope == scope && entry.process_scope == process_scope
                 && entry.contextual_width == contextual_width
                 && entry.callable == active_hir_callable_
-                && entry.binding_frames == hir_generic_binding_frames_) {
+                && entry.binding_frames == *frames) {
                 return entry.result;
             }
         }
@@ -16003,13 +16017,14 @@ Lowerer::resolve_hir_vhdl_function_call(
     constexpr std::size_t maximum_entries { 1U << 16U };
     if (hir_boundary_fallback_calls_ != fallback_calls
         || hir_vhdl_function_call_cache_entries_ >= maximum_entries
-        || !hir_vhdl_expression_subtype_cacheable()) {
+        || !hir_vhdl_expression_subtype_cacheable()
+        || hir_binding_frames_state() != frames) {
         return result;
     }
     try {
         hir_vhdl_function_call_cache_[expression_id.value()].push_back({
             scope, process_scope, contextual_width, active_hir_callable_,
-            hir_generic_binding_frames_, result });
+            *frames, result });
         ++hir_vhdl_function_call_cache_entries_;
     } catch (const std::bad_alloc&) {
     }
@@ -21341,7 +21356,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
 {
     // FSIM_HIR_LOWER_TRACE_FAILURES names the rejecting line.
     const auto procedure_rejected = [](const int line) {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] procedure-call-rejected line="
                       << line << '\n';
         }
@@ -24490,7 +24505,7 @@ Lowerer::hir_vhdl_signal_part_binding(const semantic::DeclarationId formal,
         return std::nullopt;
     }
     const auto trace = [](const std::string& reason) {
-        if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        if (elaboration_detail::trace_lowering_failures()) {
             std::cerr << "[fsim-hir-lower] signal-part-rejected " << reason
                       << '\n';
         }

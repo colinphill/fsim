@@ -103,6 +103,18 @@ struct CompiledDependency {
         const CompiledDependency&) = default;
 };
 
+/// Positions in the VHDL HIR collections of the items whose scope belongs
+/// to one design unit, in collection order. A type belongs to the unit of
+/// its declaration.
+struct CompiledVhdlUnitItems {
+    std::vector<std::uint32_t> declarations;
+    std::vector<std::uint32_t> types;
+    std::vector<std::uint32_t> expressions;
+    std::vector<std::uint32_t> statements;
+    std::vector<std::uint32_t> processes;
+    std::vector<std::uint32_t> instances;
+};
+
 /// Canonical package visibility retained in the compiled-design lookup
 /// indexes. The strings are owned by the index so resolver reads remain
 /// allocation-free after linking and normalization.
@@ -305,6 +317,10 @@ public:
     systemverilog_import_statements_in_scope(ScopeId scope) const noexcept;
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     vhdl_declarations_in_scope(ScopeId scope) const noexcept;
+    /// The VHDL HIR items of one design unit; null when the lookup indexes
+    /// are stale.
+    [[nodiscard]] const CompiledVhdlUnitItems* vhdl_unit_items(
+        UnitId unit) const noexcept;
     /// Return VHDL declaration identities with this identifier in one scope,
     /// preserving HIR declaration order. A disengaged result means the
     /// non-owning lookup indexes are stale or the scope is invalid; an
@@ -441,6 +457,7 @@ private:
             vhdl_type_positions_by_name;
         std::vector<std::vector<CompiledVhdlImport>>
             vhdl_imports_by_unit;
+        std::vector<CompiledVhdlUnitItems> vhdl_unit_items;
         std::unordered_map<std::string_view,
             std::vector<CompiledVhdlPackageMemberIndexEntry>,
             VhdlIdentifierHash, VhdlIdentifierEqual>

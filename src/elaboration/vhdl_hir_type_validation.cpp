@@ -20,7 +20,9 @@
 #include <set>
 #include <tuple>
 #include <limits>
+#include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11671,7 +11673,7 @@ private:
                     return !dimension.constrained;
                 })) {
             if (!contextual_result) {
-                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                if (elaboration_detail::trace_lowering_failures()) {
                     const auto traced = specialization_.find_expression(
                         expression.operands.front());
                     std::cerr << "[fsim-vhdl-validate] array-attribute prefix kind="
@@ -12515,6 +12517,101 @@ private:
         }
     }
 
+    // Positions in the design's VHDL HIR of the items of the validated
+    // entity and architecture, in HIR order; every position when the lookup
+    // indexes are stale. Loops over them still check selected_scope.
+    struct SelectedItems {
+        std::vector<std::uint32_t> declarations;
+        std::vector<std::uint32_t> types;
+        std::vector<std::uint32_t> expressions;
+        std::vector<std::uint32_t> statements;
+        std::vector<std::uint32_t> processes;
+        std::vector<std::uint32_t> instances;
+    };
+
+    [[nodiscard]] const SelectedItems& selected_items() const
+    {
+        if (selected_items_) {
+            return *selected_items_;
+        }
+        const auto& design = specialization_.design();
+        const auto& hir = design.vhdl_hir;
+        const auto* entity = design.vhdl_unit_items(entity_.id);
+        const auto* architecture = design.vhdl_unit_items(architecture_.id);
+        auto& items = selected_items_.emplace();
+        const auto select = [&](std::vector<std::uint32_t> SelectedItems::*
+                                    result,
+                                const std::vector<std::uint32_t>
+                                    semantic::CompiledVhdlUnitItems::*member,
+                                const std::size_t size) {
+            auto& positions = items.*result;
+            if (entity == nullptr || architecture == nullptr) {
+                positions.resize(size);
+                std::iota(positions.begin(), positions.end(), 0U);
+            } else if (entity_.id == architecture_.id) {
+                positions = entity->*member;
+            } else {
+                std::ranges::merge(entity->*member, architecture->*member,
+                    std::back_inserter(positions));
+            }
+        };
+        using Items = semantic::CompiledVhdlUnitItems;
+        select(&SelectedItems::declarations, &Items::declarations,
+            hir.declarations().size());
+        select(&SelectedItems::types, &Items::types, hir.types().size());
+        select(&SelectedItems::expressions, &Items::expressions,
+            hir.expressions().size());
+        select(&SelectedItems::statements, &Items::statements,
+            hir.statements().size());
+        select(&SelectedItems::processes, &Items::processes,
+            hir.processes().size());
+        select(&SelectedItems::instances, &Items::instances,
+            hir.instances().size());
+        return items;
+    }
+
+    // The items of `collection` at `positions`.
+    template <typename Item>
+    [[nodiscard]] static auto selected(const std::vector<Item>& collection,
+        const std::vector<std::uint32_t>& positions)
+    {
+        return positions
+            | std::views::transform(
+                [&collection](const std::uint32_t position) -> const Item& {
+                    return collection[position];
+                });
+    }
+    [[nodiscard]] auto unit_declarations() const
+    {
+        return selected(specialization_.design().vhdl_hir.declarations(),
+            selected_items().declarations);
+    }
+    [[nodiscard]] auto unit_types() const
+    {
+        return selected(specialization_.design().vhdl_hir.types(),
+            selected_items().types);
+    }
+    [[nodiscard]] auto unit_expressions() const
+    {
+        return selected(specialization_.design().vhdl_hir.expressions(),
+            selected_items().expressions);
+    }
+    [[nodiscard]] auto unit_statements() const
+    {
+        return selected(specialization_.design().vhdl_hir.statements(),
+            selected_items().statements);
+    }
+    [[nodiscard]] auto unit_processes() const
+    {
+        return selected(specialization_.design().vhdl_hir.processes(),
+            selected_items().processes);
+    }
+    [[nodiscard]] auto unit_instances() const
+    {
+        return selected(specialization_.design().vhdl_hir.instances(),
+            selected_items().instances);
+    }
+
     void validate_operations()
     {
         const auto selected_scope = [&](const semantic::ScopeId scope) {
@@ -12525,7 +12622,7 @@ private:
                     || scopes[scope.value()].unit == architecture_.id);
         };
         validate_subprogram_bodies(selected_scope);
-        for (const auto& stored : specialization_.design().vhdl_hir.declarations()) {
+        for (const auto& stored : unit_declarations()) {
             using Form = semantic::vhdl::DeclarationForm;
             // IEEE 1076-2008 6.6.2: an object alias's subtype has the type of
             // the aliased object, and is one-dimensional before VHDL-2008.
@@ -12615,7 +12712,7 @@ private:
         // IEEE 1076-2008 5.2.1: the bounds of a range constraint are
         // expressions, so a type, label or design-unit name is not a bound.
         if (name_check_) {
-            for (const auto& type : specialization_.design().vhdl_hir.types()) {
+            for (const auto& type : unit_types()) {
                 const auto declaration = specialization_.find_declaration(type.declaration);
                 if (!declaration || declaration->vhdl == nullptr
                     || !selected_scope(declaration->vhdl->scope) || !type.scalar_range) {
@@ -12630,8 +12727,7 @@ private:
             }
         }
         // IEEE 1076-2008 6.4.2.1, 6.5.2: only variables are of access types.
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.declarations()) {
+        for (const auto& stored : unit_declarations()) {
             using Form = semantic::vhdl::DeclarationForm;
             // Subprogram formals are kept as ports of their object class;
             // a variable-class formal may be of an access type.
@@ -12651,8 +12747,7 @@ private:
         }
         if (name_check_) {
             using Form = semantic::vhdl::DeclarationForm;
-            for (const auto& stored :
-                specialization_.design().vhdl_hir.declarations()) {
+            for (const auto& stored : unit_declarations()) {
                 // Interface defaults are checked only when used.
                 if (stored.initializer && selected_scope(stored.scope)
                     && (stored.form == Form::signal || stored.form == Form::variable
@@ -12675,8 +12770,7 @@ private:
         }
         // Types declared in processes and subprograms are not object types of
         // the unit, but their range bounds are still checked.
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.declarations()) {
+        for (const auto& stored : unit_declarations()) {
             if (!stored.declared_type || !selected_scope(stored.scope)
                 || relevant_types_.contains(stored.declared_type->value())) {
                 continue;
@@ -12870,8 +12964,7 @@ private:
         };
         std::unordered_set<std::uint32_t> discrete_range_attributes;
         std::unordered_set<std::uint32_t> portable_range_exempt_literals;
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.statements()) {
+        for (const auto& stored : unit_statements()) {
             const auto effective = specialization_.find_statement(
                 stored.id);
             if (!effective || effective->vhdl == nullptr
@@ -13307,8 +13400,7 @@ private:
                 discrete_range_attributes.insert(id.value());
             }
         };
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.expressions()) {
+        for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(
                 stored.id);
             if (!effective || effective->vhdl == nullptr
@@ -13330,8 +13422,7 @@ private:
         // naked range values in scalar contexts outside this set so
         // VHARRAYATTR-003 still applies; the selector validator checks the
         // index subtype and array rank.
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.expressions()) {
+        for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(
                 stored.id);
             if (!effective || effective->vhdl == nullptr) {
@@ -13399,8 +13490,7 @@ private:
             }
         }
         if (architecture_.standard != "2019") {
-            for (const auto& stored :
-                specialization_.design().vhdl_hir.expressions()) {
+            for (const auto& stored : unit_expressions()) {
                 // The abstract literal of a physical literal (`N fs`) is a
                 // value of the physical type's range, not of INTEGER
                 // (IEEE 1076-2008 5.2.4.1). Specialization folds the literal
@@ -13490,7 +13580,7 @@ private:
                 linkage_uses.insert(stored.operands.front().value());
             }
         }
-        for (const auto& stored : specialization_.design().vhdl_hir.expressions()) {
+        for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(stored.id);
             if (!effective || effective->vhdl == nullptr
                 || effective->vhdl->kind != semantic::vhdl::ExpressionKind::name
@@ -13514,8 +13604,7 @@ private:
                 inner_indices.insert(stored.operands.front().value());
             }
         }
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.expressions()) {
+        for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(
                 stored.id);
             if (!effective || effective->vhdl == nullptr
@@ -13842,14 +13931,14 @@ private:
                     expression.source);
             }
         }
-        for (const auto& process : specialization_.design().vhdl_hir.processes()) {
+        for (const auto& process : unit_processes()) {
             if (selected_scope(process.scope)) {
                 validate_out_port_sensitivity(process.sensitivities, process.scope);
             }
         }
         // IEEE 1076-2008 11.7.1: a component instantiation names a declared
         // component; an actual is an expression, not a type or design unit.
-        for (const auto& instance : specialization_.design().vhdl_hir.instances()) {
+        for (const auto& instance : unit_instances()) {
             if (!selected_scope(instance.scope)) {
                 continue;
             }
@@ -13962,8 +14051,7 @@ private:
                 }
             }
         }
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.statements()) {
+        for (const auto& stored : unit_statements()) {
             const auto effective = specialization_.find_statement(
                 stored.id);
             if (!effective || effective->vhdl == nullptr
@@ -14014,6 +14102,7 @@ private:
     const semantic::vhdl::Unit& entity_;
     const semantic::vhdl::Unit& architecture_;
     std::unordered_set<std::uint32_t> relevant_types_;
+    mutable std::optional<SelectedItems> selected_items_;
     bool name_check_ { true };
     bool operator_check_ { true };
     bool names_only_ { };

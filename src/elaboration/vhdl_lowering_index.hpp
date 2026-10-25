@@ -54,6 +54,9 @@ struct VhdlLoweringIndex {
     /// The package instantiation declarations, in declaration order
     /// (IEEE 1076-2008 4.9).
     std::optional<std::vector<semantic::DeclarationId>> package_instances;
+    /// Positions in the HIR declarations of the shared variables with a
+    /// declared subtype (IEEE 1076-2008 6.4.2.4).
+    std::optional<std::vector<std::size_t>> shared_variables;
     /// Positions in the HIR statements of the loops with a parameter, by
     /// the loop's nested scope (IEEE 1076-2008 10.10).
     std::optional<std::unordered_map<std::uint32_t, std::vector<std::size_t>>>

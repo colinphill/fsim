@@ -31,6 +31,9 @@ using support::same_vhdl_identifier;
 
 const bool semantic_profile_diagnostics_enabled
     = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+// FSIM_VHDL_RESOLVE_TRACE traces VHDL overload resolution.
+const bool vhdl_resolve_trace_enabled
+    = std::getenv("FSIM_VHDL_RESOLVE_TRACE") != nullptr;
 
 void profile_vhdl_package_member_lookup(const bool indexed_empty)
 {
@@ -7081,7 +7084,7 @@ bool CompiledDesignResolver::vhdl_subtype_profiles_match(
     }
     // FSIM_VHDL_RESOLVE_TRACE names both sides of a failed match.
     const auto mismatch = [&] {
-        if (std::getenv("FSIM_VHDL_RESOLVE_TRACE") != nullptr) {
+        if (vhdl_resolve_trace_enabled) {
             std::fprintf(stderr,
                 "FSIM_VHDL_RESOLVE profile-mismatch left=%s/%u/%s/%d/%d/%d "
                 "right=%s/%u/%s/%d/%d/%d frames=%zu\n",
@@ -8201,8 +8204,7 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                             unquoted(selected_parts.back()),
                             unquoted(parts.back()))) {
                         operator_type = type_operators();
-                        if (std::getenv("FSIM_VHDL_RESOLVE_TRACE")
-                            != nullptr) {
+                        if (vhdl_resolve_trace_enabled) {
                             std::fprintf(stderr,
                                 "FSIM_VHDL_RESOLVE type-operators name=%s "
                                 "use=%s standard=%s found=%d\n",
@@ -9382,7 +9384,7 @@ CompiledDesignResolver::resolve_vhdl_callables(
             });
         }
     }
-    if (std::getenv("FSIM_VHDL_RESOLVE_TRACE") != nullptr) {
+    if (vhdl_resolve_trace_enabled) {
         std::fprintf(stderr,
             "FSIM_VHDL_RESOLVE callables name=%s scope=%u lexical=%zu "
             "packages=%zu\n",

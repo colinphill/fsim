@@ -45,6 +45,100 @@ private:
 template <typename Container>
 SizeRestoreGuard(Container&) -> SizeRestoreGuard<Container>;
 
+// The generic binding frames in force while lowering (IEEE 1076-2008
+// 6.5.6.2, 1800-2017 6.20.2). Frames change only by push, pop and resize,
+// so each depth keeps the frame state its prefix was interned under
+// (Lowerer::hir_binding_frames_state), and caches compare that number
+// instead of the frames.
+class HirGenericBindingFrames final {
+public:
+    using Frames = std::vector<semantic::CompiledBindingFrame>;
+    using value_type = semantic::CompiledBindingFrame;
+    using size_type = std::size_t;
+    using const_iterator = Frames::const_iterator;
+    using const_reverse_iterator = Frames::const_reverse_iterator;
+
+    [[nodiscard]] const Frames& frames() const noexcept { return frames_; }
+    // NOLINTNEXTLINE(google-explicit-constructor)
+    operator const Frames&() const noexcept { return frames_; }
+    // NOLINTNEXTLINE(google-explicit-constructor)
+    operator std::span<const value_type>() const noexcept { return frames_; }
+
+    [[nodiscard]] bool empty() const noexcept { return frames_.empty(); }
+    [[nodiscard]] size_type size() const noexcept { return frames_.size(); }
+    [[nodiscard]] const_iterator begin() const noexcept
+    {
+        return frames_.begin();
+    }
+    [[nodiscard]] const_iterator end() const noexcept { return frames_.end(); }
+    [[nodiscard]] const_reverse_iterator rbegin() const noexcept
+    {
+        return frames_.rbegin();
+    }
+    [[nodiscard]] const_reverse_iterator rend() const noexcept
+    {
+        return frames_.rend();
+    }
+    [[nodiscard]] const value_type& front() const { return frames_.front(); }
+    [[nodiscard]] const value_type& back() const { return frames_.back(); }
+    [[nodiscard]] const value_type& operator[](const size_type index) const
+    {
+        return frames_[index];
+    }
+
+    void push_back(value_type frame)
+    {
+        states_.emplace_back();
+        try {
+            frames_.push_back(std::move(frame));
+        } catch (...) {
+            states_.pop_back();
+            throw;
+        }
+    }
+    void pop_back() noexcept
+    {
+        frames_.pop_back();
+        states_.pop_back();
+    }
+    void resize(const size_type size)
+    {
+        states_.resize(size);
+        frames_.resize(size);
+    }
+    void clear() noexcept
+    {
+        frames_.clear();
+        states_.clear();
+    }
+
+    // The interned state of the whole stack, if it was recorded in
+    // `generation` (nonzero) of the intern table.
+    [[nodiscard]] std::optional<std::size_t> state(
+        const std::uint64_t generation) const noexcept
+    {
+        const auto& slot = states_.empty() ? empty_state_ : states_.back();
+        return slot.generation == generation
+            ? std::optional<std::size_t> { slot.id }
+            : std::nullopt;
+    }
+    void record_state(
+        const std::uint64_t generation, const std::size_t id) const noexcept
+    {
+        auto& slot = states_.empty() ? empty_state_ : states_.back();
+        slot = { generation, id };
+    }
+
+private:
+    struct State {
+        std::uint64_t generation { };
+        std::size_t id { };
+    };
+    Frames frames_;
+    mutable std::vector<State> states_;
+    mutable State empty_state_;
+};
+
 // A `timescale or timeunit spelling such as "10ns" in femtoseconds.
 [[nodiscard]] std::optional<std::uint64_t>
 systemverilog_unit_time_scale_femtoseconds(std::string_view spelling) noexcept;
@@ -500,7 +594,7 @@ private:
     struct HirEffectiveVhdlSubtypeCacheEntry {
         semantic::vhdl::SubtypeIndication subtype;
         semantic::ScopeId scope;
-        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::size_t binding_frames { };
         semantic::vhdl::SubtypeIndication result;
     };
 
@@ -509,12 +603,12 @@ private:
     struct HirVhdlCallableCacheEntry {
         semantic::vhdl::Name name;
         semantic::ScopeId scope;
-        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::size_t binding_frames { };
         std::vector<semantic::CompiledVhdlCallableResolution> candidates;
     };
 
     struct HirExpressionResolutionCacheEntry {
-        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::size_t binding_frames { };
         semantic::CompiledDeclarationResolution resolution;
     };
 
@@ -614,7 +708,7 @@ private:
     struct HirVhdlExpressionSubtypeCacheEntry {
         semantic::ScopeId scope;
         std::optional<std::size_t> callable;
-        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::size_t binding_frames { };
         std::optional<semantic::vhdl::SubtypeIndication> result;
     };
     mutable std::unordered_map<std::uint32_t,
@@ -633,7 +727,7 @@ private:
     // kept under the conditions of hir_vhdl_expression_subtype_cacheable
     // and told apart like its entries, and by the values of the unrolled
     // loops around them. Generic binding frames are numbered by
-    // hir_binding_frames_snapshot. Only results that were found are kept.
+    // hir_binding_frames_state. Only results that were found are kept.
     struct HirVhdlQueryKey {
         std::uint32_t expression { };
         semantic::ScopeId scope;
@@ -652,11 +746,22 @@ private:
     [[nodiscard]] std::optional<HirVhdlQueryKey> hir_vhdl_query_key(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The interned state of hir_generic_binding_frames_: equal frames have
+    // equal states, and a state is never reused for other frames, so
+    // caches may outlive the intern table. Empty when the table is full and
+    // cannot be reset (allocation failure).
     [[nodiscard]] std::optional<std::size_t>
-    hir_binding_frames_snapshot() const;
-    mutable std::vector<std::vector<semantic::CompiledBindingFrame>>
-        hir_binding_frame_snapshots_;
-    mutable std::size_t hir_binding_frame_snapshot_last_ { };
+    hir_binding_frames_state() const noexcept;
+    struct HirBindingFrameSnapshot {
+        std::vector<semantic::CompiledBindingFrame> frames;
+        std::size_t state { };
+    };
+    mutable std::vector<HirBindingFrameSnapshot> hir_binding_frame_snapshots_;
+    mutable std::unordered_multimap<std::size_t, std::size_t>
+        hir_binding_frame_snapshot_index_;
+    mutable std::uint64_t hir_binding_frame_generation_ { 1U };
+    mutable std::size_t hir_binding_frame_next_state_ { };
+    void clear_hir_binding_frame_snapshots() const noexcept;
     mutable std::unordered_map<HirVhdlQueryKey, std::size_t,
         HirVhdlQueryKeyHash>
         hir_vhdl_width_cache_;
@@ -4177,7 +4282,7 @@ private:
         semantic::ScopeId process_scope;
         std::size_t contextual_width { };
         std::optional<std::size_t> callable;
-        std::vector<semantic::CompiledBindingFrame> binding_frames;
+        std::size_t binding_frames { };
         std::optional<HirCallableResolution> result;
     };
     mutable std::unordered_map<std::uint32_t,
@@ -5229,8 +5334,7 @@ private:
         hir_vhdl_generate_iterator_profile_frames_;
     mutable std::vector<std::vector<HirCasePatternBinding>>
         hir_case_pattern_binding_frames_;
-    mutable std::vector<semantic::CompiledBindingFrame>
-        hir_generic_binding_frames_;
+    mutable HirGenericBindingFrames hir_generic_binding_frames_;
     std::optional<semantic::CompiledBindingFrame> base_generic_binding_frame_;
     mutable std::unordered_set<std::uint32_t>
         hir_vhdl_function_shape_frames_;
