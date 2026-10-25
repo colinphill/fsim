@@ -56,6 +56,10 @@ enum class Op : std::uint8_t {
     join_end,
     // The sequence matched.
     match,
+    // `##1 @(c)` (lo == 1) or `##0 @(c)` (lo == 0) in a multiclocked
+    // sequence (IEEE 1800-2017 16.13.1): the thread continues on clock `a`
+    // at its first tick strictly after, or at or after, the current one.
+    clock,
 };
 
 struct Instruction {
@@ -122,6 +126,11 @@ struct Plan {
     std::uint32_t bounds { };
     // `cover sequence` reports every match (16.14.3).
     bool every_match { };
+    // A multiclocked plan: the guard that is true when clock i ticked in
+    // the current time step. Clock 0 is the leading clock, on which
+    // attempts start and the property operators count ticks. Empty for a
+    // singly clocked plan, whose every evaluation is a tick of its clock.
+    std::vector<std::uint32_t> clock_guards;
 };
 
 [[nodiscard]] std::string encode(const Plan& plan);

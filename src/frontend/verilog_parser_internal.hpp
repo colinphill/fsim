@@ -375,9 +375,15 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<std::vector<Token>> bounds;
       std::vector<Token> clock;
       std::vector<Token> disable;
+      // A multiclocked sequence's clocking events, the leading one first
+      // (IEEE 1800-2017 16.13.1); empty when the property has one clock.
+      std::vector<std::vector<Token>> clocks;
   };
+  // `tick_prefix` names the events that report each clock's ticks to a
+  // multiclocked monitor; without it a multiclocked property is rejected.
   std::optional<SvaPrepared> prepare_sva_property(const DesignUnit& unit,
-      const SystemVerilogConcurrentAssertion& directive, std::string& reason);
+      const SystemVerilogConcurrentAssertion& directive, std::string& reason,
+      std::string_view tick_prefix = { });
   // `$__fsim_sva_tick(site, plan, ...)` with the given start operand.
   std::vector<Token> sva_tick_call(const SvaPrepared& prepared,
       std::uint32_t site, std::span<const Token> start, const SourceSpan& span,

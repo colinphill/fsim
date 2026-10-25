@@ -94,10 +94,22 @@ struct CompiledPlan {
     bool every_match { };
     const std::vector<bool>* values { };
     std::int64_t now { };
+    // A multiclocked plan (16.13): the guard of each clock's tick, the
+    // ticks counted on each clock, the time step of each clock's last tick,
+    // the clocks that ticked in this evaluation, and its time step.
+    std::vector<std::uint32_t> clock_guards;
+    std::vector<std::int64_t> clock_ticks;
+    std::vector<std::int64_t> clock_times;
+    std::vector<bool> ticked;
+    std::int64_t time { };
 
     [[nodiscard]] bool guard(const std::uint32_t index) const
     {
         return index < values->size() && (*values)[index];
+    }
+    [[nodiscard]] bool multiclocked() const
+    {
+        return !clock_guards.empty();
     }
 };
 
@@ -116,6 +128,13 @@ struct JoinReference {
 
 struct Thread {
     std::uint32_t pc { };
+    // The clock whose ticks the window counts. A thread switching clocks
+    // waits for the clock's first tick after `switch_time` (at it when
+    // `switch_inclusive`) before its window is known.
+    std::uint32_t clock { };
+    bool switching { };
+    bool switch_inclusive { };
+    std::int64_t switch_time { };
     std::int64_t due_lo { };
     std::int64_t due_hi { };
     std::vector<std::int64_t> counters;
@@ -126,9 +145,12 @@ struct Thread {
     [[nodiscard]] std::vector<std::int64_t> key() const
     {
         std::vector<std::int64_t> result;
-        result.reserve(6U + counters.size() + throughout.size() * 2U
+        result.reserve(10U + counters.size() + throughout.size() * 2U
             + groups.size() + joins.size() * 2U);
         result.push_back(pc);
+        result.push_back(clock);
+        result.push_back((switching ? 1 : 0) | (switch_inclusive ? 2 : 0));
+        result.push_back(switch_time);
         result.push_back(due_lo);
         result.push_back(due_hi);
         result.push_back(static_cast<std::int64_t>(counters.size()));
@@ -172,12 +194,33 @@ public:
         visited_.clear();
         kept_.clear();
         std::deque<Thread> queue;
+        std::vector<Thread> waiting;
         for (auto& thread : threads_) {
+            // In a multiclocked sequence only the threads on a clock that
+            // ticked advance.
+            if (plan_.multiclocked()) {
+                if (!plan_.ticked[thread.clock]) {
+                    waiting.push_back(std::move(thread));
+                    continue;
+                }
+                if (thread.switching) {
+                    if (plan_.time < thread.switch_time
+                        || (plan_.time == thread.switch_time
+                            && !thread.switch_inclusive)) {
+                        waiting.push_back(std::move(thread));
+                        continue;
+                    }
+                    thread.switching = false;
+                    thread.due_lo = plan_.clock_ticks[thread.clock];
+                    thread.due_hi = thread.due_lo;
+                }
+            }
+            const auto tick = thread_now(thread);
             // A thread inside `throughout` checks its condition on every
             // tick after the operand started.
             const bool holds = std::ranges::all_of(thread.throughout,
                 [&](const Throughout& entry) {
-                    return entry.from < 0 || entry.from > now
+                    return entry.from < 0 || entry.from > tick
                         || plan_.guard(entry.guard);
                 });
             if (holds) {
@@ -185,6 +228,9 @@ public:
             }
         }
         threads_.clear();
+        for (auto& thread : waiting) {
+            keep(std::move(thread));
+        }
         while (!queue.empty()) {
             auto thread = std::move(queue.front());
             queue.pop_front();
@@ -208,6 +254,13 @@ public:
     }
 
 private:
+    // The current tick of the thread's clock.
+    [[nodiscard]] std::int64_t thread_now(const Thread& thread) const
+    {
+        return plan_.multiclocked() ? plan_.clock_ticks[thread.clock]
+                                    : now_;
+    }
+
     struct Join {
         std::uint32_t kind { };
         Thread continuation;
@@ -253,6 +306,7 @@ private:
     void run(Thread thread, std::deque<Thread>& queue)
     {
         const auto& code = sequence_.code;
+        now_ = thread_now(thread);
         while (thread.pc < code.size()) {
             const auto& step = code[thread.pc];
             switch (step.op) {
@@ -408,6 +462,26 @@ private:
                     matched_ = true;
                 }
                 return;
+            case Op::clock: {
+                // The operand before ended at this tick; the rest starts on
+                // the clock's first tick strictly after this time step
+                // (`##1`) or at or after it (`##0`) (16.13.1).
+                const auto target = step.a;
+                const bool inclusive = step.lo == 0;
+                thread.clock = target;
+                ++thread.pc;
+                if (inclusive && plan_.clock_times[target] == plan_.time) {
+                    thread.due_lo = plan_.clock_ticks[target];
+                    thread.due_hi = thread.due_lo;
+                    now_ = thread.due_lo;
+                    break;
+                }
+                thread.switching = true;
+                thread.switch_inclusive = inclusive;
+                thread.switch_time = plan_.time;
+                keep(std::move(thread));
+                return;
+            }
             }
         }
     }
@@ -1010,6 +1084,18 @@ Monitor::Monitor(semantic::sva::Plan plan,
     }
     plan_->root = plan.root;
     plan_->guards = plan.guards;
+    if (plan.clock_guards.size() > 1U) {
+        if (plan.properties[plan.root].kind != PropertyKind::sequence) {
+            throw std::runtime_error {
+                "a multiclocked concurrent property must be a sequence"
+            };
+        }
+        plan_->clock_guards = plan.clock_guards;
+        plan_->clock_ticks.assign(plan.clock_guards.size(), -1);
+        plan_->clock_times.assign(plan.clock_guards.size(),
+            std::numeric_limits<std::int64_t>::min());
+        plan_->ticked.assign(plan.clock_guards.size(), false);
+    }
     plan_->every_match = plan.every_match
         && plan.properties[plan.root].kind == PropertyKind::sequence;
 }
@@ -1017,10 +1103,35 @@ Monitor::Monitor(semantic::sva::Plan plan,
 Monitor::~Monitor() = default;
 
 void Monitor::tick(const std::vector<bool>& guards, const bool start,
-    const bool disabled)
+    const bool disabled, const std::int64_t time)
 {
-    ++tick_;
     plan_->values = &guards;
+    bool leading = true;
+    if (plan_->multiclocked()) {
+        // A clock ticks at most once in a time step; its tick guard stays
+        // set for the rest of the step (15.5.3).
+        bool any { };
+        for (std::size_t clock = 0; clock < plan_->clock_guards.size();
+             ++clock) {
+            const bool ticked = plan_->guard(plan_->clock_guards[clock])
+                && plan_->clock_times[clock] != time;
+            plan_->ticked[clock] = ticked;
+            if (ticked) {
+                ++plan_->clock_ticks[clock];
+                plan_->clock_times[clock] = time;
+                any = true;
+            }
+        }
+        plan_->time = time;
+        leading = plan_->ticked[0];
+        if (!any && !disabled) {
+            return;
+        }
+        // The property counts ticks of the leading clock.
+        tick_ = plan_->clock_ticks[0];
+    } else {
+        ++tick_;
+    }
     plan_->now = tick_;
     if (disabled) {
         if (start || !attempts_.empty()) {
@@ -1029,7 +1140,7 @@ void Monitor::tick(const std::vector<bool>& guards, const bool start,
         attempts_.clear();
         return;
     }
-    if (start) {
+    if (start && leading) {
         attempts_.push_back(
             std::make_unique<Instance>(*plan_, plan_->root, tick_));
     }

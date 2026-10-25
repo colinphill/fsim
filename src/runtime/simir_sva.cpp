@@ -78,7 +78,8 @@ void Interpreter::Impl::execute_sva(
     const bool disabled = known_one(read(operation.disabled, 1U), 0U);
     std::string error;
     try {
-        active_monitor->tick(guards, start, disabled);
+        active_monitor->tick(guards, start, disabled,
+            static_cast<std::int64_t>(scheduler.now()));
     } catch (const std::runtime_error& failure) {
         error = failure.what();
     }

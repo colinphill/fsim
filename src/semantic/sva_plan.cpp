@@ -120,6 +120,13 @@ std::string encode(const Plan& plan)
             out.put(child);
         }
     }
+    // Singly clocked plans end here, as before multiclocked plans existed.
+    if (!plan.clock_guards.empty()) {
+        out.put(static_cast<std::int64_t>(plan.clock_guards.size()));
+        for (const auto guard : plan.clock_guards) {
+            out.put(guard);
+        }
+    }
     return std::move(out).finish();
 }
 
@@ -149,7 +156,7 @@ std::optional<Plan> decode(const std::string_view text)
         sequence.code.resize(size);
         for (auto& instruction : sequence.code) {
             if (!in.get_unsigned(instruction.op,
-                    static_cast<std::int64_t>(Op::match))
+                    static_cast<std::int64_t>(Op::clock))
                 || !in.get_unsigned(instruction.a, maximum_count)
                 || !in.get_unsigned(instruction.b, maximum_count)
                 || !in.get_unsigned(instruction.c, maximum_count)
@@ -181,6 +188,19 @@ std::optional<Plan> decode(const std::string_view text)
         property.children.resize(children);
         for (auto& child : property.children) {
             if (!in.get_unsigned(child, maximum_count)) {
+                return std::nullopt;
+            }
+        }
+    }
+    if (!in.done()) {
+        std::size_t clocks { };
+        if (!in.get_unsigned(clocks, maximum_count) || clocks < 2U) {
+            return std::nullopt;
+        }
+        plan.clock_guards.resize(clocks);
+        for (auto& guard : plan.clock_guards) {
+            if (!in.get_unsigned(guard, maximum_count)
+                || guard >= plan.guards) {
                 return std::nullopt;
             }
         }
@@ -220,7 +240,13 @@ std::optional<Plan> decode(const std::string_view text)
                 || (instruction.op == Op::counter_branch
                     && instruction.b > size)
                 || (instruction.op == Op::join_begin
-                    && (instruction.b > size || instruction.c > size))) {
+                    && (instruction.b > size || instruction.c > size))
+                || (instruction.op == Op::clock
+                    && (instruction.a >= plan.clock_guards.size()
+                        || instruction.lo.mode != Bound::Mode::literal
+                        || instruction.lo.value + instruction.lo.offset < 0
+                        || instruction.lo.value + instruction.lo.offset
+                            > 1))) {
                 return std::nullopt;
             }
         }

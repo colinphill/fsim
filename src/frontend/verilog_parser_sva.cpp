@@ -20,6 +20,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <utility>
 
 namespace fsim::frontend {
 namespace {
@@ -61,6 +62,8 @@ enum class NodeKind : std::uint8_t {
     until,
     accept,
     reject,
+    // `@(c) s`: s on clock `clock` of a multiclocked sequence (16.13.1).
+    clocked,
 };
 
 struct Node {
@@ -76,6 +79,8 @@ struct Node {
     bool synchronous { };
     // A delay with no left operand (`##n s`).
     bool leading { };
+    // The clock of a clocked node: an index into ParseContext::clocks.
+    std::uint32_t clock { };
 };
 
 [[nodiscard]] bool sequence_kind(const NodeKind kind)
@@ -92,6 +97,7 @@ struct Node {
     case NodeKind::within:
     case NodeKind::throughout:
     case NodeKind::first_match:
+    case NodeKind::clocked:
         return true;
     default:
         return false;
@@ -132,6 +138,10 @@ struct ParseContext {
     // The scope's default disable condition, `1'b0` when none (16.14.7).
     std::vector<Token> inferred_disable;
     std::string failure;
+    // The clocking events of the property, the directive's first; the
+    // clock in effect flows left to right (16.13.3, 16.16).
+    std::vector<std::vector<Token>> clocks;
+    std::uint32_t current_clock { };
 };
 
 // Builds the property tree of one token sequence; a named sequence or
@@ -1026,8 +1036,9 @@ private:
             return add(std::move(node));
         }
         if (at(TokenKind::At)) {
-            // A clocking event inside the property must be the directive's
-            // clock; multiple clocks are not evaluated.
+            // A clocking event applies to the rest of its operand. Another
+            // clock than the one in effect makes a multiclocked sequence
+            // (16.13.1); multiclocked properties are not evaluated.
             ++position_;
             std::vector<Token> event;
             if (at(TokenKind::LeftParen)) {
@@ -1041,10 +1052,15 @@ private:
                 event = slice(position_, position_ + 1U);
                 ++position_;
             }
-            if (spelling(event) != spelling(context_.clock)) {
-                return fail("a property with more than one clocking event");
+            const auto clock = clock_index(event);
+            if (clock == context_.current_clock) {
+                return implication();
             }
-            return implication();
+            const auto enclosing
+                = std::exchange(context_.current_clock, clock);
+            auto operand = implication();
+            context_.current_clock = enclosing;
+            return clocked(clock, operand);
         }
         if (const auto* found = declaration(position_)) {
             return instance(*found);
@@ -1089,17 +1105,55 @@ private:
             return fail("the actual arguments of '" + declaration.name
                 + "' do not match its formals");
         }
+        auto clock = context_.current_clock;
         if (declaration.clock) {
-            auto clock = substituted(declaration, actuals,
+            const auto event = substituted(declaration, actuals,
                 declaration.clock->event_tokens);
-            if (!clock || spelling(*clock) != spelling(context_.clock)) {
-                return fail("a property with more than one clocking event");
+            if (!event) {
+                return fail("the instance clock does not substitute");
+            }
+            clock = clock_index(*event);
+        }
+        const auto enclosing = std::exchange(context_.current_clock, clock);
+        TreeParser inner { nodes_,
+            inferred(std::move(*body), context_.clocks[clock],
+                context_.inferred_disable),
+            context_, depth_ + 1U };
+        auto operand = inner.parse();
+        context_.current_clock = enclosing;
+        if (clock == enclosing) {
+            return operand;
+        }
+        return clocked(clock, operand);
+    }
+
+    // The index of a clocking event among the property's clocks.
+    std::uint32_t clock_index(const std::vector<Token>& event)
+    {
+        const auto text = spelling(event);
+        for (std::size_t index = 0; index < context_.clocks.size(); ++index) {
+            if (spelling(context_.clocks[index]) == text) {
+                return static_cast<std::uint32_t>(index);
             }
         }
-        TreeParser inner { nodes_,
-            inferred(std::move(*body), context_.clock, context_.inferred_disable),
-            context_, depth_ + 1U };
-        return inner.parse();
+        context_.clocks.push_back(event);
+        return static_cast<std::uint32_t>(context_.clocks.size() - 1U);
+    }
+
+    std::optional<std::size_t> clocked(const std::uint32_t clock,
+        const std::optional<std::size_t> operand)
+    {
+        if (!operand) {
+            return operand;
+        }
+        if (!is_sequence(*operand)) {
+            return fail("a multiclocked property");
+        }
+        Node node;
+        node.kind = NodeKind::clocked;
+        node.clock = clock;
+        node.operands = { *operand };
+        return add(std::move(node));
     }
 
 public:
@@ -1203,6 +1257,8 @@ public:
     plan::Plan plan;
     std::vector<std::vector<Token>> guards;
     std::vector<std::vector<Token>> bounds;
+    // Why a multiclocked sequence could not be compiled.
+    std::string failure;
 
     void compile(const std::size_t root, const bool every_match)
     {
@@ -1210,6 +1266,15 @@ public:
         plan.every_match = every_match;
         plan.guards = static_cast<std::uint32_t>(guards.size());
         plan.bounds = static_cast<std::uint32_t>(bounds.size());
+    }
+
+    // The guard of each clock's tick in a multiclocked plan.
+    void clock_ticks(const std::span<const std::vector<Token>> ticks)
+    {
+        for (const auto& tick : ticks) {
+            plan.clock_guards.push_back(guard(tick));
+        }
+        plan.guards = static_cast<std::uint32_t>(guards.size());
     }
 
 private:
@@ -1300,13 +1365,55 @@ private:
         const auto& node = nodes_[index];
         auto& code = sequence.code;
         const auto here = [&] { return static_cast<std::uint32_t>(code.size()); };
+        // A clock may change only where a singly clocked operand of a
+        // concatenation ends (16.13.1), not inside another operator.
+        struct Nested {
+            std::size_t& depth;
+            bool active;
+            Nested(std::size_t& value, const bool region)
+                : depth(value)
+                , active(region)
+            {
+                depth += active ? 1U : 0U;
+            }
+            ~Nested() { depth -= active ? 1U : 0U; }
+            Nested(const Nested&) = delete;
+            Nested& operator=(const Nested&) = delete;
+        } nested { nested_,
+            node.kind != NodeKind::boolean && node.kind != NodeKind::delay
+                && node.kind != NodeKind::clocked };
         switch (node.kind) {
         case NodeKind::boolean:
             code.push_back(instruction(plan::Op::check, guard(node.expression)));
             break;
+        case NodeKind::clocked:
+            if (node.clock != clock_) {
+                fail("a clocking event that does not follow ##0 or ##1");
+            }
+            emit(node.operands[0], sequence);
+            break;
         case NodeKind::delay: {
             if (!node.leading) {
                 emit(node.operands[0], sequence);
+            }
+            const auto& right = nodes_[node.operands.back()];
+            if (right.kind == NodeKind::clocked && right.clock != clock_) {
+                // `##1 @(c) s` and `##0 @(c) s` hand the sequence over to
+                // clock c (16.13.1).
+                if (nested_ != 0U || node.lo.kind != BoundSpec::Kind::literal
+                    || node.hi.kind != BoundSpec::Kind::literal
+                    || node.lo.value != node.hi.value
+                    || node.lo.value < 0 || node.lo.value > 1) {
+                    fail("a clock change other than ##0 or ##1 between "
+                         "singly clocked sequences");
+                }
+                auto step = instruction(plan::Op::clock, right.clock);
+                step.lo.value = node.lo.value;
+                step.hi.value = node.lo.value;
+                code.push_back(step);
+                clock_ = right.clock;
+                emit(right.operands[0], sequence);
+                break;
             }
             auto step = instruction(plan::Op::delay);
             // A leading delay counts from the attempt's first tick.
@@ -1402,6 +1509,7 @@ private:
     std::uint32_t sequence(const std::size_t index)
     {
         plan::Sequence compiled;
+        clock_ = 0U;
         emit(index, compiled);
         compiled.code.push_back(instruction(plan::Op::match));
         plan.sequences.push_back(std::move(compiled));
@@ -1513,10 +1621,21 @@ private:
         return add(std::move(result));
     }
 
+    void fail(std::string reason)
+    {
+        if (failure.empty()) {
+            failure = std::move(reason);
+        }
+    }
+
     const std::vector<Node>& nodes_;
     std::vector<Token> truth_;
     std::map<std::string, std::uint32_t, std::less<>> guard_index_;
     std::map<std::string, std::size_t, std::less<>> bound_index_;
+    // The clock in effect while a sequence is emitted, and how many
+    // operators other than concatenation enclose the code being emitted.
+    std::uint32_t clock_ { };
+    std::size_t nested_ { };
 };
 
 [[nodiscard]] bool trace_enabled()
@@ -1598,7 +1717,7 @@ void VerilogParser::extract_procedural_assertions(
 
 std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     const DesignUnit& unit, const SystemVerilogConcurrentAssertion& directive,
-    std::string& reason)
+    std::string& reason, const std::string_view tick_prefix)
 {
     const auto fail = [&](std::string why) -> std::optional<SvaPrepared> {
         reason = std::move(why);
@@ -1804,6 +1923,8 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
             ? synthetic_tokens("1'b0", directive.span)
             : unit.systemverilog_default_disable_tokens,
         { },
+        { clock },
+        0U,
     };
     std::vector<Node> nodes;
     TreeParser parser { nodes, tokens, context, 0U };
@@ -1814,10 +1935,36 @@ std::optional<VerilogParser::SvaPrepared> VerilogParser::prepare_sva_property(
     if (!disable.empty() && !context.boolean(disable)) {
         return fail("the disable condition is not a boolean expression");
     }
+    const bool multiclocked = context.clocks.size() > 1U;
+    if (multiclocked) {
+        if (tick_prefix.empty()) {
+            return fail("a multiclocked sequence in a procedural assertion");
+        }
+        const auto kind = nodes[*root].kind;
+        if (!sequence_kind(kind) && kind != NodeKind::strong
+            && kind != NodeKind::weak) {
+            return fail("a multiclocked property");
+        }
+    }
     PlanCompiler compiler { nodes, synthetic_tokens("1'b1", directive.span) };
     compiler.compile(*root, cover_sequence
             && directive.kind == SystemVerilogConcurrentAssertionKind::Cover);
+    if (!compiler.failure.empty()) {
+        return fail(compiler.failure);
+    }
     SvaPrepared prepared;
+    if (multiclocked) {
+        // Each clock's tick is the triggered state of an event its own
+        // process triggers (15.5.3), which stays set for the time step.
+        std::vector<std::vector<Token>> ticks;
+        for (std::size_t index = 0; index < context.clocks.size(); ++index) {
+            ticks.push_back(synthetic_tokens(std::string { tick_prefix }
+                    + "_tick" + std::to_string(index) + ".triggered",
+                directive.span));
+        }
+        compiler.clock_ticks(ticks);
+        prepared.clocks = std::move(context.clocks);
+    }
     prepared.plan = semantic::sva::encode(compiler.plan);
     prepared.guards = std::move(compiler.guards);
     prepared.bounds = std::move(compiler.bounds);
@@ -2004,9 +2151,14 @@ bool VerilogParser::resolve_sva_directive(
         return false;
     };
     std::string reason;
-    const auto prepared = prepare_sva_property(unit, directive, reason);
+    const auto prefix = "__fsim_sva" + std::to_string(index);
+    const auto prepared
+        = prepare_sva_property(unit, directive, reason, prefix);
     if (!prepared) {
         return reject(reason);
+    }
+    if (!prepared->clocks.empty() && !directive.procedural_enable.empty()) {
+        return reject("a multiclocked sequence in a procedural assertion");
     }
     const auto& encoded = prepared->plan;
     if (trace_enabled()) {
@@ -2159,14 +2311,46 @@ bool VerilogParser::resolve_sva_directive(
 
     // The process body: wait for the clocking event, sample the guards,
     // advance the monitor, and run each outcome's action.
-    const auto prefix = "__fsim_sva" + std::to_string(index);
     std::vector<Token> body;
     const auto emit = [&](const std::string_view text) {
         auto lexed = synthetic_tokens(text, directive.span);
         body.insert(body.end(), lexed.begin(), lexed.end());
     };
     emit("begin int " + prefix + "_n; int " + prefix + "_o; @(");
-    body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
+    std::vector<SignalDeclaration> clock_events;
+    std::vector<Process> clock_processes;
+    if (prepared->clocks.empty()) {
+        body.insert(body.end(), prepared->clock.begin(), prepared->clock.end());
+    } else {
+        // A multiclocked sequence: each clock triggers an event, and the
+        // monitor runs when any of them did (16.13.1).
+        for (std::size_t clock = 0; clock < prepared->clocks.size(); ++clock) {
+            const auto tick = prefix + "_tick" + std::to_string(clock);
+            auto type = default_verilog_type();
+            type.spelling = "event";
+            type.domain = ValueDomain::Logic4;
+            clock_events.push_back(SignalDeclaration {
+                tick, type, PortDirection::Unknown, false, directive.span });
+            std::vector<Token> trigger = synthetic_tokens("@(", directive.span);
+            trigger.insert(trigger.end(), prepared->clocks[clock].begin(),
+                prepared->clocks[clock].end());
+            const auto tail = synthetic_tokens(") -> " + tick + ";",
+                directive.span);
+            trigger.insert(trigger.end(), tail.begin(), tail.end());
+            auto statement
+                = parse_generated_statement(std::move(trigger), directive.span);
+            if (!statement) {
+                return reject("the generated clock process does not parse");
+            }
+            Process clock_process;
+            clock_process.kind = ProcessKind::VerilogAlways;
+            clock_process.name = prefix + "_clock" + std::to_string(clock);
+            clock_process.span = directive.span;
+            clock_process.statements.push_back(std::move(*statement));
+            clock_processes.push_back(std::move(clock_process));
+            emit((clock == 0U ? "" : " or ") + tick);
+        }
+    }
     emit(") begin " + prefix + "_n = ");
     {
         // A procedural assertion starts an attempt only when its procedure
@@ -2230,6 +2414,12 @@ bool VerilogParser::resolve_sva_directive(
     }
     process.statements.push_back(std::move(*statement));
     unit.processes.push_back(std::move(process));
+    for (auto& event : clock_events) {
+        unit.signals.push_back(std::move(event));
+    }
+    for (auto& clock_process : clock_processes) {
+        unit.processes.push_back(std::move(clock_process));
+    }
     return true;
 }
 

@@ -253,6 +253,42 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 10: multiclocked sequences
+
+The concurrent-property monitor evaluated properties with one clock, so a
+sequence whose clocking event changes part way, such as
+`@(posedge clk0) ##1 out0 ##1 @(posedge clk1) out1`, was rejected. That
+was the last case left on the parked list
+(sv-tests 16.13--sequence-multiclock-uvm), which is now empty.
+
+- A clocking event inside a property applies to the rest of its operand,
+  and the clock in effect flows from left to right (IEEE 1800-2017
+  16.13.3, 16.16), including into sequence instances with their own
+  clock.
+- A concatenation that changes clock compiles to a clock handover in the
+  sequence plan: after `##1 @(c)` the sequence continues at the first tick
+  of c strictly after the end of the left operand, after `##0 @(c)` at its
+  first tick at or after it (16.13.1).
+- Each thread of the matcher counts the ticks of its own clock. The
+  monitor keeps a tick count and the time step of the last tick for each
+  clock, starts attempts only on the leading clock, and takes the time
+  step from the scheduler.
+- The directive gets one named event per clock, triggered by a process
+  that waits for that clock. The monitor process waits on these events and
+  reads each one's triggered state (15.5.3), which stays set for the rest
+  of the time step. A clock therefore ticks at most once per time step,
+  even when the monitor runs in several delta cycles.
+- Clock changes are evaluated between singly clocked operands of a
+  concatenation; a clock change inside another sequence operator, and a
+  multiclocked property (16.13.2), still use the earlier evaluator and its
+  diagnostic.
+
+The plan text gains an optional trailing clock section, so singly clocked
+plans encode as before. The compliance fixture
+sv_multiclock_sequence_batch96_20261025 checks `##1` and `##0` with clocks
+that tick in the same time step, failures, and a handover between clocks
+of different periods.
+
 ### Batch 96 part 9: generate selection in loops, declaration lookup
 
 - Specialization decides the SystemVerilog generate constructs it can

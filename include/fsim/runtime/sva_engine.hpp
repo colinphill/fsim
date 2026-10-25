@@ -37,8 +37,11 @@ public:
     Monitor& operator=(const Monitor&) = delete;
 
     // One clock tick: `guards[i]` is guard i sampled at this tick; `start`
-    // starts a new attempt; `disabled` is the disable condition.
-    void tick(const std::vector<bool>& guards, bool start, bool disabled);
+    // starts a new attempt; `disabled` is the disable condition. `time`
+    // identifies the time step; a multiclocked plan reads which of its
+    // clocks ticked from its clock guards.
+    void tick(const std::vector<bool>& guards, bool start, bool disabled,
+        std::int64_t time);
     [[nodiscard]] std::size_t pending_outcomes() const;
     [[nodiscard]] Outcome next_outcome();
     // Attempts running at the end of simulation: those whose strong

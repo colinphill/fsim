@@ -2153,6 +2153,7 @@ tests/fixtures/compliance/sv_local_queue_output_index_20261013.sv
 tests/fixtures/compliance/sv_macro_continued_comments_batch56.sv
 tests/fixtures/compliance/sv_modport_export_batch89.sv
 tests/fixtures/compliance/sv_module_items.sv
+tests/fixtures/compliance/sv_multiclock_sequence_batch96_20261025.sv
 tests/fixtures/compliance/sv_mutable_index_callable_fold_batch58.sv
 tests/fixtures/compliance/sv_nested_interface_member_port_20261013.sv
 tests/fixtures/compliance/sv_net_data_types.sv
