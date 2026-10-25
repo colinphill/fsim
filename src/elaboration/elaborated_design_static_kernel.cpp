@@ -708,7 +708,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     }
     // A port-association program (a resolver with sources) runs on the
     // host in the cycle its sources update, so its sources stay host
-    // signals. The program and the adapters it replaced (halted stubs) are
+    // signals (except pure routing, below). The program and the adapters it replaced (halted stubs) are
     // host programs, not VHDL processes the kernel must hold.
     std::vector<std::uint8_t> host_program(process_count, 0U);
     for (std::size_t index = 0U; index < signals_.size(); ++index) {
@@ -730,12 +730,58 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
     }
-    for (const auto& signal : signals_) {
+    // A pure-routing program (a formal fed by a bit range of one signal)
+    // is kernel wiring rather than a host program: the kernel copies the
+    // range into the formal in the update phase that changes the source, so
+    // the formal updates in the same delta cycle (IEEE 1076-2008 6.5.7.1,
+    // 14.7.3.3) and the source stays kernel-owned. A wiring whose source or
+    // formal cannot be kernel-owned reverts to a host program below.
+    struct Wiring {
+        SignalId target { };
+        SignalId source { };
+        ProcessId program { };
+        bool live { };
+    };
+    std::vector<Wiring> wirings;
+    std::vector<std::int32_t> wiring_of_target(signal_count, -1);
+    const auto wiring_signal_width = [&](const SignalId signal) {
+        return static_cast<std::uint64_t>(
+            signal < signal_count ? signals_[signal].initial_value.width()
+                                  : 0U);
+    };
+    for (SignalId target = 0U; vhdl_mode && target < signal_count; ++target) {
+        const auto& resolver = signals_[target].vhdl_resolver;
+        if (!resolver || resolver->sources.size() != 1U
+            || !resolver->drivers.empty() || !resolver->variants.empty()
+            || resolver->guarded_kind != 0U || resolver->driving_mirror
+            || !signals_[target].vhdl_conversion_drivers.empty()
+            || resolver->process >= process_count
+            || !views[resolver->process].valid()) {
+            continue;
+        }
+        const auto wire = static_kernel_wiring(
+            views[resolver->process].operations(), resolver->output,
+            wiring_signal_width);
+        const auto source = resolver->sources.front();
+        if (!wire || wire->source != source || source >= signal_count
+            || source == target
+            || wire->width != wiring_signal_width(target)
+            || signals_[source].value_kind != signals_[target].value_kind) {
+            continue;
+        }
+        wiring_of_target[target] = static_cast<std::int32_t>(wirings.size());
+        wirings.push_back({ target, source, resolver->process, true });
+    }
+    for (SignalId index = 0U; index < signal_count; ++index) {
+        const auto& signal = signals_[index];
         if (!signal.vhdl_resolver || signal.vhdl_resolver->sources.empty()) {
             continue;
         }
         if (signal.vhdl_resolver->process < process_count) {
             host_program[signal.vhdl_resolver->process] = 1U;
+        }
+        if (wiring_of_target[index] >= 0) {
+            continue;
         }
         for (const auto source : signal.vhdl_resolver->sources) {
             if (source < signal_count) {
@@ -916,6 +962,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             alias_role[alias.signal] = 1U;
         }
     }
+    for (bool revalidate = true; revalidate;) {
+    revalidate = false;
     for (bool changed = true; changed;) {
         changed = false;
         mark_edge_sensitive();
@@ -927,6 +975,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 && !graph_signals[signal].writers.empty()
                 && signal_ok(signal)) {
                 owned[signal] = 1U;
+            }
+        }
+        // A wired formal is kernel-owned with its source; the program is its
+        // only writer.
+        for (bool again = true; again;) {
+            again = false;
+            for (const auto& wiring : wirings) {
+                if (!wiring.live || owned[wiring.target] != 0U
+                    || owned[wiring.source] == 0U
+                    || alias_role[wiring.target] != 0U
+                    || !basic_ok(wiring.target)
+                    || !std::ranges::all_of(
+                        graph_signals[wiring.target].writers,
+                        [&](const auto& writer) {
+                            return writer.process == wiring.program;
+                        })) {
+                    continue;
+                }
+                owned[wiring.target] = 1U;
+                again = true;
             }
         }
         for (std::size_t object = 0U; object < object_count; ++object) {
@@ -988,6 +1056,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 changed = true;
             }
         }
+    }
+    // A wiring needs its source and its formal kernel-owned; otherwise its
+    // program runs on the host and the source stays a host signal.
+    for (auto& wiring : wirings) {
+        if (wiring.live
+            && (owned[wiring.source] == 0U || owned[wiring.target] == 0U)) {
+            wiring.live = false;
+            host_touched[wiring.source] = 1U;
+            wiring_of_target[wiring.target] = -1;
+            revalidate = true;
+        }
+    }
     }
 
     const bool diagnose = std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr;
@@ -1262,6 +1342,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     }
     spec->vhdl = vhdl_mode;
     spec->mixed = mixed;
+    std::vector<std::uint8_t> wired_program(process_count, 0U);
+    for (const auto& wiring : wirings) {
+        if (wiring.live) {
+            wired_program[wiring.program] = 1U;
+        }
+    }
     std::vector<std::uint8_t> virtual_owned(signal_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
         if (owned_container[object] == 0U) {
@@ -1332,9 +1418,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         if (std::ranges::any_of(graph_signals[signal].readers,
                 [&](const auto& reader) {
                     return reader.process >= process_count
-                        || member[reader.process] == 0U;
+                        || (member[reader.process] == 0U
+                            && wired_program[reader.process] == 0U);
                 })) {
             spec->boundary_outputs.push_back(signal);
+        }
+    }
+    // The kernel's wiring is the only writer of a wired formal; the program
+    // is its driver identity on the host.
+    for (const auto& wiring : wirings) {
+        if (wiring.live
+            && std::ranges::none_of(spec->writer_regions,
+                [&](const auto& region) {
+                    return region.signal == wiring.target;
+                })) {
+            spec->writer_regions.push_back({ wiring.target, wiring.program,
+                0U,
+                static_cast<std::uint32_t>(
+                    signals_[wiring.target].initial_value.width()) });
         }
     }
     std::vector<std::uint8_t> input(signal_count, 0U);

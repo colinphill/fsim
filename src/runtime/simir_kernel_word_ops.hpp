@@ -269,6 +269,43 @@ struct Logic9Planes {
     return { value.a & m, ~value.b & m, ~value.a & value.b & m, 0U };
 }
 
+/// The bits of a packed value of 1 to 64 elements that are all 0 or 1, in
+/// either representation; a Logic9 value qualifies only with '0' and '1'.
+[[nodiscard]] inline std::optional<std::uint64_t> known_bits(
+    const PackedLogic4& value) noexcept
+{
+    if (value.width() == 0U || value.width() > 64U) {
+        return std::nullopt;
+    }
+    const auto width = static_cast<std::uint32_t>(value.width());
+    const auto front = [](const std::span<const std::uint64_t> words) {
+        return words.empty() ? std::uint64_t { 0 } : words.front();
+    };
+    if (!value.is_logic9()) {
+        if ((front(value.bval_words()) & mask(width)) != 0U) {
+            return std::nullopt;
+        }
+        return front(value.aval_words()) & mask(width);
+    }
+    const auto word = logic9_word(front(value.logic9_plane_words(0U)),
+        front(value.logic9_plane_words(1U)),
+        front(value.logic9_plane_words(2U)),
+        front(value.logic9_plane_words(3U)), width);
+    if (!word || word->b != 0U) {
+        return std::nullopt;
+    }
+    return word->a;
+}
+
+/// A Logic9 value of '0' and '1' elements from the bits of a known word.
+[[nodiscard]] inline PackedLogic4 logic9_known(
+    const std::uint64_t bits, const std::uint32_t width)
+{
+    const auto planes = logic9_planes(Word { bits, 0U }, width);
+    return PackedLogic4::from_logic9_word(
+        Logic9Word { width, { planes.p0, planes.p1, planes.p2, planes.p3 } });
+}
+
 /// VHDL logic operations with 'U' masks (std_logic_1164 tables over
 /// {0, 1, X, Z, U}; 'U' elements read as X in the words).
 [[nodiscard]] constexpr std::uint64_t unknown_and(const Word l,

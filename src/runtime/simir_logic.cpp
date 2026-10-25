@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_kernel_word_ops.hpp"
 #include "fsim/support/index_distance.hpp"
 
 namespace fsim::runtime::simir {
 
 [[nodiscard]] PackedLogic4 unary_not(const PackedLogic4 &source) {
+  // Elements that are all 0 or 1 invert as a word; a Logic9 value keeps its
+  // representation.
+  if (const auto bits = kernel_word::known_bits(source)) {
+    const auto width = static_cast<std::uint32_t>(source.width());
+    const auto inverted = ~*bits & kernel_word::mask(width);
+    return source.is_logic9()
+        ? kernel_word::logic9_known(inverted, width)
+        : PackedLogic4::from_aval_bval(width, inverted, 0U);
+  }
   PackedLogic4 result(source.width(), Logic4::x);
   if (source.is_logic9()) {
     result.fill(Logic9::u);
@@ -152,6 +162,33 @@ namespace fsim::runtime::simir {
     const PackedLogic4& value,
     const PackedLogic4& amount_value,
     const bool signed_amount) {
+  // Values and amounts of 1 to 64 bits: the static kernel's word shift. A
+  // Logic9 value of '0' and '1' elements shifts in zeros or its own end
+  // element alike and keeps its representation.
+  if (value.width() != 0U && value.width() <= 64U
+      && amount_value.width() != 0U && amount_value.width() <= 64U
+      && !amount_value.is_logic9()) {
+    const auto front = [](const std::span<const std::uint64_t> words) {
+      return words.empty() ? std::uint64_t { 0 } : words.front();
+    };
+    const auto width = static_cast<std::uint32_t>(value.width());
+    const auto amount_width
+        = static_cast<std::uint32_t>(amount_value.width());
+    const kernel_word::Word amount { front(amount_value.aval_words()),
+                                     front(amount_value.bval_words()) };
+    if (!value.is_logic9()) {
+      const auto result = kernel_word::shift(operation,
+          { front(value.aval_words()), front(value.bval_words()) }, width,
+          amount, amount_width, signed_amount);
+      return PackedLogic4::from_aval_bval(width, result.a, result.b);
+    }
+    const auto bits = kernel_word::known_bits(value);
+    if (bits && (amount.b & kernel_word::mask(amount_width)) == 0U) {
+      const auto result = kernel_word::shift(operation, { *bits, 0U },
+          width, amount, amount_width, signed_amount);
+      return kernel_word::logic9_known(result.a, width);
+    }
+  }
   for (std::size_t index = 0; index < amount_value.width(); ++index) {
     const auto bit = amount_value.get(index);
     if (bit == Logic4::x || bit == Logic4::z) {

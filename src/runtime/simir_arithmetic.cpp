@@ -231,6 +231,28 @@ namespace fsim::runtime::simir {
     return PackedLogic4::from_aval_bval(comparison ? 1U : width, result.a,
         result.b);
   }
+  // Logic9 operands whose elements are all '0' or '1' agree with the Logic4
+  // tables (IEEE 1076-2008 16.7): the same word operations, with bitwise
+  // results kept Logic9 as below.
+  if (lhs.width() <= 64U
+      && operation != BinaryOperator::vhdl_match_equal) {
+    const auto left = kernel_word::known_bits(lhs);
+    const auto right = left ? kernel_word::known_bits(rhs) : std::nullopt;
+    if (right) {
+      const auto width = static_cast<std::uint32_t>(lhs.width());
+      const auto result = kernel_word::binary(
+          operation, { *left, 0U }, { *right, 0U }, width);
+      if (operation == BinaryOperator::bit_and
+          || operation == BinaryOperator::bit_or
+          || operation == BinaryOperator::bit_xor) {
+        return kernel_word::logic9_known(result.a, width);
+      }
+      const bool comparison = operation >= BinaryOperator::equal
+          && operation <= BinaryOperator::greater_equal_signed;
+      return PackedLogic4::from_aval_bval(comparison ? 1U : width, result.a,
+          result.b);
+    }
+  }
   if (operation == BinaryOperator::equal) {
     bool unknown = false;
     bool mismatch = false;

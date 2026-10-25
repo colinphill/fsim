@@ -665,11 +665,14 @@ private:
     // Runs `process`, a one-shot program lowered against the design's
     // signals, in `interpreter` with the objects elaborated so far, and keeps
     // the shared-variable state it leaves. Returns the interpreter's id of
-    // design signal `result`.
+    // design signal `result`. With `value`, stores there the value the run
+    // leaves in `result`, taken from an earlier run of the same program on
+    // the same values when there is one, in which case nothing runs.
     std::optional<SignalId> run_compiled_vhdl_elaboration_program(
         runtime::simir::Interpreter& interpreter,
         runtime::simir::Process process,
-        std::optional<SignalId> result);
+        std::optional<SignalId> result,
+        std::optional<PackedLogic4>* value = nullptr);
     // Keeps the shared-variable state an elaboration-time evaluation left;
     // `images` gives the interpreter's ids of the design signals it holds,
     // all of them under their own ids when null.
@@ -2126,6 +2129,25 @@ private:
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
+    // A one-shot elaboration program already run: its operations with the
+    // signals renumbered densely, the renumbered signals in the order the
+    // operations name them, the values and kinds of those signals before
+    // the run, and the value it left in its result. The interpreter is
+    // deterministic, so the same program run on the same values leaves the
+    // same value; an instance of a unit evaluates the same constant
+    // initializer as every other instance with the same generic values.
+    struct VhdlElaborationProgramMemo {
+        runtime::simir::Process program;
+        std::vector<SignalId> signal_sequence;
+        std::vector<std::pair<PackedLogic4, runtime::simir::ValueKind>> inputs;
+        SignalId result { };
+        PackedLogic4 value;
+    };
+    // By operation count, signal count and register count.
+    std::map<std::tuple<std::size_t, std::size_t, std::size_t>,
+        std::vector<VhdlElaborationProgramMemo>>
+        vhdl_elaboration_program_memo_;
+    std::size_t vhdl_elaboration_program_memo_entries_ { };
     // Static storage of SystemVerilog task and function locals and formals:
     // every caller writes it procedurally, whatever the calling context.
     std::unordered_set<SignalId> static_callable_signals_;

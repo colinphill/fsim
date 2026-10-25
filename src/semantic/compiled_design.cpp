@@ -10,6 +10,8 @@
 #include <optional>
 #include <set>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace fsim::semantic {
@@ -808,6 +810,8 @@ void CompiledDesign::refresh_lookup_indexes()
         systemverilog_hir.instances(), vhdl_hir.instances());
     rebuilt.systemverilog_declarations_by_scope.resize(
         semantics.scopes().size());
+    rebuilt.systemverilog_declarations_by_scope_and_name.resize(
+        semantics.scopes().size());
     for (const auto& declaration : systemverilog_hir.declarations()) {
         if (!declaration.scope.valid()
             || declaration.scope.value()
@@ -816,6 +820,62 @@ void CompiledDesign::refresh_lookup_indexes()
         }
         rebuilt.systemverilog_declarations_by_scope[
             declaration.scope.value()].push_back(declaration.id);
+        rebuilt.systemverilog_declarations_by_scope_and_name[
+            declaration.scope.value()][declaration.name]
+                .push_back(declaration.id);
+    }
+    {
+        std::unordered_map<std::uint32_t, ScopeId> process_scopes;
+        for (const auto& process : systemverilog_hir.processes()) {
+            process_scopes.try_emplace(process.id.value(), process.scope);
+        }
+        std::unordered_map<std::uint32_t, std::size_t> region_scopes;
+        std::unordered_set<std::uint32_t> process_opened;
+        std::vector<const sv::GenerateRegion*> path;
+        const auto visit = [&](const auto& self, const UnitId unit,
+                               const sv::GenerateRegion& region) -> void {
+            path.push_back(&region);
+            std::vector<DeclarationId> held { region.declarations };
+            if (region.declaration.valid()) {
+                held.push_back(region.declaration);
+            }
+            std::ranges::sort(held);
+            const auto [end, last] = std::ranges::unique(held);
+            held.erase(end, last);
+            for (const auto declaration : held) {
+                rebuilt.systemverilog_generate_paths[declaration.value()]
+                    .push_back({ unit, path });
+            }
+            ++region_scopes[region.scope.value()];
+            if (region.kind == sv::GenerateKind::iterative) {
+                rebuilt.systemverilog_scope_genvars[region.scope.value()]
+                    .push_back({ unit, region.iterator });
+                for (const auto process : region.processes) {
+                    const auto found = process_scopes.find(process.value());
+                    if (found == process_scopes.end()) {
+                        continue;
+                    }
+                    process_opened.insert(found->second.value());
+                    rebuilt.systemverilog_scope_genvars[
+                        found->second.value()]
+                        .push_back({ unit, region.iterator });
+                }
+            }
+            for (const auto& nested : region.nested) {
+                self(self, unit, nested);
+            }
+            path.pop_back();
+        };
+        for (const auto& unit : systemverilog_hir.units()) {
+            for (const auto& region : unit.generates) {
+                visit(visit, unit.id, region);
+            }
+        }
+        for (const auto& [scope, count] : region_scopes) {
+            if (count > 1U || process_opened.contains(scope)) {
+                rebuilt.systemverilog_genvar_unordered_scopes.insert(scope);
+            }
+        }
     }
     rebuilt.systemverilog_import_statements_by_scope.resize(
         semantics.scopes().size());
@@ -1372,6 +1432,61 @@ CompiledDesign::systemverilog_declarations_in_scope(
     }
     return std::span<const DeclarationId> {
         lookup_indexes_.systemverilog_declarations_by_scope[scope.value()] };
+}
+
+std::optional<std::span<const DeclarationId>>
+CompiledDesign::systemverilog_declarations_named_in_scope(
+    const ScopeId scope, const std::string_view name) const noexcept
+{
+    if (!lookup_indexes_current() || !scope.valid()
+        || scope.value()
+            >= lookup_indexes_.systemverilog_declarations_by_scope_and_name
+                   .size()) {
+        return std::nullopt;
+    }
+    const auto& declarations
+        = lookup_indexes_.systemverilog_declarations_by_scope_and_name[
+            scope.value()];
+    const auto found = declarations.find(name);
+    if (found == declarations.end()) {
+        return std::span<const DeclarationId> { };
+    }
+    return std::span<const DeclarationId> { found->second };
+}
+
+std::optional<std::span<const CompiledSystemVerilogGeneratePath>>
+CompiledDesign::systemverilog_generate_paths(
+    const DeclarationId declaration) const noexcept
+{
+    if (!lookup_indexes_current()) {
+        return std::nullopt;
+    }
+    const auto found
+        = lookup_indexes_.systemverilog_generate_paths.find(
+            declaration.value());
+    if (found == lookup_indexes_.systemverilog_generate_paths.end()) {
+        return std::span<const CompiledSystemVerilogGeneratePath> { };
+    }
+    return std::span<const CompiledSystemVerilogGeneratePath> {
+        found->second };
+}
+
+std::optional<std::span<const CompiledSystemVerilogScopeGenvar>>
+CompiledDesign::systemverilog_scope_genvars(
+    const ScopeId scope) const noexcept
+{
+    if (!lookup_indexes_current()
+        || lookup_indexes_.systemverilog_genvar_unordered_scopes.contains(
+            scope.value())) {
+        return std::nullopt;
+    }
+    const auto found
+        = lookup_indexes_.systemverilog_scope_genvars.find(scope.value());
+    if (found == lookup_indexes_.systemverilog_scope_genvars.end()) {
+        return std::span<const CompiledSystemVerilogScopeGenvar> { };
+    }
+    return std::span<const CompiledSystemVerilogScopeGenvar> {
+        found->second };
 }
 
 std::optional<std::span<const DeclarationId>>

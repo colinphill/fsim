@@ -129,6 +129,20 @@ struct CompiledVhdlTypeMemberIndexEntry {
     std::uint32_t member_position { };
 };
 
+/// The SystemVerilog generate regions, outermost first, that hold one
+/// declaration of `unit`, in the non-owning lookup indexes.
+struct CompiledSystemVerilogGeneratePath {
+    UnitId unit;
+    std::vector<const sv::GenerateRegion*> regions;
+};
+
+/// The genvar of a loop generate whose block or process opens a scope, in
+/// the non-owning lookup indexes.
+struct CompiledSystemVerilogScopeGenvar {
+    UnitId unit;
+    std::string_view iterator;
+};
+
 /// Resolved name metadata for one VHDL expression. This is used by the
 /// linked-expression annotation update, which deliberately excludes every
 /// field consumed by the compiled-design lookup indexes.
@@ -265,6 +279,25 @@ public:
     /// to the complete HIR collection.
     [[nodiscard]] std::optional<std::span<const DeclarationId>>
     systemverilog_declarations_in_scope(ScopeId scope) const noexcept;
+    /// Return the SystemVerilog declaration identities named `name` in one
+    /// scope, preserving HIR declaration order. A disengaged result means the
+    /// lookup indexes are stale or the scope is invalid; an engaged empty span
+    /// means a current index found no declarations.
+    [[nodiscard]] std::optional<std::span<const DeclarationId>>
+    systemverilog_declarations_named_in_scope(
+        ScopeId scope, std::string_view name) const noexcept;
+    /// The generate region paths of every region of `unit` that holds
+    /// `declaration`, in region order; disengaged when the lookup indexes
+    /// are stale.
+    [[nodiscard]] std::optional<
+        std::span<const CompiledSystemVerilogGeneratePath>>
+    systemverilog_generate_paths(DeclarationId declaration) const noexcept;
+    /// The genvars of the loop generates whose block or one of whose
+    /// processes opens `scope`; disengaged when the lookup indexes are
+    /// stale or a scope is both, which the index does not order.
+    [[nodiscard]] std::optional<
+        std::span<const CompiledSystemVerilogScopeGenvar>>
+    systemverilog_scope_genvars(ScopeId scope) const noexcept;
     /// Positions in `systemverilog_hir.statements()` of the statements with
     /// import items that open `scope`, in statement order; disengaged when
     /// the lookup indexes are stale.
@@ -378,6 +411,18 @@ private:
         RecordPositions instances;
         std::vector<std::vector<DeclarationId>>
             systemverilog_declarations_by_scope;
+        std::vector<std::unordered_map<std::string_view,
+            std::vector<DeclarationId>>>
+            systemverilog_declarations_by_scope_and_name;
+        std::unordered_map<std::uint32_t,
+            std::vector<CompiledSystemVerilogGeneratePath>>
+            systemverilog_generate_paths;
+        std::unordered_map<std::uint32_t,
+            std::vector<CompiledSystemVerilogScopeGenvar>>
+            systemverilog_scope_genvars;
+        // Scopes opened both by a generate block and by a process; their
+        // genvar visibility follows region order (systemverilog_genvar_scope).
+        std::unordered_set<std::uint32_t> systemverilog_genvar_unordered_scopes;
         std::vector<std::vector<std::uint32_t>>
             systemverilog_import_statements_by_scope;
         std::vector<std::vector<DeclarationId>>

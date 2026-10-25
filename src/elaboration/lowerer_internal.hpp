@@ -621,6 +621,45 @@ private:
         std::vector<HirVhdlExpressionSubtypeCacheEntry>>
         hir_vhdl_expression_subtype_cache_;
     mutable std::size_t hir_vhdl_expression_subtype_cache_entries_ { };
+    // FSIM_PROFILE_LOWERING counts of those lookups; uncached ones by the
+    // first condition that kept them out of the cache.
+    mutable std::size_t hir_vhdl_expression_subtype_cache_hits_ { };
+    mutable std::size_t hir_vhdl_expression_subtype_cache_misses_ { };
+    mutable std::size_t hir_vhdl_expression_subtype_uncached_scope_ { };
+    mutable std::size_t hir_vhdl_expression_subtype_uncached_frames_ { };
+    mutable std::size_t hir_vhdl_expression_subtype_uncached_access_ { };
+    mutable std::size_t hir_vhdl_expression_subtype_uncached_shaped_ { };
+    // hir_expression_width and hir_vhdl_shape results of VHDL expressions,
+    // kept under the conditions of hir_vhdl_expression_subtype_cacheable
+    // and told apart like its entries, and by the values of the unrolled
+    // loops around them. Generic binding frames are numbered by
+    // hir_binding_frames_snapshot. Only results that were found are kept.
+    struct HirVhdlQueryKey {
+        std::uint32_t expression { };
+        semantic::ScopeId scope;
+        semantic::ScopeId process_scope;
+        std::optional<std::size_t> callable;
+        std::size_t frames { };
+        std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
+            loop_values;
+        friend bool operator==(
+            const HirVhdlQueryKey&, const HirVhdlQueryKey&) = default;
+    };
+    struct HirVhdlQueryKeyHash {
+        [[nodiscard]] std::size_t operator()(
+            const HirVhdlQueryKey& key) const noexcept;
+    };
+    [[nodiscard]] std::optional<HirVhdlQueryKey> hir_vhdl_query_key(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<std::size_t>
+    hir_binding_frames_snapshot() const;
+    mutable std::vector<std::vector<semantic::CompiledBindingFrame>>
+        hir_binding_frame_snapshots_;
+    mutable std::size_t hir_binding_frame_snapshot_last_ { };
+    mutable std::unordered_map<HirVhdlQueryKey, std::size_t,
+        HirVhdlQueryKeyHash>
+        hir_vhdl_width_cache_;
     mutable std::size_t hir_pure_integral_attempt_hits_ { };
     mutable std::size_t hir_pure_integral_attempt_misses_ { };
     mutable std::size_t hir_pure_integral_attempt_cap_drops_ { };
@@ -1226,6 +1265,12 @@ private:
         // (IEEE 1076-2008 5.3.2.2).
         [[nodiscard]] bool null() const noexcept;
     };
+    // hir_vhdl_shape results (see hir_vhdl_width_cache_).
+    mutable std::unordered_map<HirVhdlQueryKey, HirVhdlShape,
+        HirVhdlQueryKeyHash>
+        hir_vhdl_shape_cache_;
+    [[nodiscard]] std::optional<HirVhdlShape> compute_hir_vhdl_shape(
+        semantic::ExpressionId expression) const;
     // The shape a subtype gives its objects.
     [[nodiscard]] std::optional<HirVhdlShape> hir_vhdl_subtype_shape(
         const semantic::vhdl::SubtypeIndication& subtype,
@@ -1622,6 +1667,10 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         const semantic::vhdl::SubtypeIndication* vhdl_array_context = nullptr) const;
+    [[nodiscard]] std::optional<std::size_t> compute_hir_expression_width(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        const semantic::vhdl::SubtypeIndication* vhdl_array_context) const;
     // The target expression of a name that denotes an object alias of an
     // element or slice (`alias a : t is s(1 to 4)`).
     [[nodiscard]] std::optional<semantic::ExpressionId> hir_vhdl_alias_target_expression(
@@ -5217,6 +5266,10 @@ private:
     // it are not operands of the calling expression, so they add no
     // implicit sensitivity (IEEE 1800-2017 9.4.2.2, 10.3).
     mutable std::unordered_set<SignalId> hir_static_storage_signals_;
+    // hir_static_storage outside a callable frame, by declaration; the
+    // builder registers static storage before lowering the instance.
+    mutable std::unordered_map<std::uint32_t, std::optional<HirStaticStorage>>
+        hir_scope_static_storage_;
     RegisterId next_register_ { };
     StringRegisterId next_string_register_ { };
     ContainerRegisterId next_container_register_ { };

@@ -253,6 +253,50 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 3: elaboration time of the rs suite, nvc issue620
+
+Elaboration of the rs testbenches had grown well past the pre-LRM binary
+(rs_param VHDL over a minute at one point). The fixes, in instructions
+measured with `perf stat` (G = 10^9) over `fsim elaborate --no-aot`:
+
+- VHDL elaboration programs (composite constants such as `build_apow`,
+  evaluated by the SimIR interpreter since batch 77) are memoized on the
+  program's structure, its input values and its result signal; programs
+  that read containers or coverage state are not memoized.
+- The interpreter takes word-sized paths for known LOGIC9 operands in
+  binary operators, `not` and shifts.
+- SystemVerilog concurrent templates replay again across reg/wire and
+  implicit/explicit-wire layouts when the template only reads the signal
+  (rejections back from 1546 to 311 in rs_codec).
+- The compiled design indexes SystemVerilog declarations by scope and
+  name, declarations by their generate regions, and loop-generate genvars
+  by the scope they open; name resolution no longer scans a scope's
+  declarations or walks the generate tree on each lookup. A specialization
+  may not rename a declaration it replaces.
+- Static-storage lookups outside a callable frame are memoized per lowerer.
+
+| Case | pre-LRM | before | now |
+| --- | ---: | ---: | ---: |
+| rs_codec VHDL | 38.1 | 45.8 | 42.6 |
+| rs_codec Verilog | 43.4 | 64.0 | 48.3 |
+| rs_param VHDL | 124.0 | 168 | 135.4 |
+| rs_param Verilog (fails FSIM-ART-0014 in both) | 164.9 | 224.8 | 165.7 |
+| rs_symsize Verilog | 142.5 | 164.2 | 141.3 |
+| rs_thru Verilog | 13.7 | 18.4 | 14.9 |
+| rs_encoder Verilog | 12.9 | 15.4 | 14.2 |
+
+Peak memory matches the pre-LRM binary. rs_param VHDL still takes 15.0 s
+against 10.8 s: its instruction count is within 9%, but cycles per
+instruction and branch misses are higher, spread across VHDL subtype and
+shape queries, with no single hot spot. A link-time pass that re-resolves
+every VHDL expression's type (about 0.46 G in each small case) is the
+largest fixed cost left.
+
+nvc issue620: a formal associated with a static element or slice of an
+actual signal is a wire to that part (IEEE 1076-2008 6.5.6.3, 14.7.3.3);
+the static kernel drives such a formal in the update phase that changes
+its source, so it has the part's value in the same cycle.
+
 ### Batch 96 part 2: sweep losses fixed, catalog entries
 
 The part 1 sweep with the frozen binary `b96z`, against `b95c` (VHDL) and
@@ -310,8 +354,19 @@ Fixtures: `vhdl_character_subtype_default_20261025.vhd`,
 `vhdl_defaulted_call_index_20261025.vhd`.
 
 The labelled ctest has the same 23 known failures as Batch 95. nvc
-issue620 and issue810 remain open. The six-suite sweep with `b96w` is in
-progress.
+issue620 and issue810 remain open.
+
+The six-suite sweep with `b96w` (`b96w1`) gains 9 against Batch 95 and
+loses none. The one sv-tests failure is a parked UVM case.
+
+| Suite | Batch95 passes / in scope | b96w1 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2634 / 2635 | 2635 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2059 / 2064 | 2065 / 2065 | 350 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1257 / 1261 | 1259 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
 
 ### Batch 96 part 1: pool closures, elaboration regression fixes
 

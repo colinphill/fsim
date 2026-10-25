@@ -223,7 +223,10 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
 namespace {
 
 // A static name of a subelement or slice of a signal (IEEE 1076-2008 8.1):
-// the formal is associated with that part of the actual signal itself.
+// the formal is associated with that part of the actual signal itself, so it
+// has the part's effective value in the same simulation cycle (6.5.6.3,
+// 14.7.3.3). An element or slice names a whole signal or record subelement
+// with static indices or bounds.
 bool vhdl_static_signal_name(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::ExpressionId actual, const std::size_t depth = 0U)
@@ -234,13 +237,11 @@ bool vhdl_static_signal_name(
     }
     const auto& source = *expression->vhdl;
     using Kind = semantic::vhdl::ExpressionKind;
-    // Record subelements only: an element or slice of an array actual keeps
-    // its adapter, which closed VHDL kernels schedule as a member process.
     if (source.kind == Kind::name) {
-        return source.text.find('.') != std::string::npos;
+        return depth != 0U || source.text.find('.') != std::string::npos;
     }
     if ((source.kind != Kind::index && source.kind != Kind::slice)
-        || source.operands.size() < 2U || depth != 0U) {
+        || source.operands.size() < 2U) {
         return false;
     }
     for (std::size_t index = 1U; index < source.operands.size(); ++index) {

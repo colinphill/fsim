@@ -34,6 +34,9 @@ struct SystemVerilogTemplateSignalRole {
     bool read_only { };
     bool readable { true };
     bool writable { true };
+    // Whether the template's program writes the signal; a role it only
+    // reads lowers the same for a `reg` as for a `wire`.
+    bool written { true };
 };
 
 [[nodiscard]] std::optional<

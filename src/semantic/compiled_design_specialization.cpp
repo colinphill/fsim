@@ -19084,9 +19084,11 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
         return false;
     }
     const auto original = design_->find_declaration(replacement.id);
+    // The resolver finds declarations by their compiled scope and name.
     if (!original || !valid_scoped_replacement(*design_,
             replacement_units_, replacement, original->systemverilog,
-            design_->semantics.declarations())) {
+            design_->semantics.declarations())
+        || replacement.name != original->systemverilog->name) {
         return false;
     }
     return insert_replacement(

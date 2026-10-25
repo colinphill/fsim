@@ -342,6 +342,33 @@ void visit_systemverilog_declarations_in_scope(
     }
 }
 
+// Declarations named `name` in one scope; a specialization never renames a
+// declaration it replaces (SpecializedHirUnit::replace).
+template <typename Visitor>
+void visit_systemverilog_declarations_named_in_scope(
+    const CompiledDesign& design,
+    const SpecializedHirUnit* const effective, const ScopeId scope,
+    const std::string_view name, Visitor&& visitor)
+{
+    if (const auto indexed
+        = design.systemverilog_declarations_named_in_scope(scope, name)) {
+        for (const auto id : *indexed) {
+            const auto declaration = find_declaration(
+                design, effective, id);
+            if (declaration && declaration->systemverilog != nullptr) {
+                visitor(*declaration);
+            }
+        }
+        return;
+    }
+    visit_systemverilog_declarations_in_scope(design, effective, scope,
+        [&](const CompiledDeclarationView& declaration) {
+            if (declaration.systemverilog->name == name) {
+                visitor(declaration);
+            }
+        });
+}
+
 template <typename Visitor>
 void visit_vhdl_declarations_in_scope(const CompiledDesign& design,
     const SpecializedHirUnit* const effective, const ScopeId scope,
@@ -458,26 +485,40 @@ struct SystemVerilogGenerateCandidate {
 };
 
 std::optional<SystemVerilogGenerateCandidate>
-systemverilog_generate_candidate(
+systemverilog_generate_candidate(const CompiledDesign& design,
     const sv::Unit& unit, const DeclarationId candidate)
 {
     std::vector<std::vector<const sv::GenerateRegion*>> paths;
-    std::vector<const sv::GenerateRegion*> path;
-    const auto visit = [&](const auto& self,
-                           const sv::GenerateRegion& region) -> void {
-        path.push_back(&region);
-        if (region.declaration == candidate
-            || std::ranges::find(region.declarations, candidate)
-                != region.declarations.end()) {
-            paths.push_back(path);
-        }
-        for (const auto& nested : region.nested) {
-            self(self, nested);
-        }
-        path.pop_back();
+    const auto in_unit = [&](const CompiledSystemVerilogGeneratePath& path) {
+        const auto* outer = path.regions.front();
+        return path.unit == unit.id && !unit.generates.empty()
+            && outer >= unit.generates.data()
+            && outer < unit.generates.data() + unit.generates.size();
     };
-    for (const auto& region : unit.generates) {
-        visit(visit, region);
+    if (const auto indexed = design.systemverilog_generate_paths(candidate)) {
+        for (const auto& path : *indexed) {
+            if (in_unit(path)) {
+                paths.push_back(path.regions);
+            }
+        }
+    } else {
+        std::vector<const sv::GenerateRegion*> path;
+        const auto visit = [&](const auto& self,
+                               const sv::GenerateRegion& region) -> void {
+            path.push_back(&region);
+            if (region.declaration == candidate
+                || std::ranges::find(region.declarations, candidate)
+                    != region.declarations.end()) {
+                paths.push_back(path);
+            }
+            for (const auto& nested : region.nested) {
+                self(self, nested);
+            }
+            path.pop_back();
+        };
+        for (const auto& region : unit.generates) {
+            visit(visit, region);
+        }
     }
     if (paths.size() != 1U) {
         return std::nullopt;
@@ -1645,6 +1686,13 @@ bool systemverilog_genvar_scope(
     if (record == nullptr || !record->parent) {
         return false;
     }
+    if (const auto indexed = design.systemverilog_scope_genvars(scope)) {
+        return std::ranges::any_of(*indexed,
+            [&](const CompiledSystemVerilogScopeGenvar& genvar) {
+                return genvar.unit == record->unit
+                    && genvar.iterator == name;
+            });
+    }
     const auto unit = design.find_unit(record->unit);
     if (!unit || unit->systemverilog == nullptr
         || unit->systemverilog->generates.empty()) {
@@ -2234,13 +2282,9 @@ CompiledDesignResolver::resolve_systemverilog_name(
     bool lexical_import_has_member { };
     if (simple_name) {
         auto scope = std::optional { use_scope };
-        auto owner = design_->find_unit(selected_unit_);
-        if (const auto* record = find_scope(*design_, use_scope)) {
-            if (const auto scoped = design_->find_unit(record->unit);
-                scoped && scoped->systemverilog != nullptr) {
-                owner = scoped;
-            }
-        }
+        const auto owner = generate_owner != nullptr
+            ? use_unit
+            : design_->find_unit(selected_unit_);
         while (scope) {
             if (owner && owner->systemverilog != nullptr) {
                 for (const auto* statement
@@ -2283,16 +2327,11 @@ CompiledDesignResolver::resolve_systemverilog_name(
         if (!simple_name) {
             return false;
         }
-        const auto* use_record = find_scope(*design_, use_scope);
-        if (use_record == nullptr) {
-            return false;
-        }
-        const auto owner = design_->find_unit(use_record->unit);
-        if (!owner || owner->systemverilog == nullptr) {
+        if (generate_owner == nullptr) {
             return false;
         }
         const auto* source_unit = source_package_for_compilation_unit(
-            *design_, *owner->systemverilog);
+            *design_, *generate_owner);
         if (source_unit == nullptr) {
             return false;
         }
@@ -2318,7 +2357,7 @@ CompiledDesignResolver::resolve_systemverilog_name(
     };
     const auto generate_candidate = [&](const DeclarationId id) {
         return generate_owner != nullptr
-            ? systemverilog_generate_candidate(*generate_owner, id)
+            ? systemverilog_generate_candidate(*design_, *generate_owner, id)
             : std::nullopt;
     };
     const auto resolve_generated_candidates
@@ -2457,15 +2496,12 @@ CompiledDesignResolver::resolve_systemverilog(
 
     const auto declarations_in_scope = [&](const ScopeId scope) {
         std::vector<DeclarationId> candidates;
-        visit_systemverilog_declarations_in_scope(
-            *design_, effective_, scope,
+        visit_systemverilog_declarations_named_in_scope(
+            *design_, effective_, scope, member,
             [&](const CompiledDeclarationView& view) {
-                const auto& declaration = *view.systemverilog;
-                if (declaration.name != member
-                    || (predicate && !predicate(view))) {
-                    return;
+                if (!predicate || predicate(view)) {
+                    candidates.push_back(view.systemverilog->id);
                 }
-                candidates.push_back(declaration.id);
             });
         auto result = declaration_result(std::move(candidates));
         if (result.status != CompiledResolutionStatus::not_found

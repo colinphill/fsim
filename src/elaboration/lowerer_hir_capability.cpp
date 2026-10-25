@@ -8245,6 +8245,18 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
     if (frame == nullptr && active_hir_callable_) {
         frame = &hir_callable_frames_[*active_hir_callable_];
     }
+    const bool scope_storage = frame == nullptr
+        || (!frame->interface_receiver && frame->class_static_scope.empty());
+    if (scope_storage) {
+        if (const auto found = hir_scope_static_storage_.find(
+                declaration.value());
+            found != hir_scope_static_storage_.end()) {
+            if (found->second && found->second->signal) {
+                hir_static_storage_signals_.insert(*found->second->signal);
+            }
+            return found->second;
+        }
+    }
     const auto key = "@static:" + std::to_string(declaration.value());
     HirStaticStorage result;
     const auto lookup = [](const auto& objects, const std::string& name,
@@ -8278,9 +8290,13 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
     if (result.signal) {
         hir_static_storage_signals_.insert(*result.signal);
     }
-    return result.signal || result.string || result.container
+    auto storage = result.signal || result.string || result.container
         ? std::optional { result }
         : std::nullopt;
+    if (scope_storage) {
+        hir_scope_static_storage_.try_emplace(declaration.value(), storage);
+    }
+    return storage;
 }
 
 std::optional<SignalId> Lowerer::hir_static_variable_signal(
@@ -19751,7 +19767,106 @@ bool Lowerer::hir_vhdl_record_result_possible(
         || base->form == semantic::vhdl::TypeForm::unresolved;
 }
 
+std::size_t Lowerer::HirVhdlQueryKeyHash::operator()(
+    const HirVhdlQueryKey& key) const noexcept
+{
+    auto hash = static_cast<std::size_t>(key.expression);
+    const auto mix = [&](const std::size_t value) {
+        hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    };
+    mix(key.scope.value());
+    mix(key.process_scope.value());
+    mix(key.callable ? *key.callable + 1U : 0U);
+    mix(key.frames);
+    for (const auto& [parameter, value] : key.loop_values) {
+        mix(parameter.value());
+        mix(static_cast<std::size_t>(value));
+    }
+    return hash;
+}
+
+std::optional<std::size_t> Lowerer::hir_binding_frames_snapshot() const
+{
+    if (hir_binding_frame_snapshot_last_ < hir_binding_frame_snapshots_.size()
+        && hir_binding_frame_snapshots_[hir_binding_frame_snapshot_last_]
+            == hir_generic_binding_frames_) {
+        return hir_binding_frame_snapshot_last_;
+    }
+    for (std::size_t index { }; index < hir_binding_frame_snapshots_.size();
+         ++index) {
+        if (hir_binding_frame_snapshots_[index]
+            == hir_generic_binding_frames_) {
+            hir_binding_frame_snapshot_last_ = index;
+            return index;
+        }
+    }
+    constexpr std::size_t maximum_snapshots { 256U };
+    if (hir_binding_frame_snapshots_.size() >= maximum_snapshots) {
+        return std::nullopt;
+    }
+    hir_binding_frame_snapshots_.push_back(hir_generic_binding_frames_);
+    hir_binding_frame_snapshot_last_ = hir_binding_frame_snapshots_.size() - 1U;
+    return hir_binding_frame_snapshot_last_;
+}
+
+std::optional<Lowerer::HirVhdlQueryKey> Lowerer::hir_vhdl_query_key(
+    const semantic::ExpressionId expression,
+    const semantic::ScopeId process_scope) const
+{
+    if (!hir_vhdl_expression_subtype_cacheable()) {
+        return std::nullopt;
+    }
+    const auto frames = hir_binding_frames_snapshot();
+    if (!frames) {
+        return std::nullopt;
+    }
+    return HirVhdlQueryKey { expression.value(), hir_process_scope_,
+        process_scope, active_hir_callable_, *frames,
+        hir_static_loop_values_ };
+}
+
+// A VHDL expression's width depends on what its subtype does and on the
+// unrolled loops around it; it is kept like the subtype (see
+// hir_vhdl_expression_subtype).
 std::optional<std::size_t> Lowerer::hir_expression_width(
+    const semantic::ExpressionId expression_id,
+    const semantic::ScopeId process_scope,
+    const semantic::vhdl::SubtypeIndication* vhdl_array_context) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<HirVhdlQueryKey> key;
+    if (vhdl_array_context == nullptr
+        && hir_captured_update_indices_.empty()) {
+        if (const auto expression
+            = specialized_hir_unit_->find_expression(expression_id);
+            expression && expression->vhdl != nullptr) {
+            key = hir_vhdl_query_key(expression_id, process_scope);
+        }
+    }
+    if (key) {
+        if (const auto found = hir_vhdl_width_cache_.find(*key);
+            found != hir_vhdl_width_cache_.end()) {
+            return found->second;
+        }
+    }
+    const auto fallback_calls = hir_boundary_fallback_calls_;
+    auto result = compute_hir_expression_width(
+        expression_id, process_scope, vhdl_array_context);
+    constexpr std::size_t maximum_entries { 1U << 18U };
+    if (key && result && hir_boundary_fallback_calls_ == fallback_calls
+        && hir_vhdl_width_cache_.size() < maximum_entries
+        && hir_vhdl_expression_subtype_cacheable()) {
+        try {
+            hir_vhdl_width_cache_.emplace(std::move(*key), *result);
+        } catch (const std::bad_alloc&) {
+        }
+    }
+    return result;
+}
+
+std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope,
     const semantic::vhdl::SubtypeIndication* vhdl_array_context) const
@@ -23680,6 +23795,15 @@ Lowerer::hir_vhdl_expression_subtype(
         return std::nullopt;
     }
     if (!hir_vhdl_expression_subtype_cacheable()) {
+        if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
+            ++hir_vhdl_expression_subtype_uncached_scope_;
+        } else if (hir_vhdl_design_has_access_types()) {
+            ++hir_vhdl_expression_subtype_uncached_access_;
+        } else if (hir_vhdl_shaped_active()) {
+            ++hir_vhdl_expression_subtype_uncached_shaped_;
+        } else {
+            ++hir_vhdl_expression_subtype_uncached_frames_;
+        }
         return compute_hir_vhdl_expression_subtype(expression_id);
     }
     const auto scope = hir_process_scope_;
@@ -23689,10 +23813,12 @@ Lowerer::hir_vhdl_expression_subtype(
         for (const auto& entry : found->second) {
             if (entry.scope == scope && entry.callable == active_hir_callable_
                 && entry.binding_frames == hir_generic_binding_frames_) {
+                ++hir_vhdl_expression_subtype_cache_hits_;
                 return entry.result;
             }
         }
     }
+    ++hir_vhdl_expression_subtype_cache_misses_;
     const auto fallback_calls = hir_boundary_fallback_calls_;
     auto result = compute_hir_vhdl_expression_subtype(expression_id);
     constexpr std::size_t maximum_entries { 1U << 18U };

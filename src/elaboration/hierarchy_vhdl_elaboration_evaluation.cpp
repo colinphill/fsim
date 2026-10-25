@@ -7,13 +7,18 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <stdexcept>
 #include <iostream>
 #include <map>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -44,6 +49,36 @@ void add_elaboration_signals(runtime::simir::Interpreter& interpreter,
         value.vhdl_conversion_drivers.clear();
         static_cast<void>(interpreter.add_signal(std::move(value)));
     }
+}
+
+// Whether a one-shot program's value depends only on its operations and
+// the values of the signals it names: it covers nothing and reads no
+// container object or string, which the run takes from the whole design.
+// An assertion or report changes only the run's own counters, as the run
+// has no report hook; a failure throws, and a failed run is not kept.
+bool elaboration_program_memoizable(const runtime::simir::Process& process)
+{
+    using namespace runtime::simir;
+    if (process.string_register_count != 0U) {
+        trace_evaluation("memo", "string registers");
+        return false;
+    }
+    if (!process_operations_shareable(process)) {
+        trace_evaluation("memo", "operations without a structural comparison");
+        return false;
+    }
+    if (std::ranges::any_of(process.operations,
+            [](const Operation& operation) {
+                return operation_get_if<ReadContainerObject>(&operation)
+                    != nullptr
+                    || operation_get_if<CodeCoverageHit>(&operation) != nullptr
+                    || operation_get_if<CoverageControl>(&operation) != nullptr
+                    || operation_get_if<CoverageAccess>(&operation) != nullptr;
+            })) {
+        trace_evaluation("memo", "container object or coverage operations");
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -105,9 +140,9 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     }
     try {
         runtime::simir::Interpreter interpreter;
-        const auto result = run_compiled_vhdl_elaboration_program(
-            interpreter, std::move(*process), destination);
-        auto value = interpreter.signal_value_snapshot(*result);
+        std::optional<PackedLogic4> value;
+        static_cast<void>(run_compiled_vhdl_elaboration_program(
+            interpreter, std::move(*process), destination, &value));
         diagnostics_.resize(diagnostics_before);
         return value;
     } catch (const std::exception& error) {
@@ -120,7 +155,8 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
 std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     runtime::simir::Interpreter& interpreter,
     runtime::simir::Process process,
-    const std::optional<SignalId> result)
+    const std::optional<SignalId> result,
+    std::optional<PackedLogic4>* const value)
 {
     process.id = 0U;
     process.initialize = true;
@@ -130,6 +166,7 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     // signal under its own id.
     std::map<SignalId, SignalId> images;
     std::vector<SignalId> sources;
+    std::vector<SignalId> sequence;
     const auto rename = [&](SignalId& signal) {
         if (signal >= design_.signals_.size()) {
             return false;
@@ -140,6 +177,7 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
             sources.push_back(signal);
         }
         signal = found->second;
+        sequence.push_back(signal);
         return true;
     };
     auto compacted = process;
@@ -162,23 +200,85 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     for (auto& driver : compacted.driver_regions) {
         compact = compact && rename(driver.signal);
     }
+    // The signals the program itself names; the container objects' change
+    // signals follow.
+    const auto named_signals = sources.size();
+    const auto named_sequence = sequence.size();
     for (auto& object : containers) {
         compact = compact
             && (!object.change_signal || rename(*object.change_signal));
     }
     auto result_image = result;
     compact = compact && (!result_image || rename(*result_image));
+    // A value-only program whose result is a signal it names, reading no
+    // shared variable, is looked up among the programs already run.
+    const bool memoize = value != nullptr && compact && result_image
+        && *result_image < named_signals
+        && elaboration_program_memoizable(compacted)
+        && std::ranges::none_of(
+            std::span { sources }.first(named_signals),
+            [&](const SignalId signal) {
+                return vhdl_unprotected_shared_signals_.contains(signal);
+            });
+    sequence.resize(named_sequence);
+    const auto memo_key = std::tuple { compacted.operations.size(),
+        named_signals, compacted.register_count };
+    const auto same_inputs
+        = [&](const VhdlElaborationProgramMemo& entry) {
+              for (std::size_t index = 0; index < named_signals; ++index) {
+                  const auto& signal = design_.signals_[sources[index]];
+                  if (entry.inputs[index].second != signal.value_kind
+                      || !(entry.inputs[index].first
+                          == signal.initial_value)) {
+                      return false;
+                  }
+              }
+              return true;
+          };
+    std::vector<runtime::simir::Signal> signals;
+    if (compact) {
+        signals.reserve(sources.size());
+        for (const auto source : sources) {
+            signals.push_back(design_.signals_[source]);
+        }
+    }
+    if (memoize) {
+        if (const auto bucket = vhdl_elaboration_program_memo_.find(memo_key);
+            bucket != vhdl_elaboration_program_memo_.end()) {
+            for (const auto& entry : bucket->second) {
+                if (entry.result != *result_image
+                    || entry.signal_sequence != sequence
+                    || !same_inputs(entry)) {
+                    continue;
+                }
+                // The signal sequences match, so equal operations name the
+                // same signals.
+                auto candidate = compacted;
+                if (runtime::simir::share_process_operations(
+                        entry.program, candidate, signals)) {
+                    trace_evaluation("memo", "an earlier run's value");
+                    *value = entry.value;
+                    return result_image;
+                }
+            }
+        }
+    }
+    std::optional<VhdlElaborationProgramMemo> memo_entry;
+    if (memoize) {
+        memo_entry = VhdlElaborationProgramMemo {
+            compacted, sequence, { }, *result_image, PackedLogic4 { } };
+        memo_entry->inputs.reserve(named_signals);
+        for (std::size_t index = 0; index < named_signals; ++index) {
+            memo_entry->inputs.emplace_back(
+                signals[index].initial_value, signals[index].value_kind);
+        }
+    }
     if (compact) {
         runtime::simir::normalize_sensitivities(
             compacted.static_sensitivity);
         // A hint indexed by the sorted sensitivities; the interpreter
         // ignores it.
         compacted.static_trigger_regions = { };
-        std::vector<runtime::simir::Signal> signals;
-        signals.reserve(sources.size());
-        for (const auto source : sources) {
-            signals.push_back(design_.signals_[source]);
-        }
         add_elaboration_signals(interpreter, signals);
         process = std::move(compacted);
     } else {
@@ -197,6 +297,18 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     static_cast<void>(interpreter.run());
     keep_compiled_vhdl_elaboration_state(
         interpreter, compact ? &images : nullptr);
+    if (value != nullptr && result_image) {
+        *value = interpreter.signal_value_snapshot(*result_image);
+        constexpr std::size_t maximum_memo_entries { 4096U };
+        if (memo_entry
+            && vhdl_elaboration_program_memo_entries_
+                < maximum_memo_entries) {
+            memo_entry->value = **value;
+            vhdl_elaboration_program_memo_[memo_key].push_back(
+                std::move(*memo_entry));
+            ++vhdl_elaboration_program_memo_entries_;
+        }
+    }
     return result_image;
 }
 

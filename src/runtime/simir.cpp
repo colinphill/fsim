@@ -666,6 +666,7 @@ bool operation_list_detail::ShareAccess::shareable(
                         || std::is_same_v<Type, IntegerCheck>
                         || std::is_same_v<Type, LoadConstant>
                         || std::is_same_v<Type, DynamicInsert>
+                        || std::is_same_v<Type, DynamicPartInsert>
                         || std::is_same_v<Type, DynamicPartSelect>
                         || std::is_same_v<Type, IntegerBinary>
                         || std::is_same_v<Type, DynamicExtract>
@@ -1003,7 +1004,8 @@ bool operation_list_detail::ShareAccess::share_impl(
                     compatible = left.source == right->source
                         && left.lower == right->lower
                         && left.upper == right->upper;
-                } else if constexpr (std::is_same_v<Type, DynamicInsert>) {
+                } else if constexpr (std::is_same_v<Type, DynamicInsert>
+                    || std::is_same_v<Type, DynamicPartInsert>) {
                     compatible = left.destination == right->destination
                         && left.target == right->target
                         && left.source == right->source

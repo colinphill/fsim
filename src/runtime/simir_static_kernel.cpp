@@ -106,6 +106,19 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     }
 }
 
+/// `width` (at most 64) bits of a plane at bit `bit`.
+[[nodiscard]] std::uint64_t read_plane_bits(const std::uint64_t* plane,
+    const std::uint32_t words, const std::uint32_t bit, const std::uint32_t width)
+{
+    const auto word = bit / 64U;
+    const auto shift = bit % 64U;
+    auto value = plane[word] >> shift;
+    if (shift != 0U && shift + width > 64U && word + 1U < words) {
+        value |= plane[word + 1U] << (64U - shift);
+    }
+    return value & kernel_word::mask(width);
+}
+
 [[nodiscard]] Logic4 edge_bit(const PackedLogic4& value)
 {
     return value.width() == 0U ? Logic4::x : value.get(0U);
@@ -637,6 +650,54 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             input_for(signal).mirror = mirror_of_signal_[signal];
             slots_.push_back(std::move(slot));
         }
+    }
+
+    // Wired formals: an owned signal whose host resolver is a pure-routing
+    // program over an owned source (static_kernel_wiring) is driven by the
+    // kernel from now on; the host does not resolve it again.
+    for (const auto signal : spec.owned_signals) {
+        const auto resolver = impl_.vhdl_resolvers.find(signal);
+        if (resolver == impl_.vhdl_resolvers.end()
+            || resolver->second.sources.size() != 1U
+            || !resolver->second.drivers.empty()
+            || !resolver->second.variants.empty()
+            || resolver->second.driving_mirror
+            || resolver->second.process >= impl_.processes.size()) {
+            continue;
+        }
+        const auto source = resolver->second.sources.front();
+        const auto wire = static_kernel_wiring(
+            impl_.processes.program_view(resolver->second.process).operations(),
+            resolver->second.output, [&](const SignalId id) {
+                return static_cast<std::uint64_t>(
+                    impl_.get_signal(id).initial_value.width());
+            });
+        if (!wire || wire->source != source || source >= signal_count
+            || slot_of_signal_[source] == no_slot) {
+            continue;
+        }
+        const auto& from = slots_[slot_of_signal_[source]];
+        const auto& to = slots_[slot_of_signal_[signal]];
+        if (from.planes != to.planes || to.width != wire->width
+            || wire->offset + wire->width > from.width) {
+            throw std::invalid_argument(
+                "static kernel wiring does not fit its signals");
+        }
+        wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+            wire->offset, wire->width });
+        auto& dependents = impl_.vhdl_conversion_dependents[source];
+        std::erase(dependents, signal);
+        impl_.vhdl_resolvers.erase(resolver);
+    }
+    std::ranges::stable_sort(wires_, {}, &Wire::source);
+    slot_wires_.assign(slots_.size(), { 0U, 0U });
+    for (std::uint32_t index = 0U; index < wires_.size();) {
+        auto end = index;
+        while (end < wires_.size() && wires_[end].source == wires_[index].source) {
+            ++end;
+        }
+        slot_wires_[wires_[index].source] = { index, end };
+        index = end;
     }
 
     // Level combinational members: writer before reader, cycles last.
@@ -1307,6 +1368,28 @@ void Interpreter::Impl::StaticKernel::store_planes_word(std::uint64_t* const bas
     put(base + words, value.b);
 }
 
+bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
+{
+    const auto& from = slots_[wire.source];
+    const auto& to = slots_[wire.target];
+    bool changed = false;
+    for (std::uint32_t plane = 0U; plane < to.planes; ++plane) {
+        const auto* source = arena_.data() + from.offset + plane * from.words;
+        auto* target = arena_.data() + to.offset + plane * to.words;
+        for (std::uint32_t done = 0U; done < wire.width; done += 64U) {
+            const auto chunk = std::min(64U, wire.width - done);
+            const auto bits = read_plane_bits(
+                source, from.words, wire.offset + done, chunk);
+            auto& out = target[done / 64U];
+            const auto mask = kernel_word::mask(chunk);
+            const auto next = (out & ~mask) | bits;
+            changed = changed || next != out;
+            out = next;
+        }
+    }
+    return changed;
+}
+
 void Interpreter::Impl::StaticKernel::commit_round()
 {
     // VHDL update phase: apply this round's assignments in program order
@@ -1403,6 +1486,15 @@ void Interpreter::Impl::StaticKernel::commit_round()
     }
     writes_.count = 0U;
     pending_generic_.clear();
+    // Wired formals follow their sources' new values in this update phase.
+    // A wire's target joins the touched list, so wires chain.
+    for (std::size_t at = 0U; !wires_.empty() && at < touched_.size(); ++at) {
+        const auto [begin, end] = slot_wires_[touched_[at]];
+        for (auto index = begin; index < end; ++index) {
+            touch(wires_[index].target);
+            copy_wire(wires_[index]);
+        }
+    }
     for (const auto slot_index : touched_) {
         auto& slot = commit_slots_[slot_index];
         slot.touched = false;
@@ -3065,6 +3157,17 @@ void Interpreter::Impl::StaticKernel::publish()
 void Interpreter::Impl::StaticKernel::initialize()
 {
     initialized_ = true;
+    // A wired formal starts at its source's initial value (IEEE 1076-2008
+    // 14.7.5.2); wires chain, so repeat until the values settle.
+    for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
+        bool changed = false;
+        for (const auto& wire : wires_) {
+            changed = copy_wire(wire) || changed;
+        }
+        if (!changed) {
+            break;
+        }
+    }
     for (auto& input : inputs_) {
         input.revision = impl_.signal_value_revisions[input.signal];
         input.cached = vhdl_ ? read_signal(input.signal)

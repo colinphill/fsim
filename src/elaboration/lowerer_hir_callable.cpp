@@ -9909,6 +9909,32 @@ void Lowerer::end_hir_effective_vhdl_subtype_cache_scope() const noexcept
                       << '\n';
         }
         if (profile_expression_resolution_cache()
+            && (hir_vhdl_expression_subtype_cache_hits_ != 0U
+                || hir_vhdl_expression_subtype_cache_misses_ != 0U
+                || hir_vhdl_expression_subtype_uncached_scope_ != 0U
+                || hir_vhdl_expression_subtype_uncached_frames_ != 0U
+                || hir_vhdl_expression_subtype_uncached_access_ != 0U
+                || hir_vhdl_expression_subtype_uncached_shaped_ != 0U)) {
+            std::cerr << "fsim-profile: hir-vhdl-expression-subtype-cache"
+                      << " hits=" << hir_vhdl_expression_subtype_cache_hits_
+                      << " misses="
+                      << hir_vhdl_expression_subtype_cache_misses_
+                      << " uncached_scope="
+                      << hir_vhdl_expression_subtype_uncached_scope_
+                      << " uncached_frames="
+                      << hir_vhdl_expression_subtype_uncached_frames_
+                      << " uncached_access="
+                      << hir_vhdl_expression_subtype_uncached_access_
+                      << " uncached_shaped="
+                      << hir_vhdl_expression_subtype_uncached_shaped_ << '\n';
+        }
+        hir_vhdl_expression_subtype_cache_hits_ = 0U;
+        hir_vhdl_expression_subtype_cache_misses_ = 0U;
+        hir_vhdl_expression_subtype_uncached_scope_ = 0U;
+        hir_vhdl_expression_subtype_uncached_frames_ = 0U;
+        hir_vhdl_expression_subtype_uncached_access_ = 0U;
+        hir_vhdl_expression_subtype_uncached_shaped_ = 0U;
+        if (profile_expression_resolution_cache()
             && (hir_pure_integral_attempt_hits_ != 0U
                 || hir_pure_integral_attempt_misses_ != 0U)) {
             std::cerr << "fsim-profile: hir-pure-integral-attempt-cache"
@@ -9965,6 +9991,10 @@ void Lowerer::clear_hir_vhdl_query_caches() const noexcept
 {
     hir_vhdl_expression_subtype_cache_.clear();
     hir_vhdl_expression_subtype_cache_entries_ = 0U;
+    hir_vhdl_width_cache_.clear();
+    hir_vhdl_shape_cache_.clear();
+    hir_binding_frame_snapshots_.clear();
+    hir_binding_frame_snapshot_last_ = 0U;
     hir_vhdl_function_call_cache_.clear();
     hir_vhdl_function_call_cache_entries_ = 0U;
 }
@@ -11545,7 +11575,9 @@ Lowerer::hir_vhdl_function_result_shape(
             expression_id, process_scope, selected_body);
     }
     // FSIM_VHDL_SHAPE_TRACE prints each function result shape.
-    if (std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr) {
+    static const bool shape_trace
+        = std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr;
+    if (shape_trace) {
         std::cerr << "[fsim-vhdl-shape] function-result expression="
                   << expression_id.value() << " source="
                   << (proven ? "proof" : result ? "returned" : "none");

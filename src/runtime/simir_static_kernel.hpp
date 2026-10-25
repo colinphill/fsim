@@ -13,7 +13,9 @@
 
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -125,6 +127,9 @@ struct StaticKernelRuntimeSpec {
     /// The host's original program; the scheduler runs the host stub.
     Process host_original;
     std::vector<StaticKernelMemberSpec> members;
+    /// A kernel-owned signal with a pure-routing host resolver
+    /// (static_kernel_wiring) over another owned signal is a wired formal:
+    /// the kernel drives it in the update phase that changes its source.
     std::vector<SignalId> owned_signals;
     std::vector<SignalId> boundary_outputs;
     std::vector<StaticKernelAliasFamily> families;
@@ -336,6 +341,75 @@ struct StaticKernelRuntimeSpec {
                 || std::is_same_v<T, Assert>;
         }
     }, operation);
+}
+
+/// A bit range of one signal that a port-association program copies into its
+/// formal unchanged.
+struct StaticKernelWiring {
+    SignalId source { };
+    std::uint32_t offset { };
+    std::uint32_t width { };
+};
+
+/// Recognizes a pure-routing port-association program (IEEE 1076-2008
+/// 6.5.7.1, 14.7.3.3): one that only reads current signal values, selects
+/// bit ranges of them and leaves the result in `output`, with no conversion
+/// function or type conversion. A formal associated with a static element or
+/// slice of an actual signal is such a wire: it has the part's effective
+/// value in the cycle the part updates. `signal_width` gives a signal's
+/// width in bits.
+template <typename Operations, typename SignalWidth>
+[[nodiscard]] std::optional<StaticKernelWiring> static_kernel_wiring(
+    const Operations& operations, const RegisterId output,
+    SignalWidth&& signal_width)
+{
+    struct Piece {
+        SignalId signal { };
+        std::uint64_t offset { };
+        std::uint64_t width { };
+    };
+    std::map<RegisterId, Piece> pieces;
+    for (std::size_t index = 0U; index < operations.size(); ++index) {
+        const auto operation = operations.expanded(index);
+        if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+            if (read->kind != SignalReadKind::current || read->ticks != 1U
+                || read->clock || read->gate) {
+                return std::nullopt;
+            }
+            pieces.insert_or_assign(read->destination,
+                Piece { read->signal, 0U,
+                    static_cast<std::uint64_t>(signal_width(read->signal)) });
+        } else if (const auto* extract = operation_get_if<Extract>(&operation)) {
+            const auto piece = pieces.find(extract->source);
+            if (piece == pieces.end()
+                || static_cast<std::uint64_t>(extract->offset) + extract->width
+                    > piece->second.width) {
+                return std::nullopt;
+            }
+            const Piece part { piece->second.signal,
+                piece->second.offset + extract->offset, extract->width };
+            pieces.insert_or_assign(extract->destination, part);
+        } else if (const auto* copy = operation_get_if<CopyRegister>(&operation)) {
+            const auto piece = pieces.find(copy->source);
+            if (piece == pieces.end()) {
+                return std::nullopt;
+            }
+            const auto value = piece->second;
+            pieces.insert_or_assign(copy->destination, value);
+        } else if (!operation_holds<DebugPoint>(operation)
+            && !operation_holds<Halt>(operation)) {
+            return std::nullopt;
+        }
+    }
+    const auto result = pieces.find(output);
+    if (result == pieces.end() || result->second.width == 0U
+        || result->second.offset + result->second.width
+            > signal_width(result->second.signal)) {
+        return std::nullopt;
+    }
+    return StaticKernelWiring { result->second.signal,
+        static_cast<std::uint32_t>(result->second.offset),
+        static_cast<std::uint32_t>(result->second.width) };
 }
 
 } // namespace fsim::runtime::simir

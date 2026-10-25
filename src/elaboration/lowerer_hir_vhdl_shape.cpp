@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <new>
 #include <string_view>
 #include <unordered_set>
 
@@ -19,6 +20,15 @@ namespace {
     using semantic::vhdl::ElementConstraint;
     using semantic::vhdl::RangeConstraint;
     using semantic::vhdl::RangeKind;
+
+    // FSIM_VHDL_SHAPE_TRACE prints composed shapes; read once, as shape
+    // queries run for most VHDL expressions.
+    bool vhdl_shape_trace()
+    {
+        static const bool enabled
+            = std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr;
+        return enabled;
+    }
 
     template <typename Range>
     [[nodiscard]] RangeConstraint index_constraint(const Range& range)
@@ -858,12 +868,39 @@ Lowerer::hir_vhdl_concatenation_subtype(
     return array;
 }
 
+// A shape depends on what the expression's subtype does and on the unrolled
+// loops around it; it is kept like the subtype (see
+// hir_vhdl_expression_subtype).
 std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
     const semantic::ExpressionId expression_id) const
 {
     if (specialized_hir_unit_ == nullptr || hir_vhdl_shape_depth_ >= 32U) {
         return std::nullopt;
     }
+    auto key = hir_vhdl_query_key(expression_id, hir_process_scope_);
+    if (key) {
+        if (const auto found = hir_vhdl_shape_cache_.find(*key);
+            found != hir_vhdl_shape_cache_.end()) {
+            return found->second;
+        }
+    }
+    const auto fallback_calls = hir_boundary_fallback_calls_;
+    auto result = compute_hir_vhdl_shape(expression_id);
+    constexpr std::size_t maximum_entries { 1U << 17U };
+    if (key && result && hir_boundary_fallback_calls_ == fallback_calls
+        && hir_vhdl_shape_cache_.size() < maximum_entries
+        && hir_vhdl_expression_subtype_cacheable()) {
+        try {
+            hir_vhdl_shape_cache_.emplace(std::move(*key), *result);
+        } catch (const std::bad_alloc&) {
+        }
+    }
+    return result;
+}
+
+std::optional<Lowerer::HirVhdlShape> Lowerer::compute_hir_vhdl_shape(
+    const semantic::ExpressionId expression_id) const
+{
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     if (!expression || expression->vhdl == nullptr) {
@@ -1235,7 +1272,7 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_shape(
         }
     }
     // FSIM_VHDL_SHAPE_TRACE prints each composed shape.
-    if (std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr) {
+    if (vhdl_shape_trace()) {
         std::cerr << "[fsim-vhdl-shape] expression=" << expression_id.value()
                   << " kind=" << static_cast<int>(source.kind) << " text="
                   << source.text << " facts=" << facts.has_value();
@@ -1375,7 +1412,7 @@ Lowerer::hir_vhdl_initialized_object_subtype(
             width = hir_vhdl_positional_aggregate_bits(
                 initializer, declared, scope);
         }
-        if (std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr) {
+        if (vhdl_shape_trace()) {
             std::cerr << "[fsim-vhdl-shape] initialized expression="
                       << initializer.value() << " open="
                       << (open ? static_cast<int>(open->ranges.size()) : -1)
@@ -1488,7 +1525,7 @@ std::optional<Lowerer::HirVhdlShape> Lowerer::hir_vhdl_contextual_shape(
         expression_id, context, scope);
     auto contextual = subtype ? hir_vhdl_subtype_shape(*subtype, scope)
                               : std::nullopt;
-    if (std::getenv("FSIM_VHDL_SHAPE_TRACE") != nullptr) {
+    if (vhdl_shape_trace()) {
         std::cerr << "[fsim-vhdl-shape] contextual expression="
                   << expression_id.value() << " context="
                   << context.type_mark.spelling << " subtype="

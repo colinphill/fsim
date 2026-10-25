@@ -132,10 +132,17 @@ bool same_concurrent_signal_layout(
     const Signal& right_runtime,
     const bool read_only = false)
 {
-    // A read-only role only reads the signal, so `reg` and `wire` (and an
-    // implicit or explicit `wire` net type) lower identically.
+    // A role the program only reads lowers identically for a `reg` and a
+    // `wire`, whatever the net type of a plain wire.
     const bool interchangeable = read_only && plain_verilog_value(left)
         && plain_verilog_value(right);
+    // A net declared without a net type is a `wire` (IEEE 1800-2017 6.10).
+    const auto net_type = [](const SignalInfo& signal) -> std::string_view {
+        return signal.type_name == "wire"
+                && signal.systemverilog_net_type.empty()
+            ? std::string_view { "wire" }
+            : std::string_view { signal.systemverilog_net_type };
+    };
     if (left.width != right.width
         || (!interchangeable && left.type_name != right.type_name)
         || left.nominal_type != right.nominal_type
@@ -143,8 +150,7 @@ bool same_concurrent_signal_layout(
         || left.resolution != right.resolution
         || left.is_signed != right.is_signed
         || left.systemverilog_scalar != right.systemverilog_scalar
-        || (!interchangeable
-            && left.systemverilog_net_type != right.systemverilog_net_type)
+        || (!interchangeable && net_type(left) != net_type(right))
         || !same_optional_range(left.packed_range, right.packed_range)
         || !same_optional_range(left.integer_range, right.integer_range)
         || !same_optional_range(
@@ -585,9 +591,10 @@ make_systemverilog_template_signal_remap(
                 signal_info[target->second->signal],
                 signals[source.signal],
                 signals[target->second->signal],
-                source.read_only && !source.writable
-                    && target->second->read_only
-                    && !target->second->writable)
+                !source.written
+                    || (source.read_only && !source.writable
+                        && target->second->read_only
+                        && !target->second->writable))
             || !source_signals.insert(source.signal).second
             || !target_signals.insert(target->second->signal).second) {
             return std::nullopt;
@@ -1374,6 +1381,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     if (!matching_overlay) {
         record_lowering_census(systemverilog_concurrent_template_misses_);
     } else {
+        why("no_replayable_template");
         record_lowering_census(
             systemverilog_concurrent_template_rejections_);
     }
@@ -1394,6 +1402,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             elapsed->count());
     }
     if (!lowered) {
+        why("not_lowered");
         record_lowering_census(systemverilog_concurrent_template_rejections_);
         return retain_full_process(std::move(lowered));
     }
@@ -1418,6 +1427,11 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             && lowered->driver_regions.front().width == 0U)
         || lowered->switch_source || lowered->switch_target
         || lowered->switch_control) {
+        why(diagnostics_.size() != diagnostics_before ? "diagnostics"
+            : invocation_after != invocation_before ? "callable_invocation"
+            : lowerer.has_generated_processes() ? "generated_processes"
+            : lowered->driver_regions.size() != 1U ? "driver_regions"
+            : "program_shape");
         record_lowering_census(systemverilog_concurrent_template_rejections_);
         return retain_full_process(std::move(lowered));
     }
@@ -1427,11 +1441,13 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             && signal < design_.signal_info_.size();
     };
     std::set<SignalId> used_signals;
+    std::set<SignalId> written_signals;
     const auto collect_operation_signals = [&](const Operation& operation) {
         visit_operation([&](const auto& value) {
             using Type = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<Type, ReadSignal>
-                || std::is_same_v<Type, WriteBlocking>
+            if constexpr (std::is_same_v<Type, ReadSignal>) {
+                used_signals.insert(value.signal);
+            } else if constexpr (std::is_same_v<Type, WriteBlocking>
                 || std::is_same_v<Type, WriteUpdate>
                 || std::is_same_v<Type, WriteBlockingSlice>
                 || std::is_same_v<Type, WriteUpdateSlice>
@@ -1439,6 +1455,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
                 || std::is_same_v<Type, WriteProjected>
                 || std::is_same_v<Type, WriteProjectedSlice>) {
                 used_signals.insert(value.signal);
+                written_signals.insert(value.signal);
             }
         }, operation);
     };
@@ -1451,6 +1468,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     }
     for (const auto& driver : lowered->driver_regions) {
         used_signals.insert(driver.signal);
+        written_signals.insert(driver.signal);
     }
     std::map<SignalId, SignalId> formal_signals;
     std::vector<SystemVerilogTemplateSignalRole> signal_roles;
@@ -1468,6 +1486,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             }
             if (!profile(*signal)
                 || !formal_signals.emplace(*signal, *signal).second) {
+                why("port_signal");
                 record_lowering_census(
                     systemverilog_concurrent_template_rejections_);
                 return retain_full_process(std::move(lowered));
@@ -1494,6 +1513,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             if (!profile(element.signal)
                 || !formal_signals.emplace(
                         element.signal, element.signal).second) {
+                why("element_signal");
                 record_lowering_census(
                     systemverilog_concurrent_template_rejections_);
                 return retain_full_process(std::move(lowered));
@@ -1509,7 +1529,11 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             });
         }
     }
+    for (auto& role : signal_roles) {
+        role.written = written_signals.contains(role.signal);
+    }
     if (signal_roles.empty()) {
+        why("no_signal_roles");
         record_lowering_census(systemverilog_concurrent_template_rejections_);
         return retain_full_process(std::move(lowered));
     }
@@ -1522,6 +1546,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             || !remap_concurrent_operation(
                 operation, formal_signals,
                 lowered->name, lowered->name)) {
+            why("operation_remap");
             record_lowering_census(
                 systemverilog_concurrent_template_rejections_);
             return retain_full_process(std::move(lowered));
@@ -1529,6 +1554,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     }
     for (const auto& sensitivity : lowered->static_sensitivity) {
         if (!formal_signals.contains(sensitivity.signal)) {
+            why("sensitivity_signal");
             record_lowering_census(
                 systemverilog_concurrent_template_rejections_);
             return retain_full_process(std::move(lowered));
@@ -1536,6 +1562,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     }
     for (const auto& driver : lowered->driver_regions) {
         if (!formal_signals.contains(driver.signal)) {
+            why("driver_signal");
             record_lowering_census(
                 systemverilog_concurrent_template_rejections_);
             return retain_full_process(std::move(lowered));

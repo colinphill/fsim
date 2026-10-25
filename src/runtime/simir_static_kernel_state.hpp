@@ -840,6 +840,21 @@ private:
         bool single_writer { };
     };
     std::vector<CommitSlot> commit_slots_;
+    /// Kernel wiring (static_kernel_wiring): the update phase that changes
+    /// `source` copies its bit range into `target` in the same delta cycle,
+    /// so a formal associated with an element or slice of a signal follows
+    /// it without a host round trip (IEEE 1076-2008 6.5.7.1, 14.7.3.3).
+    struct Wire {
+        std::uint32_t source { };
+        std::uint32_t target { };
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+    /// Sorted by source slot; `slot_wires_` holds each slot's [begin, end).
+    std::vector<Wire> wires_;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> slot_wires_;
+    /// Copies the wire's bit range; true when the target changed.
+    bool copy_wire(const Wire& wire);
     std::vector<std::uint32_t> slot_of_signal_;
     std::vector<std::uint32_t> family_of_signal_;
     std::vector<Family> families_;
